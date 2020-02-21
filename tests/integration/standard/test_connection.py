@@ -172,8 +172,8 @@ class HeartbeatTest(unittest.TestCase):
                     if conn._connections is not None and len(conn._connections) > 0:
                         connections.append(conn._connections)
                 else:
-                    if conn._connection is not None:
-                        connections.append(conn._connection)
+                    if conn._connections and len(conn._connections.values()) > 0:
+                        connections.append(conn._connections.values())
         return connections
 
     def wait_for_connections(self, host, cluster):
