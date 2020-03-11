@@ -43,6 +43,7 @@ from cassandra import ProtocolVersion
 try:
     from ccmlib.dse_cluster import DseCluster
     from ccmlib.cluster import Cluster as CCMCluster
+    from ccmlib.scylla_cluster import ScyllaCluster as CCMSCyllaCluster
     from ccmlib.cluster_factory import ClusterFactory as CCMClusterFactory
     from ccmlib import common
 except ImportError as e:
@@ -168,8 +169,12 @@ else:  # we are testing against Cassandra or DDAC
     try:
         cassandra_version = Version(cv_string)  # env var is set to test-dse for DDAC
     except:
-        # fallback to MAPPED_CASSANDRA_VERSION
-        cassandra_version = Version(mcv_string)
+        try:
+            # fallback to MAPPED_CASSANDRA_VERSION
+            cassandra_version = Version(mcv_string)
+        except:
+            cassandra_version = Version('3.11.4')
+            cv_string = '3.11.4'
 
     CASSANDRA_VERSION = Version(mcv_string) if mcv_string else cassandra_version
     CCM_VERSION = cassandra_version if mcv_string else CASSANDRA_VERSION
@@ -178,6 +183,7 @@ CASSANDRA_IP = os.getenv('CLUSTER_IP', '127.0.0.1')
 CASSANDRA_DIR = os.getenv('CASSANDRA_DIR', None)
 
 CCM_KWARGS = {}
+IS_SCYLLA = False
 if DSE_VERSION:
     log.info('Using DSE version: %s', DSE_VERSION)
     if not CASSANDRA_DIR:
@@ -185,13 +191,19 @@ if DSE_VERSION:
         if DSE_CRED:
             log.info("Using DSE credentials file located at {0}".format(DSE_CRED))
             CCM_KWARGS['dse_credentials_file'] = DSE_CRED
+
 elif CASSANDRA_DIR:
     log.info("Using Cassandra dir: %s", CASSANDRA_DIR)
     CCM_KWARGS['install_dir'] = CASSANDRA_DIR
-else:
+elif os.environ.get('CASSANDRA_VERSION'):
     log.info('Using Cassandra version: %s', CCM_VERSION)
     CCM_KWARGS['version'] = CCM_VERSION
-
+elif os.getenv('INSTALL_DIRECTORY'):
+    CCM_KWARGS['install_dir'] = os.path.join(os.getenv('INSTALL_DIRECTORY'))
+    IS_SCYLLA = True
+elif os.getenv('SCYLLA_VERSION'):
+    CCM_KWARGS['cassandra_version'] = os.path.join(os.getenv('SCYLLA_VERSION'))
+    IS_SCYLLA = True
 
 #This changes the default contact_point parameter in Cluster
 def set_default_cass_ip():
@@ -429,10 +441,12 @@ def is_current_cluster(cluster_name, node_counts, workloads):
     if CCM_CLUSTER and CCM_CLUSTER.name == cluster_name:
         if [len(list(nodes)) for dc, nodes in
                 groupby(CCM_CLUSTER.nodelist(), lambda n: n.data_center)] == node_counts:
-            for node in CCM_CLUSTER.nodelist():
-                if set(node.workloads) != set(workloads):
-                    print("node workloads don't match creating new cluster")
-                    return False
+            # workloads is DSE related feature that scylla-ccm doesn't support
+            # hence commenting this code out
+            # for node in CCM_CLUSTER.nodelist():
+            #    if set(node.workloads) != set(workloads):
+            #        print("node workloads don't match creating new cluster")
+            #        return False
             return True
     return False
 
@@ -530,8 +544,14 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
 
                 CCM_CLUSTER.set_dse_configuration_options(dse_options)
             else:
-                CCM_CLUSTER = CCMCluster(path, cluster_name, **ccm_options)
+                if IS_SCYLLA:
+                    CCM_CLUSTER = CCMSCyllaCluster(path, cluster_name, **ccm_options)
+                else:
+                    CCM_CLUSTER = CCMCluster(path, cluster_name, **ccm_options)
                 CCM_CLUSTER.set_configuration_options({'start_native_transport': True})
+                if IS_SCYLLA:
+                    CCM_CLUSTER.set_configuration_options({'experimental': True})
+
                 if cassandra_version >= Version('2.2'):
                     CCM_CLUSTER.set_configuration_options({'enable_user_defined_functions': True})
                     if cassandra_version >= Version('3.0'):
@@ -545,7 +565,8 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
 
         # This will enable the Mirroring query handler which will echo our custom payload k,v pairs back
 
-        if 'graph' not in workloads:
+        # jvm_args, are commandline passed to scylla, and scylla doesn't support this specific one
+        if not IS_SCYLLA and 'graph' not in workloads:
             if PROTOCOL_VERSION >= 4:
                 jvm_args = [" -Dcassandra.custom_query_handler_class=org.apache.cassandra.cql3.CustomPayloadMirroringQueryHandler"]
         if len(workloads) > 0:
