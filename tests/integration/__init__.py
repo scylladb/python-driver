@@ -550,7 +550,10 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
                     CCM_CLUSTER = CCMCluster(path, cluster_name, **ccm_options)
                 CCM_CLUSTER.set_configuration_options({'start_native_transport': True})
                 if IS_SCYLLA:
-                    CCM_CLUSTER.set_configuration_options({'experimental': True})
+                    # `experimental: True` enable all experimental features.
+                    # CDC is causing an issue (can't start cluster with multiple seeds)
+                    # Selecting only features we need for tests, i.e. anything but CDC.
+                    CCM_CLUSTER.set_configuration_options({'experimental_features': ['lwt', 'udf']})
 
                 if cassandra_version >= Version('2.2'):
                     CCM_CLUSTER.set_configuration_options({'enable_user_defined_functions': True})
