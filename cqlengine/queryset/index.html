@@ -403,7 +403,7 @@ Setting the timeout on the model is meaningless and will raise an AssertionError
 </div>
 <div class="section" id="default-ttl-and-per-query-ttl">
 <span id="ttl-change"></span><h2>Default TTL and Per Query TTL<a class="headerlink" href="#default-ttl-and-per-query-ttl" title="Permalink to this headline">¶</a></h2>
-<p>Model default TTL now relies on the <em>default_time_to_live</em> feature, introduced in Cassandra 2.0. It is not handled anymore in the CQLEngine Model (cassandra-driver &gt;=3.6). You can set the default TTL of a table like this:</p>
+<p>Model default TTL now relies on the <em>default_time_to_live</em> feature, introduced in Cassandra 2.0. It is not handled anymore in the CQLEngine Model (scylla-driver &gt;=3.6). You can set the default TTL of a table like this:</p>
 <p>Example:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">User</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
     <span class="n">__options__</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;default_time_to_live&#39;</span><span class="p">:</span> <span class="mi">20</span><span class="p">}</span>

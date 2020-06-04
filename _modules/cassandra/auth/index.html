@@ -254,14 +254,14 @@
 <span class="sd">        auth_provider = TransitionalModePlainTextAuthProvider()</span>
 <span class="sd">        cluster = Cluster(auth_provider=auth_provider)</span>
 
-<span class="sd">    .. warning:: TransitionalModePlainTextAuthProvider will be removed in cassandra-driver</span>
+<span class="sd">    .. warning:: TransitionalModePlainTextAuthProvider will be removed in scylla-driver</span>
 <span class="sd">                 4.0. The transitional mode will be handled internally without the need</span>
 <span class="sd">                 of any auth provider.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="c1"># TODO remove next major</span>
-        <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;TransitionalModePlainTextAuthProvider will be removed in cassandra-driver &quot;</span>
+        <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;TransitionalModePlainTextAuthProvider will be removed in scylla-driver &quot;</span>
                     <span class="s2">&quot;4.0. The transitional mode will be handled internally without the need &quot;</span>
                     <span class="s2">&quot;of any auth provider.&quot;</span><span class="p">)</span>
 

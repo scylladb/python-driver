@@ -108,10 +108,10 @@ implementation) and <a class="reference external" href="http://pypy.org">PyPy</a
 <p><a class="reference external" href="https://pypi.org/project/pip/">pip</a> is the suggested tool for installing
 packages.  It will handle installing all Python dependencies for the driver at
 the same time as the driver itself.  To install the driver*:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">cassandra</span><span class="o">-</span><span class="n">driver</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">scylla</span><span class="o">-</span><span class="n">driver</span>
 </pre></div>
 </div>
-<p>You can use <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">--pre</span> <span class="pre">cassandra-driver</span></code> if you need to install a beta version.</p>
+<p>You can use <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">--pre</span> <span class="pre">scylla-driver</span></code> if you need to install a beta version.</p>
 <p><strong>*Note</strong>: if intending to use optional extensions, install the <a class="reference external" href="#optional-non-python-dependencies">dependencies</a> first. The driver may need to be reinstalled if dependencies are added after the initial installation.</p>
 </div>
 <div class="section" id="verifying-your-installation">
@@ -127,7 +127,7 @@ the same time as the driver itself.  To install the driver*:</p>
 <p>The driver provides an optional fluent graph API that depends on Apache TinkerPop (gremlinpython). It is
 not installed by default. To be able to build Gremlin traversals, you need to install
 the <cite>graph</cite> requirements:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">cassandra</span><span class="o">-</span><span class="n">driver</span><span class="p">[</span><span class="n">graph</span><span class="p">]</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">scylla</span><span class="o">-</span><span class="n">driver</span><span class="p">[</span><span class="n">graph</span><span class="p">]</span>
 </pre></div>
 </div>
 <p>See <a class="reference internal" href="../graph_fluent/"><span class="doc">DataStax Graph Fluent API</span></a> for more details about this API.</p>
@@ -171,7 +171,7 @@ threads used to build the driver and any C extensions:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$ <span class="c1"># installing from source</span>
 $ <span class="nv">CASS_DRIVER_BUILD_CONCURRENCY</span><span class="o">=</span><span class="m">8</span> python setup.py install
 $ <span class="c1"># installing from pip</span>
-$ <span class="nv">CASS_DRIVER_BUILD_CONCURRENCY</span><span class="o">=</span><span class="m">8</span> pip install cassandra-driver
+$ <span class="nv">CASS_DRIVER_BUILD_CONCURRENCY</span><span class="o">=</span><span class="m">8</span> pip install scylla-driver
 </pre></div>
 </div>
 </div>
@@ -182,7 +182,7 @@ $ <span class="nv">CASS_DRIVER_BUILD_CONCURRENCY</span><span class="o">=</span><
 </pre></div>
 </div>
 <p>To fix this, re-run the installation with an extra compilation flag:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">ARCHFLAGS</span><span class="o">=</span>-Wno-error<span class="o">=</span>unused-command-line-argument-hard-error-in-future pip install cassandra-driver
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">ARCHFLAGS</span><span class="o">=</span>-Wno-error<span class="o">=</span>unused-command-line-argument-hard-error-in-future pip install scylla-driver
 </pre></div>
 </div>
 </div>
@@ -252,7 +252,7 @@ context:</p>
 </pre></div>
 </div>
 <p>This method is required when using pip, which provides no other way of injecting user options in a single command:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CASS_DRIVER_NO_CYTHON</span><span class="o">=</span><span class="mi">1</span> <span class="n">pip</span> <span class="n">install</span> <span class="n">cassandra</span><span class="o">-</span><span class="n">driver</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CASS_DRIVER_NO_CYTHON</span><span class="o">=</span><span class="mi">1</span> <span class="n">pip</span> <span class="n">install</span> <span class="n">scylla</span><span class="o">-</span><span class="n">driver</span>
 <span class="n">CASS_DRIVER_NO_CYTHON</span><span class="o">=</span><span class="mi">1</span> <span class="n">sudo</span> <span class="o">-</span><span class="n">E</span> <span class="n">pip</span> <span class="n">install</span> <span class="o">~/</span><span class="n">python</span><span class="o">-</span><span class="n">driver</span>
 </pre></div>
 </div>

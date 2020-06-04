@@ -101,19 +101,19 @@
 </div>
 <div class="section" id="upgrading-from-dse-driver">
 <h2>Upgrading from dse-driver<a class="headerlink" href="#upgrading-from-dse-driver" title="Permalink to this headline">¶</a></h2>
-<p>Since 3.21.0, cassandra-driver fully supports DataStax products. dse-driver and
-dse-graph users should now migrate to cassandra-driver to benefit from latest bug fixes
+<p>Since 3.21.0, scylla-driver fully supports DataStax products. dse-driver and
+dse-graph users should now migrate to scylla-driver to benefit from latest bug fixes
 and new features. The upgrade to this new unified driver version is straightforward
 with no major API changes.</p>
 <div class="section" id="installation">
 <h3>Installation<a class="headerlink" href="#installation" title="Permalink to this headline">¶</a></h3>
-<p>Only the <cite>cassandra-driver</cite> package should be installed. <cite>dse-driver</cite> and <cite>dse-graph</cite>
+<p>Only the <cite>scylla-driver</cite> package should be installed. <cite>dse-driver</cite> and <cite>dse-graph</cite>
 are not required anymore:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">cassandra</span><span class="o">-</span><span class="n">driver</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">scylla</span><span class="o">-</span><span class="n">driver</span>
 </pre></div>
 </div>
 <p>If you need the Graph <em>Fluent</em> API (features provided by dse-graph):</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">cassandra</span><span class="o">-</span><span class="n">driver</span><span class="p">[</span><span class="n">graph</span><span class="p">]</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">scylla</span><span class="o">-</span><span class="n">driver</span><span class="p">[</span><span class="n">graph</span><span class="p">]</span>
 </pre></div>
 </div>
 <p>See <a class="reference internal" href="../installation/"><span class="doc">Installation</span></a> for more details.</p>
@@ -133,12 +133,12 @@ need to change only the first module of your import statements, not the submodul
 <span class="kn">from</span> <span class="nn">cassandra.policies</span> <span class="kn">import</span> <span class="n">WhiteListRoundRobinPolicy</span>
 </pre></div>
 </div>
-<p>Also note that the cassandra.hosts module doesn’t exist in cassandra-driver. This
+<p>Also note that the cassandra.hosts module doesn’t exist in scylla-driver. This
 module is named cassandra.pool.</p>
 </div>
 <div class="section" id="dse-graph">
 <h3>dse-graph<a class="headerlink" href="#dse-graph" title="Permalink to this headline">¶</a></h3>
-<p>dse-graph features are now built-in in cassandra-driver. The only change you need
+<p>dse-graph features are now built into scylla-driver. The only change you need
 to do is your import statements:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">dse_graph</span> <span class="kn">import</span> <span class="o">..</span>
 <span class="kn">from</span> <span class="nn">dse_graph.query</span> <span class="kn">import</span> <span class="o">..</span>
