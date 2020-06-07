@@ -9,7 +9,7 @@
     <meta name="viewport" content="width=device-width initial-scale=1" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <title>
-    DataStax Python Driver for Apache Cassandra® | Scylla Docs
+    Python Driver for Scylla and Apache Cassandra® | Scylla Docs
     </title>
     <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
 
@@ -93,23 +93,23 @@
 </header>
 <section id="content">
     <div class="content-full">
-        <div class="section" id="datastax-python-driver-for-apache-cassandra">
-<h1>DataStax Python Driver for Apache Cassandra®<a class="headerlink" href="#datastax-python-driver-for-apache-cassandra" title="Permalink to this headline">¶</a></h1>
-<p>A Python client driver for <a class="reference external" href="http://cassandra.apache.org">Apache Cassandra®</a>.
+        <div class="section" id="python-driver-for-scylla-and-apache-cassandra">
+<h1>Python Driver for Scylla and Apache Cassandra®<a class="headerlink" href="#python-driver-for-scylla-and-apache-cassandra" title="Permalink to this headline">¶</a></h1>
+<p>A Python client driver for <a class="reference external" href="https://docs.scylladb.com">Scylla</a>.
 This driver works exclusively with the Cassandra Query Language v3 (CQL3)
-and Cassandra’s native protocol.  Cassandra 2.1+ is supported, including DSE 4.7+.</p>
+and Cassandra’s native protocol.</p>
 <p>The driver supports Python 2.7, 3.4, 3.5, 3.6, 3.7 and 3.8.</p>
 <p>This driver is open source under the
 <a class="reference external" href="http://www.apache.org/licenses/LICENSE-2.0.html">Apache v2 License</a>.
-The source code for this driver can be found on <a class="reference external" href="http://github.com/datastax/python-driver">GitHub</a>.</p>
-<p><strong>Note:</strong> DataStax products do not support big-endian systems.</p>
+The source code for this driver can be found on <a class="reference external" href="http://github.com/scylladb/python-driver">GitHub</a>.</p>
+<p>Scylla Driver is a fork from <a class="reference external" href="http://github.com/datastax/python-driver">DataStax Python Driver</a>, including some non-breaking changes for Scylla optimization, with more updates planned.</p>
 <div class="section" id="contents">
 <h2>Contents<a class="headerlink" href="#contents" title="Permalink to this headline">¶</a></h2>
 <dl class="docutils">
 <dt><a class="reference internal" href="installation/"><span class="doc">Installation</span></a></dt>
 <dd>How to install the driver.</dd>
 <dt><a class="reference internal" href="getting_started/"><span class="doc">Getting Started</span></a></dt>
-<dd>A guide through the first steps of connecting to Cassandra and executing queries</dd>
+<dd>A guide through the first steps of connecting to Scylla and executing queries</dd>
 <dt><a class="reference internal" href="execution_profiles/"><span class="doc">Execution Profiles</span></a></dt>
 <dd>An introduction to a more flexible way of configuring request execution</dd>
 <dt><a class="reference internal" href="lwt/"><span class="doc">Lightweight Transactions (Compare-and-set)</span></a></dt>
@@ -125,17 +125,9 @@ The source code for this driver can be found on <a class="reference external" hr
 <dt><a class="reference internal" href="upgrading/"><span class="doc">Upgrading</span></a></dt>
 <dd>A guide to upgrading versions of the driver</dd>
 <dt><a class="reference internal" href="user_defined_types/"><span class="doc">User Defined Types</span></a></dt>
-<dd>Working with Cassandra 2.1’s user-defined types</dd>
+<dd>Working with Scylla’s user-defined types (UDT)</dd>
 <dt><a class="reference internal" href="dates_and_times/"><span class="doc">Working with Dates and Times</span></a></dt>
 <dd>Some discussion on the driver’s approach to working with timestamp, date, time types</dd>
-<dt><a class="reference internal" href="cloud/"><span class="doc">Cloud</span></a></dt>
-<dd>A guide to connecting to Datastax Apollo</dd>
-<dt><a class="reference internal" href="geo_types/"><span class="doc">DSE Geometry Types</span></a></dt>
-<dd>Working with DSE geometry types</dd>
-<dt><a class="reference internal" href="graph/"><span class="doc">DataStax Graph Queries</span></a></dt>
-<dd>Graph queries with DSE Graph</dd>
-<dt><a class="reference internal" href="graph_fluent/"><span class="doc">DataStax Graph Fluent API</span></a></dt>
-<dd>DataStax Graph Fluent API</dd>
 <dt><a class="reference internal" href="CHANGELOG/"><span class="doc">CHANGELOG</span></a></dt>
 <dd>Log of changes to the driver, organized by version.</dd>
 <dt><a class="reference internal" href="faq/"><span class="doc">Frequently Asked Questions</span></a></dt>
@@ -149,14 +141,17 @@ The source code for this driver can be found on <a class="reference external" hr
 <div class="section" id="getting-help">
 <h2>Getting Help<a class="headerlink" href="#getting-help" title="Permalink to this headline">¶</a></h2>
 <p>Visit the <a class="reference internal" href="faq/"><span class="doc">FAQ section</span></a> in this documentation.</p>
-<p>Please send questions to the <a class="reference external" href="https://groups.google.com/a/lists.datastax.com/forum/#!forum/python-driver-user">mailing list</a>.</p>
-<p>Alternatively, you can use the <a class="reference external" href="https://community.datastax.com">DataStax Community</a>.</p>
+<p>Please send questions to the Scylla <a class="reference external" href="https://groups.google.com/forum/#!forum/scylladb-users">user list</a>.</p>
 </div>
 <div class="section" id="reporting-issues">
 <h2>Reporting Issues<a class="headerlink" href="#reporting-issues" title="Permalink to this headline">¶</a></h2>
-<p>Please report any bugs and make any feature requests on the
-<a class="reference external" href="https://datastax-oss.atlassian.net/browse/PYTHON">JIRA</a> issue tracker.</p>
-<p>If you would like to contribute, please feel free to open a pull request.</p>
+<p>Please report any bugs and make any feature requests on the <a class="reference external" href="https://github.com/scylladb/python-driver/issues">Github project issues</a></p>
+</div>
+<div class="section" id="copyright">
+<h2>Copyright<a class="headerlink" href="#copyright" title="Permalink to this headline">¶</a></h2>
+<p>© 2013-2017 DataStax</p>
+<p>© 2016, The Apache Software Foundation.
+Apache®, Apache Cassandra®, Cassandra®, the Apache feather logo and the Apache Cassandra® Eye logo are either registered trademarks or trademarks of the Apache Software Foundation in the United States and/or other countries. No endorsement by The Apache Software Foundation is implied by the use of these marks.</p>
 </div>
 </div>
 
@@ -213,7 +208,7 @@ The source code for this driver can be found on <a class="reference external" hr
             <a class="link" href="https://docs.scylladb.com">Docs</a>
             <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
             <a class="link" href="https://www.scylladb.com/company/">About Us</a>
-            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page DataStax Python Driver for Apache Cassandra®&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/index%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page Python Driver for Scylla and Apache Cassandra®&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/index%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
                 Report an issue on this page</a>
         </div>
         <div class="footer-actions">
