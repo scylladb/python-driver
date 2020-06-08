@@ -99,11 +99,35 @@
 <h1>CHANGELOG<a class="headerlink" href="#changelog" title="Permalink to this headline">¶</a></h1>
 <div class="section" id="id1">
 <h2>3.22.0<a class="headerlink" href="#id1" title="Permalink to this headline">¶</a></h2>
-<p>UNRELEASED</p>
+<p>February 26, 2020</p>
 <div class="section" id="features">
 <h3>Features<a class="headerlink" href="#features" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Add all() function to the ResultSet API (PYTHON-1203)</li>
+<li>Parse new schema metadata in NGDG and generate table edges CQL syntax (PYTHON-996)</li>
+<li>Add GraphSON3 support (PYTHON-788)</li>
+<li>Use GraphSON3 as default for Native graphs (PYTHON-1004)</li>
+<li>Add Tuple and UDT types for native graph (PYTHON-1005)</li>
+<li>Add Duration type for native graph (PYTHON-1000)</li>
+<li>Add gx:ByteBuffer graphson type support for Blob field (PYTHON-1027)</li>
+<li>Enable Paging Through DSE Driver for Gremlin Traversals (PYTHON-1045)</li>
+<li>Provide numerical wrappers to ensure proper graphson schema definition (PYTHON-1051)</li>
+<li>Resolve the row_factory automatically for native graphs (PYTHON-1056)</li>
+<li>Add g:TraversalMetrics/g:Metrics graph deserializers (PYTHON-1057)</li>
+<li>Add g:BulkSet graph deserializers (PYTHON-1060)</li>
+<li>Update Graph Engine names and the way to create a Classic/Native Graph (PYTHON-1090)</li>
+<li>Update Native to Core Graph Engine</li>
+<li>Add graphson3 and native graph support (PYTHON-1039)</li>
+<li>Enable Paging Through DSE Driver for Gremlin Traversals (PYTHON-1045)</li>
+<li>Expose filter predicates for cql collections (PYTHON-1019)</li>
+<li>Add g:TraversalMetrics/Metrics deserializers (PYTHON-1057)</li>
+<li>Make graph metadata handling more robust (PYTHON-1204)</li>
+</ul>
+</div>
+<div class="section" id="bug-fixes">
+<h3>Bug Fixes<a class="headerlink" href="#bug-fixes" title="Permalink to this headline">¶</a></h3>
+<ul class="simple">
+<li>Make sure to only query the native_transport_address column with DSE (PYTHON-1205)</li>
 </ul>
 </div>
 </div>
@@ -124,8 +148,8 @@
 <li>[GRAPH] Ability to execute Fluent Graph queries asynchronously (PYTHON-1129)</li>
 </ul>
 </div>
-<div class="section" id="bug-fixes">
-<h3>Bug Fixes<a class="headerlink" href="#bug-fixes" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id4">
+<h3>Bug Fixes<a class="headerlink" href="#id4" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Handle prepared id mismatch when repreparing on the fly (PYTHON-1124)</li>
 <li>re-raising the CQLEngineException will fail on Python 3 (PYTHON-1166)</li>
@@ -141,7 +165,7 @@
 <ul class="simple">
 <li>The driver has a new dependency: geomet. It comes from the dse-driver unification and
 is used to support DSE geo types.</li>
-<li>Remove <a href="#id4"><span class="problematic" id="id5">*</span></a>read_repair_chance table options (PYTHON-1140)</li>
+<li>Remove <a href="#id5"><span class="problematic" id="id6">*</span></a>read_repair_chance table options (PYTHON-1140)</li>
 <li>Avoid warnings about unspecified load balancing policy when connecting to a cloud cluster (PYTHON-1177)</li>
 <li>Add new DSE CQL keywords (PYTHON-1122)</li>
 <li>Publish binary wheel distributions (PYTHON-1013)</li>
@@ -155,8 +179,8 @@ the DefaultLoadBalancingPolicy.</li>
 </ul>
 <p>Merged from dse-driver:</p>
 </div>
-<div class="section" id="id6">
-<h3>Features<a class="headerlink" href="#id6" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id7">
+<h3>Features<a class="headerlink" href="#id7" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Insights integration (PYTHON-1047)</li>
 <li>Graph execution profiles should preserve their graph_source when graph_options is overridden (PYTHON-1021)</li>
@@ -184,8 +208,8 @@ the DefaultLoadBalancingPolicy.</li>
 <li>Target graph analytics query to spark master when available (PYTHON-510)</li>
 </ul>
 </div>
-<div class="section" id="id7">
-<h3>Bug Fixes<a class="headerlink" href="#id7" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id8">
+<h3>Bug Fixes<a class="headerlink" href="#id8" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Continuous paging sessions raise RuntimeError when results are not entirely consumed (PYTHON-1054)</li>
 <li>GraphSON Property deserializer should return a dict instead of a set (PYTHON-1033)</li>
@@ -212,38 +236,38 @@ the DefaultLoadBalancingPolicy.</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id8">
-<h2>3.20.2<a class="headerlink" href="#id8" title="Permalink to this headline">¶</a></h2>
-<p>November 19, 2019</p>
 <div class="section" id="id9">
-<h3>Bug Fixes<a class="headerlink" href="#id9" title="Permalink to this headline">¶</a></h3>
+<h2>3.20.2<a class="headerlink" href="#id9" title="Permalink to this headline">¶</a></h2>
+<p>November 19, 2019</p>
+<div class="section" id="id10">
+<h3>Bug Fixes<a class="headerlink" href="#id10" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix import error for old python installation without SSLContext (PYTHON-1183)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id10">
-<h2>3.20.1<a class="headerlink" href="#id10" title="Permalink to this headline">¶</a></h2>
-<p>November 6, 2019</p>
 <div class="section" id="id11">
-<h3>Bug Fixes<a class="headerlink" href="#id11" title="Permalink to this headline">¶</a></h3>
+<h2>3.20.1<a class="headerlink" href="#id11" title="Permalink to this headline">¶</a></h2>
+<p>November 6, 2019</p>
+<div class="section" id="id12">
+<h3>Bug Fixes<a class="headerlink" href="#id12" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>ValueError: too many values to unpack (expected 2)” when there are two dashes in server version number (PYTHON-1172)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id12">
-<h2>3.20.0<a class="headerlink" href="#id12" title="Permalink to this headline">¶</a></h2>
-<p>October 28, 2019</p>
 <div class="section" id="id13">
-<h3>Features<a class="headerlink" href="#id13" title="Permalink to this headline">¶</a></h3>
+<h2>3.20.0<a class="headerlink" href="#id13" title="Permalink to this headline">¶</a></h2>
+<p>October 28, 2019</p>
+<div class="section" id="id14">
+<h3>Features<a class="headerlink" href="#id14" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>DataStax Apollo Support (PYTHON-1074)</li>
 <li>Use 4.0 schema parser in 4 alpha and snapshot builds (PYTHON-1158)</li>
 </ul>
 </div>
-<div class="section" id="id14">
-<h3>Bug Fixes<a class="headerlink" href="#id14" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id15">
+<h3>Bug Fixes<a class="headerlink" href="#id15" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Connection setup methods prevent using ExecutionProfile in cqlengine (PYTHON-1009)</li>
 <li>Driver deadlock if all connections dropped by heartbeat whilst request in flight and request times out (PYTHON-1044)</li>
@@ -251,11 +275,11 @@ the DefaultLoadBalancingPolicy.</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id15">
-<h2>3.19.0<a class="headerlink" href="#id15" title="Permalink to this headline">¶</a></h2>
-<p>August 26, 2019</p>
 <div class="section" id="id16">
-<h3>Features<a class="headerlink" href="#id16" title="Permalink to this headline">¶</a></h3>
+<h2>3.19.0<a class="headerlink" href="#id16" title="Permalink to this headline">¶</a></h2>
+<p>August 26, 2019</p>
+<div class="section" id="id17">
+<h3>Features<a class="headerlink" href="#id17" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Add Python 3.7 support (PYTHON-1016)</li>
 <li>Future-proof Mapping imports (PYTHON-1023)</li>
@@ -263,8 +287,8 @@ the DefaultLoadBalancingPolicy.</li>
 <li>NTS Token Replica Map Generation is slow (PYTHON-622)</li>
 </ul>
 </div>
-<div class="section" id="id17">
-<h3>Bug Fixes<a class="headerlink" href="#id17" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id18">
+<h3>Bug Fixes<a class="headerlink" href="#id18" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>as_cql_query UDF/UDA parameters incorrectly includes “frozen” if arguments are collections (PYTHON-1031)</li>
 <li>cqlengine does not currently support combining TTL and TIMESTAMP on INSERT (PYTHON-1093)</li>
@@ -275,19 +299,19 @@ the DefaultLoadBalancingPolicy.</li>
 <li>Exception when use pk__token__gt filter In python 3.7 (PYTHON-1121)</li>
 </ul>
 </div>
-<div class="section" id="id18">
-<h3>Other<a class="headerlink" href="#id18" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id19">
+<h3>Other<a class="headerlink" href="#id19" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Remove invalid warning in set_session when we initialize a default connection (PYTHON-1104)</li>
 <li>Set the proper default ExecutionProfile.row_factory value (PYTHON-1119)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id19">
-<h2>3.18.0<a class="headerlink" href="#id19" title="Permalink to this headline">¶</a></h2>
-<p>May 27, 2019</p>
 <div class="section" id="id20">
-<h3>Features<a class="headerlink" href="#id20" title="Permalink to this headline">¶</a></h3>
+<h2>3.18.0<a class="headerlink" href="#id20" title="Permalink to this headline">¶</a></h2>
+<p>May 27, 2019</p>
+<div class="section" id="id21">
+<h3>Features<a class="headerlink" href="#id21" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Abstract Host Connection information (PYTHON-1079)</li>
 <li>Improve version parsing to support a non-integer 4th component (PYTHON-1091)</li>
@@ -295,8 +319,8 @@ the DefaultLoadBalancingPolicy.</li>
 <li>Add jitter to ExponentialReconnectionPolicy (PYTHON-1065)</li>
 </ul>
 </div>
-<div class="section" id="id21">
-<h3>Bug Fixes<a class="headerlink" href="#id21" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id22">
+<h3>Bug Fixes<a class="headerlink" href="#id22" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix error when preparing queries with beta protocol v5 (PYTHON-1081)</li>
 <li>Accept legacy empty strings as column names (PYTHON-1082)</li>
@@ -304,21 +328,21 @@ the DefaultLoadBalancingPolicy.</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id22">
-<h2>3.17.1<a class="headerlink" href="#id22" title="Permalink to this headline">¶</a></h2>
-<p>May 2, 2019</p>
 <div class="section" id="id23">
-<h3>Bug Fixes<a class="headerlink" href="#id23" title="Permalink to this headline">¶</a></h3>
+<h2>3.17.1<a class="headerlink" href="#id23" title="Permalink to this headline">¶</a></h2>
+<p>May 2, 2019</p>
+<div class="section" id="id24">
+<h3>Bug Fixes<a class="headerlink" href="#id24" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Socket errors EAGAIN/EWOULDBLOCK are not handled properly and cause timeouts (PYTHON-1089)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id24">
-<h2>3.17.0<a class="headerlink" href="#id24" title="Permalink to this headline">¶</a></h2>
-<p>February 19, 2019</p>
 <div class="section" id="id25">
-<h3>Features<a class="headerlink" href="#id25" title="Permalink to this headline">¶</a></h3>
+<h2>3.17.0<a class="headerlink" href="#id25" title="Permalink to this headline">¶</a></h2>
+<p>February 19, 2019</p>
+<div class="section" id="id26">
+<h3>Features<a class="headerlink" href="#id26" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Send driver name and version in startup message (PYTHON-1068)</li>
 <li>Add Cluster ssl_context option to enable SSL (PYTHON-995)</li>
@@ -328,23 +352,23 @@ the DefaultLoadBalancingPolicy.</li>
 <li>Add host kwarg to Session.execute/execute_async APIs to send a query to a specific node (PYTHON-993)</li>
 </ul>
 </div>
-<div class="section" id="id26">
-<h3>Bug Fixes<a class="headerlink" href="#id26" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id27">
+<h3>Bug Fixes<a class="headerlink" href="#id27" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>NoHostAvailable when all hosts are up and connectable (PYTHON-891)</li>
 <li>Serial consistency level is not used (PYTHON-1007)</li>
 </ul>
 </div>
-<div class="section" id="id27">
-<h3>Other<a class="headerlink" href="#id27" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id28">
+<h3>Other<a class="headerlink" href="#id28" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fail faster on incorrect lz4 import (PYTHON-1042)</li>
 <li>Bump Cython dependency version to 0.29 (PYTHON-1036)</li>
 <li>Expand Driver SSL Documentation (PYTHON-740)</li>
 </ul>
 </div>
-<div class="section" id="id28">
-<h3>Deprecations<a class="headerlink" href="#id28" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id29">
+<h3>Deprecations<a class="headerlink" href="#id29" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Using Cluster.ssl_options to enable SSL is deprecated and will be removed in
 the next major release, use ssl_context.</li>
@@ -353,11 +377,11 @@ removed in the next major release. (PYTHON-937)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id29">
-<h2>3.16.0<a class="headerlink" href="#id29" title="Permalink to this headline">¶</a></h2>
-<p>November 12, 2018</p>
 <div class="section" id="id30">
-<h3>Bug Fixes<a class="headerlink" href="#id30" title="Permalink to this headline">¶</a></h3>
+<h2>3.16.0<a class="headerlink" href="#id30" title="Permalink to this headline">¶</a></h2>
+<p>November 12, 2018</p>
+<div class="section" id="id31">
+<h3>Bug Fixes<a class="headerlink" href="#id31" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Improve and fix socket error-catching code in nonblocking-socket reactors (PYTHON-1024)</li>
 <li>Non-ASCII characters in schema break CQL string generation (PYTHON-1008)</li>
@@ -367,35 +391,35 @@ removed in the next major release. (PYTHON-937)</li>
 <li>Cluster instantiation fails if any contact points’ hostname resolution fails (PYTHON-895)</li>
 </ul>
 </div>
-<div class="section" id="id31">
-<h3>Other<a class="headerlink" href="#id31" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id32">
+<h3>Other<a class="headerlink" href="#id32" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix tests when RF is not maintained if we decomission a node (PYTHON-1017)</li>
 <li>Fix wrong use of ResultSet indexing (PYTHON-1015)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id32">
-<h2>3.15.1<a class="headerlink" href="#id32" title="Permalink to this headline">¶</a></h2>
-<p>September 6, 2018</p>
 <div class="section" id="id33">
-<h3>Bug Fixes<a class="headerlink" href="#id33" title="Permalink to this headline">¶</a></h3>
+<h2>3.15.1<a class="headerlink" href="#id33" title="Permalink to this headline">¶</a></h2>
+<p>September 6, 2018</p>
+<div class="section" id="id34">
+<h3>Bug Fixes<a class="headerlink" href="#id34" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>C* 4.0 schema-parsing logic breaks running against DSE 6.0.X (PYTHON-1018)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id34">
-<h2>3.15.0<a class="headerlink" href="#id34" title="Permalink to this headline">¶</a></h2>
-<p>August 30, 2018</p>
 <div class="section" id="id35">
-<h3>Features<a class="headerlink" href="#id35" title="Permalink to this headline">¶</a></h3>
+<h2>3.15.0<a class="headerlink" href="#id35" title="Permalink to this headline">¶</a></h2>
+<p>August 30, 2018</p>
+<div class="section" id="id36">
+<h3>Features<a class="headerlink" href="#id36" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Parse Virtual Keyspace Metadata (PYTHON-992)</li>
 </ul>
 </div>
-<div class="section" id="id36">
-<h3>Bug Fixes<a class="headerlink" href="#id36" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id37">
+<h3>Bug Fixes<a class="headerlink" href="#id37" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Tokenmap.get_replicas returns the wrong value if token coincides with the end of the range (PYTHON-978)</li>
 <li>Python Driver fails with “more than 255 arguments” python exception when &gt; 255 columns specified in query response (PYTHON-893)</li>
@@ -403,8 +427,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>Asyncore reactors should use a global variable instead of a class variable for the event loop (PYTHON-697)</li>
 </ul>
 </div>
-<div class="section" id="id37">
-<h3>Other<a class="headerlink" href="#id37" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id38">
+<h3>Other<a class="headerlink" href="#id38" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Use global variable for libev loops so it can be subclassed (PYTHON-973)</li>
 <li>Update SchemaParser for V4 (PYTHON-1006)</li>
@@ -412,11 +436,11 @@ removed in the next major release. (PYTHON-937)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id38">
-<h2>3.14.0<a class="headerlink" href="#id38" title="Permalink to this headline">¶</a></h2>
-<p>April 17, 2018</p>
 <div class="section" id="id39">
-<h3>Features<a class="headerlink" href="#id39" title="Permalink to this headline">¶</a></h3>
+<h2>3.14.0<a class="headerlink" href="#id39" title="Permalink to this headline">¶</a></h2>
+<p>April 17, 2018</p>
+<div class="section" id="id40">
+<h3>Features<a class="headerlink" href="#id40" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Add one() function to the ResultSet API (PYTHON-947)</li>
 <li>Create an utility function to fetch concurrently many keys from the same replica (PYTHON-647)</li>
@@ -425,8 +449,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>Support IS NOT NULL operator in cqlengine (PYTHON-968)</li>
 </ul>
 </div>
-<div class="section" id="id40">
-<h3>Other<a class="headerlink" href="#id40" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id41">
+<h3>Other<a class="headerlink" href="#id41" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix Broken Links in Docs (PYTHON-916)</li>
 <li>Reevaluate MONKEY_PATCH_LOOP in test codebase (PYTHON-903)</li>
@@ -441,18 +465,18 @@ removed in the next major release. (PYTHON-937)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id41">
-<h2>3.13.0<a class="headerlink" href="#id41" title="Permalink to this headline">¶</a></h2>
-<p>January 30, 2018</p>
 <div class="section" id="id42">
-<h3>Features<a class="headerlink" href="#id42" title="Permalink to this headline">¶</a></h3>
+<h2>3.13.0<a class="headerlink" href="#id42" title="Permalink to this headline">¶</a></h2>
+<p>January 30, 2018</p>
+<div class="section" id="id43">
+<h3>Features<a class="headerlink" href="#id43" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>cqlengine: LIKE filter operator (PYTHON-512)</li>
 <li>Support cassandra.query.BatchType with cqlengine BatchQuery (PYTHON-888)</li>
 </ul>
 </div>
-<div class="section" id="id43">
-<h3>Bug Fixes<a class="headerlink" href="#id43" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id44">
+<h3>Bug Fixes<a class="headerlink" href="#id44" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>AttributeError: ‘NoneType’ object has no attribute ‘add_timer’ (PYTHON-862)</li>
 <li>Support retry_policy in PreparedStatement (PYTHON-861)</li>
@@ -462,8 +486,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>ResultSet.was_applied doesn’t support batch with LWT statements (PYTHON-848)</li>
 </ul>
 </div>
-<div class="section" id="id44">
-<h3>Other<a class="headerlink" href="#id44" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id45">
+<h3>Other<a class="headerlink" href="#id45" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>cqlengine: avoid warning when unregistering connection on shutdown (PYTHON-865)</li>
 <li>Fix DeprecationWarning of log.warn (PYTHON-846)</li>
@@ -478,11 +502,11 @@ removed in the next major release. (PYTHON-937)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id45">
-<h2>3.12.0<a class="headerlink" href="#id45" title="Permalink to this headline">¶</a></h2>
-<p>November 6, 2017</p>
 <div class="section" id="id46">
-<h3>Features<a class="headerlink" href="#id46" title="Permalink to this headline">¶</a></h3>
+<h2>3.12.0<a class="headerlink" href="#id46" title="Permalink to this headline">¶</a></h2>
+<p>November 6, 2017</p>
+<div class="section" id="id47">
+<h3>Features<a class="headerlink" href="#id47" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Send keyspace in QUERY, PREPARE, and BATCH messages (PYTHON-678)</li>
 <li>Add IPv4Address/IPv6Address support for inet types (PYTHON-751)</li>
@@ -496,8 +520,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>Add asyncio reactor (PYTHON-507)</li>
 </ul>
 </div>
-<div class="section" id="id47">
-<h3>Bug Fixes<a class="headerlink" href="#id47" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id48">
+<h3>Bug Fixes<a class="headerlink" href="#id48" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Both _set_final_exception/result called for the same ResponseFuture (PYTHON-630)</li>
 <li>Use of DCAwareRoundRobinPolicy raises NoHostAvailable exception (PYTHON-781)</li>
@@ -511,26 +535,26 @@ removed in the next major release. (PYTHON-937)</li>
 <li>Use of DCAwareRoundRobinPolicy raises NoHostAvailable exception       (PYTHON-781)</li>
 </ul>
 </div>
-<div class="section" id="id48">
-<h3>Other<a class="headerlink" href="#id48" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id49">
+<h3>Other<a class="headerlink" href="#id49" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Remove DeprecationWarning when using WhiteListRoundRobinPolicy (PYTHON-810)</li>
 <li>Bump Cython dependency version to 0.27 (PYTHON-833)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id49">
-<h2>3.11.0<a class="headerlink" href="#id49" title="Permalink to this headline">¶</a></h2>
-<p>July 24, 2017</p>
 <div class="section" id="id50">
-<h3>Features<a class="headerlink" href="#id50" title="Permalink to this headline">¶</a></h3>
+<h2>3.11.0<a class="headerlink" href="#id50" title="Permalink to this headline">¶</a></h2>
+<p>July 24, 2017</p>
+<div class="section" id="id51">
+<h3>Features<a class="headerlink" href="#id51" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Add idle_heartbeat_timeout cluster option to tune how long to wait for heartbeat responses. (PYTHON-762)</li>
 <li>Add HostFilterPolicy (PYTHON-761)</li>
 </ul>
 </div>
-<div class="section" id="id51">
-<h3>Bug Fixes<a class="headerlink" href="#id51" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id52">
+<h3>Bug Fixes<a class="headerlink" href="#id52" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>is_idempotent flag is not propagated from PreparedStatement to BoundStatement (PYTHON-736)</li>
 <li>Fix asyncore hang on exit (PYTHON-767)</li>
@@ -543,8 +567,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>Fix .values_list by using db names internally (cqlengine) (PYTHON-785)</li>
 </ul>
 </div>
-<div class="section" id="id52">
-<h3>Other<a class="headerlink" href="#id52" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id53">
+<h3>Other<a class="headerlink" href="#id53" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Bump Cython dependency version to 0.25.2 (PYTHON-754)</li>
 <li>Fix DeprecationWarning when using lz4 (PYTHON-769)</li>
@@ -555,19 +579,19 @@ removed in the next major release. (PYTHON-937)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id53">
-<h2>3.10.0<a class="headerlink" href="#id53" title="Permalink to this headline">¶</a></h2>
-<p>May 24, 2017</p>
 <div class="section" id="id54">
-<h3>Features<a class="headerlink" href="#id54" title="Permalink to this headline">¶</a></h3>
+<h2>3.10.0<a class="headerlink" href="#id54" title="Permalink to this headline">¶</a></h2>
+<p>May 24, 2017</p>
+<div class="section" id="id55">
+<h3>Features<a class="headerlink" href="#id55" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Add Duration type to cqlengine (PYTHON-750)</li>
 <li>Community PR review: Raise error on primary key update only if its value changed (PYTHON-705)</li>
 <li>get_query_trace() contract is ambiguous (PYTHON-196)</li>
 </ul>
 </div>
-<div class="section" id="id55">
-<h3>Bug Fixes<a class="headerlink" href="#id55" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id56">
+<h3>Bug Fixes<a class="headerlink" href="#id56" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Queries using speculative execution policy timeout prematurely (PYTHON-755)</li>
 <li>Fix <cite>map</cite> where results are not consumed (PYTHON-749)</li>
@@ -583,27 +607,27 @@ removed in the next major release. (PYTHON-937)</li>
 <li>Avoid using nonexistent prepared statement in ResponseFuture (PYTHON-706)</li>
 </ul>
 </div>
-<div class="section" id="id56">
-<h3>Other<a class="headerlink" href="#id56" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id57">
+<h3>Other<a class="headerlink" href="#id57" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Update README (PYTHON-746)</li>
 <li>Test python versions 3.5 and 3.6 (PYTHON-737)</li>
-<li>Docs Warning About Prepare “select <a href="#id57"><span class="problematic" id="id58">*</span></a>” (PYTHON-626)</li>
+<li>Docs Warning About Prepare “select <a href="#id58"><span class="problematic" id="id59">*</span></a>” (PYTHON-626)</li>
 <li>Increase Coverage in CqlEngine Test Suite (PYTHON-505)</li>
 <li>Example SSL connection code does not verify server certificates (PYTHON-469)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id59">
-<h2>3.9.0<a class="headerlink" href="#id59" title="Permalink to this headline">¶</a></h2>
 <div class="section" id="id60">
-<h3>Features<a class="headerlink" href="#id60" title="Permalink to this headline">¶</a></h3>
+<h2>3.9.0<a class="headerlink" href="#id60" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="id61">
+<h3>Features<a class="headerlink" href="#id61" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>cqlengine: remove elements by key from a map (PYTHON-688)</li>
 </ul>
 </div>
-<div class="section" id="id61">
-<h3>Bug Fixes<a class="headerlink" href="#id61" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id62">
+<h3>Bug Fixes<a class="headerlink" href="#id62" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>improve error handling when connecting to non-existent keyspace (PYTHON-665)</li>
 <li>Sockets associated with sessions not getting cleaned up on session.shutdown() (PYTHON-673)</li>
@@ -614,19 +638,19 @@ removed in the next major release. (PYTHON-937)</li>
 <li>cqlengine: field value manager’s explicit flag is True when queried back from cassandra (PYTHON-719)</li>
 </ul>
 </div>
-<div class="section" id="id62">
-<h3>Other<a class="headerlink" href="#id62" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id63">
+<h3>Other<a class="headerlink" href="#id63" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Connection not closed in example_mapper (PYTHON-723)</li>
 <li>Remove mention of pre-2.0 C* versions from OSS 3.0+ docs (PYTHON-710)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id63">
-<h2>3.8.1<a class="headerlink" href="#id63" title="Permalink to this headline">¶</a></h2>
-<p>March 16, 2017</p>
 <div class="section" id="id64">
-<h3>Bug Fixes<a class="headerlink" href="#id64" title="Permalink to this headline">¶</a></h3>
+<h2>3.8.1<a class="headerlink" href="#id64" title="Permalink to this headline">¶</a></h2>
+<p>March 16, 2017</p>
+<div class="section" id="id65">
+<h3>Bug Fixes<a class="headerlink" href="#id65" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>implement __le__/__ge__/__ne__ on some custom types (PYTHON-714)</li>
 <li>Fix bug in eventlet and gevent reactors that could cause hangs (PYTHON-721)</li>
@@ -634,10 +658,10 @@ removed in the next major release. (PYTHON-937)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id65">
-<h2>3.8.0<a class="headerlink" href="#id65" title="Permalink to this headline">¶</a></h2>
 <div class="section" id="id66">
-<h3>Features<a class="headerlink" href="#id66" title="Permalink to this headline">¶</a></h3>
+<h2>3.8.0<a class="headerlink" href="#id66" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="id67">
+<h3>Features<a class="headerlink" href="#id67" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Quote index names in metadata CQL generation (PYTHON-616)</li>
 <li>On column deserialization failure, keep error message consistent between python and cython (PYTHON-631)</li>
@@ -648,8 +672,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>Send flags with PREPARE message in v5 (PYTHON-684)</li>
 </ul>
 </div>
-<div class="section" id="id67">
-<h3>Bug Fixes<a class="headerlink" href="#id67" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id68">
+<h3>Bug Fixes<a class="headerlink" href="#id68" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Potential Timing issue if application exits prior to session pool initialization (PYTHON-636)</li>
 <li>“Host X.X.X.X has been marked down” without any exceptions (PYTHON-640)</li>
@@ -663,8 +687,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>cassandra.cqlengine.connection.register_connection broken when hosts=None (PYTHON-692)</li>
 </ul>
 </div>
-<div class="section" id="id68">
-<h3>Other<a class="headerlink" href="#id68" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id69">
+<h3>Other<a class="headerlink" href="#id69" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Create a cqlengine doc section explaining None semantics (PYTHON-623)</li>
 <li>Resolve warnings in documentation generation (PYTHON-645)</li>
@@ -673,21 +697,21 @@ removed in the next major release. (PYTHON-937)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id69">
-<h2>3.7.1<a class="headerlink" href="#id69" title="Permalink to this headline">¶</a></h2>
-<p>October 26, 2016</p>
 <div class="section" id="id70">
-<h3>Bug Fixes<a class="headerlink" href="#id70" title="Permalink to this headline">¶</a></h3>
+<h2>3.7.1<a class="headerlink" href="#id70" title="Permalink to this headline">¶</a></h2>
+<p>October 26, 2016</p>
+<div class="section" id="id71">
+<h3>Bug Fixes<a class="headerlink" href="#id71" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Cython upgrade has broken stable version of cassandra-driver (PYTHON-656)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id71">
-<h2>3.7.0<a class="headerlink" href="#id71" title="Permalink to this headline">¶</a></h2>
-<p>September 13, 2016</p>
 <div class="section" id="id72">
-<h3>Features<a class="headerlink" href="#id72" title="Permalink to this headline">¶</a></h3>
+<h2>3.7.0<a class="headerlink" href="#id72" title="Permalink to this headline">¶</a></h2>
+<p>September 13, 2016</p>
+<div class="section" id="id73">
+<h3>Features<a class="headerlink" href="#id73" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Add v5 protocol failure map (PYTHON-619)</li>
 <li>Don’t return from initial connect on first error (PYTHON-617)</li>
@@ -705,8 +729,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>cqlengine: Connections: support of multiple keyspaces and sessions (PYTHON-613)</li>
 </ul>
 </div>
-<div class="section" id="id73">
-<h3>Bug Fixes<a class="headerlink" href="#id73" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id74">
+<h3>Bug Fixes<a class="headerlink" href="#id74" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Race when adding a pool while setting keyspace (PYTHON-628)</li>
 <li>Update results_metadata when prepared statement is reprepared (PYTHON-621)</li>
@@ -717,11 +741,11 @@ removed in the next major release. (PYTHON-937)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id74">
-<h2>3.6.0<a class="headerlink" href="#id74" title="Permalink to this headline">¶</a></h2>
-<p>August 1, 2016</p>
 <div class="section" id="id75">
-<h3>Features<a class="headerlink" href="#id75" title="Permalink to this headline">¶</a></h3>
+<h2>3.6.0<a class="headerlink" href="#id75" title="Permalink to this headline">¶</a></h2>
+<p>August 1, 2016</p>
+<div class="section" id="id76">
+<h3>Features<a class="headerlink" href="#id76" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Handle null values in NumpyProtocolHandler (PYTHON-553)</li>
 <li>Collect greplin scales stats per cluster (PYTHON-561)</li>
@@ -734,8 +758,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>Standardize Validation between Ascii and Text types in Cqlengine (PYTHON-609)</li>
 </ul>
 </div>
-<div class="section" id="id76">
-<h3>Bug Fixes<a class="headerlink" href="#id76" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id77">
+<h3>Bug Fixes<a class="headerlink" href="#id77" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix geventreactor with SSL support (PYTHON-600)</li>
 <li>Don’t downgrade protocol version if explicitly set (PYTHON-537)</li>
@@ -753,41 +777,41 @@ removed in the next major release. (PYTHON-937)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id77">
-<h2>3.5.0<a class="headerlink" href="#id77" title="Permalink to this headline">¶</a></h2>
-<p>June 27, 2016</p>
 <div class="section" id="id78">
-<h3>Features<a class="headerlink" href="#id78" title="Permalink to this headline">¶</a></h3>
+<h2>3.5.0<a class="headerlink" href="#id78" title="Permalink to this headline">¶</a></h2>
+<p>June 27, 2016</p>
+<div class="section" id="id79">
+<h3>Features<a class="headerlink" href="#id79" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Optional Execution Profiles for the core driver (PYTHON-569)</li>
 <li>API to get the host metadata associated with the control connection node (PYTHON-583)</li>
 <li>Expose CDC option in table metadata CQL (PYTHON-593)</li>
 </ul>
 </div>
-<div class="section" id="id79">
-<h3>Bug Fixes<a class="headerlink" href="#id79" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id80">
+<h3>Bug Fixes<a class="headerlink" href="#id80" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Clean up Asyncore socket map when fork is detected (PYTHON-577)</li>
 <li>cqlengine: QuerySet only() is not respected when there are deferred fields (PYTHON-560)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id80">
-<h2>3.4.1<a class="headerlink" href="#id80" title="Permalink to this headline">¶</a></h2>
-<p>May 26, 2016</p>
 <div class="section" id="id81">
-<h3>Bug Fixes<a class="headerlink" href="#id81" title="Permalink to this headline">¶</a></h3>
+<h2>3.4.1<a class="headerlink" href="#id81" title="Permalink to this headline">¶</a></h2>
+<p>May 26, 2016</p>
+<div class="section" id="id82">
+<h3>Bug Fixes<a class="headerlink" href="#id82" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Gevent connection closes on IO timeout (PYTHON-573)</li>
 <li>“dictionary changed size during iteration” with Python 3 (PYTHON-572)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id82">
-<h2>3.4.0<a class="headerlink" href="#id82" title="Permalink to this headline">¶</a></h2>
-<p>May 24, 2016</p>
 <div class="section" id="id83">
-<h3>Features<a class="headerlink" href="#id83" title="Permalink to this headline">¶</a></h3>
+<h2>3.4.0<a class="headerlink" href="#id83" title="Permalink to this headline">¶</a></h2>
+<p>May 24, 2016</p>
+<div class="section" id="id84">
+<h3>Features<a class="headerlink" href="#id84" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Include DSE version and workload in Host data (PYTHON-555)</li>
 <li>Add a context manager to Cluster and Session (PYTHON-521)</li>
@@ -802,8 +826,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>Write docs around working with datetime and timezones (PYTHON-394)</li>
 </ul>
 </div>
-<div class="section" id="id84">
-<h3>Bug Fixes<a class="headerlink" href="#id84" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id85">
+<h3>Bug Fixes<a class="headerlink" href="#id85" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>High CPU utilization when using asyncore event loop (PYTHON-239)</li>
 <li>Fix CQL Export for non-ASCII Identifiers (PYTHON-447)</li>
@@ -818,11 +842,11 @@ removed in the next major release. (PYTHON-937)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id85">
-<h2>3.3.0<a class="headerlink" href="#id85" title="Permalink to this headline">¶</a></h2>
-<p>May 2, 2016</p>
 <div class="section" id="id86">
-<h3>Features<a class="headerlink" href="#id86" title="Permalink to this headline">¶</a></h3>
+<h2>3.3.0<a class="headerlink" href="#id86" title="Permalink to this headline">¶</a></h2>
+<p>May 2, 2016</p>
+<div class="section" id="id87">
+<h3>Features<a class="headerlink" href="#id87" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Add an AddressTranslator interface (PYTHON-69)</li>
 <li>New Retry Policy Decision - try next host (PYTHON-285)</li>
@@ -838,8 +862,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>Specialized exceptions for metadata refresh methods failure (PYTHON-527)</li>
 </ul>
 </div>
-<div class="section" id="id87">
-<h3>Bug Fixes<a class="headerlink" href="#id87" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id88">
+<h3>Bug Fixes<a class="headerlink" href="#id88" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Resolve contact point hostnames to avoid duplicate hosts (PYTHON-103)</li>
 <li>GeventConnection stalls requests when read is a multiple of the input buffer size (PYTHON-429)</li>
@@ -850,25 +874,25 @@ removed in the next major release. (PYTHON-937)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id88">
-<h2>3.2.2<a class="headerlink" href="#id88" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="id89">
+<h2>3.2.2<a class="headerlink" href="#id89" title="Permalink to this headline">¶</a></h2>
 <p>April 19, 2016</p>
 <ul class="simple">
 <li>Fix counter save-after-no-update (PYTHON-547)</li>
 </ul>
 </div>
-<div class="section" id="id89">
-<h2>3.2.1<a class="headerlink" href="#id89" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="id90">
+<h2>3.2.1<a class="headerlink" href="#id90" title="Permalink to this headline">¶</a></h2>
 <p>April 13, 2016</p>
 <ul class="simple">
 <li>Introduced an update to allow deserializer compilation with recently released Cython 0.24 (PYTHON-542)</li>
 </ul>
 </div>
-<div class="section" id="id90">
-<h2>3.2.0<a class="headerlink" href="#id90" title="Permalink to this headline">¶</a></h2>
-<p>April 12, 2016</p>
 <div class="section" id="id91">
-<h3>Features<a class="headerlink" href="#id91" title="Permalink to this headline">¶</a></h3>
+<h2>3.2.0<a class="headerlink" href="#id91" title="Permalink to this headline">¶</a></h2>
+<p>April 12, 2016</p>
+<div class="section" id="id92">
+<h3>Features<a class="headerlink" href="#id92" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>cqlengine: Warn on sync_schema type mismatch (PYTHON-260)</li>
 <li>cqlengine: Automatically defer fields with the ‘=’ operator (and immutable values) in select queries (PYTHON-520)</li>
@@ -877,8 +901,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>cqlengine: token-aware routing for mapper statements (PYTHON-535)</li>
 </ul>
 </div>
-<div class="section" id="id92">
-<h3>Bug Fixes<a class="headerlink" href="#id92" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id93">
+<h3>Bug Fixes<a class="headerlink" href="#id93" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Deleting a column in a lightweight transaction raises a SyntaxException #325 (PYTHON-249)</li>
 <li>cqlengine: make Token function works with named tables/columns #86 (PYTHON-272)</li>
@@ -889,21 +913,21 @@ removed in the next major release. (PYTHON-937)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id93">
-<h2>3.1.1<a class="headerlink" href="#id93" title="Permalink to this headline">¶</a></h2>
-<p>March 14, 2016</p>
 <div class="section" id="id94">
-<h3>Bug Fixes<a class="headerlink" href="#id94" title="Permalink to this headline">¶</a></h3>
+<h2>3.1.1<a class="headerlink" href="#id94" title="Permalink to this headline">¶</a></h2>
+<p>March 14, 2016</p>
+<div class="section" id="id95">
+<h3>Bug Fixes<a class="headerlink" href="#id95" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>cqlengine: Fix performance issue related to additional “COUNT” queries (PYTHON-522)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id95">
-<h2>3.1.0<a class="headerlink" href="#id95" title="Permalink to this headline">¶</a></h2>
-<p>March 10, 2016</p>
 <div class="section" id="id96">
-<h3>Features<a class="headerlink" href="#id96" title="Permalink to this headline">¶</a></h3>
+<h2>3.1.0<a class="headerlink" href="#id96" title="Permalink to this headline">¶</a></h2>
+<p>March 10, 2016</p>
+<div class="section" id="id97">
+<h3>Features<a class="headerlink" href="#id97" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Pass name of server auth class to AuthProvider (PYTHON-454)</li>
 <li>Surface schema agreed flag for DDL statements (PYTHON-458)</li>
@@ -923,8 +947,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>cqlengine: Warn when Model.create() on Counters (to be deprecated) (PYTHON-333)</li>
 </ul>
 </div>
-<div class="section" id="id97">
-<h3>Bug Fixes<a class="headerlink" href="#id97" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id98">
+<h3>Bug Fixes<a class="headerlink" href="#id98" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Bus error (alignment issues) when running cython on some ARM platforms (PYTHON-450)</li>
 <li>Overflow when decoding large collections (cython) (PYTHON-459)</li>
@@ -951,8 +975,8 @@ removed in the next major release. (PYTHON-937)</li>
 <li>cqlengine: Typo in cqlengine UserType __len__ breaks attribute assignment (PYTHON-502)</li>
 </ul>
 </div>
-<div class="section" id="id98">
-<h3>Other<a class="headerlink" href="#id98" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id99">
+<h3>Other<a class="headerlink" href="#id99" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>cqlengine: a major improvement on queryset has been introduced. It
 is a lot more efficient to iterate large datasets: the rows are
@@ -967,11 +991,11 @@ executed.</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id99">
-<h2>3.0.0<a class="headerlink" href="#id99" title="Permalink to this headline">¶</a></h2>
-<p>November 24, 2015</p>
 <div class="section" id="id100">
-<h3>Features<a class="headerlink" href="#id100" title="Permalink to this headline">¶</a></h3>
+<h2>3.0.0<a class="headerlink" href="#id100" title="Permalink to this headline">¶</a></h2>
+<p>November 24, 2015</p>
+<div class="section" id="id101">
+<h3>Features<a class="headerlink" href="#id101" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Support datetime.date objects as a DateType (PYTHON-212)</li>
 <li>Add Cluster.update_view_metadata (PYTHON-407)</li>
@@ -980,8 +1004,8 @@ executed.</li>
 <li>Change default consistency level to LOCAL_ONE</li>
 </ul>
 </div>
-<div class="section" id="id101">
-<h3>Bug Fixes<a class="headerlink" href="#id101" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id102">
+<h3>Bug Fixes<a class="headerlink" href="#id102" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Properly SerDes nested collections when protocol_version &lt; 3 (PYTHON-215)</li>
 <li>Evict UDTs from UserType cache on change (PYTHON-226)</li>
@@ -997,8 +1021,8 @@ executed.</li>
 <div class="section" id="rc1">
 <h2>3.0.0rc1<a class="headerlink" href="#rc1" title="Permalink to this headline">¶</a></h2>
 <p>November 9, 2015</p>
-<div class="section" id="id102">
-<h3>Features<a class="headerlink" href="#id102" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id103">
+<h3>Features<a class="headerlink" href="#id103" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Process Modernized Schema Tables for Cassandra 3.0 (PYTHON-276, PYTHON-408, PYTHON-400, PYTHON-422)</li>
 <li>Remove deprecated features (PYTHON-292)</li>
@@ -1010,8 +1034,8 @@ executed.</li>
 <li>Normalize CQL query/export in metadata model (PYTHON-405)</li>
 </ul>
 </div>
-<div class="section" id="id103">
-<h3>Bug Fixes<a class="headerlink" href="#id103" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id104">
+<h3>Bug Fixes<a class="headerlink" href="#id104" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Implementation of named arguments bind is non-pythonic (PYTHON-178)</li>
 <li>CQL encoding is incorrect for NaN and Infinity floats (PYTHON-282)</li>
@@ -1021,11 +1045,11 @@ executed.</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id104">
-<h2>2.7.2<a class="headerlink" href="#id104" title="Permalink to this headline">¶</a></h2>
-<p>September 14, 2015</p>
 <div class="section" id="id105">
-<h3>Bug Fixes<a class="headerlink" href="#id105" title="Permalink to this headline">¶</a></h3>
+<h2>2.7.2<a class="headerlink" href="#id105" title="Permalink to this headline">¶</a></h2>
+<p>September 14, 2015</p>
+<div class="section" id="id106">
+<h3>Bug Fixes<a class="headerlink" href="#id106" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Resolve CQL export error for UDF with zero parameters (PYTHON-392)</li>
 <li>Remove futures dep. for Python 3 (PYTHON-393)</li>
@@ -1034,23 +1058,23 @@ executed.</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id106">
-<h2>2.7.1<a class="headerlink" href="#id106" title="Permalink to this headline">¶</a></h2>
-<p>August 25, 2015</p>
 <div class="section" id="id107">
-<h3>Bug Fixes<a class="headerlink" href="#id107" title="Permalink to this headline">¶</a></h3>
+<h2>2.7.1<a class="headerlink" href="#id107" title="Permalink to this headline">¶</a></h2>
+<p>August 25, 2015</p>
+<div class="section" id="id108">
+<h3>Bug Fixes<a class="headerlink" href="#id108" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Explicitly include extension source files in Manifest</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id108">
-<h2>2.7.0<a class="headerlink" href="#id108" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="id109">
+<h2>2.7.0<a class="headerlink" href="#id109" title="Permalink to this headline">¶</a></h2>
 <p>August 25, 2015</p>
 <p>Cython is introduced, providing compiled extensions for core modules, and
 extensions for optimized results deserialization.</p>
-<div class="section" id="id109">
-<h3>Features<a class="headerlink" href="#id109" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id110">
+<h3>Features<a class="headerlink" href="#id110" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>General Performance Improvements for Throughput (PYTHON-283)</li>
 <li>Improve synchronous request performance with Timers (PYTHON-108)</li>
@@ -1063,8 +1087,8 @@ extensions for optimized results deserialization.</p>
 <li>Make driver tolerant of inconsistent metadata (PYTHON-370)</li>
 </ul>
 </div>
-<div class="section" id="id110">
-<h3>Bug Fixes<a class="headerlink" href="#id110" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id111">
+<h3>Bug Fixes<a class="headerlink" href="#id111" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Drop Events out-of-order Cause KeyError on Processing (PYTHON-358)</li>
 <li>DowngradingConsistencyRetryPolicy doesn’t check response count on write timeouts (PYTHON-338)</li>
@@ -1074,11 +1098,11 @@ extensions for optimized results deserialization.</p>
 </ul>
 </div>
 </div>
-<div class="section" id="id111">
-<h2>2.6.0<a class="headerlink" href="#id111" title="Permalink to this headline">¶</a></h2>
-<p>July 20, 2015</p>
 <div class="section" id="id112">
-<h3>Bug Fixes<a class="headerlink" href="#id112" title="Permalink to this headline">¶</a></h3>
+<h2>2.6.0<a class="headerlink" href="#id112" title="Permalink to this headline">¶</a></h2>
+<p>July 20, 2015</p>
+<div class="section" id="id113">
+<h3>Bug Fixes<a class="headerlink" href="#id113" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Output proper CQL for compact tables with no clustering columns (PYTHON-360)</li>
 </ul>
@@ -1087,8 +1111,8 @@ extensions for optimized results deserialization.</p>
 <div class="section" id="c2">
 <h2>2.6.0c2<a class="headerlink" href="#c2" title="Permalink to this headline">¶</a></h2>
 <p>June 24, 2015</p>
-<div class="section" id="id113">
-<h3>Features<a class="headerlink" href="#id113" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id114">
+<h3>Features<a class="headerlink" href="#id114" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Automatic Protocol Version Downgrade (PYTHON-240)</li>
 <li>cqlengine Python 2.6 compatibility (PYTHON-288)</li>
@@ -1096,8 +1120,8 @@ extensions for optimized results deserialization.</p>
 <li>Set models.DEFAULT_KEYSPACE when calling set_session (github #352)</li>
 </ul>
 </div>
-<div class="section" id="id114">
-<h3>Bug Fixes<a class="headerlink" href="#id114" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id115">
+<h3>Bug Fixes<a class="headerlink" href="#id115" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Avoid stall while connecting to mixed version cluster (PYTHON-303)</li>
 <li>Make SSL work with AsyncoreConnection in python 2.6.9 (PYTHON-322)</li>
@@ -1112,8 +1136,8 @@ extensions for optimized results deserialization.</p>
 <p>June 4, 2015</p>
 <p>This release adds support for Cassandra 2.2 features, including version
 4 of the native protocol.</p>
-<div class="section" id="id115">
-<h3>Features<a class="headerlink" href="#id115" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id116">
+<h3>Features<a class="headerlink" href="#id116" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Default load balancing policy to TokenAware(DCAware) (PYTHON-160)</li>
 <li>Configuration option for connection timeout (PYTHON-206)</li>
@@ -1133,8 +1157,8 @@ extensions for optimized results deserialization.</p>
 <li>Expose CQL keywords in API (PYTHON-324)</li>
 </ul>
 </div>
-<div class="section" id="id116">
-<h3>Bug Fixes<a class="headerlink" href="#id116" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id117">
+<h3>Bug Fixes<a class="headerlink" href="#id117" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>IPv6 address support on Windows (PYTHON-20)</li>
 <li>Convert exceptions during automatic re-preparation to nice exceptions (PYTHON-207)</li>
@@ -1149,11 +1173,11 @@ extensions for optimized results deserialization.</p>
 </ul>
 </div>
 </div>
-<div class="section" id="id117">
-<h2>2.5.1<a class="headerlink" href="#id117" title="Permalink to this headline">¶</a></h2>
-<p>April 23, 2015</p>
 <div class="section" id="id118">
-<h3>Bug Fixes<a class="headerlink" href="#id118" title="Permalink to this headline">¶</a></h3>
+<h2>2.5.1<a class="headerlink" href="#id118" title="Permalink to this headline">¶</a></h2>
+<p>April 23, 2015</p>
+<div class="section" id="id119">
+<h3>Bug Fixes<a class="headerlink" href="#id119" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix thread safety in DC-aware load balancing policy (PYTHON-297)</li>
 <li>Fix race condition in node/token rebuild (PYTHON-298)</li>
@@ -1161,11 +1185,11 @@ extensions for optimized results deserialization.</p>
 </ul>
 </div>
 </div>
-<div class="section" id="id119">
-<h2>2.5.0<a class="headerlink" href="#id119" title="Permalink to this headline">¶</a></h2>
-<p>March 30, 2015</p>
 <div class="section" id="id120">
-<h3>Features<a class="headerlink" href="#id120" title="Permalink to this headline">¶</a></h3>
+<h2>2.5.0<a class="headerlink" href="#id120" title="Permalink to this headline">¶</a></h2>
+<p>March 30, 2015</p>
+<div class="section" id="id121">
+<h3>Features<a class="headerlink" href="#id121" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Integrated cqlengine object mapping package</li>
 <li>Utility functions for converting timeuuids and datetime (PYTHON-99)</li>
@@ -1173,8 +1197,8 @@ extensions for optimized results deserialization.</p>
 <li>Support for new Date and Time Cassandra types (PYTHON-190)</li>
 </ul>
 </div>
-<div class="section" id="id121">
-<h3>Bug Fixes<a class="headerlink" href="#id121" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id122">
+<h3>Bug Fixes<a class="headerlink" href="#id122" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix index target for collection indexes (full(), keys()) (PYTHON-222)</li>
 <li>Thread exception during GIL cleanup (PYTHON-229)</li>
@@ -1185,11 +1209,11 @@ extensions for optimized results deserialization.</p>
 </ul>
 </div>
 </div>
-<div class="section" id="id122">
-<h2>2.1.4<a class="headerlink" href="#id122" title="Permalink to this headline">¶</a></h2>
-<p>January 26, 2015</p>
 <div class="section" id="id123">
-<h3>Features<a class="headerlink" href="#id123" title="Permalink to this headline">¶</a></h3>
+<h2>2.1.4<a class="headerlink" href="#id123" title="Permalink to this headline">¶</a></h2>
+<p>January 26, 2015</p>
+<div class="section" id="id124">
+<h3>Features<a class="headerlink" href="#id124" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>SaslAuthenticator for Kerberos support (PYTHON-109)</li>
 <li>Heartbeat for network device keepalive and detecting failures on idle connections (PYTHON-197)</li>
@@ -1198,8 +1222,8 @@ extensions for optimized results deserialization.</p>
 <li>Add eventlet connection support (PYTHON-194)</li>
 </ul>
 </div>
-<div class="section" id="id124">
-<h3>Bug Fixes<a class="headerlink" href="#id124" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id125">
+<h3>Bug Fixes<a class="headerlink" href="#id125" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Schema meta fix for complex thrift tables (PYTHON-191)</li>
 <li>Support for ‘unknown’ replica placement strategies in schema meta (PYTHON-192)</li>
@@ -1210,11 +1234,11 @@ extensions for optimized results deserialization.</p>
 </ul>
 </div>
 </div>
-<div class="section" id="id125">
-<h2>2.1.3<a class="headerlink" href="#id125" title="Permalink to this headline">¶</a></h2>
-<p>December 16, 2014</p>
 <div class="section" id="id126">
-<h3>Features<a class="headerlink" href="#id126" title="Permalink to this headline">¶</a></h3>
+<h2>2.1.3<a class="headerlink" href="#id126" title="Permalink to this headline">¶</a></h2>
+<p>December 16, 2014</p>
+<div class="section" id="id127">
+<h3>Features<a class="headerlink" href="#id127" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>INFO-level log confirmation that a connection was opened to a node that was marked up (PYTHON-116)</li>
 <li>Avoid connecting to peer with incomplete metadata (PYTHON-163)</li>
@@ -1224,8 +1248,8 @@ extensions for optimized results deserialization.</p>
 <li>Update schema metadata processing to accommodate coming schema modernization (PYTHON-185)</li>
 </ul>
 </div>
-<div class="section" id="id127">
-<h3>Bug Fixes<a class="headerlink" href="#id127" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id128">
+<h3>Bug Fixes<a class="headerlink" href="#id128" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Support large negative timestamps on Windows (PYTHON-119)</li>
 <li>Fix schema agreement for clusters with peer rpc_addres 0.0.0.0 (PYTHON-166)</li>
@@ -1238,11 +1262,11 @@ extensions for optimized results deserialization.</p>
 </ul>
 </div>
 </div>
-<div class="section" id="id128">
-<h2>2.1.2<a class="headerlink" href="#id128" title="Permalink to this headline">¶</a></h2>
-<p>October 16, 2014</p>
 <div class="section" id="id129">
-<h3>Features<a class="headerlink" href="#id129" title="Permalink to this headline">¶</a></h3>
+<h2>2.1.2<a class="headerlink" href="#id129" title="Permalink to this headline">¶</a></h2>
+<p>October 16, 2014</p>
+<div class="section" id="id130">
+<h3>Features<a class="headerlink" href="#id130" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Allow DCAwareRoundRobinPolicy to be constructed without a local_dc, defaulting
 instead to the DC of a contact_point (PYTHON-126)</li>
@@ -1250,8 +1274,8 @@ instead to the DC of a contact_point (PYTHON-126)</li>
 <li>Improved feedback on ValueError using named_tuple_factory with invalid column names (PYTHON-122)</li>
 </ul>
 </div>
-<div class="section" id="id130">
-<h3>Bug Fixes<a class="headerlink" href="#id130" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id131">
+<h3>Bug Fixes<a class="headerlink" href="#id131" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Make execute_concurrent compatible with Python 2.6 (PYTHON-159)</li>
 <li>Handle Unauthorized message on schema_triggers query (PYTHON-155)</li>
@@ -1260,11 +1284,11 @@ instead to the DC of a contact_point (PYTHON-126)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id131">
-<h2>2.1.1<a class="headerlink" href="#id131" title="Permalink to this headline">¶</a></h2>
-<p>September 11, 2014</p>
 <div class="section" id="id132">
-<h3>Features<a class="headerlink" href="#id132" title="Permalink to this headline">¶</a></h3>
+<h2>2.1.1<a class="headerlink" href="#id132" title="Permalink to this headline">¶</a></h2>
+<p>September 11, 2014</p>
+<div class="section" id="id133">
+<h3>Features<a class="headerlink" href="#id133" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Detect triggers and include them in CQL queries generated to recreate
 the schema (github-189)</li>
@@ -1272,25 +1296,25 @@ the schema (github-189)</li>
 platform not addressed (PYTHON-20))</li>
 </ul>
 </div>
-<div class="section" id="id133">
-<h3>Bug Fixes<a class="headerlink" href="#id133" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id134">
+<h3>Bug Fixes<a class="headerlink" href="#id134" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix NetworkTopologyStrategy.export_for_schema (PYTHON-120)</li>
 <li>Keep timeout for paged results (PYTHON-150)</li>
 </ul>
 </div>
-<div class="section" id="id134">
-<h3>Other<a class="headerlink" href="#id134" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id135">
+<h3>Other<a class="headerlink" href="#id135" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Add frozen&lt;&gt; type modifier to UDTs and tuples to handle CASSANDRA-7857</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id135">
-<h2>2.1.0<a class="headerlink" href="#id135" title="Permalink to this headline">¶</a></h2>
-<p>August 7, 2014</p>
 <div class="section" id="id136">
-<h3>Bug Fixes<a class="headerlink" href="#id136" title="Permalink to this headline">¶</a></h3>
+<h2>2.1.0<a class="headerlink" href="#id136" title="Permalink to this headline">¶</a></h2>
+<p>August 7, 2014</p>
+<div class="section" id="id137">
+<h3>Bug Fixes<a class="headerlink" href="#id137" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Correctly serialize and deserialize null values in tuples and
 user-defined types (PYTHON-110)</li>
@@ -1299,11 +1323,11 @@ against Homebrew and Mac Ports installs of libev (PYTHON-112 and 804dea3)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id137">
-<h2>2.1.0c1<a class="headerlink" href="#id137" title="Permalink to this headline">¶</a></h2>
-<p>July 25, 2014</p>
 <div class="section" id="id138">
-<h3>Bug Fixes<a class="headerlink" href="#id138" title="Permalink to this headline">¶</a></h3>
+<h2>2.1.0c1<a class="headerlink" href="#id138" title="Permalink to this headline">¶</a></h2>
+<p>July 25, 2014</p>
+<div class="section" id="id139">
+<h3>Bug Fixes<a class="headerlink" href="#id139" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Properly specify UDTs for columns in CREATE TABLE statements</li>
 <li>Avoid moving retries to a new host when using request ID zero (PYTHON-88)</li>
@@ -1317,8 +1341,8 @@ have extra items (PYTHON-98)</li>
 <li>Include User Defined Types in KeyspaceMetadata.export_as_string() (PYTHON-96)</li>
 </ul>
 </div>
-<div class="section" id="id139">
-<h3>Other<a class="headerlink" href="#id139" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id140">
+<h3>Other<a class="headerlink" href="#id140" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Return list collection columns as python lists instead of tuples
 now that tuples are a specific Cassandra type</li>
@@ -1330,8 +1354,8 @@ now that tuples are a specific Cassandra type</li>
 <p>July 11, 2014</p>
 <p>This release adds support for Cassandra 2.1 features, including version
 3 of the native protocol.</p>
-<div class="section" id="id140">
-<h3>Features<a class="headerlink" href="#id140" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id141">
+<h3>Features<a class="headerlink" href="#id141" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>When using the v3 protocol, only one connection is opened per-host, and
 throughput is improved due to reduced pooling overhead and lock contention.</li>
@@ -1347,8 +1371,8 @@ API is not exposed (so no Deferreds), this is just a reactor
 implementation. (github #135, PYTHON-8)</li>
 </ul>
 </div>
-<div class="section" id="id141">
-<h3>Bug Fixes<a class="headerlink" href="#id141" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id142">
+<h3>Bug Fixes<a class="headerlink" href="#id142" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix references to xrange that do not go through “six” in libevreactor and
 geventreactor (github #138)</li>
@@ -1380,11 +1404,11 @@ host is down.</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id142">
-<h2>2.0.2<a class="headerlink" href="#id142" title="Permalink to this headline">¶</a></h2>
-<p>June 10, 2014</p>
 <div class="section" id="id143">
-<h3>Bug Fixes<a class="headerlink" href="#id143" title="Permalink to this headline">¶</a></h3>
+<h2>2.0.2<a class="headerlink" href="#id143" title="Permalink to this headline">¶</a></h2>
+<p>June 10, 2014</p>
+<div class="section" id="id144">
+<h3>Bug Fixes<a class="headerlink" href="#id144" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Add six to requirements.txt</li>
 <li>Avoid KeyError during schema refresh when a keyspace is dropped
@@ -1400,43 +1424,43 @@ destroyed (github #93)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id144">
-<h2>2.0.1<a class="headerlink" href="#id144" title="Permalink to this headline">¶</a></h2>
-<p>May 28, 2014</p>
 <div class="section" id="id145">
-<h3>Bug Fixes<a class="headerlink" href="#id145" title="Permalink to this headline">¶</a></h3>
+<h2>2.0.1<a class="headerlink" href="#id145" title="Permalink to this headline">¶</a></h2>
+<p>May 28, 2014</p>
+<div class="section" id="id146">
+<h3>Bug Fixes<a class="headerlink" href="#id146" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix check for Cluster.is_shutdown in in &#64;run_in_executor
 decorator</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id146">
-<h2>2.0.0<a class="headerlink" href="#id146" title="Permalink to this headline">¶</a></h2>
-<p>May 28, 2014</p>
 <div class="section" id="id147">
-<h3>Features<a class="headerlink" href="#id147" title="Permalink to this headline">¶</a></h3>
+<h2>2.0.0<a class="headerlink" href="#id147" title="Permalink to this headline">¶</a></h2>
+<p>May 28, 2014</p>
+<div class="section" id="id148">
+<h3>Features<a class="headerlink" href="#id148" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Make libev C extension Python3-compatible (PYTHON-70)</li>
 <li>Support v2 protocol authentication (PYTHON-73, github #125)</li>
 </ul>
 </div>
-<div class="section" id="id148">
-<h3>Bug Fixes<a class="headerlink" href="#id148" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id149">
+<h3>Bug Fixes<a class="headerlink" href="#id149" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix murmur3 C extension compilation under Python3.4 (github #124)</li>
 </ul>
 </div>
 <div class="section" id="merged-from-1-x">
 <h3>Merged From 1.x<a class="headerlink" href="#merged-from-1-x" title="Permalink to this headline">¶</a></h3>
-<div class="section" id="id149">
-<h4>Features<a class="headerlink" href="#id149" title="Permalink to this headline">¶</a></h4>
+<div class="section" id="id150">
+<h4>Features<a class="headerlink" href="#id150" title="Permalink to this headline">¶</a></h4>
 <ul class="simple">
 <li>Add Session.default_consistency_level (PYTHON-14)</li>
 </ul>
 </div>
-<div class="section" id="id150">
-<h4>Bug Fixes<a class="headerlink" href="#id150" title="Permalink to this headline">¶</a></h4>
+<div class="section" id="id151">
+<h4>Bug Fixes<a class="headerlink" href="#id151" title="Permalink to this headline">¶</a></h4>
 <ul class="simple">
 <li>Don’t strip trailing underscores from column names when using the
 named_tuple_factory (PYTHON-56)</li>
@@ -1457,8 +1481,8 @@ actually changed</li>
 remote hosts when using the DCAwareRoundRobinPolicy) (PYTHON-75)</li>
 </ul>
 </div>
-<div class="section" id="id151">
-<h4>Other<a class="headerlink" href="#id151" title="Permalink to this headline">¶</a></h4>
+<div class="section" id="id152">
+<h4>Other<a class="headerlink" href="#id152" title="Permalink to this headline">¶</a></h4>
 <ul class="simple">
 <li>Add 1 second timeout to join() call on event loop thread during
 interpreter shutdown.  This can help to prevent the process from
@@ -1467,8 +1491,8 @@ hanging during shutdown.</li>
 </div>
 </div>
 </div>
-<div class="section" id="id152">
-<h2>2.0.0b1<a class="headerlink" href="#id152" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="id153">
+<h2>2.0.0b1<a class="headerlink" href="#id153" title="Permalink to this headline">¶</a></h2>
 <p>May 6, 2014</p>
 <div class="section" id="upgrading-from-1-x">
 <h3>Upgrading from 1.x<a class="headerlink" href="#upgrading-from-1-x" title="Permalink to this headline">¶</a></h3>
@@ -1482,8 +1506,8 @@ to set your protocol version to 1.  For example:</p>
 <blockquote>
 <div>cluster = Cluster(…, protocol_version=1)</div></blockquote>
 </div>
-<div class="section" id="id153">
-<h3>Features<a class="headerlink" href="#id153" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id154">
+<h3>Features<a class="headerlink" href="#id154" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Support v2 of Cassandra’s native protocol, which includes the following
 new features: automatic query paging support, protocol-level batch statements,
@@ -1492,15 +1516,15 @@ and lightweight transactions</li>
 <li>Allow a default query timeout to be set per-Session</li>
 </ul>
 </div>
-<div class="section" id="id154">
-<h3>Bug Fixes<a class="headerlink" href="#id154" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id155">
+<h3>Bug Fixes<a class="headerlink" href="#id155" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Avoid errors during interpreter shutdown (the driver attempts to cleanup
 daemonized worker threads before interpreter shutdown)</li>
 </ul>
 </div>
-<div class="section" id="id155">
-<h3>Deprecations<a class="headerlink" href="#id155" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id156">
+<h3>Deprecations<a class="headerlink" href="#id156" title="Permalink to this headline">¶</a></h3>
 <p>The following functions have moved from cassandra.decoder to cassandra.query.
 The original functions have been left in place with a DeprecationWarning for
 now:</p>
@@ -1514,18 +1538,18 @@ now:</p>
 you handle any of these exceptions, you must adjust the code accordingly.</p>
 </div>
 </div>
-<div class="section" id="id156">
-<h2>1.1.2<a class="headerlink" href="#id156" title="Permalink to this headline">¶</a></h2>
-<p>May 8, 2014</p>
 <div class="section" id="id157">
-<h3>Features<a class="headerlink" href="#id157" title="Permalink to this headline">¶</a></h3>
+<h2>1.1.2<a class="headerlink" href="#id157" title="Permalink to this headline">¶</a></h2>
+<p>May 8, 2014</p>
+<div class="section" id="id158">
+<h3>Features<a class="headerlink" href="#id158" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Allow a specific compression type to be requested for communications with
 Cassandra and prefer lz4 if available</li>
 </ul>
 </div>
-<div class="section" id="id158">
-<h3>Bug Fixes<a class="headerlink" href="#id158" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id159">
+<h3>Bug Fixes<a class="headerlink" href="#id159" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Update token metadata (for TokenAware calculations) when a node is removed
 from the ring</li>
@@ -1539,8 +1563,8 @@ future node up or node down handling from being executed.</li>
 <li>Handle exhausted ReconnectionPolicy schedule correctly</li>
 </ul>
 </div>
-<div class="section" id="id159">
-<h3>Other<a class="headerlink" href="#id159" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id160">
+<h3>Other<a class="headerlink" href="#id160" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Don’t log at ERROR when a connection is closed during the startup
 communications</li>
@@ -1548,21 +1572,21 @@ communications</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id160">
-<h2>1.1.1<a class="headerlink" href="#id160" title="Permalink to this headline">¶</a></h2>
-<p>April 16, 2014</p>
 <div class="section" id="id161">
-<h3>Bug Fixes<a class="headerlink" href="#id161" title="Permalink to this headline">¶</a></h3>
+<h2>1.1.1<a class="headerlink" href="#id161" title="Permalink to this headline">¶</a></h2>
+<p>April 16, 2014</p>
+<div class="section" id="id162">
+<h3>Bug Fixes<a class="headerlink" href="#id162" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix unconditional import of nose in setup.py (github #111)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id162">
-<h2>1.1.0<a class="headerlink" href="#id162" title="Permalink to this headline">¶</a></h2>
-<p>April 16, 2014</p>
 <div class="section" id="id163">
-<h3>Features<a class="headerlink" href="#id163" title="Permalink to this headline">¶</a></h3>
+<h2>1.1.0<a class="headerlink" href="#id163" title="Permalink to this headline">¶</a></h2>
+<p>April 16, 2014</p>
+<div class="section" id="id164">
+<h3>Features<a class="headerlink" href="#id164" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Gevent is now supported through monkey-patching the stdlib (PYTHON-7,
 github issue #46)</li>
@@ -1573,8 +1597,8 @@ Cassandra 2.1. (github issue #91)</li>
 the new cassandra.concurrent module. (github issue #7)</li>
 </ul>
 </div>
-<div class="section" id="id164">
-<h3>Bug Fixes<a class="headerlink" href="#id164" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id165">
+<h3>Bug Fixes<a class="headerlink" href="#id165" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Correctly supply compaction and compression parameters in CREATE statements
 for tables when working with Cassandra 2.0+</li>
@@ -1596,8 +1620,8 @@ and rack information has been set, if possible.</li>
 distribution of requests</li>
 </ul>
 </div>
-<div class="section" id="id165">
-<h3>Other<a class="headerlink" href="#id165" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id166">
+<h3>Other<a class="headerlink" href="#id166" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Don’t ignore column names when parsing typestrings.  This is needed for
 user-defined type support.  (github issue #90)</li>
@@ -1610,11 +1634,11 @@ PYTHON-59)</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id166">
-<h2>1.0.2<a class="headerlink" href="#id166" title="Permalink to this headline">¶</a></h2>
-<p>March 4, 2014</p>
 <div class="section" id="id167">
-<h3>Bug Fixes<a class="headerlink" href="#id167" title="Permalink to this headline">¶</a></h3>
+<h2>1.0.2<a class="headerlink" href="#id167" title="Permalink to this headline">¶</a></h2>
+<p>March 4, 2014</p>
+<div class="section" id="id168">
+<h3>Bug Fixes<a class="headerlink" href="#id168" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>With asyncorereactor, correctly handle EAGAIN/EWOULDBLOCK when the message from
 Cassandra is a multiple of the read buffer size.  Previously, if no more data
@@ -1631,8 +1655,8 @@ CREATE statements.</li>
 when hosts go up or down</li>
 </ul>
 </div>
-<div class="section" id="id168">
-<h3>Other<a class="headerlink" href="#id168" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id169">
+<h3>Other<a class="headerlink" href="#id169" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Remove ignored <code class="docutils literal notranslate"><span class="pre">tracing_enabled</span></code> parameter for <code class="docutils literal notranslate"><span class="pre">SimpleStatement</span></code>.  The
 correct way to trace a query is by setting the <code class="docutils literal notranslate"><span class="pre">trace</span></code> argument to <code class="docutils literal notranslate"><span class="pre">True</span></code>
@@ -1646,11 +1670,11 @@ columns</li>
 </ul>
 </div>
 </div>
-<div class="section" id="id169">
-<h2>1.0.1<a class="headerlink" href="#id169" title="Permalink to this headline">¶</a></h2>
-<p>Feb 19, 2014</p>
 <div class="section" id="id170">
-<h3>Bug Fixes<a class="headerlink" href="#id170" title="Permalink to this headline">¶</a></h3>
+<h2>1.0.1<a class="headerlink" href="#id170" title="Permalink to this headline">¶</a></h2>
+<p>Feb 19, 2014</p>
+<div class="section" id="id171">
+<h3>Bug Fixes<a class="headerlink" href="#id171" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Include table indexes in <code class="docutils literal notranslate"><span class="pre">KeyspaceMetadata.export_as_string()</span></code></li>
 <li>Fix broken token awareness on ByteOrderedPartitioner</li>
@@ -1670,8 +1694,8 @@ the ring and tokens that exactly match a node’s token</li>
 set when events complete after the main operation has already completed.</li>
 </ul>
 </div>
-<div class="section" id="id171">
-<h3>Other<a class="headerlink" href="#id171" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id172">
+<h3>Other<a class="headerlink" href="#id172" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Skip sending OPTIONS message on connection creation if compression is
 disabled or not available and a CQL version has not been explicitly
@@ -1683,8 +1707,8 @@ set</li>
 <div class="section" id="final">
 <h2>1.0.0 Final<a class="headerlink" href="#final" title="Permalink to this headline">¶</a></h2>
 <p>Jan 29, 2014</p>
-<div class="section" id="id172">
-<h3>Bug Fixes<a class="headerlink" href="#id172" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id173">
+<h3>Bug Fixes<a class="headerlink" href="#id173" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Prevent leak of Scheduler thread (even with proper shutdown)</li>
 <li>Correctly handle ignored hosts, which are common with the
@@ -1713,8 +1737,8 @@ reactor only)</li>
 becomes defunct</li>
 </ul>
 </div>
-<div class="section" id="id173">
-<h3>Features<a class="headerlink" href="#id173" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id174">
+<h3>Features<a class="headerlink" href="#id174" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Add default query timeout to <code class="docutils literal notranslate"><span class="pre">Session</span></code></li>
 <li>Add timeout parameter to <code class="docutils literal notranslate"><span class="pre">Session.execute()</span></code></li>
@@ -1724,8 +1748,8 @@ becomes defunct</li>
 configurable</li>
 </ul>
 </div>
-<div class="section" id="id174">
-<h3>Other<a class="headerlink" href="#id174" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id175">
+<h3>Other<a class="headerlink" href="#id175" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Raise Exception if <code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy</span></code> is used against a cluster using the
 <code class="docutils literal notranslate"><span class="pre">Murmur3Partitioner</span></code> if the murmur3 C extension has not been compiled</li>
@@ -1749,16 +1773,16 @@ Python 2.7, and PyPy</li>
 prepared statements and node failure handling.  In particular,
 several cases where a request would never be completed (and as a
 result, leave the application hanging) have been resolved.</p>
-<div class="section" id="id175">
-<h3>Features<a class="headerlink" href="#id175" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id176">
+<h3>Features<a class="headerlink" href="#id176" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Add <cite>timeout</cite> kwarg to <code class="docutils literal notranslate"><span class="pre">ResponseFuture.result()</span></code></li>
 <li>Create connection pools to all hosts in parallel when initializing
 new Sesssions.</li>
 </ul>
 </div>
-<div class="section" id="id176">
-<h3>Bug Fixes<a class="headerlink" href="#id176" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id177">
+<h3>Bug Fixes<a class="headerlink" href="#id177" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Properly set exception on ResponseFuture when a query fails
 against all hosts</li>
@@ -1794,8 +1818,8 @@ statements were executed and unrecognized.)</li>
 pending message deque for libev connections</li>
 </ul>
 </div>
-<div class="section" id="id177">
-<h3>Other<a class="headerlink" href="#id177" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id178">
+<h3>Other<a class="headerlink" href="#id178" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Prepare statements in batches of 10. (When many prepared statements
 are in use, this allows the driver to start utilizing nodes that
@@ -1812,8 +1836,8 @@ up.)</li>
 <div class="section" id="b6">
 <h2>1.0.0b6<a class="headerlink" href="#b6" title="Permalink to this headline">¶</a></h2>
 <p>Oct 22, 2013</p>
-<div class="section" id="id178">
-<h3>Bug Fixes<a class="headerlink" href="#id178" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id179">
+<h3>Bug Fixes<a class="headerlink" href="#id179" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Use lazy string formatting when logging</li>
 <li>Avoid several deadlock scenarios, especially when nodes go down</li>
@@ -1821,8 +1845,8 @@ up.)</li>
 <li>Gracefully handle un-handled Exceptions when erroring callbacks</li>
 </ul>
 </div>
-<div class="section" id="id179">
-<h3>Other<a class="headerlink" href="#id179" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id180">
+<h3>Other<a class="headerlink" href="#id180" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Node state listeners (which are called when a node is added, removed,
 goes down, or comes up) should now be registered through
@@ -1834,14 +1858,14 @@ Cluster.register_listener() instead of through a host’s HealthMonitor
 <div class="section" id="b5">
 <h2>1.0.0b5<a class="headerlink" href="#b5" title="Permalink to this headline">¶</a></h2>
 <p>Oct 10, 2013</p>
-<div class="section" id="id180">
-<h3>Features<a class="headerlink" href="#id180" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id181">
+<h3>Features<a class="headerlink" href="#id181" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>SSL support</li>
 </ul>
 </div>
-<div class="section" id="id181">
-<h3>Bug Fixes<a class="headerlink" href="#id181" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id182">
+<h3>Bug Fixes<a class="headerlink" href="#id182" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Avoid KeyError when building replica map for NetworkTopologyStrategy</li>
 <li>Work around python bug which causes deadlock when a thread imports
@@ -1851,8 +1875,8 @@ the utf8 module</li>
 may happen automatically for new connections)</li>
 </ul>
 </div>
-<div class="section" id="id182">
-<h3>Other<a class="headerlink" href="#id182" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id183">
+<h3>Other<a class="headerlink" href="#id183" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Switch packaging from Distribute to setuptools, improved C extension
 support</li>
@@ -1863,16 +1887,16 @@ support</li>
 <div class="section" id="beta4">
 <h2>1.0.0-beta4<a class="headerlink" href="#beta4" title="Permalink to this headline">¶</a></h2>
 <p>Sep 24, 2013</p>
-<div class="section" id="id183">
-<h3>Features<a class="headerlink" href="#id183" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id184">
+<h3>Features<a class="headerlink" href="#id184" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Handle new blob syntax in Cassandra 2.0 by accepting bytearray
 objects for blob values</li>
 <li>Add cql_version kwarg to Cluster.__init__</li>
 </ul>
 </div>
-<div class="section" id="id184">
-<h3>Bug Fixes<a class="headerlink" href="#id184" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id185">
+<h3>Bug Fixes<a class="headerlink" href="#id185" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix KeyError when building token map with NetworkTopologyStrategy
 keyspaces (this prevented a Cluster from successfully connecting
@@ -1885,16 +1909,16 @@ when creating BoundStatements</li>
 <div class="section" id="beta3">
 <h2>1.0.0-beta3<a class="headerlink" href="#beta3" title="Permalink to this headline">¶</a></h2>
 <p>Sep 20, 2013</p>
-<div class="section" id="id185">
-<h3>Features<a class="headerlink" href="#id185" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id186">
+<h3>Features<a class="headerlink" href="#id186" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Support for LZ4 compression (Cassandra 2.0+)</li>
 <li>Token-aware routing will now utilize all replicas for a query instead
 of just the first replica</li>
 </ul>
 </div>
-<div class="section" id="id186">
-<h3>Bug Fixes<a class="headerlink" href="#id186" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id187">
+<h3>Bug Fixes<a class="headerlink" href="#id187" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix libev include path for CentOS</li>
 <li>Fix varint packing of the value 0</li>
@@ -1914,8 +1938,8 @@ formatting</li>
 <li>Fix export of schema as a set of CQL queries</li>
 </ul>
 </div>
-<div class="section" id="id187">
-<h3>Other<a class="headerlink" href="#id187" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id188">
+<h3>Other<a class="headerlink" href="#id188" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Use cStringIO for connection buffer for better performance</li>
 <li>Add __repr__ method for Statement classes</li>
@@ -1929,8 +1953,8 @@ type are used with statements</li>
 <div class="section" id="beta2">
 <h2>1.0.0-beta2<a class="headerlink" href="#beta2" title="Permalink to this headline">¶</a></h2>
 <p>Aug 19, 2013</p>
-<div class="section" id="id188">
-<h3>Bug Fixes<a class="headerlink" href="#id188" title="Permalink to this headline">¶</a></h3>
+<div class="section" id="id189">
+<h3>Bug Fixes<a class="headerlink" href="#id189" title="Permalink to this headline">¶</a></h3>
 <ul class="simple">
 <li>Fix pip packaging</li>
 </ul>

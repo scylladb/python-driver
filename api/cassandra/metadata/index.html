@@ -268,6 +268,12 @@ or not.</p>
 <dd><p>A dict mapping view names to <a class="reference internal" href="#cassandra.metadata.MaterializedViewMetadata" title="cassandra.metadata.MaterializedViewMetadata"><code class="xref py py-class docutils literal notranslate"><span class="pre">MaterializedViewMetadata</span></code></a> instances.</p>
 </dd></dl>
 
+<dl class="attribute">
+<dt id="cassandra.metadata.KeyspaceMetadata.graph_engine">
+<code class="descname">graph_engine</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.KeyspaceMetadata.graph_engine" title="Permalink to this definition">¶</a></dt>
+<dd><p>A string indicating whether a graph engine is enabled for this keyspace (Core/Classic).</p>
+</dd></dl>
+
 <dl class="method">
 <dt id="cassandra.metadata.KeyspaceMetadata.export_as_string">
 <code class="descname">export_as_string</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/cassandra/metadata/#KeyspaceMetadata.export_as_string"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.metadata.KeyspaceMetadata.export_as_string" title="Permalink to this definition">¶</a></dt>
@@ -600,6 +606,44 @@ extra whitespace will be added to make the query human readable.</p>
 </dd></dl>
 
 <dl class="class">
+<dt id="cassandra.metadata.TableMetadataV3">
+<em class="property">class </em><code class="descclassname">cassandra.metadata.</code><code class="descname">TableMetadataV3</code><a class="reference internal" href="../../../_modules/cassandra/metadata/#TableMetadataV3"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.metadata.TableMetadataV3" title="Permalink to this definition">¶</a></dt>
+<dd><p>For C* 3.0+. <cite>option_maps</cite> take a superset of map names, so if  nothing
+changes structurally, new option maps can just be appended to the list.</p>
+<dl class="attribute">
+<dt id="cassandra.metadata.TableMetadataV3.is_cql_compatible">
+<code class="descname">is_cql_compatible</code><a class="headerlink" href="#cassandra.metadata.TableMetadataV3.is_cql_compatible" title="Permalink to this definition">¶</a></dt>
+<dd><p>A boolean indicating if this table can be represented as CQL in export</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="cassandra.metadata.TableMetadataDSE68">
+<em class="property">class </em><code class="descclassname">cassandra.metadata.</code><code class="descname">TableMetadataDSE68</code><a class="reference internal" href="../../../_modules/cassandra/metadata/#TableMetadataDSE68"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.metadata.TableMetadataDSE68" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="attribute">
+<dt id="cassandra.metadata.TableMetadataDSE68.vertex">
+<code class="descname">vertex</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.TableMetadataDSE68.vertex" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <a class="reference internal" href="#cassandra.metadata.VertexMetadata" title="cassandra.metadata.VertexMetadata"><code class="xref py py-class docutils literal notranslate"><span class="pre">VertexMetadata</span></code></a> instance, if graph enabled</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.TableMetadataDSE68.edge">
+<code class="descname">edge</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.TableMetadataDSE68.edge" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <a class="reference internal" href="#cassandra.metadata.EdgeMetadata" title="cassandra.metadata.EdgeMetadata"><code class="xref py py-class docutils literal notranslate"><span class="pre">EdgeMetadata</span></code></a> instance, if graph enabled</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="cassandra.metadata.TableMetadataDSE68.as_cql_query">
+<code class="descname">as_cql_query</code><span class="sig-paren">(</span><em>formatted=False</em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/cassandra/metadata/#TableMetadataDSE68.as_cql_query"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.metadata.TableMetadataDSE68.as_cql_query" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a CQL query that can be used to recreate this table (index
+creations are not included).  If <cite>formatted</cite> is set to <code class="xref py py-const docutils literal notranslate"><span class="pre">True</span></code>,
+extra whitespace will be added to make the query human readable.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
 <dt id="cassandra.metadata.ColumnMetadata">
 <em class="property">class </em><code class="descclassname">cassandra.metadata.</code><code class="descname">ColumnMetadata</code><a class="reference internal" href="../../../_modules/cassandra/metadata/#ColumnMetadata"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.metadata.ColumnMetadata" title="Permalink to this definition">¶</a></dt>
 <dd><p>A representation of a single column in a table.</p>
@@ -697,7 +741,7 @@ be <code class="xref py py-const docutils literal notranslate"><span class="pre"
 <dl class="attribute">
 <dt id="cassandra.metadata.MaterializedViewMetadata.keyspace_name">
 <code class="descname">keyspace_name</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.MaterializedViewMetadata.keyspace_name" title="Permalink to this definition">¶</a></dt>
-<dd><p>A string name of the view.</p>
+<dd><p>A string name of the keyspace of this view.</p>
 </dd></dl>
 
 <dl class="attribute">
@@ -760,6 +804,102 @@ view.</p>
 <dd><p>Returns a CQL query that can be used to recreate this function.
 If <cite>formatted</cite> is set to <code class="xref py py-const docutils literal notranslate"><span class="pre">True</span></code>, extra whitespace will
 be added to make the query more readable.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="cassandra.metadata.VertexMetadata">
+<em class="property">class </em><code class="descclassname">cassandra.metadata.</code><code class="descname">VertexMetadata</code><a class="reference internal" href="../../../_modules/cassandra/metadata/#VertexMetadata"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.metadata.VertexMetadata" title="Permalink to this definition">¶</a></dt>
+<dd><p>A representation of a vertex on a table</p>
+<dl class="attribute">
+<dt id="cassandra.metadata.VertexMetadata.keyspace_name">
+<code class="descname">keyspace_name</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.VertexMetadata.keyspace_name" title="Permalink to this definition">¶</a></dt>
+<dd><p>A string name of the keyspace.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.VertexMetadata.table_name">
+<code class="descname">table_name</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.VertexMetadata.table_name" title="Permalink to this definition">¶</a></dt>
+<dd><p>A string name of the table this vertex is on.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.VertexMetadata.label_name">
+<code class="descname">label_name</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.VertexMetadata.label_name" title="Permalink to this definition">¶</a></dt>
+<dd><p>A string name of the label of this vertex.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="cassandra.metadata.EdgeMetadata">
+<em class="property">class </em><code class="descclassname">cassandra.metadata.</code><code class="descname">EdgeMetadata</code><a class="reference internal" href="../../../_modules/cassandra/metadata/#EdgeMetadata"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.metadata.EdgeMetadata" title="Permalink to this definition">¶</a></dt>
+<dd><p>A representation of an edge on a table</p>
+<dl class="attribute">
+<dt id="cassandra.metadata.EdgeMetadata.keyspace_name">
+<code class="descname">keyspace_name</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.EdgeMetadata.keyspace_name" title="Permalink to this definition">¶</a></dt>
+<dd><p>A string name of the keyspace</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.EdgeMetadata.table_name">
+<code class="descname">table_name</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.EdgeMetadata.table_name" title="Permalink to this definition">¶</a></dt>
+<dd><p>A string name of the table this edge is on</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.EdgeMetadata.label_name">
+<code class="descname">label_name</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.EdgeMetadata.label_name" title="Permalink to this definition">¶</a></dt>
+<dd><p>A string name of the label of this edge</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.EdgeMetadata.from_table">
+<code class="descname">from_table</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.EdgeMetadata.from_table" title="Permalink to this definition">¶</a></dt>
+<dd><p>A string name of the from table of this edge (incoming vertex)</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.EdgeMetadata.from_label">
+<code class="descname">from_label</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.EdgeMetadata.from_label" title="Permalink to this definition">¶</a></dt>
+<dd><p>A string name of the from table label of this edge (incoming vertex)</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.EdgeMetadata.from_partition_key_columns">
+<code class="descname">from_partition_key_columns</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.EdgeMetadata.from_partition_key_columns" title="Permalink to this definition">¶</a></dt>
+<dd><p>The columns that match the partition key of the incoming vertex table.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.EdgeMetadata.from_clustering_columns">
+<code class="descname">from_clustering_columns</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.EdgeMetadata.from_clustering_columns" title="Permalink to this definition">¶</a></dt>
+<dd><p>The columns that match the clustering columns of the incoming vertex table.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.EdgeMetadata.to_table">
+<code class="descname">to_table</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.EdgeMetadata.to_table" title="Permalink to this definition">¶</a></dt>
+<dd><p>A string name of the to table of this edge (outgoing vertex)</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.EdgeMetadata.to_label">
+<code class="descname">to_label</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.EdgeMetadata.to_label" title="Permalink to this definition">¶</a></dt>
+<dd><p>A string name of the to table label of this edge (outgoing vertex)</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.EdgeMetadata.to_partition_key_columns">
+<code class="descname">to_partition_key_columns</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.EdgeMetadata.to_partition_key_columns" title="Permalink to this definition">¶</a></dt>
+<dd><p>The columns that match the partition key of the outgoing vertex table.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metadata.EdgeMetadata.to_clustering_columns">
+<code class="descname">to_clustering_columns</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metadata.EdgeMetadata.to_clustering_columns" title="Permalink to this definition">¶</a></dt>
+<dd><p>The columns that match the clustering columns of the outgoing vertex table.</p>
 </dd></dl>
 
 </dd></dl>

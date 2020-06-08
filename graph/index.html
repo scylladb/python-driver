@@ -97,17 +97,6 @@
         <div class="large-6 large-push-3 columns">
             <div class="section" id="datastax-graph-queries">
 <h1>DataStax Graph Queries<a class="headerlink" href="#datastax-graph-queries" title="Permalink to this headline">¶</a></h1>
-<p>The Cassandra driver executes graph queries over the Cassandra native protocol. Use
-<a class="reference internal" href="../api/cassandra/cluster/#cassandra.cluster.Session.execute_graph" title="cassandra.cluster.Session.execute_graph"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Session.execute_graph()</span></code></a> or <a class="reference internal" href="../api/cassandra/cluster/#cassandra.cluster.Session.execute_graph_async" title="cassandra.cluster.Session.execute_graph_async"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Session.execute_graph_async()</span></code></a> for
-executing gremlin queries in DSE Graph.</p>
-<p>Three Execution Profiles are provided suitable for graph execution:</p>
-<ul class="simple">
-<li><a class="reference internal" href="../api/cassandra/cluster/#cassandra.cluster.EXEC_PROFILE_GRAPH_DEFAULT" title="cassandra.cluster.EXEC_PROFILE_GRAPH_DEFAULT"><code class="xref py py-data docutils literal notranslate"><span class="pre">EXEC_PROFILE_GRAPH_DEFAULT</span></code></a></li>
-<li><a class="reference internal" href="../api/cassandra/cluster/#cassandra.cluster.EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT" title="cassandra.cluster.EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT"><code class="xref py py-data docutils literal notranslate"><span class="pre">EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT</span></code></a></li>
-<li><a class="reference internal" href="../api/cassandra/cluster/#cassandra.cluster.EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT" title="cassandra.cluster.EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT"><code class="xref py py-data docutils literal notranslate"><span class="pre">EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT</span></code></a></li>
-</ul>
-<p>See <a class="reference internal" href="../getting_started/"><span class="doc">Getting Started</span></a> and <a class="reference internal" href="../execution_profiles/"><span class="doc">Execution Profiles</span></a>
-for more detail on working with profiles.</p>
 <div class="section" id="getting-started">
 <h2>Getting Started<a class="headerlink" href="#getting-started" title="Permalink to this headline">¶</a></h2>
 <p>First, we need to create a graph in the system. To access the system API, we
@@ -126,7 +115,7 @@ use the system execution profile</p>
 profile. Additionally, we also need to set the schema_mode to <cite>development</cite>
 for the schema creation:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cluster</span> <span class="kn">import</span> <span class="n">Cluster</span><span class="p">,</span> <span class="n">GraphExecutionProfile</span><span class="p">,</span> <span class="n">EXEC_PROFILE_GRAPH_DEFAULT</span>
-<span class="kn">from</span> <span class="nn">cassandra.datastax.graph</span> <span class="kn">import</span> <span class="n">GraphOptions</span>
+<span class="kn">from</span> <span class="nn">cassandra.graph</span> <span class="kn">import</span> <span class="n">GraphOptions</span>
 
 <span class="n">graph_name</span> <span class="o">=</span> <span class="s1">&#39;movies&#39;</span>
 <span class="n">ep</span> <span class="o">=</span> <span class="n">GraphExecutionProfile</span><span class="p">(</span><span class="n">graph_options</span><span class="o">=</span><span class="n">GraphOptions</span><span class="p">(</span><span class="n">graph_name</span><span class="o">=</span><span class="n">graph_name</span><span class="p">))</span>
@@ -261,7 +250,7 @@ for the schema creation:</p>
 <p>To see a more graph examples, see <a class="reference external" href="https://github.com/datastax/graph-examples/">DataStax Graph Examples</a>.</p>
 </div>
 <div class="section" id="graph-types">
-<span id="id1"></span><h2>Graph Types<a class="headerlink" href="#graph-types" title="Permalink to this headline">¶</a></h2>
+<h2>Graph Types<a class="headerlink" href="#graph-types" title="Permalink to this headline">¶</a></h2>
 <p>Here are the supported graph types with their python representations:</p>
 <table border="1" class="docutils">
 <colgroup>
@@ -333,14 +322,14 @@ for the schema creation:</p>
 </div>
 <div class="section" id="graph-row-factory">
 <h2>Graph Row Factory<a class="headerlink" href="#graph-row-factory" title="Permalink to this headline">¶</a></h2>
-<p>By default (with <code class="xref py py-class docutils literal notranslate"><span class="pre">GraphExecutionProfile.row_factory</span></code> set to <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.graph_object_row_factory" title="cassandra.datastax.graph.graph_object_row_factory"><code class="xref py py-func docutils literal notranslate"><span class="pre">datastax.graph.graph_object_row_factory()</span></code></a>), known graph result
+<p>By default (with <code class="xref py py-class docutils literal notranslate"><span class="pre">GraphExecutionProfile.row_factory</span></code> set to <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.graph_object_row_factory" title="cassandra.datastax.graph.graph_object_row_factory"><code class="xref py py-func docutils literal notranslate"><span class="pre">graph.graph_object_row_factory()</span></code></a>), known graph result
 types are unpacked and returned as specialized types (<a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.Vertex" title="cassandra.datastax.graph.Vertex"><code class="xref py py-class docutils literal notranslate"><span class="pre">Vertex</span></code></a>, <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.Edge" title="cassandra.datastax.graph.Edge"><code class="xref py py-class docutils literal notranslate"><span class="pre">Edge</span></code></a>). If the result is not one of these
-types, a <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.Result" title="cassandra.datastax.graph.Result"><code class="xref py py-class docutils literal notranslate"><span class="pre">datastax.graph.Result</span></code></a> is returned, containing the graph result parsed from JSON and removed from its outer dict.
+types, a <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.Result" title="cassandra.datastax.graph.Result"><code class="xref py py-class docutils literal notranslate"><span class="pre">graph.Result</span></code></a> is returned, containing the graph result parsed from JSON and removed from its outer dict.
 The class has some accessor convenience methods for accessing top-level properties by name (<cite>type</cite>, <cite>properties</cite> above),
 or lists by index:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># dicts with `__getattr__` or `__getitem__`</span>
 <span class="n">result</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute_graph</span><span class="p">(</span><span class="s2">&quot;[[key_str: &#39;value&#39;, key_int: 3]]&quot;</span><span class="p">,</span> <span class="n">execution_profile</span><span class="o">=</span><span class="n">EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>  <span class="c1"># Using system exec just because there is no graph defined</span>
-<span class="n">result</span>  <span class="c1"># cassandra.datastax.graph.Result({u&#39;key_str&#39;: u&#39;value&#39;, u&#39;key_int&#39;: 3})</span>
+<span class="n">result</span>  <span class="c1"># dse.graph.Result({u&#39;key_str&#39;: u&#39;value&#39;, u&#39;key_int&#39;: 3})</span>
 <span class="n">result</span><span class="o">.</span><span class="n">value</span>  <span class="c1"># {u&#39;key_int&#39;: 3, u&#39;key_str&#39;: u&#39;value&#39;} (dict)</span>
 <span class="n">result</span><span class="o">.</span><span class="n">key_str</span>  <span class="c1"># u&#39;value&#39;</span>
 <span class="n">result</span><span class="o">.</span><span class="n">key_int</span>  <span class="c1"># 3</span>
@@ -349,30 +338,28 @@ or lists by index:</p>
 
 <span class="c1"># lists with `__getitem__`</span>
 <span class="n">result</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute_graph</span><span class="p">(</span><span class="s1">&#39;[[0, 1, 2]]&#39;</span><span class="p">,</span> <span class="n">execution_profile</span><span class="o">=</span><span class="n">EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
-<span class="n">result</span>  <span class="c1"># cassandra.datastax.graph.Result([0, 1, 2])</span>
+<span class="n">result</span>  <span class="c1"># dse.graph.Result([0, 1, 2])</span>
 <span class="n">result</span><span class="o">.</span><span class="n">value</span>  <span class="c1"># [0, 1, 2] (list)</span>
 <span class="n">result</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>  <span class="c1"># 1 (list[1])</span>
 </pre></div>
 </div>
-<p>You can use a different row factory by setting <code class="xref py py-attr docutils literal notranslate"><span class="pre">cluster.ExecutionProfile.row_factory</span></code> or passing it to
-<code class="xref py py-meth docutils literal notranslate"><span class="pre">cluster.Session.execute_graph()</span></code>. For example, <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.single_object_row_factory" title="cassandra.datastax.graph.single_object_row_factory"><code class="xref py py-func docutils literal notranslate"><span class="pre">datastax.graph.single_object_row_factory()</span></code></a> returns the JSON result string,
-unparsed. <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.graph_result_row_factory" title="cassandra.datastax.graph.graph_result_row_factory"><code class="xref py py-func docutils literal notranslate"><span class="pre">datastax.graph.graph_result_row_factory()</span></code></a> returns parsed, but unmodified results (such that all metadata is retained,
-unlike <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.graph_object_row_factory" title="cassandra.datastax.graph.graph_object_row_factory"><code class="xref py py-func docutils literal notranslate"><span class="pre">datastax.graph.graph_object_row_factory()</span></code></a>, which sheds some as attributes and properties are unpacked). These results
-also provide convenience methods for converting to known types (<a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.Result.as_vertex" title="cassandra.datastax.graph.Result.as_vertex"><code class="xref py py-meth docutils literal notranslate"><span class="pre">datastax.graph.Result.as_vertex()</span></code></a>, <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.Result.as_edge" title="cassandra.datastax.graph.Result.as_edge"><code class="xref py py-meth docutils literal notranslate"><span class="pre">datastax.graph.Result.as_edge()</span></code></a>,</p>
-<blockquote>
-<div><a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.Result.as_path" title="cassandra.datastax.graph.Result.as_path"><code class="xref py py-meth docutils literal notranslate"><span class="pre">datastax.graph.Result.as_path()</span></code></a>).</div></blockquote>
+<p>You can use a different row factory by setting <code class="xref py py-attr docutils literal notranslate"><span class="pre">Session.default_graph_row_factory</span></code> or passing it to
+<a class="reference internal" href="../api/cassandra/cluster/#cassandra.cluster.Session.execute_graph" title="cassandra.cluster.Session.execute_graph"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Session.execute_graph()</span></code></a>. For example, <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.single_object_row_factory" title="cassandra.datastax.graph.single_object_row_factory"><code class="xref py py-func docutils literal notranslate"><span class="pre">graph.single_object_row_factory()</span></code></a> returns the JSON result string`,
+unparsed. <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.graph_result_row_factory" title="cassandra.datastax.graph.graph_result_row_factory"><code class="xref py py-func docutils literal notranslate"><span class="pre">graph.graph_result_row_factory()</span></code></a> returns parsed, but unmodified results (such that all metadata is retained,
+unlike <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.graph_object_row_factory" title="cassandra.datastax.graph.graph_object_row_factory"><code class="xref py py-func docutils literal notranslate"><span class="pre">graph.graph_object_row_factory()</span></code></a>, which sheds some as attributes and properties are unpacked). These results
+also provide convenience methods for converting to known types (<a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.Result.as_vertex" title="cassandra.datastax.graph.Result.as_vertex"><code class="xref py py-meth docutils literal notranslate"><span class="pre">as_vertex()</span></code></a>, <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.Result.as_edge" title="cassandra.datastax.graph.Result.as_edge"><code class="xref py py-meth docutils literal notranslate"><span class="pre">as_edge()</span></code></a>, <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.Result.as_path" title="cassandra.datastax.graph.Result.as_path"><code class="xref py py-meth docutils literal notranslate"><span class="pre">as_path()</span></code></a>).</p>
 <p>Vertex and Edge properties are never unpacked since their types are unknown. If you know your graph schema and want to
-deserialize properties, use the <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.GraphSON1Deserializer" title="cassandra.datastax.graph.GraphSON1Deserializer"><code class="xref py py-class docutils literal notranslate"><span class="pre">datastax.graph.GraphSON1Deserializer</span></code></a>. It provides convenient methods to deserialize by types (e.g.
+deserialize properties, use the <a class="reference internal" href="../api/cassandra/datastax/graph/#cassandra.datastax.graph.GraphSON1Deserializer" title="cassandra.datastax.graph.GraphSON1Deserializer"><code class="xref py py-class docutils literal notranslate"><span class="pre">GraphSON1Deserializer</span></code></a>. It provides convenient methods to deserialize by types (e.g.
 deserialize_date, deserialize_uuid, deserialize_polygon etc.) Example:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># ...</span>
-<span class="kn">from</span> <span class="nn">cassandra.datastax.graph</span> <span class="kn">import</span> <span class="n">GraphSON1Deserializer</span>
+<span class="kn">from</span> <span class="nn">cassandra.graph</span> <span class="kn">import</span> <span class="n">GraphSON1Deserializer</span>
 
 <span class="n">row</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute_graph</span><span class="p">(</span><span class="s2">&quot;g.V().toList()&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
 <span class="n">value</span> <span class="o">=</span> <span class="n">row</span><span class="o">.</span><span class="n">properties</span><span class="p">[</span><span class="s1">&#39;my_property_key&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">value</span>  <span class="c1"># accessing the VertexProperty value</span>
 <span class="n">value</span> <span class="o">=</span> <span class="n">GraphSON1Deserializer</span><span class="o">.</span><span class="n">deserialize_timestamp</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
 
-<span class="nb">print</span> <span class="n">value</span>  <span class="c1"># 2017-06-26 08:27:05</span>
-<span class="nb">print</span> <span class="nb">type</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>  <span class="c1"># &lt;type &#39;datetime.datetime&#39;&gt;</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>  <span class="c1"># 2017-06-26 08:27:05</span>
+<span class="nb">print</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">value</span><span class="p">))</span>  <span class="c1"># &lt;type &#39;datetime.datetime&#39;&gt;</span>
 </pre></div>
 </div>
 </div>
@@ -383,10 +370,10 @@ deserialize_date, deserialize_uuid, deserialize_polygon etc.) Example:</p>
 <span class="p">[</span><span class="n">r</span><span class="o">.</span><span class="n">value</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">result_set</span><span class="p">]</span>  <span class="c1"># [1, 2]</span>
 </pre></div>
 </div>
-<p>All python types listed in <a class="reference internal" href="#id1">Graph Types</a> can be passed as named parameters and will be serialized
+<p>All python types listed in <a class="reference internal" href="#graph-types">Graph Types</a> can be passed as named parameters and will be serialized
 automatically to their graph representation:</p>
 <p>Example:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">s</span><span class="o">.</span><span class="n">execute_graph</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">session</span><span class="o">.</span><span class="n">execute_graph</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
 <span class="s2">  g.addV(&#39;person&#39;).</span>
 <span class="s2">  property(&#39;name&#39;, text_value).</span>
 <span class="s2">  property(&#39;age&#39;, integer_value).</span>
@@ -419,7 +406,7 @@ support for the complex data types handled by DSE Graph.</p>
 for graph queries. Enabling GraphSON2 can be done by <cite>changing the
 graph protocol of the execution profile</cite> and <cite>setting the graphson2 row factory</cite>:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cluster</span> <span class="kn">import</span> <span class="n">Cluster</span><span class="p">,</span> <span class="n">GraphExecutionProfile</span><span class="p">,</span> <span class="n">EXEC_PROFILE_GRAPH_DEFAULT</span>
-<span class="kn">from</span> <span class="nn">cassandra.datastax.graph</span> <span class="kn">import</span> <span class="n">GraphOptions</span><span class="p">,</span> <span class="n">GraphProtocol</span><span class="p">,</span> <span class="n">graph_graphson2_row_factory</span>
+<span class="kn">from</span> <span class="nn">cassandra.graph</span> <span class="kn">import</span> <span class="n">GraphOptions</span><span class="p">,</span> <span class="n">GraphProtocol</span><span class="p">,</span> <span class="n">graph_graphson2_row_factory</span>
 
 <span class="c1"># Create a GraphSON2 execution profile</span>
 <span class="n">ep</span> <span class="o">=</span> <span class="n">GraphExecutionProfile</span><span class="p">(</span><span class="n">graph_options</span><span class="o">=</span><span class="n">GraphOptions</span><span class="p">(</span><span class="n">graph_name</span><span class="o">=</span><span class="s1">&#39;types&#39;</span><span class="p">,</span>
@@ -427,8 +414,8 @@ graph protocol of the execution profile</cite> and <cite>setting the graphson2 r
                            <span class="n">row_factory</span><span class="o">=</span><span class="n">graph_graphson2_row_factory</span><span class="p">)</span>
 
 <span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">(</span><span class="n">execution_profiles</span><span class="o">=</span><span class="p">{</span><span class="n">EXEC_PROFILE_GRAPH_DEFAULT</span><span class="p">:</span> <span class="n">ep</span><span class="p">})</span>
-<span class="n">s</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
-<span class="n">s</span><span class="o">.</span><span class="n">execute_graph</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+<span class="n">session</span><span class="o">.</span><span class="n">execute_graph</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>Using GraphSON2, all properties will be automatically deserialized to

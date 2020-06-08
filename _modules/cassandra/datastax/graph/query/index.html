@@ -123,14 +123,14 @@
 
 <span class="kn">from</span> <span class="nn">cassandra</span> <span class="kn">import</span> <span class="n">ConsistencyLevel</span>
 <span class="kn">from</span> <span class="nn">cassandra.query</span> <span class="kn">import</span> <span class="n">Statement</span><span class="p">,</span> <span class="n">SimpleStatement</span>
-<span class="kn">from</span> <span class="nn">cassandra.datastax.graph.types</span> <span class="kn">import</span> <span class="n">Vertex</span><span class="p">,</span> <span class="n">Edge</span><span class="p">,</span> <span class="n">Path</span>
-<span class="kn">from</span> <span class="nn">cassandra.datastax.graph.graphson</span> <span class="kn">import</span> <span class="n">GraphSON2Reader</span>
+<span class="kn">from</span> <span class="nn">cassandra.datastax.graph.types</span> <span class="kn">import</span> <span class="n">Vertex</span><span class="p">,</span> <span class="n">Edge</span><span class="p">,</span> <span class="n">Path</span><span class="p">,</span> <span class="n">VertexProperty</span>
+<span class="kn">from</span> <span class="nn">cassandra.datastax.graph.graphson</span> <span class="kn">import</span> <span class="n">GraphSON2Reader</span><span class="p">,</span> <span class="n">GraphSON3Reader</span>
 
 
 <span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
     <span class="s1">&#39;GraphProtocol&#39;</span><span class="p">,</span> <span class="s1">&#39;GraphOptions&#39;</span><span class="p">,</span> <span class="s1">&#39;GraphStatement&#39;</span><span class="p">,</span> <span class="s1">&#39;SimpleGraphStatement&#39;</span><span class="p">,</span>
     <span class="s1">&#39;single_object_row_factory&#39;</span><span class="p">,</span> <span class="s1">&#39;graph_result_row_factory&#39;</span><span class="p">,</span> <span class="s1">&#39;graph_object_row_factory&#39;</span><span class="p">,</span>
-    <span class="s1">&#39;graph_graphson2_row_factory&#39;</span><span class="p">,</span> <span class="s1">&#39;Result&#39;</span>
+    <span class="s1">&#39;graph_graphson2_row_factory&#39;</span><span class="p">,</span> <span class="s1">&#39;Result&#39;</span><span class="p">,</span> <span class="s1">&#39;graph_graphson3_row_factory&#39;</span>
 <span class="p">]</span>
 
 <span class="c1"># (attr, description, server option)</span>
@@ -149,19 +149,22 @@
 <span class="c1"># this is defined by the execution profile attribute, not in graph options</span>
 <span class="n">_request_timeout_key</span> <span class="o">=</span> <span class="s1">&#39;request-timeout&#39;</span>
 
-<span class="n">_graphson2_reader</span> <span class="o">=</span> <span class="n">GraphSON2Reader</span><span class="p">()</span>
-
 
 <div class="viewcode-block" id="GraphProtocol"><a class="viewcode-back" href="../../../../../api/cassandra/graph/#cassandra.datastax.graph.GraphProtocol">[docs]</a><span class="k">class</span> <span class="nc">GraphProtocol</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
 
-    <span class="n">GRAPHSON_1_0</span> <span class="o">=</span> <span class="s1">&#39;graphson-1.0&#39;</span>
+    <span class="n">GRAPHSON_1_0</span> <span class="o">=</span> <span class="sa">b</span><span class="s1">&#39;graphson-1.0&#39;</span>
     <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    GraphSON1</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-    <span class="n">GRAPHSON_2_0</span> <span class="o">=</span> <span class="s1">&#39;graphson-2.0&#39;</span>
+    <span class="n">GRAPHSON_2_0</span> <span class="o">=</span> <span class="sa">b</span><span class="s1">&#39;graphson-2.0&#39;</span>
     <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    GraphSON2</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">GRAPHSON_3_0</span> <span class="o">=</span> <span class="sa">b</span><span class="s1">&#39;graphson-3.0&#39;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    GraphSON3</span>
 <span class="sd">    &quot;&quot;&quot;</span></div>
 
 
@@ -171,11 +174,13 @@
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="c1"># See _graph_options map above for notes on valid options</span>
 
+    <span class="n">DEFAULT_GRAPH_PROTOCOL</span> <span class="o">=</span> <span class="n">GraphProtocol</span><span class="o">.</span><span class="n">GRAPHSON_1_0</span>
+    <span class="n">DEFAULT_GRAPH_LANGUAGE</span> <span class="o">=</span> <span class="sa">b</span><span class="s1">&#39;gremlin-groovy&#39;</span>
+
     <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_graph_options</span> <span class="o">=</span> <span class="p">{}</span>
         <span class="n">kwargs</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s1">&#39;graph_source&#39;</span><span class="p">,</span> <span class="s1">&#39;g&#39;</span><span class="p">)</span>
-        <span class="n">kwargs</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s1">&#39;graph_language&#39;</span><span class="p">,</span> <span class="s1">&#39;gremlin-groovy&#39;</span><span class="p">)</span>
-        <span class="n">kwargs</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s1">&#39;graph_protocol&#39;</span><span class="p">,</span> <span class="n">GraphProtocol</span><span class="o">.</span><span class="n">GRAPHSON_1_0</span><span class="p">)</span>
+        <span class="n">kwargs</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s1">&#39;graph_language&#39;</span><span class="p">,</span> <span class="n">GraphOptions</span><span class="o">.</span><span class="n">DEFAULT_GRAPH_LANGUAGE</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">attr</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">six</span><span class="o">.</span><span class="n">iteritems</span><span class="p">(</span><span class="n">kwargs</span><span class="p">):</span>
             <span class="k">if</span> <span class="n">attr</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_graph_option_names</span><span class="p">:</span>
                 <span class="n">warn</span><span class="p">(</span><span class="s2">&quot;Unknown keyword argument received for GraphOptions: </span><span class="si">{0}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">attr</span><span class="p">))</span>
@@ -326,11 +331,31 @@
         <span class="k">yield</span> <span class="n">res</span>
 
 
-<span class="k">def</span> <span class="nf">graph_graphson2_row_factory</span><span class="p">(</span><span class="n">column_names</span><span class="p">,</span> <span class="n">rows</span><span class="p">):</span>
-    <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Row Factory that returns the decoded graphson as DSE types.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="p">[</span><span class="n">_graphson2_reader</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])[</span><span class="s1">&#39;result&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">]</span>
+<span class="k">class</span> <span class="nc">_GraphSONContextRowFactory</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="n">graphson_reader_class</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">graphson_reader_kwargs</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cluster</span><span class="p">):</span>
+        <span class="n">context</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;cluster&#39;</span><span class="p">:</span> <span class="n">cluster</span><span class="p">}</span>
+        <span class="n">kwargs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graphson_reader_kwargs</span> <span class="ow">or</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graphson_reader</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graphson_reader_class</span><span class="p">(</span><span class="n">context</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">column_names</span><span class="p">,</span> <span class="n">rows</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">graphson_reader</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])[</span><span class="s1">&#39;result&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">]</span>
+
+
+<span class="k">class</span> <span class="nc">_GraphSON2RowFactory</span><span class="p">(</span><span class="n">_GraphSONContextRowFactory</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Row factory to deserialize GraphSON2 results.&quot;&quot;&quot;</span>
+    <span class="n">graphson_reader_class</span> <span class="o">=</span> <span class="n">GraphSON2Reader</span>
+
+
+<span class="k">class</span> <span class="nc">_GraphSON3RowFactory</span><span class="p">(</span><span class="n">_GraphSONContextRowFactory</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Row factory to deserialize GraphSON3 results.&quot;&quot;&quot;</span>
+    <span class="n">graphson_reader_class</span> <span class="o">=</span> <span class="n">GraphSON3Reader</span>
+
+
+<span class="n">graph_graphson2_row_factory</span> <span class="o">=</span> <span class="n">_GraphSON2RowFactory</span>
+<span class="n">graph_graphson3_row_factory</span> <span class="o">=</span> <span class="n">_GraphSON3RowFactory</span>
 
 
 <div class="viewcode-block" id="Result"><a class="viewcode-back" href="../../../../../api/cassandra/graph/#cassandra.datastax.graph.Result">[docs]</a><span class="k">class</span> <span class="nc">Result</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
@@ -405,7 +430,10 @@
         <span class="k">try</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">Path</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">labels</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">objects</span><span class="p">)</span>
         <span class="k">except</span> <span class="p">(</span><span class="ne">AttributeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">,</span> <span class="ne">TypeError</span><span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">&quot;Could not create Path from </span><span class="si">%r</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="p">,))</span></div></div>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">&quot;Could not create Path from </span><span class="si">%r</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="p">,))</span></div>
+
+    <span class="k">def</span> <span class="nf">as_vertex_property</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">VertexProperty</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;label&#39;</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;value&#39;</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;properties&#39;</span><span class="p">,</span> <span class="p">{}))</span></div>
 </pre></div>
         </div>
 

@@ -718,7 +718,7 @@ topology changes or schema updates.</p>
 
 <dl class="class">
 <dt id="cassandra.cluster.ExecutionProfile">
-<em class="property">class </em><code class="descclassname">cassandra.cluster.</code><code class="descname">ExecutionProfile</code><span class="sig-paren">(</span><em>load_balancing_policy=&lt;object object&gt;</em>, <em>retry_policy=None</em>, <em>consistency_level=LOCAL_ONE</em>, <em>serial_consistency_level=None</em>, <em>request_timeout=10.0</em>, <em>row_factory=&lt;function named_tuple_factory&gt;</em>, <em>speculative_execution_policy=None</em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/cassandra/cluster/#ExecutionProfile"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.cluster.ExecutionProfile" title="Permalink to this definition">¶</a></dt>
+<em class="property">class </em><code class="descclassname">cassandra.cluster.</code><code class="descname">ExecutionProfile</code><span class="sig-paren">(</span><em>load_balancing_policy=&lt;object object&gt;</em>, <em>retry_policy=None</em>, <em>consistency_level=ConsistencyLevel.LOCAL_ONE</em>, <em>serial_consistency_level=None</em>, <em>request_timeout=10.0</em>, <em>row_factory=&lt;function named_tuple_factory&gt;</em>, <em>speculative_execution_policy=None</em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/cassandra/cluster/#ExecutionProfile"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.cluster.ExecutionProfile" title="Permalink to this definition">¶</a></dt>
 <dd><dl class="attribute">
 <dt id="cassandra.cluster.ExecutionProfile.consistency_level">
 <code class="descname">consistency_level</code><em class="property"> = LOCAL_ONE</em><a class="headerlink" href="#cassandra.cluster.ExecutionProfile.consistency_level" title="Permalink to this definition">¶</a></dt>
@@ -786,6 +786,41 @@ to constrain page size and rate.</p>
 <p>This is only available for DSE clusters.</p>
 </dd></dl>
 
+</dd></dl>
+
+<dl class="class">
+<dt id="cassandra.cluster.GraphExecutionProfile">
+<em class="property">class </em><code class="descclassname">cassandra.cluster.</code><code class="descname">GraphExecutionProfile</code><span class="sig-paren">(</span><em>load_balancing_policy=_NOT_SET</em>, <em>retry_policy=None</em>, <em>consistency_level=ConsistencyLevel.LOCAL_ONE</em>, <em>serial_consistency_level=None</em>, <em>request_timeout=30.0</em>, <em>row_factory=None</em>, <em>graph_options=None</em>, <em>continuous_paging_options=_NOT_SET</em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/cassandra/cluster/#GraphExecutionProfile"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.cluster.GraphExecutionProfile" title="Permalink to this definition">¶</a></dt>
+<dd><p>Default execution profile for graph execution.</p>
+<p>See <a class="reference internal" href="#cassandra.cluster.ExecutionProfile" title="cassandra.cluster.ExecutionProfile"><code class="xref py py-class docutils literal notranslate"><span class="pre">ExecutionProfile</span></code></a> for base attributes. Note that if not explicitly set,
+the row_factory and graph_options.graph_protocol are resolved during the query execution.
+These options will resolve to graph_graphson3_row_factory and GraphProtocol.GRAPHSON_3_0
+for the core graph engine (DSE 6.8+), otherwise graph_object_row_factory and GraphProtocol.GRAPHSON_1_0</p>
+<p>In addition to default parameters shown in the signature, this profile also defaults <code class="docutils literal notranslate"><span class="pre">retry_policy</span></code> to
+<code class="xref py py-class docutils literal notranslate"><span class="pre">cassandra.policies.NeverRetryPolicy</span></code>.</p>
+<dl class="attribute">
+<dt id="cassandra.cluster.GraphExecutionProfile.graph_options">
+<code class="descname">graph_options</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.cluster.GraphExecutionProfile.graph_options" title="Permalink to this definition">¶</a></dt>
+<dd><p><a class="reference internal" href="../datastax/graph/#cassandra.datastax.graph.GraphOptions" title="cassandra.datastax.graph.GraphOptions"><code class="xref py py-class docutils literal notranslate"><span class="pre">GraphOptions</span></code></a> to use with this execution</p>
+<p>Default options for graph queries, initialized as follows by default:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">GraphOptions</span><span class="p">(</span><span class="n">graph_language</span><span class="o">=</span><span class="sa">b</span><span class="s1">&#39;gremlin-groovy&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>See cassandra.graph.GraphOptions</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="cassandra.cluster.GraphAnalyticsExecutionProfile">
+<em class="property">class </em><code class="descclassname">cassandra.cluster.</code><code class="descname">GraphAnalyticsExecutionProfile</code><span class="sig-paren">(</span><em>load_balancing_policy=None</em>, <em>retry_policy=None</em>, <em>consistency_level=ConsistencyLevel.LOCAL_ONE</em>, <em>serial_consistency_level=None</em>, <em>request_timeout=3600. * 24. * 7.</em>, <em>row_factory=None</em>, <em>graph_options=None</em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/cassandra/cluster/#GraphAnalyticsExecutionProfile"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.cluster.GraphAnalyticsExecutionProfile" title="Permalink to this definition">¶</a></dt>
+<dd><p>Execution profile with timeout and load balancing appropriate for graph analytics queries.</p>
+<p>See also <code class="xref py py-class docutils literal notranslate"><span class="pre">GraphExecutionPolicy</span></code>.</p>
+<p>In addition to default parameters shown in the signature, this profile also defaults <code class="docutils literal notranslate"><span class="pre">retry_policy</span></code> to
+<code class="xref py py-class docutils literal notranslate"><span class="pre">cassandra.policies.NeverRetryPolicy</span></code>, and <code class="docutils literal notranslate"><span class="pre">load_balancing_policy</span></code> to one that targets the current Spark
+master.</p>
+<p>Note: The graph_options.graph_source is set automatically to b’a’ (analytics)
+when using GraphAnalyticsExecutionProfile. This is mandatory to target analytics nodes.</p>
 </dd></dl>
 
 <dl class="data">

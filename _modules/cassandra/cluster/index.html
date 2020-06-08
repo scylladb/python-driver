@@ -184,14 +184,16 @@
 <span class="kn">from</span> <span class="nn">cassandra.marshal</span> <span class="kn">import</span> <span class="n">int64_pack</span>
 <span class="kn">from</span> <span class="nn">cassandra.timestamps</span> <span class="kn">import</span> <span class="n">MonotonicTimestampGenerator</span>
 <span class="kn">from</span> <span class="nn">cassandra.compat</span> <span class="kn">import</span> <span class="n">Mapping</span>
-<span class="kn">from</span> <span class="nn">cassandra.util</span> <span class="kn">import</span> <span class="n">_resolve_contact_points_to_string_map</span>
+<span class="kn">from</span> <span class="nn">cassandra.util</span> <span class="kn">import</span> <span class="n">_resolve_contact_points_to_string_map</span><span class="p">,</span> <span class="n">Version</span>
 
 <span class="kn">from</span> <span class="nn">cassandra.datastax.insights.reporter</span> <span class="kn">import</span> <span class="n">MonitorReporter</span>
 <span class="kn">from</span> <span class="nn">cassandra.datastax.insights.util</span> <span class="kn">import</span> <span class="n">version_supports_insights</span>
 
 <span class="kn">from</span> <span class="nn">cassandra.datastax.graph</span> <span class="kn">import</span> <span class="p">(</span><span class="n">graph_object_row_factory</span><span class="p">,</span> <span class="n">GraphOptions</span><span class="p">,</span> <span class="n">GraphSON1Serializer</span><span class="p">,</span>
-                                      <span class="n">GraphProtocol</span><span class="p">,</span> <span class="n">GraphSON2Serializer</span><span class="p">,</span> <span class="n">GraphStatement</span><span class="p">,</span> <span class="n">SimpleGraphStatement</span><span class="p">)</span>
-<span class="kn">from</span> <span class="nn">cassandra.datastax.graph.query</span> <span class="kn">import</span> <span class="n">_request_timeout_key</span>
+                                      <span class="n">GraphProtocol</span><span class="p">,</span> <span class="n">GraphSON2Serializer</span><span class="p">,</span> <span class="n">GraphStatement</span><span class="p">,</span> <span class="n">SimpleGraphStatement</span><span class="p">,</span>
+                                      <span class="n">graph_graphson2_row_factory</span><span class="p">,</span> <span class="n">graph_graphson3_row_factory</span><span class="p">,</span>
+                                      <span class="n">GraphSON3Serializer</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">cassandra.datastax.graph.query</span> <span class="kn">import</span> <span class="n">_request_timeout_key</span><span class="p">,</span> <span class="n">_GraphSONContextRowFactory</span>
 <span class="kn">from</span> <span class="nn">cassandra.datastax</span> <span class="kn">import</span> <span class="n">cloud</span> <span class="k">as</span> <span class="n">dscloud</span>
 
 <span class="k">try</span><span class="p">:</span>
@@ -257,6 +259,7 @@
 <span class="n">DEFAULT_MIN_CONNECTIONS_PER_REMOTE_HOST</span> <span class="o">=</span> <span class="mi">1</span>
 <span class="n">DEFAULT_MAX_CONNECTIONS_PER_REMOTE_HOST</span> <span class="o">=</span> <span class="mi">2</span>
 
+<span class="n">_GRAPH_PAGING_MIN_DSE_VERSION</span> <span class="o">=</span> <span class="n">Version</span><span class="p">(</span><span class="s1">&#39;6.8.0&#39;</span><span class="p">)</span>
 
 <span class="n">_NOT_SET</span> <span class="o">=</span> <span class="nb">object</span><span class="p">()</span>
 
@@ -506,7 +509,7 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">continuous_paging_options</span> <span class="o">=</span> <span class="n">continuous_paging_options</span></div>
 
 
-<span class="k">class</span> <span class="nc">GraphExecutionProfile</span><span class="p">(</span><span class="n">ExecutionProfile</span><span class="p">):</span>
+<div class="viewcode-block" id="GraphExecutionProfile"><a class="viewcode-back" href="../../../api/cassandra/cluster/#cassandra.cluster.GraphExecutionProfile">[docs]</a><span class="k">class</span> <span class="nc">GraphExecutionProfile</span><span class="p">(</span><span class="n">ExecutionProfile</span><span class="p">):</span>
     <span class="n">graph_options</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    :class:`.GraphOptions` to use with this execution</span>
@@ -520,29 +523,32 @@
 
     <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">load_balancing_policy</span><span class="o">=</span><span class="n">_NOT_SET</span><span class="p">,</span> <span class="n">retry_policy</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
                  <span class="n">consistency_level</span><span class="o">=</span><span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">LOCAL_ONE</span><span class="p">,</span> <span class="n">serial_consistency_level</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-                 <span class="n">request_timeout</span><span class="o">=</span><span class="mf">30.0</span><span class="p">,</span> <span class="n">row_factory</span><span class="o">=</span><span class="n">graph_object_row_factory</span><span class="p">,</span>
-                 <span class="n">graph_options</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+                 <span class="n">request_timeout</span><span class="o">=</span><span class="mf">30.0</span><span class="p">,</span> <span class="n">row_factory</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">graph_options</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">continuous_paging_options</span><span class="o">=</span><span class="n">_NOT_SET</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Default execution profile for graph execution.</span>
 
-<span class="sd">        See :class:`.ExecutionProfile`</span>
-<span class="sd">        for base attributes.</span>
+<span class="sd">        See :class:`.ExecutionProfile` for base attributes. Note that if not explicitly set,</span>
+<span class="sd">        the row_factory and graph_options.graph_protocol are resolved during the query execution.</span>
+<span class="sd">        These options will resolve to graph_graphson3_row_factory and GraphProtocol.GRAPHSON_3_0</span>
+<span class="sd">        for the core graph engine (DSE 6.8+), otherwise graph_object_row_factory and GraphProtocol.GRAPHSON_1_0</span>
 
 <span class="sd">        In addition to default parameters shown in the signature, this profile also defaults ``retry_policy`` to</span>
 <span class="sd">        :class:`cassandra.policies.NeverRetryPolicy`.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">retry_policy</span> <span class="o">=</span> <span class="n">retry_policy</span> <span class="ow">or</span> <span class="n">NeverRetryPolicy</span><span class="p">()</span>
         <span class="nb">super</span><span class="p">(</span><span class="n">GraphExecutionProfile</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">load_balancing_policy</span><span class="p">,</span> <span class="n">retry_policy</span><span class="p">,</span> <span class="n">consistency_level</span><span class="p">,</span>
-                                                    <span class="n">serial_consistency_level</span><span class="p">,</span> <span class="n">request_timeout</span><span class="p">,</span> <span class="n">row_factory</span><span class="p">)</span>
+                                                    <span class="n">serial_consistency_level</span><span class="p">,</span> <span class="n">request_timeout</span><span class="p">,</span> <span class="n">row_factory</span><span class="p">,</span>
+                                                    <span class="n">continuous_paging_options</span><span class="o">=</span><span class="n">continuous_paging_options</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">graph_options</span> <span class="o">=</span> <span class="n">graph_options</span> <span class="ow">or</span> <span class="n">GraphOptions</span><span class="p">(</span><span class="n">graph_source</span><span class="o">=</span><span class="sa">b</span><span class="s1">&#39;g&#39;</span><span class="p">,</span>
-                                                           <span class="n">graph_language</span><span class="o">=</span><span class="sa">b</span><span class="s1">&#39;gremlin-groovy&#39;</span><span class="p">)</span>
+                                                           <span class="n">graph_language</span><span class="o">=</span><span class="sa">b</span><span class="s1">&#39;gremlin-groovy&#39;</span><span class="p">)</span></div>
 
 
-<span class="k">class</span> <span class="nc">GraphAnalyticsExecutionProfile</span><span class="p">(</span><span class="n">GraphExecutionProfile</span><span class="p">):</span>
+<div class="viewcode-block" id="GraphAnalyticsExecutionProfile"><a class="viewcode-back" href="../../../api/cassandra/cluster/#cassandra.cluster.GraphAnalyticsExecutionProfile">[docs]</a><span class="k">class</span> <span class="nc">GraphAnalyticsExecutionProfile</span><span class="p">(</span><span class="n">GraphExecutionProfile</span><span class="p">):</span>
 
     <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">load_balancing_policy</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">retry_policy</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
                  <span class="n">consistency_level</span><span class="o">=</span><span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">LOCAL_ONE</span><span class="p">,</span> <span class="n">serial_consistency_level</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-                 <span class="n">request_timeout</span><span class="o">=</span><span class="mf">3600.</span> <span class="o">*</span> <span class="mf">24.</span> <span class="o">*</span> <span class="mf">7.</span><span class="p">,</span> <span class="n">row_factory</span><span class="o">=</span><span class="n">graph_object_row_factory</span><span class="p">,</span>
+                 <span class="n">request_timeout</span><span class="o">=</span><span class="mf">3600.</span> <span class="o">*</span> <span class="mf">24.</span> <span class="o">*</span> <span class="mf">7.</span><span class="p">,</span> <span class="n">row_factory</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
                  <span class="n">graph_options</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Execution profile with timeout and load balancing appropriate for graph analytics queries.</span>
@@ -562,7 +568,7 @@
                                                              <span class="n">serial_consistency_level</span><span class="p">,</span> <span class="n">request_timeout</span><span class="p">,</span> <span class="n">row_factory</span><span class="p">,</span>
                                                              <span class="n">graph_options</span><span class="p">)</span>
         <span class="c1"># ensure the graph_source is analytics, since this is the purpose of the GraphAnalyticsExecutionProfile</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">graph_options</span><span class="o">.</span><span class="n">set_source_analytics</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_options</span><span class="o">.</span><span class="n">set_source_analytics</span><span class="p">()</span></div>
 
 
 <span class="k">class</span> <span class="nc">ProfileManager</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
@@ -2610,6 +2616,7 @@
     <span class="n">_profile_manager</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">_metrics</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">_request_init_callbacks</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">_graph_paging_available</span> <span class="o">=</span> <span class="kc">False</span>
 
     <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="p">,</span> <span class="n">keyspace</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">cluster</span> <span class="o">=</span> <span class="n">cluster</span>
@@ -2643,19 +2650,21 @@
             <span class="k">raise</span> <span class="n">NoHostAvailable</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="p">[</span><span class="n">h</span><span class="o">.</span><span class="n">address</span> <span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="n">hosts</span><span class="p">])</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">session_id</span> <span class="o">=</span> <span class="n">uuid</span><span class="o">.</span><span class="n">uuid4</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_graph_paging_available</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_check_graph_paging_available</span><span class="p">()</span>
 
-        <span class="n">cc_host</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cluster</span><span class="o">.</span><span class="n">get_control_connection_host</span><span class="p">()</span>
-        <span class="n">valid_insights_version</span> <span class="o">=</span> <span class="p">(</span><span class="n">cc_host</span> <span class="ow">and</span> <span class="n">version_supports_insights</span><span class="p">(</span><span class="n">cc_host</span><span class="o">.</span><span class="n">dse_version</span><span class="p">))</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">cluster</span><span class="o">.</span><span class="n">monitor_reporting_enabled</span> <span class="ow">and</span> <span class="n">valid_insights_version</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_monitor_reporter</span> <span class="o">=</span> <span class="n">MonitorReporter</span><span class="p">(</span>
-                <span class="n">interval_sec</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cluster</span><span class="o">.</span><span class="n">monitor_reporting_interval</span><span class="p">,</span>
-                <span class="n">session</span><span class="o">=</span><span class="bp">self</span><span class="p">,</span>
-            <span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">cc_host</span><span class="p">:</span>
-                <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;Not starting MonitorReporter thread for Insights; &#39;</span>
-                          <span class="s1">&#39;not supported by server version </span><span class="si">{v}</span><span class="s1"> on &#39;</span>
-                          <span class="s1">&#39;ControlConnection host </span><span class="si">{c}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">v</span><span class="o">=</span><span class="n">cc_host</span><span class="o">.</span><span class="n">release_version</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="n">cc_host</span><span class="p">))</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">cluster</span><span class="o">.</span><span class="n">monitor_reporting_enabled</span><span class="p">:</span>
+            <span class="n">cc_host</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cluster</span><span class="o">.</span><span class="n">get_control_connection_host</span><span class="p">()</span>
+            <span class="n">valid_insights_version</span> <span class="o">=</span> <span class="p">(</span><span class="n">cc_host</span> <span class="ow">and</span> <span class="n">version_supports_insights</span><span class="p">(</span><span class="n">cc_host</span><span class="o">.</span><span class="n">dse_version</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">valid_insights_version</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_monitor_reporter</span> <span class="o">=</span> <span class="n">MonitorReporter</span><span class="p">(</span>
+                    <span class="n">interval_sec</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cluster</span><span class="o">.</span><span class="n">monitor_reporting_interval</span><span class="p">,</span>
+                    <span class="n">session</span><span class="o">=</span><span class="bp">self</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">cc_host</span><span class="p">:</span>
+                    <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;Not starting MonitorReporter thread for Insights; &#39;</span>
+                              <span class="s1">&#39;not supported by server version </span><span class="si">{v}</span><span class="s1"> on &#39;</span>
+                              <span class="s1">&#39;ControlConnection host </span><span class="si">{c}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">v</span><span class="o">=</span><span class="n">cc_host</span><span class="o">.</span><span class="n">release_version</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="n">cc_host</span><span class="p">))</span>
 
         <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;Started Session with client_id </span><span class="si">{}</span><span class="s1"> and session_id </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cluster</span><span class="o">.</span><span class="n">client_id</span><span class="p">,</span>
                                                                                <span class="bp">self</span><span class="o">.</span><span class="n">session_id</span><span class="p">))</span>
@@ -2782,18 +2791,31 @@
         <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">GraphStatement</span><span class="p">):</span>
             <span class="n">query</span> <span class="o">=</span> <span class="n">SimpleGraphStatement</span><span class="p">(</span><span class="n">query</span><span class="p">)</span>
 
-        <span class="n">execution_profile</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_maybe_get_execution_profile</span><span class="p">(</span><span class="n">execution_profile</span><span class="p">)</span>  <span class="c1"># look up instance here so we can apply the extended attributes</span>
+        <span class="c1"># Clone and look up instance here so we can resolve and apply the extended attributes</span>
+        <span class="n">execution_profile</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">execution_profile_clone_update</span><span class="p">(</span><span class="n">execution_profile</span><span class="p">)</span>
 
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">execution_profile</span><span class="p">,</span> <span class="s1">&#39;graph_options&#39;</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Execution profile for graph queries must derive from GraphExecutionProfile, and provide graph_options&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_resolve_execution_profile_options</span><span class="p">(</span><span class="n">execution_profile</span><span class="p">)</span>
+
+        <span class="c1"># make sure the graphson context row factory is binded to this cluster</span>
         <span class="k">try</span><span class="p">:</span>
-            <span class="n">options</span> <span class="o">=</span> <span class="n">execution_profile</span><span class="o">.</span><span class="n">graph_options</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
-        <span class="k">except</span> <span class="ne">AttributeError</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Execution profile for graph queries must derive from GraphExecutionProfile, and provide graph_options&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">issubclass</span><span class="p">(</span><span class="n">execution_profile</span><span class="o">.</span><span class="n">row_factory</span><span class="p">,</span> <span class="n">_GraphSONContextRowFactory</span><span class="p">):</span>
+                <span class="n">execution_profile</span><span class="o">.</span><span class="n">row_factory</span> <span class="o">=</span> <span class="n">execution_profile</span><span class="o">.</span><span class="n">row_factory</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cluster</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TypeError</span><span class="p">:</span>
+            <span class="c1"># issubclass might fail if arg1 is an instance</span>
+            <span class="k">pass</span>
+
+            <span class="c1"># set graph paging if needed</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_maybe_set_graph_paging</span><span class="p">(</span><span class="n">execution_profile</span><span class="p">)</span>
 
         <span class="n">graph_parameters</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">if</span> <span class="n">parameters</span><span class="p">:</span>
-            <span class="n">graph_parameters</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_transform_params</span><span class="p">(</span><span class="n">parameters</span><span class="p">,</span> <span class="n">graph_options</span><span class="o">=</span><span class="n">options</span><span class="p">)</span>
+            <span class="n">graph_parameters</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_transform_params</span><span class="p">(</span><span class="n">parameters</span><span class="p">,</span> <span class="n">graph_options</span><span class="o">=</span><span class="n">execution_profile</span><span class="o">.</span><span class="n">graph_options</span><span class="p">)</span>
 
-        <span class="n">custom_payload</span> <span class="o">=</span> <span class="n">options</span><span class="o">.</span><span class="n">get_options_map</span><span class="p">()</span>
+        <span class="n">custom_payload</span> <span class="o">=</span> <span class="n">execution_profile</span><span class="o">.</span><span class="n">graph_options</span><span class="o">.</span><span class="n">get_options_map</span><span class="p">()</span>
         <span class="k">if</span> <span class="n">execute_as</span><span class="p">:</span>
             <span class="n">custom_payload</span><span class="p">[</span><span class="n">_proxy_execute_key</span><span class="p">]</span> <span class="o">=</span> <span class="n">six</span><span class="o">.</span><span class="n">b</span><span class="p">(</span><span class="n">execute_as</span><span class="p">)</span>
         <span class="n">custom_payload</span><span class="p">[</span><span class="n">_request_timeout_key</span><span class="p">]</span> <span class="o">=</span> <span class="n">int64_pack</span><span class="p">(</span><span class="n">long</span><span class="p">(</span><span class="n">execution_profile</span><span class="o">.</span><span class="n">request_timeout</span> <span class="o">*</span> <span class="mi">1000</span><span class="p">))</span>
@@ -2804,11 +2826,81 @@
         <span class="n">future</span><span class="o">.</span><span class="n">message</span><span class="o">.</span><span class="n">query_params</span> <span class="o">=</span> <span class="n">graph_parameters</span>
         <span class="n">future</span><span class="o">.</span><span class="n">_protocol_handler</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">client_protocol_handler</span>
 
-        <span class="k">if</span> <span class="n">options</span><span class="o">.</span><span class="n">is_analytics_source</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">execution_profile</span><span class="o">.</span><span class="n">load_balancing_policy</span><span class="p">,</span> <span class="n">DefaultLoadBalancingPolicy</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">execution_profile</span><span class="o">.</span><span class="n">graph_options</span><span class="o">.</span><span class="n">is_analytics_source</span> <span class="ow">and</span> \
+                <span class="nb">isinstance</span><span class="p">(</span><span class="n">execution_profile</span><span class="o">.</span><span class="n">load_balancing_policy</span><span class="p">,</span> <span class="n">DefaultLoadBalancingPolicy</span><span class="p">):</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">_target_analytics_master</span><span class="p">(</span><span class="n">future</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">future</span><span class="o">.</span><span class="n">send_request</span><span class="p">()</span>
         <span class="k">return</span> <span class="n">future</span></div>
+
+    <span class="k">def</span> <span class="nf">_maybe_set_graph_paging</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">execution_profile</span><span class="p">):</span>
+        <span class="n">graph_paging</span> <span class="o">=</span> <span class="n">execution_profile</span><span class="o">.</span><span class="n">continuous_paging_options</span>
+        <span class="k">if</span> <span class="n">execution_profile</span><span class="o">.</span><span class="n">continuous_paging_options</span> <span class="ow">is</span> <span class="n">_NOT_SET</span><span class="p">:</span>
+            <span class="n">graph_paging</span> <span class="o">=</span> <span class="n">ContinuousPagingOptions</span><span class="p">()</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_graph_paging_available</span> <span class="k">else</span> <span class="kc">None</span>
+
+        <span class="n">execution_profile</span><span class="o">.</span><span class="n">continuous_paging_options</span> <span class="o">=</span> <span class="n">graph_paging</span>
+
+    <span class="k">def</span> <span class="nf">_check_graph_paging_available</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Verify if we can enable graph paging. This executed only once when the session is created.&quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">ProtocolVersion</span><span class="o">.</span><span class="n">has_continuous_paging_next_pages</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_protocol_version</span><span class="p">):</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="k">for</span> <span class="n">host</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">cluster</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">all_hosts</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">host</span><span class="o">.</span><span class="n">dse_version</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">False</span>
+
+            <span class="n">version</span> <span class="o">=</span> <span class="n">Version</span><span class="p">(</span><span class="n">host</span><span class="o">.</span><span class="n">dse_version</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">version</span> <span class="o">&lt;</span> <span class="n">_GRAPH_PAGING_MIN_DSE_VERSION</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="k">return</span> <span class="kc">True</span>
+
+    <span class="k">def</span> <span class="nf">_resolve_execution_profile_options</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">execution_profile</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Determine the GraphSON protocol and row factory for a graph query. This is useful</span>
+<span class="sd">        to configure automatically the execution profile when executing a query on a</span>
+<span class="sd">        core graph.</span>
+
+<span class="sd">        If `graph_protocol` is not explicitly specified, the following rules apply:</span>
+<span class="sd">        - Default to GraphProtocol.GRAPHSON_1_0, or GRAPHSON_2_0 if the `graph_language` is not gremlin-groovy.</span>
+<span class="sd">        - If `graph_options.graph_name` is specified and is a Core graph, set GraphSON_3_0.</span>
+<span class="sd">        If `row_factory` is not explicitly specified, the following rules apply:</span>
+<span class="sd">        - Default to graph_object_row_factory.</span>
+<span class="sd">        - If `graph_options.graph_name` is specified and is a Core graph, set graph_graphson3_row_factory.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">execution_profile</span><span class="o">.</span><span class="n">graph_options</span><span class="o">.</span><span class="n">graph_protocol</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> \
+                <span class="n">execution_profile</span><span class="o">.</span><span class="n">row_factory</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span>
+
+        <span class="n">graph_options</span> <span class="o">=</span> <span class="n">execution_profile</span><span class="o">.</span><span class="n">graph_options</span>
+
+        <span class="n">is_core_graph</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_name</span><span class="p">:</span>
+            <span class="c1"># graph_options.graph_name is bytes ...</span>
+            <span class="n">name</span> <span class="o">=</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_name</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s1">&#39;utf-8&#39;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">cluster</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">keyspaces</span><span class="p">:</span>
+                <span class="n">ks_metadata</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cluster</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">keyspaces</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
+                <span class="k">if</span> <span class="n">ks_metadata</span><span class="o">.</span><span class="n">graph_engine</span> <span class="o">==</span> <span class="s1">&#39;Core&#39;</span><span class="p">:</span>
+                    <span class="n">is_core_graph</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="k">if</span> <span class="n">is_core_graph</span><span class="p">:</span>
+            <span class="n">graph_protocol</span> <span class="o">=</span> <span class="n">GraphProtocol</span><span class="o">.</span><span class="n">GRAPHSON_3_0</span>
+            <span class="n">row_factory</span> <span class="o">=</span> <span class="n">graph_graphson3_row_factory</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_language</span> <span class="o">==</span> <span class="n">GraphOptions</span><span class="o">.</span><span class="n">DEFAULT_GRAPH_LANGUAGE</span><span class="p">:</span>
+                <span class="n">graph_protocol</span> <span class="o">=</span> <span class="n">GraphOptions</span><span class="o">.</span><span class="n">DEFAULT_GRAPH_PROTOCOL</span>
+                <span class="n">row_factory</span> <span class="o">=</span> <span class="n">graph_object_row_factory</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="c1"># if not gremlin-groovy, GraphSON_2_0</span>
+                <span class="n">graph_protocol</span> <span class="o">=</span> <span class="n">GraphProtocol</span><span class="o">.</span><span class="n">GRAPHSON_2_0</span>
+                <span class="n">row_factory</span> <span class="o">=</span> <span class="n">graph_graphson2_row_factory</span>
+
+        <span class="c1"># Only apply if not set explicitly</span>
+        <span class="k">if</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_protocol</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_protocol</span> <span class="o">=</span> <span class="n">graph_protocol</span>
+        <span class="k">if</span> <span class="n">execution_profile</span><span class="o">.</span><span class="n">row_factory</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">execution_profile</span><span class="o">.</span><span class="n">row_factory</span> <span class="o">=</span> <span class="n">row_factory</span>
 
     <span class="k">def</span> <span class="nf">_transform_params</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">parameters</span><span class="p">,</span> <span class="n">graph_options</span><span class="p">):</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">parameters</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
@@ -2817,12 +2909,16 @@
         <span class="c1"># Serialize python types to graphson</span>
         <span class="n">serializer</span> <span class="o">=</span> <span class="n">GraphSON1Serializer</span>
         <span class="k">if</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_protocol</span> <span class="o">==</span> <span class="n">GraphProtocol</span><span class="o">.</span><span class="n">GRAPHSON_2_0</span><span class="p">:</span>
-            <span class="n">serializer</span> <span class="o">=</span> <span class="n">GraphSON2Serializer</span>
+            <span class="n">serializer</span> <span class="o">=</span> <span class="n">GraphSON2Serializer</span><span class="p">()</span>
+        <span class="k">elif</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_protocol</span> <span class="o">==</span> <span class="n">GraphProtocol</span><span class="o">.</span><span class="n">GRAPHSON_3_0</span><span class="p">:</span>
+            <span class="c1"># only required for core graphs</span>
+            <span class="n">context</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s1">&#39;cluster&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cluster</span><span class="p">,</span>
+                <span class="s1">&#39;graph_name&#39;</span><span class="p">:</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_name</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s1">&#39;utf-8&#39;</span><span class="p">)</span> <span class="k">if</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_name</span> <span class="k">else</span> <span class="kc">None</span>
+            <span class="p">}</span>
+            <span class="n">serializer</span> <span class="o">=</span> <span class="n">GraphSON3Serializer</span><span class="p">(</span><span class="n">context</span><span class="p">)</span>
 
-        <span class="n">serialized_parameters</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="n">p</span><span class="p">:</span> <span class="n">serializer</span><span class="o">.</span><span class="n">serialize</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
-            <span class="k">for</span> <span class="n">p</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">six</span><span class="o">.</span><span class="n">iteritems</span><span class="p">(</span><span class="n">parameters</span><span class="p">)</span>
-        <span class="p">}</span>
+        <span class="n">serialized_parameters</span> <span class="o">=</span> <span class="n">serializer</span><span class="o">.</span><span class="n">serialize</span><span class="p">(</span><span class="n">parameters</span><span class="p">)</span>
         <span class="k">return</span> <span class="p">[</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">serialized_parameters</span><span class="p">)</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s1">&#39;utf-8&#39;</span><span class="p">)]</span>
 
     <span class="k">def</span> <span class="nf">_target_analytics_master</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">future</span><span class="p">):</span>
@@ -3428,7 +3524,7 @@
     <span class="n">_SELECT_SCHEMA_PEERS_TEMPLATE</span> <span class="o">=</span> <span class="s2">&quot;SELECT peer, host_id, </span><span class="si">{nt_col_name}</span><span class="s2">, schema_version FROM system.peers&quot;</span>
     <span class="n">_SELECT_SCHEMA_LOCAL</span> <span class="o">=</span> <span class="s2">&quot;SELECT schema_version FROM system.local WHERE key=&#39;local&#39;&quot;</span>
 
-    <span class="n">_MINIMUM_NATIVE_ADDRESS_VERSION</span> <span class="o">=</span> <span class="s2">&quot;4.0&quot;</span>
+    <span class="n">_MINIMUM_NATIVE_ADDRESS_DSE_VERSION</span> <span class="o">=</span> <span class="n">Version</span><span class="p">(</span><span class="s2">&quot;6.0.0&quot;</span><span class="p">)</span>
 
     <span class="n">_is_shutdown</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">_timeout</span> <span class="o">=</span> <span class="kc">None</span>
@@ -3988,14 +4084,17 @@
 <span class="sd">        field named nt_col_name.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">host_release_version</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cluster</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">get_host</span><span class="p">(</span><span class="n">connection</span><span class="o">.</span><span class="n">endpoint</span><span class="p">)</span><span class="o">.</span><span class="n">release_version</span>
-        <span class="k">if</span> <span class="n">host_release_version</span><span class="p">:</span>
-            <span class="n">use_native_address_query</span> <span class="o">=</span> <span class="n">host_release_version</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_MINIMUM_NATIVE_ADDRESS_VERSION</span>
-            <span class="k">if</span> <span class="n">use_native_address_query</span><span class="p">:</span>
-                <span class="n">select_peers_query</span> <span class="o">=</span> <span class="n">peers_query_template</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">nt_col_name</span><span class="o">=</span><span class="s2">&quot;native_transport_address&quot;</span><span class="p">)</span>
-            <span class="k">else</span><span class="p">:</span>
+        <span class="n">host_dse_version</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cluster</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">get_host</span><span class="p">(</span><span class="n">connection</span><span class="o">.</span><span class="n">endpoint</span><span class="p">)</span><span class="o">.</span><span class="n">dse_version</span>
+        <span class="n">uses_native_address_query</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">host_dse_version</span> <span class="ow">and</span> <span class="n">Version</span><span class="p">(</span><span class="n">host_dse_version</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_MINIMUM_NATIVE_ADDRESS_DSE_VERSION</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">uses_native_address_query</span><span class="p">:</span>
+            <span class="n">select_peers_query</span> <span class="o">=</span> <span class="n">peers_query_template</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">nt_col_name</span><span class="o">=</span><span class="s2">&quot;native_transport_address&quot;</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">host_release_version</span><span class="p">:</span>
                 <span class="n">select_peers_query</span> <span class="o">=</span> <span class="n">peers_query_template</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">nt_col_name</span><span class="o">=</span><span class="s2">&quot;rpc_address&quot;</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">select_peers_query</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_SELECT_PEERS</span>
+
         <span class="k">return</span> <span class="n">select_peers_query</span>
 
     <span class="k">def</span> <span class="nf">_signal_error</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>

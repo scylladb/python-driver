@@ -118,19 +118,67 @@ converted to their simplified objects. Some low-level metadata is shed in this c
 still returned as <a class="reference internal" href="#cassandra.datastax.graph.Result" title="cassandra.datastax.graph.Result"><code class="xref py py-class docutils literal notranslate"><span class="pre">Result</span></code></a>.</p>
 </dd></dl>
 
+<dl class="function">
+<dt id="cassandra.datastax.graph.graph_graphson2_row_factory">
+<code class="descclassname">cassandra.datastax.graph.</code><code class="descname">graph_graphson2_row_factory</code><span class="sig-paren">(</span><em>cluster</em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.datastax.graph.graph_graphson2_row_factory" title="Permalink to this definition">¶</a></dt>
+<dd><p>Row factory to deserialize GraphSON2 results.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="cassandra.datastax.graph.graph_graphson3_row_factory">
+<code class="descclassname">cassandra.datastax.graph.</code><code class="descname">graph_graphson3_row_factory</code><span class="sig-paren">(</span><em>cluster</em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.datastax.graph.graph_graphson3_row_factory" title="Permalink to this definition">¶</a></dt>
+<dd><p>Row factory to deserialize GraphSON3 results.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="cassandra.datastax.graph.to_int">
+<code class="descclassname">cassandra.datastax.graph.</code><code class="descname">to_int</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.datastax.graph.to_int" title="Permalink to this definition">¶</a></dt>
+<dd><p>Wraps a value to be explicitly serialized as a graphson Int.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="cassandra.datastax.graph.to_bigint">
+<code class="descclassname">cassandra.datastax.graph.</code><code class="descname">to_bigint</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.datastax.graph.to_bigint" title="Permalink to this definition">¶</a></dt>
+<dd><p>Wraps a value to be explicitly serialized as a graphson Bigint.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="cassandra.datastax.graph.to_smallint">
+<code class="descclassname">cassandra.datastax.graph.</code><code class="descname">to_smallint</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.datastax.graph.to_smallint" title="Permalink to this definition">¶</a></dt>
+<dd><p>Wraps a value to be explicitly serialized as a graphson Smallint.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="cassandra.datastax.graph.to_float">
+<code class="descclassname">cassandra.datastax.graph.</code><code class="descname">to_float</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.datastax.graph.to_float" title="Permalink to this definition">¶</a></dt>
+<dd><p>Wraps a value to be explicitly serialized as a graphson Float.</p>
+</dd></dl>
+
+<dl class="function">
+<dt id="cassandra.datastax.graph.to_double">
+<code class="descclassname">cassandra.datastax.graph.</code><code class="descname">to_double</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.datastax.graph.to_double" title="Permalink to this definition">¶</a></dt>
+<dd><p>Wraps a value to be explicitly serialized as a graphson Double.</p>
+</dd></dl>
+
 <dl class="class">
 <dt id="cassandra.datastax.graph.GraphProtocol">
 <em class="property">class </em><code class="descclassname">cassandra.datastax.graph.</code><code class="descname">GraphProtocol</code><a class="reference internal" href="../../../../_modules/cassandra/datastax/graph/query/#GraphProtocol"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.GraphProtocol" title="Permalink to this definition">¶</a></dt>
 <dd><dl class="attribute">
 <dt id="cassandra.datastax.graph.GraphProtocol.GRAPHSON_1_0">
-<code class="descname">GRAPHSON_1_0</code><em class="property"> = 'graphson-1.0'</em><a class="headerlink" href="#cassandra.datastax.graph.GraphProtocol.GRAPHSON_1_0" title="Permalink to this definition">¶</a></dt>
+<code class="descname">GRAPHSON_1_0</code><em class="property"> = b'graphson-1.0'</em><a class="headerlink" href="#cassandra.datastax.graph.GraphProtocol.GRAPHSON_1_0" title="Permalink to this definition">¶</a></dt>
 <dd><p>GraphSON1</p>
 </dd></dl>
 
 <dl class="attribute">
 <dt id="cassandra.datastax.graph.GraphProtocol.GRAPHSON_2_0">
-<code class="descname">GRAPHSON_2_0</code><em class="property"> = 'graphson-2.0'</em><a class="headerlink" href="#cassandra.datastax.graph.GraphProtocol.GRAPHSON_2_0" title="Permalink to this definition">¶</a></dt>
+<code class="descname">GRAPHSON_2_0</code><em class="property"> = b'graphson-2.0'</em><a class="headerlink" href="#cassandra.datastax.graph.GraphProtocol.GRAPHSON_2_0" title="Permalink to this definition">¶</a></dt>
 <dd><p>GraphSON2</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.datastax.graph.GraphProtocol.GRAPHSON_3_0">
+<code class="descname">GRAPHSON_3_0</code><em class="property"> = b'graphson-3.0'</em><a class="headerlink" href="#cassandra.datastax.graph.GraphProtocol.GRAPHSON_3_0" title="Permalink to this definition">¶</a></dt>
+<dd><p>GraphSON3</p>
 </dd></dl>
 
 </dd></dl>
@@ -397,7 +445,7 @@ the properties themselves have property maps).</p>
 
 <dl class="class">
 <dt id="cassandra.datastax.graph.GraphSON2Reader">
-<em class="property">class </em><code class="descclassname">cassandra.datastax.graph.</code><code class="descname">GraphSON2Reader</code><span class="sig-paren">(</span><em>extra_deserializer_map=None</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../_modules/cassandra/datastax/graph/graphson/#GraphSON2Reader"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.GraphSON2Reader" title="Permalink to this definition">¶</a></dt>
+<em class="property">class </em><code class="descclassname">cassandra.datastax.graph.</code><code class="descname">GraphSON2Reader</code><span class="sig-paren">(</span><em>context</em>, <em>extra_deserializer_map=None</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../_modules/cassandra/datastax/graph/graphson/#GraphSON2Reader"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.GraphSON2Reader" title="Permalink to this definition">¶</a></dt>
 <dd><p>GraphSON2 Reader that parse json and deserialize to python objects.</p>
 <table class="docutils field-list" frame="void" rules="none">
 <col class="field-name" />
