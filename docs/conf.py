@@ -27,7 +27,7 @@ import cassandra
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.viewcode']
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.viewcode', 'sphinx_scylladb_theme']
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -96,15 +96,22 @@ pygments_style = 'sphinx'
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = 'custom'
+html_theme = 'sphinx_scylladb_theme'
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
 # documentation.
-#html_theme_options = {}
+html_theme_options = {
+    'header_links': [
+    ('Scylla Python Driver', '/'),
+    ('Scylla Cloud', 'https://docs.scylladb.com/scylla-cloud/'),
+    ('Scylla University', 'https://university.scylladb.com/'),
+    ('ScyllaDB Home', 'https://www.scylladb.com/')],
+    'github_issues_repository': 'scylladb/python-driver'
+}
 
 # Add any paths that contain custom themes here, relative to this directory.
-html_theme_path = ['./themes']
+# html_theme_path = ['./themes']
 
 # The name for this set of Sphinx documents.  If None, it defaults to
 # "<project> v<release> documentation".
@@ -125,7 +132,7 @@ html_theme_path = ['./themes']
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = []
+# html_static_path = []
 
 # If not '', a 'Last updated on:' timestamp is inserted at every page bottom,
 # using the given strftime format.
@@ -136,14 +143,7 @@ html_static_path = []
 #html_use_smartypants = True
 
 # Custom sidebar templates, maps document names to template names.
-html_sidebars = {
-	'**': [
-	    'about.html',
-	    'navigation.html',
-	    'relations.html',
-	    'searchbox.html'
-	]
-}
+html_sidebars = {'**': ['side-nav.html']}
 
 # Additional templates that should be rendered to pages, maps page names to
 # template names.
@@ -190,7 +190,7 @@ htmlhelp_basename = 'CassandraDriverdoc'
 # Grouping the document tree into LaTeX files. List of tuples
 # (source start file, target name, title, author, documentclass [howto/manual]).
 latex_documents = [
-    ('index', 'cassandra-driver.tex', u'Cassandra Driver Documentation', u'DataStax', 'manual'),
+    ('index', 'scylla-driver.tex', u'Cassandra Driver Documentation', u'DataStax', 'manual'),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -222,6 +222,6 @@ latex_documents = [
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
 man_pages = [
-    ('index', 'cassandra-driver', u'Cassandra Driver Documentation',
+    ('index', 'scylla-driver', u'Cassandra Driver Documentation',
      [u'DataStax'], 1)
 ]

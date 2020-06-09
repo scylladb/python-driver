@@ -43,6 +43,7 @@ from cassandra.protocol import (ReadyMessage, AuthenticateMessage, OptionsMessag
                                 AuthSuccessMessage, ProtocolException,
                                 RegisterMessage, ReviseRequestMessage)
 from cassandra.util import OrderedDict
+from cassandra.murmur3 import INT64_MIN
 
 
 log = logging.getLogger(__name__)
@@ -599,6 +600,44 @@ if six.PY3:
 else:
     int_from_buf_item = ord
 
+class ShardingInfo(object):
+
+    def __init__(self, shard_id, shards_count, partitioner, sharding_algorithm, sharding_ignore_msb):
+        self.shards_count = int(shards_count)
+        self.partitioner = partitioner
+        self.sharding_algorithm = sharding_algorithm
+        self.sharding_ignore_msb = int(sharding_ignore_msb)
+
+    @staticmethod
+    def parse_sharding_info(message):
+        shard_id = message.options.get('SCYLLA_SHARD', [''])[0] or None
+        shards_count = message.options.get('SCYLLA_NR_SHARDS', [''])[0] or None
+        partitioner = message.options.get('SCYLLA_PARTITIONER', [''])[0] or None
+        sharding_algorithm = message.options.get('SCYLLA_SHARDING_ALGORITHM', [''])[0] or None
+        sharding_ignore_msb = message.options.get('SCYLLA_SHARDING_IGNORE_MSB', [''])[0] or None
+        log.debug("Parsing sharding info from message options %s", message.options)
+
+        if not (shard_id or shards_count or partitioner == "org.apache.cassandra.dht.Murmur3Partitioner" or
+            sharding_algorithm ==  "biased-token-round-robin" or sharding_ignore_msb):
+            return 0, None
+
+        return int(shard_id), ShardingInfo(shard_id, shards_count, partitioner, sharding_algorithm, sharding_ignore_msb)
+
+    def shard_id_from_token(self, t):
+        """
+        Convert a Murmur3 token to shard_id based on the number of shards on the host
+        """
+        token = t.value
+        token += INT64_MIN
+        token <<= self.sharding_ignore_msb
+        tokLo = token & 0xffffffff
+        tokHi = (token >> 32) & 0xffffffff
+        mul1 = tokLo * self.shards_count
+        mul2 = tokHi * self.shards_count
+        _sum = (mul1 >> 32) + mul2
+        output = _sum >> 32
+        return output
+
 
 class Connection(object):
 
@@ -665,6 +704,9 @@ class Connection(object):
 
     _check_hostname = False
     _product_type = None
+
+    shard_id = 0
+    sharding_info = None
 
     def __init__(self, host='127.0.0.1', port=9042, authenticator=None,
                  ssl_options=None, sockopts=None, compression=True,
@@ -1126,6 +1168,7 @@ class Connection(object):
 
     @defunct_on_error
     def _handle_options_response(self, options_response):
+        self.shard_id, self.sharding_info = ShardingInfo.parse_sharding_info(options_response)
         if self.is_defunct:
             return
 

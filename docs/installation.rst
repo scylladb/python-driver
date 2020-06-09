@@ -26,8 +26,7 @@ To check if the installation was successful, you can run::
 
     python -c 'import scylla; print scylla.__version__'
 
-It should print something like "3.21.0".
-
+It should print something like "3.22.0".
 
 (*Optional*) Compression Support
 --------------------------------
