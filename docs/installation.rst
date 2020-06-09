@@ -14,9 +14,9 @@ Installation through pip
 packages.  It will handle installing all Python dependencies for the driver at
 the same time as the driver itself.  To install the driver*::
 
-    pip install cassandra-driver
+    pip install scylla-driver
 
-You can use ``pip install --pre cassandra-driver`` if you need to install a beta version.
+You can use ``pip install --pre scylla-driver`` if you need to install a beta version.
 
 ***Note**: if intending to use optional extensions, install the `dependencies <#optional-non-python-dependencies>`_ first. The driver may need to be reinstalled if dependencies are added after the initial installation.
 
@@ -24,29 +24,16 @@ Verifying your Installation
 ---------------------------
 To check if the installation was successful, you can run::
 
-    python -c 'import cassandra; print cassandra.__version__'
+    python -c 'import scylla; print scylla.__version__'
 
 It should print something like "3.21.0".
 
-.. _installation-datastax-graph:
-
-(*Optional*) DataStax Graph
----------------------------
-The driver provides an optional fluent graph API that depends on Apache TinkerPop (gremlinpython). It is
-not installed by default. To be able to build Gremlin traversals, you need to install
-the `graph` requirements::
-
-    pip install cassandra-driver[graph]
-
-See :doc:`graph_fluent` for more details about this API.
 
 (*Optional*) Compression Support
 --------------------------------
 Compression can optionally be used for communication between the driver and
-Cassandra.  There are currently two supported compression algorithms:
-snappy (in Cassandra 1.2+) and LZ4 (only in Cassandra 2.0+).  If either is
-available for the driver and Cassandra also supports it, it will
-be used automatically.
+Scylla.  There are currently two supported compression algorithms:
+snappy and LZ4.
 
 For lz4 support::
 
@@ -86,7 +73,7 @@ threads used to build the driver and any C extensions:
     $ # installing from source
     $ CASS_DRIVER_BUILD_CONCURRENCY=8 python setup.py install
     $ # installing from pip
-    $ CASS_DRIVER_BUILD_CONCURRENCY=8 pip install cassandra-driver
+    $ CASS_DRIVER_BUILD_CONCURRENCY=8 pip install scylla-driver
 
 OSX Installation Error
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -98,7 +85,7 @@ To fix this, re-run the installation with an extra compilation flag:
 
 .. code-block:: bash
 
-    ARCHFLAGS=-Wno-error=unused-command-line-argument-hard-error-in-future pip install cassandra-driver
+    ARCHFLAGS=-Wno-error=unused-command-line-argument-hard-error-in-future pip install scylla-driver
 
 .. _windows_build:
 
@@ -121,8 +108,7 @@ Manual Installation
 -------------------
 You can always install the driver directly from a source checkout or tarball.
 When installing manually, ensure the python dependencies are already
-installed. You can find the list of dependencies in
-`requirements.txt <https://github.com/datastax/python-driver/blob/master/requirements.txt>`_.
+installed. 
 
 Once the dependencies are installed, simply run::
 
@@ -180,7 +166,7 @@ context::
 
 This method is required when using pip, which provides no other way of injecting user options in a single command::
 
-    CASS_DRIVER_NO_CYTHON=1 pip install cassandra-driver
+    CASS_DRIVER_NO_CYTHON=1 pip install scylla-driver
     CASS_DRIVER_NO_CYTHON=1 sudo -E pip install ~/python-driver
 
 The environment variable is the preferred option because it spans all invocations of setup.py, and will
@@ -223,14 +209,11 @@ the libev event loop by doing the following:
 
 .. code-block:: python
 
-    >>> from cassandra.io.libevreactor import LibevConnection
-    >>> from cassandra.cluster import Cluster
+    >>> from scylla.io.libevreactor import LibevConnection
+    >>> from scylla.cluster import Cluster
 
     >>> cluster = Cluster()
     >>> cluster.connection_class = LibevConnection
     >>> session = cluster.connect()
 
-(*Optional*) Configuring SSL
------------------------------
-Andrew Mussey has published a thorough guide on
-`Using SSL with the DataStax Python driver <http://blog.amussey.com/post/64036730812/cassandra-2-0-client-server-ssl-with-datastax-python>`_.
+
