@@ -4,8 +4,7 @@ Scylla Specific Features
 Shard Awareness
 ---------------
 
-``scylla-driver`` is shard aware and contains extensions that works with TokenAwarePolicy supported by Scylla 2.3 and onwards.
-Using this policy the driver can select a connection to a particular shard based on the shard’s token.
+**scylla-driver** is shard aware and contains extensions that work with TokenAwarePolicy supported by Scylla 2.3 and onwards. Using this policy, the driver can select a connection to a particular shard based on the shard's token.
 As a result, latency is significantly reduced because there is no need to pass data between the shards.
 
 Details on the scylla cql protocol extensions
