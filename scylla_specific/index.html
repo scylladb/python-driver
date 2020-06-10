@@ -9,7 +9,7 @@
     <meta name="viewport" content="width=device-width initial-scale=1" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <title>
-    Python Module Index | Scylla Docs
+    Scylla Specific Features | Scylla Docs
     </title>
     <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
 
@@ -20,10 +20,6 @@
     <link rel="stylesheet" href="../_static/css/doc/main.css" type="text/css" />
     <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/sphinx_tabs/semantic-ui-2.4.1/segment.min.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/sphinx_tabs/semantic-ui-2.4.1/menu.min.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.css" />
-    <link rel="stylesheet" type="text/css" href="../_static/sphinx_tabs/tabs.css" />
     
     <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
 
@@ -38,8 +34,6 @@
     <script type="text/javascript" src="../_static/doctools.js"></script>
     <script type="text/javascript" src="../_static/clipboard.min.js"></script>
     <script type="text/javascript" src="../_static/copybutton.js"></script>
-    <script type="text/javascript" src="../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.js"></script>
-    <script type="text/javascript" src="../_static/sphinx_tabs/tabs.js"></script>
     <script async="async" type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
 
     <script src="../_static/js/vendor/modernizr.js"></script>
@@ -101,15 +95,64 @@
     <div class="row">
 
         <div class="large-6 large-push-3 columns">
-            
+            <div class="section" id="scylla-specific-features">
+<h1>Scylla Specific Features<a class="headerlink" href="#scylla-specific-features" title="Permalink to this headline">¶</a></h1>
+<div class="section" id="shard-awareness">
+<h2>Shard Awareness<a class="headerlink" href="#shard-awareness" title="Permalink to this headline">¶</a></h2>
+<p><strong>scylla-driver</strong> is shard aware and contains extensions that work with the TokenAwarePolicy supported by Scylla 2.3 and onwards. Using this policy, the driver can select a connection to a particular shard based on the shard’s token.
+As a result, latency is significantly reduced because there is no need to pass data between the shards.</p>
+<p>Details on the scylla cql protocol extensions
+<a class="reference external" href="https://github.com/scylladb/scylla/blob/master/docs/protocol-extensions.md">https://github.com/scylladb/scylla/blob/master/docs/protocol-extensions.md</a></p>
+<p>For using it you only need to enable <code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy</span></code> on the <code class="docutils literal notranslate"><span class="pre">Cluster</span></code></p>
+<div class="code python highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cluster</span> <span class="kn">import</span> <span class="n">Cluster</span>
+<span class="kn">from</span> <span class="nn">cassandra.policies</span> <span class="kn">import</span> <span class="n">TokenAwarePolicy</span><span class="p">,</span> <span class="n">RoundRobinPolicy</span>
+
+<span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">(</span><span class="n">load_balancing_policy</span><span class="o">=</span><span class="n">TokenAwarePolicy</span><span class="p">(</span><span class="n">RoundRobinPolicy</span><span class="p">()))</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="new-table-attributes">
+<h2>New Table Attributes<a class="headerlink" href="#new-table-attributes" title="Permalink to this headline">¶</a></h2>
+<ul>
+<li><p class="first"><code class="docutils literal notranslate"><span class="pre">in_memory</span></code> flag</p>
+<p>New flag available on <code class="docutils literal notranslate"><span class="pre">TableMetadata.options</span></code> to indicate it’s is <a class="reference external" href="https://docs.scylladb.com/using-scylla/in-memory/">In Memory</a> table</p>
+</li>
+</ul>
+<div class="admonition note">
+<p class="first admonition-title">Note</p>
+<p class="last">in memory tables is a feature exist only in Scylla Enterprise</p>
+</div>
+<div class="code python highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cluster</span> <span class="kn">import</span> <span class="n">Cluster</span>
+
+<span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">()</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+<span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">    CREATE KEYSPACE IF NOT EXISTS keyspace1</span>
+<span class="s2">    WITH replication = {&#39;class&#39;: &#39;SimpleStrategy&#39;, &#39;replication_factor&#39;: &#39;1&#39;};</span>
+<span class="s2">&quot;&quot;&quot;</span><span class="p">)</span>
+
+<span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">    CREATE TABLE IF NOT EXISTS keyspace1.standard1 (</span>
+<span class="s2">        key blob PRIMARY KEY,</span>
+<span class="s2">        &quot;C0&quot; blob</span>
+<span class="s2">    ) WITH in_memory=true AND compaction={&#39;class&#39;: &#39;InMemoryCompactionStrategy&#39;}</span>
+<span class="s2">&quot;&quot;&quot;</span><span class="p">)</span>
+
+<span class="n">cluster</span><span class="o">.</span><span class="n">refresh_table_metadata</span><span class="p">(</span><span class="s2">&quot;keyspace1&quot;</span><span class="p">,</span> <span class="s2">&quot;standard1&quot;</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">cluster</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">keyspaces</span><span class="p">[</span><span class="s2">&quot;keyspace1&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">tables</span><span class="p">[</span><span class="s2">&quot;standard1&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">options</span><span class="p">[</span><span class="s2">&quot;in_memory&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="kc">True</span>
+</pre></div>
+</div>
+</div>
+</div>
+
         </div>
 
         <div id="sidebar" class="large-3 large-pull-9 columns"><div class="side-nav">
-<ul>
+<ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="../api/">API Documentation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../installation/">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../getting_started/">Getting Started</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../scylla_specific/">Scylla Specific Features</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Scylla Specific Features</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../upgrading/">Upgrading</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../execution_profiles/">Execution Profiles</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../performance/">Performance Notes</a></li>
@@ -178,7 +221,7 @@
             <a class="link" href="https://docs.scylladb.com">Docs</a>
             <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
             <a class="link" href="https://www.scylladb.com/company/">About Us</a>
-            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page Python Module Index&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/py-modindex%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page Scylla Specific Features&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/scylla_specific%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
                 Report an issue on this page</a>
         </div>
         <div class="footer-actions">
