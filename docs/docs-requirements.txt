@@ -1,6 +1,7 @@
 -r ../requirements.txt
-sphinx==1.8.0
 sphinx_scylladb_theme
 sphinx-autobuild==0.7.1
+sphinx-multiversion==0.2.3
+sphinx==2.4.4
 gevent>=1.0
 eventlet
