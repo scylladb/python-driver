@@ -130,8 +130,4 @@ doctest:
 	      "results in $(BUILDDIR)/doctest/output.txt."
 preview:
 	./_utils/setup.sh
-	$(SPHINXBUILD) -b dirhtml $(ALLSPHINXOPTS) $(BUILDDIR)/dirhtml
-	@echo
-	@echo "Build finished. The HTML pages are in $(BUILDDIR)/dirhtml."
-	./_utils/preview.sh
-
+	sphinx-autobuild -b dirhtml $(ALLSPHINXOPTS) $(BUILDDIR)/dirhtml --port 5500
