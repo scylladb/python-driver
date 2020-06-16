@@ -93,6 +93,8 @@ Please report any bugs and make any feature requests on the `Github project issu
 Copyright
 ---------
 
+© 2020, ScyllaDB. All rights reserved.
+
 © 2013-2017 DataStax
 
 © 2016, The Apache Software Foundation.

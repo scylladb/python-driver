@@ -15,7 +15,7 @@ of :class:`~cassandra.auth.AuthProvider`.  When working
 with Cassandra's ``PasswordAuthenticator``, you can use
 the :class:`~cassandra.auth.PlainTextAuthProvider` class.
 
-For example, suppose Cassandra is setup with its default
+For example, suppose Scylla is setup with its default
 'cassandra' user with a password of 'cassandra':
 
 .. code-block:: python
@@ -30,7 +30,7 @@ For example, suppose Cassandra is setup with its default
 
 Custom Authenticators
 ^^^^^^^^^^^^^^^^^^^^^
-If you're using something other than Cassandra's ``PasswordAuthenticator``,
+If you're using something other than Scylla's ``PasswordAuthenticator``,
 :class:`~.SaslAuthProvider` is provided for generic SASL authentication mechanisms,
 utilizing the ``pure-sasl`` package.
 If these do not suit your needs, you may need to create your own subclasses of
@@ -39,8 +39,7 @@ as example implementations.
 
 Protocol v1 Authentication
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
-When working with Cassandra 1.2 (or a higher version with
-:attr:`~.Cluster.protocol_version` set to ``1``), you will not pass in
+When working with Scylla you will not pass in
 an :class:`~.AuthProvider` instance.  Instead, you should pass in a
 function that takes one argument, the IP address of a host, and returns
 a dict of credentials with a ``username`` and ``password`` key:
@@ -56,7 +55,7 @@ a dict of credentials with a ``username`` and ``password`` key:
 
 SSL
 ---
-SSL should be used when client encryption is enabled in Cassandra.
+SSL should be used when client encryption is enabled in Scylla.
 
 To give you as much control as possible over your SSL configuration, our SSL
 API takes a user-created `SSLContext` instance from the Python standard library.
@@ -76,15 +75,6 @@ resolved ip address. If this validation needs to be done against the FQDN, consi
 as described in the following examples or implement your own :class:`~.connection.EndPoint` and
 :class:`~.connection.EndPointFactory`.
 
-
-The following examples assume you have generated your Cassandra certificate and
-keystore files with these intructions:
-
-* `Setup SSL Cert <https://docs.datastax.com/en/dse/6.7/dse-admin/datastax_enterprise/security/secSetUpSSLCert.html>`_
-
-It might be also useful to learn about the different levels of identity verification to understand the examples:
-
-* `Using SSL in DSE drivers <https://docs.datastax.com/en/dse/6.7/dse-dev/datastax_enterprise/appDevGuide/sslDrivers.html>`_
 
 SSL with Twisted or Eventlet
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -106,7 +96,7 @@ No identity verification
 
 No identity verification at all. Note that this is not recommended for for production deployments.
 
-The Cassandra configuration::
+The Scylla configuration::
 
     client_encryption_options:
       enabled: true
@@ -132,14 +122,7 @@ Client verifies server
 ++++++++++++++++++++++
 
 Ensure the python driver verifies the identity of the server.
-
-The Cassandra configuration::
-
-    client_encryption_options:
-      enabled: true
-      keystore: /path/to/127.0.0.1.keystore
-      keystore_password: myStorePass
-      require_client_auth: false
+See `Encryption: Data in Transit Client to Node <https://docs.scylladb.com/operating-scylla/security/client_node_encryption/>`_ for more infomrnation.
 
 For the driver configuration, it's very important to set `ssl_context.verify_mode`
 to `CERT_REQUIRED`. Otherwise, the loaded verify certificate will have no effect:
@@ -177,18 +160,9 @@ Additionally, you can also force the driver to verify the `hostname` of the serv
 Server verifies client
 ++++++++++++++++++++++
 
-If Cassandra is configured to verify clients (``require_client_auth``), you need to generate
+If Scylla is configured to verify clients , you need to generate
 SSL key and certificate files.
-
-The cassandra configuration::
-
-    client_encryption_options:
-      enabled: true
-      keystore: /path/to/127.0.0.1.keystore
-      keystore_password: myStorePass
-      require_client_auth: true
-      truststore: /path/to/dse-truststore.jks
-      truststore_password: myStorePass
+See `Encryption: Data in Transit Client to Node <https://docs.scylladb.com/operating-scylla/security/client_node_encryption/>`_ for more infomrnation.
 
 The Python ``ssl`` APIs require the certificate in PEM format. First, create a certificate
 conf file:
@@ -242,9 +216,6 @@ Finally, you can use that configuration with the following driver code:
 
 Server verifies client and client verifies server
 +++++++++++++++++++++++++++++++++++++++++++++++++
-
-See the previous section for examples of Cassandra configuration and preparing
-the client certificates.
 
 The following driver code specifies that the connection should use two-way verification:
 
@@ -304,7 +275,7 @@ deprecated in the next major release.
 By default, a ``ca_certs`` value should be supplied (the value should be
 a string pointing to the location of the CA certs file), and you probably
 want to specify ``ssl_version`` as ``ssl.PROTOCOL_TLSv1`` to match
-Cassandra's default protocol.
+Scylla's default protocol.
 
 For example:
 
@@ -323,34 +294,13 @@ For example:
 This is only an example to show how to pass the ssl parameters. Consider reading
 the `python ssl documentation <https://docs.python.org/2/library/ssl.html#ssl.wrap_socket>`_ for
 your configuration. For further reading, Andrew Mussey has published a thorough guide on
-`Using SSL with the DataStax Python driver <http://blog.amussey.com/post/64036730812/cassandra-2-0-client-server-ssl-with-datastax-python>`_.
+`Using SSL with the Python driver <http://blog.amussey.com/post/64036730812/cassandra-2-0-client-server-ssl-with-datastax-python>`_.
 
 SSL with Twisted
 ++++++++++++++++
 
 In case the twisted event loop is used pyOpenSSL must be installed or an exception will be risen. Also
 to set the ``ssl_version`` and ``cert_reqs`` in ``ssl_opts`` the appropriate constants from pyOpenSSL are expected.
-
-DSE Authentication
-------------------
-When authenticating against DSE, the Cassandra driver provides two auth providers that work both with legacy kerberos and Cassandra authenticators,
-as well as the new DSE Unified Authentication. This allows client to configure this auth provider independently,
-and in advance of any server upgrade. These auth providers are configured in the same way as any previous implementation::
-
-    from cassandra.auth import DSEGSSAPIAuthProvider
-    auth_provider = DSEGSSAPIAuthProvider(service='dse', qops=["auth"])
-    cluster = Cluster(auth_provider=auth_provider)
-    session = cluster.connect()
-
-Implementations are :attr:`.DSEPlainTextAuthProvider`, :class:`.DSEGSSAPIAuthProvider` and :class:`.SaslAuthProvider`.
-
-DSE Unified Authentication
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-With DSE (>=5.1), unified Authentication allows you to:
-
-* Proxy Login: Authenticate using a fixed set of authentication credentials but allow authorization of resources based another user id.
-* Proxy Execute: Authenticate using a fixed set of authentication credentials but execute requests based on another user id.
 
 Proxy Login
 +++++++++++
@@ -381,41 +331,3 @@ then you can do the proxy authentication....
     s = c.connect()
     s.execute(...)  # all requests will be executed as 'user1'
 
-If you are using kerberos, you can use directly :class:`.DSEGSSAPIAuthProvider` and pass the authorization_id, like this:
-
-.. code-block:: python
-
-    from cassandra.cluster import Cluster
-    from cassandra.auth import DSEGSSAPIAuthProvider
-
-    # Ensure the kerberos ticket of the server user is set with the kinit utility.
-    auth_provider = DSEGSSAPIAuthProvider(service='dse', qops=["auth"], principal="server@DATASTAX.COM",
-                                          authorization_id='user1@DATASTAX.COM')
-    c = Cluster(auth_provider=auth_provider)
-    s = c.connect()
-    s.execute(...)  # all requests will be executed as 'user1'
-
-
-Proxy Execute
-+++++++++++++
-
-Proxy execute allows you to execute requests as another user than the authenticated one. You need to ensure the authenticated user has the permission to use the authorization of resources of the specified user. ie. this example will allow the `server` user to execute requests as `user1`:
-
-.. code-block:: text
-
-    GRANT PROXY.EXECUTE on role user1 to server
-
-then you can do a proxy execute...
-
-.. code-block:: python
-
-    from cassandra.cluster import Cluster
-    from cassandra.auth import DSEPlainTextAuthProvider,
-
-    auth_provider = DSEPlainTextAuthProvider('server', 'server')
-
-    c = Cluster(auth_provider=auth_provider)
-    s = c.connect()
-    s.execute('select * from k.t;', execute_as='user1')  # the request will be executed as 'user1'
-
-Please see the `official documentation <https://docs.datastax.com/en/latest-dse/datastax_enterprise/unifiedAuth/unifiedAuthTOC.html>`_ for more details on the feature and configuration process.

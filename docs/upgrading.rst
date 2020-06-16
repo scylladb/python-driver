@@ -15,14 +15,9 @@ with no major API changes.
 Installation
 ^^^^^^^^^^^^
 
-Only the `scylla-driver` package should be installed. `dse-driver` and `dse-graph`
-are not required anymore::
+Only the `scylla-driver` package should be installed::
 
     pip install scylla-driver
-
-If you need the Graph *Fluent* API (features provided by dse-graph)::
-
-    pip install scylla-driver[graph]
 
 See :doc:`installation` for more details.
 
@@ -47,24 +42,6 @@ need to change only the first module of your import statements, not the submodul
 Also note that the cassandra.hosts module doesn't exist in scylla-driver. This
 module is named cassandra.pool.
 
-dse-graph
-^^^^^^^^^
-
-dse-graph features are now built into scylla-driver. The only change you need
-to do is your import statements:
-
-.. code-block:: python
-
-    from dse_graph import ..
-    from dse_graph.query import ..
-
-    # becomes
-
-    from cassandra.datastax.graph.fluent import ..
-    from cassandra.datastax.graph.fluent.query import ..
-
-See :mod:`~.datastax.graph.fluent`.
-
 Session.execute and Session.execute_async API
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -80,13 +57,11 @@ Deprecations
 
 These changes are optional, but recommended:
 
-* Importing from `cassandra.graph` is deprecated. Consider importing from `cassandra.datastax.graph`.
 * Use :class:`~.policies.DefaultLoadBalancingPolicy` instead of DSELoadBalancingPolicy.
 
 Upgrading to 3.0
 ----------------
-Version 3.0 of the DataStax Python driver for Apache Cassandra
-adds support for Cassandra 3.0 while maintaining support for
+Version 3.0 of the Python driver for Scylla and Apache Cassandra adds support for Cassandra 3.0 while maintaining support for
 previously supported versions. In addition to substantial internal rework,
 there are several updates to the API that integrators will need
 to consider:
@@ -179,7 +154,7 @@ Metadata API Updates
 ^^^^^^^^^^^^^^^^^^^^
 `PYTHON-276 <https://datastax-oss.atlassian.net/browse/PYTHON-276>`_, `PYTHON-408 <https://datastax-oss.atlassian.net/browse/PYTHON-408>`_, `PYTHON-400 <https://datastax-oss.atlassian.net/browse/PYTHON-400>`_, `PYTHON-422 <https://datastax-oss.atlassian.net/browse/PYTHON-422>`_
 
-Cassandra 3.0 brought a substantial overhaul to the internal schema metadata representation.
+Scylla 3.0 brought a substantial overhaul to the internal schema metadata representation.
 This version of the driver supports that metadata in addition to the legacy version. Doing so
 also brought some changes to the metadata model.
 
@@ -209,15 +184,6 @@ Several deprecated features are removed
 * ``cqlengine.statements`` will no longer warn about list list prepend behavior (`79efe97 <https://github.com/datastax/python-driver/commit/79efe97>`_)
 
 
-Upgrading to 2.1 from 2.0
--------------------------
-Version 2.1 of the DataStax Python driver for Apache Cassandra
-adds support for Cassandra 2.1 and version 3 of the native protocol.
-
-Cassandra 1.2, 2.0, and 2.1 are all supported.  However, 1.2 only
-supports protocol version 1, and 2.0 only supports versions 1 and
-2, so some features may not be available.
-
 Using the v3 Native Protocol
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 By default, the driver will attempt to use version 2 of the
@@ -237,7 +203,7 @@ In future releases, the driver may default to using protocol version
 
 Working with User-Defined Types
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Cassandra 2.1 introduced the ability to define new types::
+Scylla 3.x introduced the ability to define new types::
 
     USE KEYSPACE mykeyspace;
 

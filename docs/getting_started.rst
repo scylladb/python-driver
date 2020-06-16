@@ -3,15 +3,15 @@ Getting Started
 
 First, make sure you have the driver properly :doc:`installed <installation>`.
 
-Connecting to Cassandra
------------------------
-Before we can start executing any queries against a Cassandra cluster we need to setup
+Connecting to Scylla
+--------------------
+Before we can start executing any queries against a Scylla cluster we need to setup
 an instance of :class:`~.Cluster`. As the name suggests, you will typically have one
-instance of :class:`~.Cluster` for each Cassandra cluster you want to interact
+instance of :class:`~.Cluster` for each Scylla cluster you want to interact
 with.
 
 The simplest way to create a :class:`~.Cluster` is like this:
-First, make sure you have the Cassandra driver properly :doc:`installed <installation>`.
+First, make sure you have the Scylla driver properly :doc:`installed <installation>`.
 
 .. code-block:: python
 
@@ -19,7 +19,7 @@ First, make sure you have the Cassandra driver properly :doc:`installed <install
 
     cluster = Cluster()
 
-This will attempt to connection to a Cassandra instance on your
+This will attempt to connection to a Scylla instance on your
 local machine (127.0.0.1).  You can also specify a list of IP
 addresses for nodes in your cluster:
 
@@ -115,7 +115,7 @@ way to execute a query is to use :meth:`~.Session.execute()`:
     for user_row in rows:
         print user_row.name, user_row.age, user_row.email
 
-This will transparently pick a Cassandra node to execute the query against
+This will transparently pick a Scylla node to execute the query against
 and handle any retries that are necessary if the operation fails.
 
 By default, each row in the result set will be a
@@ -146,18 +146,16 @@ examples are equivalent:
 If you prefer another result format, such as a ``dict`` per row, you
 can change the :attr:`~.Session.row_factory` attribute.
 
-As mentioned in our `Drivers Best Practices Guide <https://docs.datastax.com/en/devapp/doc/devapp/driversBestPractices.html#driversBestPractices__usePreparedStatements>`_,
-it is highly recommended to use `Prepared statements <#prepared-statement>`_ for your
-frequently run queries.
+It is highly recommended to use `Prepared statements <#prepared-statement>`_ for your frequently run queries.
 
 .. _prepared-statement:
 
 Prepared Statements
 -------------------
-Prepared statements are queries that are parsed by Cassandra and then saved
+Prepared statements are queries that are parsed by Scylla and then saved
 for later use.  When the driver uses a prepared statement, it only needs to
 send the values of parameters to bind.  This lowers network traffic
-and CPU utilization within Cassandra because Cassandra does not have to
+and CPU utilization within Scylla because Scylla does not have to
 re-parse the query each time.
 
 To prepare a query, use :meth:`.Session.prepare()`:
@@ -436,15 +434,13 @@ Speculative Execution
 ^^^^^^^^^^^^^^^^^^^^^
 
 Speculative execution is a way to minimize latency by preemptively executing several
-instances of the same query against different nodes. For more details about this
-technique, see `Speculative Execution with DataStax Drivers <https://docs.datastax.com/en/devapp/doc/devapp/driversSpeculativeRetry.html>`_.
+instances of the same query against different nodes. 
 
 To enable speculative execution:
 
 * Configure a :class:`~.policies.SpeculativeExecutionPolicy` with the ExecutionProfile
 * Mark your query as idempotent, which mean it can be applied multiple
   times without changing the result of the initial application.
-  See `Query Idempotence <https://docs.datastax.com/en/devapp/doc/devapp/driversQueryIdempotence.html>`_ for more details.
 
 
 Example:

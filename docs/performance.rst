@@ -1,6 +1,6 @@
 Performance Notes
 =================
-The Python driver for Cassandra offers several methods for executing queries.
+The Python driver for Scylla offers several methods for executing queries.
 You can synchronously block for queries to complete using
 :meth:`.Session.execute()`, you can obtain asynchronous request futures through
 :meth:`.Session.execute_async()`, and you can attach a callback to the future
@@ -41,5 +41,3 @@ Be sure to **never share any** :class:`~.Cluster`, :class:`~.Session`,
 **or** :class:`~.ResponseFuture` **objects across multiple processes**. These
 objects should all be created after forking the process, not before.
 
-For further discussion and simple examples using the driver with ``multiprocessing``,
-see `this blog post <http://www.datastax.com/dev/blog/datastax-python-driver-multiprocessing-example-for-improved-bulk-data-throughput>`_.

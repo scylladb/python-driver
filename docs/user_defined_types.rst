@@ -2,7 +2,7 @@
 
 User Defined Types
 ==================
-Cassandra 2.1 introduced user-defined types (UDTs).  You can create a
+Scylla 3.x introduced user-defined types (UDTs).  You can create a
 new type through ``CREATE TYPE`` statements in CQL::
 
     CREATE TYPE address (street text, zip int);

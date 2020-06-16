@@ -63,7 +63,7 @@ Getting Started
         description     = columns.Text(required=False)
 
     #next, setup the connection to your cassandra server(s)...
-    # see http://datastax.github.io/python-driver/api/cassandra/cluster.html for options
+    # see https://scylladb.github.io/python-driver/api/cassandra/cluster.html for options
     # the list of hosts will be passed to create a Cluster() instance
     connection.setup(['127.0.0.1'], "cqlengine", protocol_version=3)
 
