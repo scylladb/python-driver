@@ -131,3 +131,9 @@ doctest:
 preview:
 	./_utils/setup.sh
 	sphinx-autobuild -b dirhtml $(ALLSPHINXOPTS) $(BUILDDIR)/dirhtml --port 5500
+
+multiversion:
+	./_utils/setup.sh
+	cd .. && sphinx-multiversion docs docs/$(BUILDDIR)/dirhtml
+	@echo
+	@echo "Build finished. The HTML pages are in $(BUILDDIR)/dirhtml."
