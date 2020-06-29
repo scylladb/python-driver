@@ -1,5 +1,5 @@
 Python Driver for Scylla and Apache Cassandra®
-=============================================
+==============================================
 A Python client driver for `Scylla <https://docs.scylladb.com>`_.
 This driver works exclusively with the Cassandra Query Language v3 (CQL3)
 and Cassandra's native protocol.
@@ -19,6 +19,9 @@ Contents
 
 :doc:`getting_started`
     A guide through the first steps of connecting to Scylla and executing queries
+
+:doc:`scylla_specific`
+    A list of feature available only on ``scylla-driver``
 
 :doc:`execution_profiles`
     An introduction to a more flexible way of configuring request execution
@@ -62,6 +65,7 @@ Contents
    api/index
    installation
    getting_started
+   scylla_specific
    upgrading
    execution_profiles
    performance
