@@ -99,6 +99,82 @@
 
             <div class="section" id="module-cassandra.datastax.graph.fluent.query">
 <span id="cassandra-datastax-graph-fluent-query"></span><h1><a class="reference internal" href="#module-cassandra.datastax.graph.fluent.query" title="cassandra.datastax.graph.fluent.query"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent.query</span></code></a><a class="headerlink" href="#module-cassandra.datastax.graph.fluent.query" title="Permalink to this headline">¶</a></h1>
+<dl class="class">
+<dt id="cassandra.datastax.graph.fluent.query.TraversalBatch">
+<em class="property">class </em><code class="descclassname">cassandra.datastax.graph.fluent.query.</code><code class="descname">TraversalBatch</code><span class="sig-paren">(</span><em>session=None</em>, <em>execution_profile=None</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_query/#TraversalBatch"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.query.TraversalBatch" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <cite>TraversalBatch</cite> is used to execute multiple graph traversals in a
+single transaction. If any traversal in the batch fails, the entire
+batch will fail to apply.</p>
+<p>If a TraversalBatch is bounded to a DSE session, it can be executed using
+<cite>traversal_batch.execute()</cite>.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>session</strong> – (Optional) A DSE session</li>
+<li><strong>execution_profile</strong> – (Optional) The execution profile to use for the batch execution</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+<dl class="method">
+<dt id="cassandra.datastax.graph.fluent.query.TraversalBatch.add">
+<code class="descname">add</code><span class="sig-paren">(</span><em>traversal</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_query/#TraversalBatch.add"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.query.TraversalBatch.add" title="Permalink to this definition">¶</a></dt>
+<dd><p>Add a traversal to the batch.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><strong>traversal</strong> – A gremlin GraphTraversal</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="method">
+<dt id="cassandra.datastax.graph.fluent.query.TraversalBatch.add_all">
+<code class="descname">add_all</code><span class="sig-paren">(</span><em>traversals</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_query/#TraversalBatch.add_all"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.query.TraversalBatch.add_all" title="Permalink to this definition">¶</a></dt>
+<dd><p>Adds a sequence of traversals to the batch.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><strong>traversals</strong> – A sequence of gremlin GraphTraversal</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="method">
+<dt id="cassandra.datastax.graph.fluent.query.TraversalBatch.execute">
+<code class="descname">execute</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_query/#TraversalBatch.execute"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.query.TraversalBatch.execute" title="Permalink to this definition">¶</a></dt>
+<dd><p>Execute the traversal batch if bounded to a <cite>DSE Session</cite>.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="cassandra.datastax.graph.fluent.query.TraversalBatch.as_graph_statement">
+<code class="descname">as_graph_statement</code><span class="sig-paren">(</span><em>graph_protocol=b'graphson-2.0'</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_query/#TraversalBatch.as_graph_statement"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.query.TraversalBatch.as_graph_statement" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return the traversal batch as GraphStatement.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><strong>graph_protocol</strong> – The graph protocol for the GraphSONWriter. Default is GraphProtocol.GRAPHSON_2_0.</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="method">
+<dt id="cassandra.datastax.graph.fluent.query.TraversalBatch.clear">
+<code class="descname">clear</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_query/#TraversalBatch.clear"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.query.TraversalBatch.clear" title="Permalink to this definition">¶</a></dt>
+<dd><p>Clear a traversal batch for reuse.</p>
+</dd></dl>
+
+</dd></dl>
+
 </div>
 
         </div>

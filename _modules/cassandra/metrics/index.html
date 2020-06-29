@@ -1,0 +1,433 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    cassandra.metrics | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="../../../_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="../../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/sphinx_tabs/semantic-ui-2.4.1/segment.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/sphinx_tabs/semantic-ui-2.4.1/menu.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/sphinx_tabs/tabs.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/clipboard.min.js"></script>
+    <script type="text/javascript" src="../../../_static/copybutton.js"></script>
+    <script type="text/javascript" src="../../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.js"></script>
+    <script type="text/javascript" src="../../../_static/sphinx_tabs/tabs.js"></script>
+    <script async="async" type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+    <script src="../../../_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="../../../_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+
+            <h1>Source code for cassandra.metrics</h1><div class="highlight"><pre>
+<span></span><span class="c1"># Copyright DataStax, Inc.</span>
+<span class="c1">#</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># you may not use this file except in compliance with the License.</span>
+<span class="c1"># You may obtain a copy of the License at</span>
+<span class="c1">#</span>
+<span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
+<span class="c1">#</span>
+<span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
+<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
+<span class="c1"># See the License for the specific language governing permissions and</span>
+<span class="c1"># limitations under the License.</span>
+
+<span class="kn">from</span> <span class="nn">itertools</span> <span class="kn">import</span> <span class="n">chain</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">from</span> <span class="nn">greplin</span> <span class="kn">import</span> <span class="n">scales</span>
+<span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+    <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span>
+        <span class="s2">&quot;The scales library is required for metrics support: &quot;</span>
+        <span class="s2">&quot;https://pypi.org/project/scales/&quot;</span><span class="p">)</span>
+
+<span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="Metrics"><a class="viewcode-back" href="../../../api/cassandra/metrics/#cassandra.metrics.Metrics">[docs]</a><span class="k">class</span> <span class="nc">Metrics</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A collection of timers and counters for various performance metrics.</span>
+
+<span class="sd">    Timer metrics are represented as floating point seconds.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">request_timer</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`greplin.scales.PmfStat` timer for requests. This is a dict-like</span>
+<span class="sd">    object with the following keys:</span>
+
+<span class="sd">    * count - number of requests that have been timed</span>
+<span class="sd">    * min - min latency</span>
+<span class="sd">    * max - max latency</span>
+<span class="sd">    * mean - mean latency</span>
+<span class="sd">    * stddev - standard deviation for latencies</span>
+<span class="sd">    * median - median latency</span>
+<span class="sd">    * 75percentile - 75th percentile latencies</span>
+<span class="sd">    * 95percentile - 95th percentile latencies</span>
+<span class="sd">    * 98percentile - 98th percentile latencies</span>
+<span class="sd">    * 99percentile - 99th percentile latencies</span>
+<span class="sd">    * 999percentile - 99.9th percentile latencies</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">connection_errors</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`greplin.scales.IntStat` count of the number of times that a</span>
+<span class="sd">    request to a Cassandra node has failed due to a connection problem.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">write_timeouts</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`greplin.scales.IntStat` count of write requests that resulted</span>
+<span class="sd">    in a timeout.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">read_timeouts</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`greplin.scales.IntStat` count of read requests that resulted</span>
+<span class="sd">    in a timeout.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">unavailables</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`greplin.scales.IntStat` count of write or read requests that</span>
+<span class="sd">    failed due to an insufficient number of replicas being alive to meet</span>
+<span class="sd">    the requested :class:`.ConsistencyLevel`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">other_errors</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`greplin.scales.IntStat` count of all other request failures,</span>
+<span class="sd">    including failures caused by invalid requests, bootstrapping nodes,</span>
+<span class="sd">    overloaded nodes, etc.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">retries</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`greplin.scales.IntStat` count of the number of times a</span>
+<span class="sd">    request was retried based on the :class:`.RetryPolicy` decision.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">ignores</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`greplin.scales.IntStat` count of the number of times a</span>
+<span class="sd">    failed request was ignored based on the :class:`.RetryPolicy` decision.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">known_hosts</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`greplin.scales.IntStat` count of the number of nodes in</span>
+<span class="sd">    the cluster that the driver is aware of, regardless of whether any</span>
+<span class="sd">    connections are opened to those nodes.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">connected_to</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`greplin.scales.IntStat` count of the number of nodes that</span>
+<span class="sd">    the driver currently has at least one connection open to.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">open_connections</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`greplin.scales.IntStat` count of the number connections</span>
+<span class="sd">    the driver currently has open.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">_stats_counter</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cluster_proxy</span><span class="p">):</span>
+        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Starting metric capture&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">stats_name</span> <span class="o">=</span> <span class="s1">&#39;cassandra-</span><span class="si">{0}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_stats_counter</span><span class="p">))</span>
+        <span class="n">Metrics</span><span class="o">.</span><span class="n">_stats_counter</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stats</span> <span class="o">=</span> <span class="n">scales</span><span class="o">.</span><span class="n">collection</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">stats_name</span><span class="p">,</span>
+            <span class="n">scales</span><span class="o">.</span><span class="n">PmfStat</span><span class="p">(</span><span class="s1">&#39;request_timer&#39;</span><span class="p">),</span>
+            <span class="n">scales</span><span class="o">.</span><span class="n">IntStat</span><span class="p">(</span><span class="s1">&#39;connection_errors&#39;</span><span class="p">),</span>
+            <span class="n">scales</span><span class="o">.</span><span class="n">IntStat</span><span class="p">(</span><span class="s1">&#39;write_timeouts&#39;</span><span class="p">),</span>
+            <span class="n">scales</span><span class="o">.</span><span class="n">IntStat</span><span class="p">(</span><span class="s1">&#39;read_timeouts&#39;</span><span class="p">),</span>
+            <span class="n">scales</span><span class="o">.</span><span class="n">IntStat</span><span class="p">(</span><span class="s1">&#39;unavailables&#39;</span><span class="p">),</span>
+            <span class="n">scales</span><span class="o">.</span><span class="n">IntStat</span><span class="p">(</span><span class="s1">&#39;other_errors&#39;</span><span class="p">),</span>
+            <span class="n">scales</span><span class="o">.</span><span class="n">IntStat</span><span class="p">(</span><span class="s1">&#39;retries&#39;</span><span class="p">),</span>
+            <span class="n">scales</span><span class="o">.</span><span class="n">IntStat</span><span class="p">(</span><span class="s1">&#39;ignores&#39;</span><span class="p">),</span>
+
+            <span class="c1"># gauges</span>
+            <span class="n">scales</span><span class="o">.</span><span class="n">Stat</span><span class="p">(</span><span class="s1">&#39;known_hosts&#39;</span><span class="p">,</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">cluster_proxy</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">all_hosts</span><span class="p">())),</span>
+            <span class="n">scales</span><span class="o">.</span><span class="n">Stat</span><span class="p">(</span><span class="s1">&#39;connected_to&#39;</span><span class="p">,</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">chain</span><span class="o">.</span><span class="n">from_iterable</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">_pools</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">cluster_proxy</span><span class="o">.</span><span class="n">sessions</span><span class="p">)))),</span>
+            <span class="n">scales</span><span class="o">.</span><span class="n">Stat</span><span class="p">(</span><span class="s1">&#39;open_connections&#39;</span><span class="p">,</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">sum</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">open_count</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">s</span><span class="o">.</span><span class="n">_pools</span><span class="o">.</span><span class="n">values</span><span class="p">())</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">cluster_proxy</span><span class="o">.</span><span class="n">sessions</span><span class="p">)))</span>
+
+        <span class="c1"># TODO, to be removed in 4.0</span>
+        <span class="c1"># /cassandra contains the metrics of the first cluster registered</span>
+        <span class="k">if</span> <span class="s1">&#39;cassandra&#39;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">scales</span><span class="o">.</span><span class="n">_Stats</span><span class="o">.</span><span class="n">stats</span><span class="p">:</span>
+            <span class="n">scales</span><span class="o">.</span><span class="n">_Stats</span><span class="o">.</span><span class="n">stats</span><span class="p">[</span><span class="s1">&#39;cassandra&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">scales</span><span class="o">.</span><span class="n">_Stats</span><span class="o">.</span><span class="n">stats</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">stats_name</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">request_timer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">request_timer</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">connection_errors</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">connection_errors</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">write_timeouts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">write_timeouts</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">read_timeouts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">read_timeouts</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">unavailables</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">unavailables</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">other_errors</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">other_errors</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">retries</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">retries</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ignores</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">ignores</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">known_hosts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">known_hosts</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">connected_to</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">connected_to</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">open_connections</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">open_connections</span>
+
+    <span class="k">def</span> <span class="nf">on_connection_error</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">connection_errors</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="k">def</span> <span class="nf">on_write_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">write_timeouts</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="k">def</span> <span class="nf">on_read_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">read_timeouts</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="k">def</span> <span class="nf">on_unavailable</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">unavailables</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="k">def</span> <span class="nf">on_other_error</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">other_errors</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="k">def</span> <span class="nf">on_ignore</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">ignores</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="k">def</span> <span class="nf">on_retry</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">retries</span> <span class="o">+=</span> <span class="mi">1</span>
+
+<div class="viewcode-block" id="Metrics.get_stats"><a class="viewcode-back" href="../../../api/cassandra/metrics/#cassandra.metrics.Metrics.get_stats">[docs]</a>    <span class="k">def</span> <span class="nf">get_stats</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns the metrics for the registered cluster instance.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">scales</span><span class="o">.</span><span class="n">getStats</span><span class="p">()[</span><span class="bp">self</span><span class="o">.</span><span class="n">stats_name</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="Metrics.set_stats_name"><a class="viewcode-back" href="../../../api/cassandra/metrics/#cassandra.metrics.Metrics.set_stats_name">[docs]</a>    <span class="k">def</span> <span class="nf">set_stats_name</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stats_name</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set the metrics stats name.</span>
+<span class="sd">        The stats_name is a string used to access the metris through scales: scales.getStats()[&lt;stats_name&gt;]</span>
+<span class="sd">        Default is &#39;cassandra-&lt;num&gt;&#39;.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats_name</span> <span class="o">==</span> <span class="n">stats_name</span><span class="p">:</span>
+            <span class="k">return</span>
+
+        <span class="k">if</span> <span class="n">stats_name</span> <span class="ow">in</span> <span class="n">scales</span><span class="o">.</span><span class="n">_Stats</span><span class="o">.</span><span class="n">stats</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;&quot;</span><span class="si">{0}</span><span class="s1">&quot; already exists in stats.&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">stats_name</span><span class="p">))</span>
+
+        <span class="n">stats</span> <span class="o">=</span> <span class="n">scales</span><span class="o">.</span><span class="n">_Stats</span><span class="o">.</span><span class="n">stats</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">stats_name</span><span class="p">]</span>
+        <span class="k">del</span> <span class="n">scales</span><span class="o">.</span><span class="n">_Stats</span><span class="o">.</span><span class="n">stats</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">stats_name</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stats_name</span> <span class="o">=</span> <span class="n">stats_name</span>
+        <span class="n">scales</span><span class="o">.</span><span class="n">_Stats</span><span class="o">.</span><span class="n">stats</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">stats_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">stats</span></div></div>
+</pre></div>
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../installation/">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../getting_started/">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../scylla_specific/">Scylla Specific Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upgrading/">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../execution_profiles/">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../performance/">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../query_paging/">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../lwt/">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../security/">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../user_defined_types/">User Defined Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../object_mapper/">Object Mapper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dates_and_times/">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../faq/">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="../../../_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page cassandra.metrics&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/_modules/cassandra/metrics%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="../../../_static/js/vendor/jquery.js"></script>
+<script src="../../../_static/expertrec.js"></script>
+<script src="../../../_static/js/foundation/foundation.js"></script>
+<script src="../../../_static/js/foundation/foundation.topbar.js"></script>
+<script src="../../../_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

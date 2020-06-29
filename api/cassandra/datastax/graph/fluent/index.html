@@ -99,6 +99,140 @@
 
             <div class="section" id="module-cassandra.datastax.graph.fluent">
 <span id="cassandra-datastax-graph-fluent"></span><h1><a class="reference internal" href="#module-cassandra.datastax.graph.fluent" title="cassandra.datastax.graph.fluent"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent</span></code></a><a class="headerlink" href="#module-cassandra.datastax.graph.fluent" title="Permalink to this headline">¶</a></h1>
+<dl class="class">
+<dt id="cassandra.datastax.graph.fluent.DseGraph">
+<em class="property">class </em><code class="descclassname">cassandra.datastax.graph.fluent.</code><code class="descname">DseGraph</code><a class="reference internal" href="../../../../../_modules/cassandra/datastax/graph/fluent/#DseGraph"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.DseGraph" title="Permalink to this definition">¶</a></dt>
+<dd><p>Dse Graph utility class for GraphTraversal construction and execution.</p>
+<dl class="attribute">
+<dt id="cassandra.datastax.graph.fluent.DseGraph.DSE_GRAPH_QUERY_LANGUAGE">
+<code class="descname">DSE_GRAPH_QUERY_LANGUAGE</code><em class="property"> = 'bytecode-json'</em><a class="headerlink" href="#cassandra.datastax.graph.fluent.DseGraph.DSE_GRAPH_QUERY_LANGUAGE" title="Permalink to this definition">¶</a></dt>
+<dd><p>Graph query language, Default is ‘bytecode-json’ (GraphSON).</p>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.DseGraph.create_execution_profile">
+<em class="property">static </em><code class="descname">create_execution_profile</code><span class="sig-paren">(</span><em>graph_name</em>, <em>graph_protocol=b'graphson-2.0'</em>, <em>**kwargs</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../_modules/cassandra/datastax/graph/fluent/#DseGraph.create_execution_profile"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.DseGraph.create_execution_profile" title="Permalink to this definition">¶</a></dt>
+<dd><p>Creates an ExecutionProfile for GraphTraversal execution. You need to register that execution profile to the
+cluster by using <cite>cluster.add_execution_profile</cite>.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>graph_name</strong> – The graph name</li>
+<li><strong>graph_protocol</strong> – (Optional) The graph protocol, default is <cite>DSE_GRAPH_QUERY_PROTOCOL</cite>.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.DseGraph.query_from_traversal">
+<em class="property">static </em><code class="descname">query_from_traversal</code><span class="sig-paren">(</span><em>traversal</em>, <em>graph_protocol=b'graphson-2.0'</em>, <em>context=None</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../_modules/cassandra/datastax/graph/fluent/#DseGraph.query_from_traversal"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.DseGraph.query_from_traversal" title="Permalink to this definition">¶</a></dt>
+<dd><p>From a GraphTraversal, return a query string based on the language specified in <cite>DseGraph.DSE_GRAPH_QUERY_LANGUAGE</cite>.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>traversal</strong> – The GraphTraversal object</li>
+<li><strong>graph_protocol</strong> – The graph protocol. Default is <cite>DseGraph.DSE_GRAPH_QUERY_PROTOCOL</cite>.</li>
+<li><strong>context</strong> – The dict of the serialization context, needed for GraphSON3 (tuple, udt).
+e.g: {‘cluster’: cluster, ‘graph_name’: name}</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.DseGraph.traversal_source">
+<em class="property">static </em><code class="descname">traversal_source</code><span class="sig-paren">(</span><em>session=None</em>, <em>graph_name=None</em>, <em>execution_profile=EXEC_PROFILE_GRAPH_DEFAULT</em>, <em>traversal_class=None</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../_modules/cassandra/datastax/graph/fluent/#DseGraph.traversal_source"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.DseGraph.traversal_source" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a TinkerPop GraphTraversalSource binded to the session and graph_name if provided.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>session</strong> – (Optional) A DSE session</li>
+<li><strong>graph_name</strong> – (Optional) DSE Graph name</li>
+<li><strong>execution_profile</strong> – (Optional) Execution profile for traversal queries. Default is set to <cite>EXEC_PROFILE_GRAPH_DEFAULT</cite>.</li>
+<li><strong>traversal_class</strong> – (Optional) The GraphTraversalSource class to use (DSL).</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cluster</span> <span class="kn">import</span> <span class="n">Cluster</span>
+<span class="kn">from</span> <span class="nn">cassandra.datastax.graph.fluent</span> <span class="kn">import</span> <span class="n">DseGraph</span>
+
+<span class="n">c</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">()</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+
+<span class="n">g</span> <span class="o">=</span> <span class="n">DseGraph</span><span class="o">.</span><span class="n">traversal_source</span><span class="p">(</span><span class="n">session</span><span class="p">,</span> <span class="s1">&#39;my_graph&#39;</span><span class="p">)</span>
+<span class="nb">print</span> <span class="n">g</span><span class="o">.</span><span class="n">V</span><span class="p">()</span><span class="o">.</span><span class="n">valueMap</span><span class="p">()</span><span class="o">.</span><span class="n">toList</span><span class="p">()</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.DseGraph.batch">
+<em class="property">static </em><code class="descname">batch</code><span class="sig-paren">(</span><em>session=None</em>, <em>execution_profile=None</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../_modules/cassandra/datastax/graph/fluent/#DseGraph.batch"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.DseGraph.batch" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the <a class="reference internal" href="query/#cassandra.datastax.graph.fluent.query.TraversalBatch" title="cassandra.datastax.graph.fluent.query.TraversalBatch"><code class="xref py py-class docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent.query.TraversalBatch</span></code></a> object allowing to
+execute multiple traversals in the same transaction.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="cassandra.datastax.graph.fluent.DSESessionRemoteGraphConnection">
+<em class="property">class </em><code class="descclassname">cassandra.datastax.graph.fluent.</code><code class="descname">DSESessionRemoteGraphConnection</code><span class="sig-paren">(</span><em>session</em><span class="optional">[</span>, <em>graph_name</em>, <em>execution_profile</em><span class="optional">]</span><span class="sig-paren">)</span><a class="reference internal" href="../../../../../_modules/cassandra/datastax/graph/fluent/#DSESessionRemoteGraphConnection"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.DSESessionRemoteGraphConnection" title="Permalink to this definition">¶</a></dt>
+<dd><p>A Tinkerpop RemoteConnection to execute traversal queries on DSE.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>session</strong> – A DSE session</li>
+<li><strong>graph_name</strong> – (Optional) DSE Graph name.</li>
+<li><strong>execution_profile</strong> – (Optional) Execution profile for traversal queries. Default is set to <cite>EXEC_PROFILE_GRAPH_DEFAULT</cite>.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="class">
+<dt id="cassandra.datastax.graph.fluent.BaseGraphRowFactory">
+<em class="property">class </em><code class="descclassname">cassandra.datastax.graph.fluent.</code><code class="descname">BaseGraphRowFactory</code><span class="sig-paren">(</span><em>cluster</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../_modules/cassandra/datastax/graph/fluent/#BaseGraphRowFactory"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.BaseGraphRowFactory" title="Permalink to this definition">¶</a></dt>
+<dd><p>Base row factory for graph traversal. This class basically wraps a
+graphson reader function to handle additional features of Gremlin/DSE
+and is callable as a normal row factory.</p>
+<dl class="docutils">
+<dt>Currently supported:</dt>
+<dd><ul class="first last simple">
+<li>bulk results</li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.datastax.graph.fluent.graph_traversal_row_factory">
+<code class="descclassname">cassandra.datastax.graph.fluent.</code><code class="descname">graph_traversal_row_factory</code><a class="headerlink" href="#cassandra.datastax.graph.fluent.graph_traversal_row_factory" title="Permalink to this definition">¶</a></dt>
+<dd><p>alias of <code class="xref py py-class docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent._GremlinGraphSON2RowFactory</span></code></p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.datastax.graph.fluent.graph_traversal_dse_object_row_factory">
+<code class="descclassname">cassandra.datastax.graph.fluent.</code><code class="descname">graph_traversal_dse_object_row_factory</code><a class="headerlink" href="#cassandra.datastax.graph.fluent.graph_traversal_dse_object_row_factory" title="Permalink to this definition">¶</a></dt>
+<dd><p>alias of <code class="xref py py-class docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent._DseGraphSON2RowFactory</span></code></p>
+</dd></dl>
+
 </div>
 
         </div>

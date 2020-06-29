@@ -129,7 +129,7 @@ a <cite>Session</cite> object, or implicitly:</p>
     <span class="nb">print</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>These <span class="xref std std-ref">Python types</span> are also supported transparently:</p>
+<p>These Python types are also supported transparently:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">g</span><span class="o">.</span><span class="n">addV</span><span class="p">(</span><span class="s1">&#39;person&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">property</span><span class="p">(</span><span class="s1">&#39;name&#39;</span><span class="p">,</span> <span class="s1">&#39;Mike&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">property</span><span class="p">(</span><span class="s1">&#39;birthday&#39;</span><span class="p">,</span> <span class="n">datetime</span><span class="p">(</span><span class="mi">1984</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">11</span><span class="p">))</span><span class="o">.</span> \
     <span class="nb">property</span><span class="p">(</span><span class="s1">&#39;house_yard&#39;</span><span class="p">,</span> <span class="n">Polygon</span><span class="p">(((</span><span class="mi">30</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span> <span class="p">(</span><span class="mi">40</span><span class="p">,</span> <span class="mi">40</span><span class="p">),</span> <span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">40</span><span class="p">),</span> <span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">20</span><span class="p">),</span> <span class="p">(</span><span class="mi">30</span><span class="p">,</span> <span class="mi">10</span><span class="p">)))</span>
 </pre></div>
@@ -157,7 +157,7 @@ query language. Here is how to accomplish this configuration:</p>
 <span class="nb">print</span> <span class="n">g</span><span class="o">.</span><span class="n">V</span><span class="p">()</span><span class="o">.</span><span class="n">toList</span><span class="p">()</span>  <span class="c1"># Traverse the Graph</span>
 </pre></div>
 </div>
-<p>Note that the execution profile created with <code class="xref py py-meth docutils literal notranslate"><span class="pre">DseGraph.create_execution_profile</span></code> cannot
+<p>Note that the execution profile created with <a class="reference internal" href="../api/cassandra/datastax/graph/fluent/#cassandra.datastax.graph.fluent.DseGraph.create_execution_profile" title="cassandra.datastax.graph.fluent.DseGraph.create_execution_profile"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DseGraph.create_execution_profile</span></code></a> cannot
 be used for any groovy string queries.</p>
 <p>If you want to change execution property defaults, please see the <a class="reference internal" href="../execution_profiles/"><span class="doc">Execution Profile documentation</span></a>
 for a more generalized discussion of the API. Graph traversal queries use the same execution profile defined for DSE graph. If you
@@ -191,7 +191,7 @@ Below is an example of explicit execution. For this example, assume the schema h
 </div>
 <div class="section" id="implicit-graph-traversal-execution-with-tinkerpop">
 <h2>Implicit Graph Traversal Execution with TinkerPop<a class="headerlink" href="#implicit-graph-traversal-execution-with-tinkerpop" title="Permalink to this headline">¶</a></h2>
-<p>Using the <code class="xref py py-class docutils literal notranslate"><span class="pre">DseGraph</span></code> class, you can build a GraphTraversalSource
+<p>Using the <a class="reference internal" href="../api/cassandra/datastax/graph/fluent/#cassandra.datastax.graph.fluent.DseGraph" title="cassandra.datastax.graph.fluent.DseGraph"><code class="xref py py-class docutils literal notranslate"><span class="pre">DseGraph</span></code></a> class, you can build a GraphTraversalSource
 that will execute queries on a DSE session without explicitly passing anything to
 that session. We call this <em>implicit execution</em> because the <cite>Session</cite> is not
 explicitly involved. Everything is managed internally by TinkerPop while
@@ -263,11 +263,11 @@ the same execution profile (for different graphs):</p>
 </div>
 <div class="section" id="batch-queries">
 <h2>Batch Queries<a class="headerlink" href="#batch-queries" title="Permalink to this headline">¶</a></h2>
-<p>DSE Graph supports batch queries using a <code class="xref py py-class docutils literal notranslate"><span class="pre">TraversalBatch</span></code> object
-instantiated with <code class="xref py py-meth docutils literal notranslate"><span class="pre">DseGraph.batch</span></code>. A <code class="xref py py-class docutils literal notranslate"><span class="pre">TraversalBatch</span></code> allows
+<p>DSE Graph supports batch queries using a <a class="reference internal" href="../api/cassandra/datastax/graph/fluent/query/#cassandra.datastax.graph.fluent.query.TraversalBatch" title="cassandra.datastax.graph.fluent.query.TraversalBatch"><code class="xref py py-class docutils literal notranslate"><span class="pre">TraversalBatch</span></code></a> object
+instantiated with <a class="reference internal" href="../api/cassandra/datastax/graph/fluent/#cassandra.datastax.graph.fluent.DseGraph.batch" title="cassandra.datastax.graph.fluent.DseGraph.batch"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DseGraph.batch</span></code></a>. A <a class="reference internal" href="../api/cassandra/datastax/graph/fluent/query/#cassandra.datastax.graph.fluent.query.TraversalBatch" title="cassandra.datastax.graph.fluent.query.TraversalBatch"><code class="xref py py-class docutils literal notranslate"><span class="pre">TraversalBatch</span></code></a> allows
 you to execute multiple graph traversals in a single atomic transaction. A
 traversal batch is executed with <a class="reference internal" href="../api/cassandra/cluster/#cassandra.cluster.Session.execute_graph" title="cassandra.cluster.Session.execute_graph"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Session.execute_graph()</span></code></a> or using
-<code class="xref py py-meth docutils literal notranslate"><span class="pre">TraversalBatch.execute</span></code> if bounded to a DSE session.</p>
+<a class="reference internal" href="../api/cassandra/datastax/graph/fluent/query/#cassandra.datastax.graph.fluent.query.TraversalBatch.execute" title="cassandra.datastax.graph.fluent.query.TraversalBatch.execute"><code class="xref py py-meth docutils literal notranslate"><span class="pre">TraversalBatch.execute</span></code></a> if bounded to a DSE session.</p>
 <p>Either way you choose to execute the traversal batch, you need to configure
 the execution profile accordingly. Here is a example:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cluster</span> <span class="kn">import</span> <span class="n">Cluster</span>
@@ -294,7 +294,7 @@ the batch to a GraphStatement:</p>
 <span class="n">session</span><span class="o">.</span><span class="n">execute_graph</span><span class="p">(</span><span class="n">graph_statement</span><span class="p">,</span> <span class="n">execution_profile</span><span class="o">=</span><span class="s1">&#39;graphson2&#39;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>To execute the batch using <code class="xref py py-meth docutils literal notranslate"><span class="pre">TraversalBatch.execute</span></code>, you need to bound the batch to a DSE session:</p>
+<p>To execute the batch using <a class="reference internal" href="../api/cassandra/datastax/graph/fluent/query/#cassandra.datastax.graph.fluent.query.TraversalBatch.execute" title="cassandra.datastax.graph.fluent.query.TraversalBatch.execute"><code class="xref py py-meth docutils literal notranslate"><span class="pre">TraversalBatch.execute</span></code></a>, you need to bound the batch to a DSE session:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">batch</span> <span class="o">=</span> <span class="n">DseGraph</span><span class="o">.</span><span class="n">batch</span><span class="p">(</span><span class="n">session</span><span class="p">,</span> <span class="s1">&#39;graphson2&#39;</span><span class="p">)</span>  <span class="c1"># bound the session and execution profile</span>
 
 <span class="n">batch</span><span class="o">.</span><span class="n">add</span><span class="p">(</span>
@@ -355,21 +355,21 @@ application would look like:</p>
 efficient traversal queries. Here are the list of additional search predicates:</p>
 <p>Text tokenization:</p>
 <ul class="simple">
-<li><code class="xref py py-meth docutils literal notranslate"><span class="pre">token</span></code></li>
-<li><code class="xref py py-meth docutils literal notranslate"><span class="pre">token_prefix</span></code></li>
-<li><code class="xref py py-meth docutils literal notranslate"><span class="pre">token_regex</span></code></li>
-<li><code class="xref py py-meth docutils literal notranslate"><span class="pre">token_fuzzy</span></code></li>
+<li><a class="reference internal" href="../api/cassandra/datastax/graph/fluent/predicates/#cassandra.datastax.graph.fluent.predicates.Search.token" title="cassandra.datastax.graph.fluent.predicates.Search.token"><code class="xref py py-meth docutils literal notranslate"><span class="pre">token</span></code></a></li>
+<li><a class="reference internal" href="../api/cassandra/datastax/graph/fluent/predicates/#cassandra.datastax.graph.fluent.predicates.Search.token_prefix" title="cassandra.datastax.graph.fluent.predicates.Search.token_prefix"><code class="xref py py-meth docutils literal notranslate"><span class="pre">token_prefix</span></code></a></li>
+<li><a class="reference internal" href="../api/cassandra/datastax/graph/fluent/predicates/#cassandra.datastax.graph.fluent.predicates.Search.token_regex" title="cassandra.datastax.graph.fluent.predicates.Search.token_regex"><code class="xref py py-meth docutils literal notranslate"><span class="pre">token_regex</span></code></a></li>
+<li><a class="reference internal" href="../api/cassandra/datastax/graph/fluent/predicates/#cassandra.datastax.graph.fluent.predicates.Search.token_fuzzy" title="cassandra.datastax.graph.fluent.predicates.Search.token_fuzzy"><code class="xref py py-meth docutils literal notranslate"><span class="pre">token_fuzzy</span></code></a></li>
 </ul>
 <p>Text match:</p>
 <ul class="simple">
-<li><code class="xref py py-meth docutils literal notranslate"><span class="pre">prefix</span></code></li>
-<li><code class="xref py py-meth docutils literal notranslate"><span class="pre">regex</span></code></li>
-<li><code class="xref py py-meth docutils literal notranslate"><span class="pre">fuzzy</span></code></li>
-<li><code class="xref py py-meth docutils literal notranslate"><span class="pre">phrase</span></code></li>
+<li><a class="reference internal" href="../api/cassandra/datastax/graph/fluent/predicates/#cassandra.datastax.graph.fluent.predicates.Search.prefix" title="cassandra.datastax.graph.fluent.predicates.Search.prefix"><code class="xref py py-meth docutils literal notranslate"><span class="pre">prefix</span></code></a></li>
+<li><a class="reference internal" href="../api/cassandra/datastax/graph/fluent/predicates/#cassandra.datastax.graph.fluent.predicates.Search.regex" title="cassandra.datastax.graph.fluent.predicates.Search.regex"><code class="xref py py-meth docutils literal notranslate"><span class="pre">regex</span></code></a></li>
+<li><a class="reference internal" href="../api/cassandra/datastax/graph/fluent/predicates/#cassandra.datastax.graph.fluent.predicates.Search.fuzzy" title="cassandra.datastax.graph.fluent.predicates.Search.fuzzy"><code class="xref py py-meth docutils literal notranslate"><span class="pre">fuzzy</span></code></a></li>
+<li><a class="reference internal" href="../api/cassandra/datastax/graph/fluent/predicates/#cassandra.datastax.graph.fluent.predicates.Search.phrase" title="cassandra.datastax.graph.fluent.predicates.Search.phrase"><code class="xref py py-meth docutils literal notranslate"><span class="pre">phrase</span></code></a></li>
 </ul>
 <p>Geo:</p>
 <ul class="simple">
-<li><code class="xref py py-meth docutils literal notranslate"><span class="pre">inside</span></code></li>
+<li><a class="reference internal" href="../api/cassandra/datastax/graph/fluent/predicates/#cassandra.datastax.graph.fluent.predicates.Geo.inside" title="cassandra.datastax.graph.fluent.predicates.Geo.inside"><code class="xref py py-meth docutils literal notranslate"><span class="pre">inside</span></code></a></li>
 </ul>
 <div class="section" id="create-search-indexes">
 <h3>Create search indexes<a class="headerlink" href="#create-search-indexes" title="Permalink to this headline">¶</a></h3>

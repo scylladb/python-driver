@@ -97,9 +97,9 @@
 	<div class="large-6 large-push-3 columns">
             
 
-            <div class="section" id="cassandra-timestamps-timestamp-generation">
-<h1><code class="docutils literal notranslate"><span class="pre">cassandra.timestamps</span></code> - Timestamp Generation<a class="headerlink" href="#cassandra-timestamps-timestamp-generation" title="Permalink to this headline">¶</a></h1>
-<span class="target" id="module-cassandra.timestamps"></span><dl class="class">
+            <div class="section" id="module-cassandra.timestamps">
+<span id="cassandra-timestamps-timestamp-generation"></span><h1><code class="docutils literal notranslate"><span class="pre">cassandra.timestamps</span></code> - Timestamp Generation<a class="headerlink" href="#module-cassandra.timestamps" title="Permalink to this headline">¶</a></h1>
+<dl class="class">
 <dt id="cassandra.timestamps.MonotonicTimestampGenerator">
 <em class="property">class </em><code class="descclassname">cassandra.timestamps.</code><code class="descname">MonotonicTimestampGenerator</code><span class="sig-paren">(</span><em>warn_on_drift=True</em>, <em>warning_threshold=0</em>, <em>warning_interval=0</em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/cassandra/timestamps/#MonotonicTimestampGenerator"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.timestamps.MonotonicTimestampGenerator" title="Permalink to this definition">¶</a></dt>
 <dd><p>An object that, when called, returns <code class="docutils literal notranslate"><span class="pre">int(time.time()</span> <span class="pre">*</span> <span class="pre">1e6)</span></code> when

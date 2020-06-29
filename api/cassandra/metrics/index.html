@@ -99,6 +99,120 @@
 
             <div class="section" id="module-cassandra.metrics">
 <span id="cassandra-metrics-performance-metrics"></span><h1><code class="docutils literal notranslate"><span class="pre">cassandra.metrics</span></code> - Performance Metrics<a class="headerlink" href="#module-cassandra.metrics" title="Permalink to this headline">¶</a></h1>
+<dl class="class">
+<dt id="cassandra.metrics.Metrics">
+<em class="property">class </em><code class="descclassname">cassandra.metrics.</code><code class="descname">Metrics</code><a class="reference internal" href="../../../_modules/cassandra/metrics/#Metrics"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.metrics.Metrics" title="Permalink to this definition">¶</a></dt>
+<dd><p>A collection of timers and counters for various performance metrics.</p>
+<p>Timer metrics are represented as floating point seconds.</p>
+<dl class="attribute">
+<dt id="cassandra.metrics.Metrics.request_timer">
+<code class="descname">request_timer</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metrics.Metrics.request_timer" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">greplin.scales.PmfStat</span></code> timer for requests. This is a dict-like
+object with the following keys:</p>
+<ul class="simple">
+<li>count - number of requests that have been timed</li>
+<li>min - min latency</li>
+<li>max - max latency</li>
+<li>mean - mean latency</li>
+<li>stddev - standard deviation for latencies</li>
+<li>median - median latency</li>
+<li>75percentile - 75th percentile latencies</li>
+<li>95percentile - 95th percentile latencies</li>
+<li>98percentile - 98th percentile latencies</li>
+<li>99percentile - 99th percentile latencies</li>
+<li>999percentile - 99.9th percentile latencies</li>
+</ul>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metrics.Metrics.connection_errors">
+<code class="descname">connection_errors</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metrics.Metrics.connection_errors" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">greplin.scales.IntStat</span></code> count of the number of times that a
+request to a Cassandra node has failed due to a connection problem.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metrics.Metrics.write_timeouts">
+<code class="descname">write_timeouts</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metrics.Metrics.write_timeouts" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">greplin.scales.IntStat</span></code> count of write requests that resulted
+in a timeout.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metrics.Metrics.read_timeouts">
+<code class="descname">read_timeouts</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metrics.Metrics.read_timeouts" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">greplin.scales.IntStat</span></code> count of read requests that resulted
+in a timeout.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metrics.Metrics.unavailables">
+<code class="descname">unavailables</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metrics.Metrics.unavailables" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">greplin.scales.IntStat</span></code> count of write or read requests that
+failed due to an insufficient number of replicas being alive to meet
+the requested <a class="reference internal" href="../#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a>.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metrics.Metrics.other_errors">
+<code class="descname">other_errors</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metrics.Metrics.other_errors" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">greplin.scales.IntStat</span></code> count of all other request failures,
+including failures caused by invalid requests, bootstrapping nodes,
+overloaded nodes, etc.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metrics.Metrics.retries">
+<code class="descname">retries</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metrics.Metrics.retries" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">greplin.scales.IntStat</span></code> count of the number of times a
+request was retried based on the <a class="reference internal" href="../policies/#cassandra.policies.RetryPolicy" title="cassandra.policies.RetryPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">RetryPolicy</span></code></a> decision.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metrics.Metrics.ignores">
+<code class="descname">ignores</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metrics.Metrics.ignores" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">greplin.scales.IntStat</span></code> count of the number of times a
+failed request was ignored based on the <a class="reference internal" href="../policies/#cassandra.policies.RetryPolicy" title="cassandra.policies.RetryPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">RetryPolicy</span></code></a> decision.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metrics.Metrics.known_hosts">
+<code class="descname">known_hosts</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metrics.Metrics.known_hosts" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">greplin.scales.IntStat</span></code> count of the number of nodes in
+the cluster that the driver is aware of, regardless of whether any
+connections are opened to those nodes.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metrics.Metrics.connected_to">
+<code class="descname">connected_to</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metrics.Metrics.connected_to" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">greplin.scales.IntStat</span></code> count of the number of nodes that
+the driver currently has at least one connection open to.</p>
+</dd></dl>
+
+<dl class="attribute">
+<dt id="cassandra.metrics.Metrics.open_connections">
+<code class="descname">open_connections</code><em class="property"> = None</em><a class="headerlink" href="#cassandra.metrics.Metrics.open_connections" title="Permalink to this definition">¶</a></dt>
+<dd><p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">greplin.scales.IntStat</span></code> count of the number connections
+the driver currently has open.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="cassandra.metrics.Metrics.get_stats">
+<code class="descname">get_stats</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/cassandra/metrics/#Metrics.get_stats"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.metrics.Metrics.get_stats" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the metrics for the registered cluster instance.</p>
+</dd></dl>
+
+<dl class="method">
+<dt id="cassandra.metrics.Metrics.set_stats_name">
+<code class="descname">set_stats_name</code><span class="sig-paren">(</span><em>stats_name</em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/cassandra/metrics/#Metrics.set_stats_name"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.metrics.Metrics.set_stats_name" title="Permalink to this definition">¶</a></dt>
+<dd><p>Set the metrics stats name.
+The stats_name is a string used to access the metris through scales: scales.getStats()[&lt;stats_name&gt;]
+Default is ‘cassandra-&lt;num&gt;’.</p>
+</dd></dl>
+
+</dd></dl>
+
 </div>
 
         </div>

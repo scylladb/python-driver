@@ -99,6 +99,119 @@
 
             <div class="section" id="module-cassandra.datastax.graph.fluent.predicates">
 <span id="cassandra-datastax-graph-fluent-predicates"></span><h1><a class="reference internal" href="#module-cassandra.datastax.graph.fluent.predicates" title="cassandra.datastax.graph.fluent.predicates"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent.predicates</span></code></a><a class="headerlink" href="#module-cassandra.datastax.graph.fluent.predicates" title="Permalink to this headline">¶</a></h1>
+<dl class="class">
+<dt id="cassandra.datastax.graph.fluent.predicates.Search">
+<em class="property">class </em><code class="descclassname">cassandra.datastax.graph.fluent.predicates.</code><code class="descname">Search</code><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#Search"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.Search" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.Search.token">
+<em class="property">static </em><code class="descname">token</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#Search.token"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.Search.token" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search any instance of a certain token within the text property targeted.
+:param value: the value to look for.</p>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.Search.token_prefix">
+<em class="property">static </em><code class="descname">token_prefix</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#Search.token_prefix"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.Search.token_prefix" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search any instance of a certain token prefix withing the text property targeted.
+:param value: the value to look for.</p>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.Search.token_regex">
+<em class="property">static </em><code class="descname">token_regex</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#Search.token_regex"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.Search.token_regex" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search any instance of the provided regular expression for the targeted property.
+:param value: the value to look for.</p>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.Search.prefix">
+<em class="property">static </em><code class="descname">prefix</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#Search.prefix"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.Search.prefix" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search for a specific prefix at the beginning of the text property targeted.
+:param value: the value to look for.</p>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.Search.regex">
+<em class="property">static </em><code class="descname">regex</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#Search.regex"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.Search.regex" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search for this regular expression inside the text property targeted.
+:param value: the value to look for.</p>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.Search.fuzzy">
+<em class="property">static </em><code class="descname">fuzzy</code><span class="sig-paren">(</span><em>value</em>, <em>distance</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#Search.fuzzy"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.Search.fuzzy" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search for a fuzzy string inside the text property targeted.
+:param value: the value to look for.
+:param distance: The distance for the fuzzy search. ie. 1, to allow a one-letter misspellings.</p>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.Search.token_fuzzy">
+<em class="property">static </em><code class="descname">token_fuzzy</code><span class="sig-paren">(</span><em>value</em>, <em>distance</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#Search.token_fuzzy"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.Search.token_fuzzy" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search for a token fuzzy inside the text property targeted.
+:param value: the value to look for.
+:param distance: The distance for the token fuzzy search. ie. 1, to allow a one-letter misspellings.</p>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.Search.phrase">
+<em class="property">static </em><code class="descname">phrase</code><span class="sig-paren">(</span><em>value</em>, <em>proximity</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#Search.phrase"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.Search.phrase" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search for a phrase inside the text property targeted.
+:param value: the value to look for.
+:param proximity: The proximity for the phrase search. ie. phrase(‘David Felcey’, 2).. to find ‘David Felcey’ with up to two middle names.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="cassandra.datastax.graph.fluent.predicates.CqlCollection">
+<em class="property">class </em><code class="descclassname">cassandra.datastax.graph.fluent.predicates.</code><code class="descname">CqlCollection</code><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#CqlCollection"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.CqlCollection" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.CqlCollection.contains">
+<em class="property">static </em><code class="descname">contains</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#CqlCollection.contains"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.CqlCollection.contains" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search for a value inside a cql list/set column.
+:param value: the value to look for.</p>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.CqlCollection.contains_value">
+<em class="property">static </em><code class="descname">contains_value</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#CqlCollection.contains_value"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.CqlCollection.contains_value" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search for a map value.
+:param value: the value to look for.</p>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.CqlCollection.contains_key">
+<em class="property">static </em><code class="descname">contains_key</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#CqlCollection.contains_key"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.CqlCollection.contains_key" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search for a map key.
+:param value: the value to look for.</p>
+</dd></dl>
+
+<dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.CqlCollection.entry_eq">
+<em class="property">static </em><code class="descname">entry_eq</code><span class="sig-paren">(</span><em>value</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#CqlCollection.entry_eq"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.CqlCollection.entry_eq" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search for a map entry.
+:param value: the value to look for.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="class">
+<dt id="cassandra.datastax.graph.fluent.predicates.Geo">
+<em class="property">class </em><code class="descclassname">cassandra.datastax.graph.fluent.predicates.</code><code class="descname">Geo</code><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#Geo"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.Geo" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="staticmethod">
+<dt id="cassandra.datastax.graph.fluent.predicates.Geo.inside">
+<em class="property">static </em><code class="descname">inside</code><span class="sig-paren">(</span><em>value</em>, <em>units=1</em><span class="sig-paren">)</span><a class="reference internal" href="../../../../../../_modules/cassandra/datastax/graph/fluent/_predicates/#Geo.inside"><span class="viewcode-link">[source]</span></a><a class="headerlink" href="#cassandra.datastax.graph.fluent.predicates.Geo.inside" title="Permalink to this definition">¶</a></dt>
+<dd><p>Search any instance of geometry inside the Distance targeted.
+:param value: A Distance to look for.
+:param units: The units for <code class="docutils literal notranslate"><span class="pre">value</span></code>. See GeoUnit enum. (Can also</p>
+<blockquote>
+<div>provide an integer to use as a multiplier to convert <code class="docutils literal notranslate"><span class="pre">value</span></code> to
+degrees.)</div></blockquote>
+</dd></dl>
+
+</dd></dl>
+
 </div>
 
         </div>
