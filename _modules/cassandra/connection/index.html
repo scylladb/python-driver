@@ -149,8 +149,7 @@
                                 <span class="n">AuthSuccessMessage</span><span class="p">,</span> <span class="n">ProtocolException</span><span class="p">,</span>
                                 <span class="n">RegisterMessage</span><span class="p">,</span> <span class="n">ReviseRequestMessage</span><span class="p">)</span>
 <span class="kn">from</span> <span class="nn">cassandra.util</span> <span class="kn">import</span> <span class="n">OrderedDict</span>
-<span class="kn">from</span> <span class="nn">cassandra.murmur3</span> <span class="kn">import</span> <span class="n">INT64_MIN</span>
-
+<span class="kn">from</span> <span class="nn">cassandra.shard_info</span> <span class="kn">import</span> <span class="n">ShardingInfo</span>
 
 <span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
 
@@ -705,44 +704,6 @@
         <span class="k">return</span> <span class="n">i</span>
 <span class="k">else</span><span class="p">:</span>
     <span class="n">int_from_buf_item</span> <span class="o">=</span> <span class="nb">ord</span>
-
-<span class="k">class</span> <span class="nc">ShardingInfo</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
-
-    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">shard_id</span><span class="p">,</span> <span class="n">shards_count</span><span class="p">,</span> <span class="n">partitioner</span><span class="p">,</span> <span class="n">sharding_algorithm</span><span class="p">,</span> <span class="n">sharding_ignore_msb</span><span class="p">):</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">shards_count</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">shards_count</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">partitioner</span> <span class="o">=</span> <span class="n">partitioner</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">sharding_algorithm</span> <span class="o">=</span> <span class="n">sharding_algorithm</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">sharding_ignore_msb</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">sharding_ignore_msb</span><span class="p">)</span>
-
-    <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">parse_sharding_info</span><span class="p">(</span><span class="n">message</span><span class="p">):</span>
-        <span class="n">shard_id</span> <span class="o">=</span> <span class="n">message</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;SCYLLA_SHARD&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;&#39;</span><span class="p">])[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">or</span> <span class="kc">None</span>
-        <span class="n">shards_count</span> <span class="o">=</span> <span class="n">message</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;SCYLLA_NR_SHARDS&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;&#39;</span><span class="p">])[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">or</span> <span class="kc">None</span>
-        <span class="n">partitioner</span> <span class="o">=</span> <span class="n">message</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;SCYLLA_PARTITIONER&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;&#39;</span><span class="p">])[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">or</span> <span class="kc">None</span>
-        <span class="n">sharding_algorithm</span> <span class="o">=</span> <span class="n">message</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;SCYLLA_SHARDING_ALGORITHM&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;&#39;</span><span class="p">])[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">or</span> <span class="kc">None</span>
-        <span class="n">sharding_ignore_msb</span> <span class="o">=</span> <span class="n">message</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;SCYLLA_SHARDING_IGNORE_MSB&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;&#39;</span><span class="p">])[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">or</span> <span class="kc">None</span>
-        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Parsing sharding info from message options </span><span class="si">%s</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">message</span><span class="o">.</span><span class="n">options</span><span class="p">)</span>
-
-        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">shard_id</span> <span class="ow">or</span> <span class="n">shards_count</span> <span class="ow">or</span> <span class="n">partitioner</span> <span class="o">==</span> <span class="s2">&quot;org.apache.cassandra.dht.Murmur3Partitioner&quot;</span> <span class="ow">or</span>
-            <span class="n">sharding_algorithm</span> <span class="o">==</span>  <span class="s2">&quot;biased-token-round-robin&quot;</span> <span class="ow">or</span> <span class="n">sharding_ignore_msb</span><span class="p">):</span>
-            <span class="k">return</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">None</span>
-
-        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">shard_id</span><span class="p">),</span> <span class="n">ShardingInfo</span><span class="p">(</span><span class="n">shard_id</span><span class="p">,</span> <span class="n">shards_count</span><span class="p">,</span> <span class="n">partitioner</span><span class="p">,</span> <span class="n">sharding_algorithm</span><span class="p">,</span> <span class="n">sharding_ignore_msb</span><span class="p">)</span>
-
-    <span class="k">def</span> <span class="nf">shard_id_from_token</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">t</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Convert a Murmur3 token to shard_id based on the number of shards on the host</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">token</span> <span class="o">=</span> <span class="n">t</span><span class="o">.</span><span class="n">value</span>
-        <span class="n">token</span> <span class="o">+=</span> <span class="n">INT64_MIN</span>
-        <span class="n">token</span> <span class="o">&lt;&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sharding_ignore_msb</span>
-        <span class="n">tokLo</span> <span class="o">=</span> <span class="n">token</span> <span class="o">&amp;</span> <span class="mh">0xffffffff</span>
-        <span class="n">tokHi</span> <span class="o">=</span> <span class="p">(</span><span class="n">token</span> <span class="o">&gt;&gt;</span> <span class="mi">32</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xffffffff</span>
-        <span class="n">mul1</span> <span class="o">=</span> <span class="n">tokLo</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">shards_count</span>
-        <span class="n">mul2</span> <span class="o">=</span> <span class="n">tokHi</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">shards_count</span>
-        <span class="n">_sum</span> <span class="o">=</span> <span class="p">(</span><span class="n">mul1</span> <span class="o">&gt;&gt;</span> <span class="mi">32</span><span class="p">)</span> <span class="o">+</span> <span class="n">mul2</span>
-        <span class="n">output</span> <span class="o">=</span> <span class="n">_sum</span> <span class="o">&gt;&gt;</span> <span class="mi">32</span>
-        <span class="k">return</span> <span class="n">output</span>
 
 
 <span class="k">class</span> <span class="nc">Connection</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
