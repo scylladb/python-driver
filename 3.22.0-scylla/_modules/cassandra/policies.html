@@ -1,0 +1,1432 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    cassandra.policies | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="../../_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx_tabs/semantic-ui-2.4.1/segment.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx_tabs/semantic-ui-2.4.1/menu.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx_tabs/tabs.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/language_data.js"></script>
+    <script src="../../_static/clipboard.min.js"></script>
+    <script src="../../_static/copybutton.js"></script>
+    <script src="../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.js"></script>
+    <script src="../../_static/sphinx_tabs/tabs.js"></script>
+
+    <script src="../../_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="../../_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+                <p>
+                    <strong>
+                    
+                    You're reading the documentation for a development version.
+                    For the latest released version, please have a look at <a href="../../../master/index.html">master</a>.
+                    
+                    </strong>
+                </p>
+            
+
+            <h1>Source code for cassandra.policies</h1><div class="highlight"><pre>
+<span></span><span class="c1"># Copyright DataStax, Inc.</span>
+<span class="c1">#</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># you may not use this file except in compliance with the License.</span>
+<span class="c1"># You may obtain a copy of the License at</span>
+<span class="c1">#</span>
+<span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
+<span class="c1">#</span>
+<span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
+<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
+<span class="c1"># See the License for the specific language governing permissions and</span>
+<span class="c1"># limitations under the License.</span>
+
+<span class="kn">from</span> <span class="nn">itertools</span> <span class="kn">import</span> <span class="n">islice</span><span class="p">,</span> <span class="n">cycle</span><span class="p">,</span> <span class="n">groupby</span><span class="p">,</span> <span class="n">repeat</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">from</span> <span class="nn">random</span> <span class="kn">import</span> <span class="n">randint</span><span class="p">,</span> <span class="n">shuffle</span>
+<span class="kn">from</span> <span class="nn">threading</span> <span class="kn">import</span> <span class="n">Lock</span>
+<span class="kn">import</span> <span class="nn">socket</span>
+<span class="kn">import</span> <span class="nn">warnings</span>
+<span class="kn">from</span> <span class="nn">cassandra</span> <span class="kn">import</span> <span class="n">WriteType</span> <span class="k">as</span> <span class="n">WT</span>
+
+
+<span class="c1"># This is done this way because WriteType was originally</span>
+<span class="c1"># defined here and in order not to break the API.</span>
+<span class="c1"># It may removed in the next mayor.</span>
+<span class="n">WriteType</span> <span class="o">=</span> <span class="n">WT</span>
+
+
+<span class="kn">from</span> <span class="nn">cassandra</span> <span class="kn">import</span> <span class="n">ConsistencyLevel</span><span class="p">,</span> <span class="n">OperationTimedOut</span>
+
+<span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="HostDistance"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.HostDistance">[docs]</a><span class="k">class</span> <span class="nc">HostDistance</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A measure of how &quot;distant&quot; a node is from the client, which</span>
+<span class="sd">    may influence how the load balancer distributes requests</span>
+<span class="sd">    and how many connections are opened to the node.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">IGNORED</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A node with this distance should never be queried or have</span>
+<span class="sd">    connections opened to it.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">LOCAL</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Nodes with ``LOCAL`` distance will be preferred for operations</span>
+<span class="sd">    under some load balancing policies (such as :class:`.DCAwareRoundRobinPolicy`)</span>
+<span class="sd">    and will have a greater number of connections opened against</span>
+<span class="sd">    them by default.</span>
+
+<span class="sd">    This distance is typically used for nodes within the same</span>
+<span class="sd">    datacenter as the client.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">REMOTE</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Nodes with ``REMOTE`` distance will be treated as a last resort</span>
+<span class="sd">    by some load balancing policies (such as :class:`.DCAwareRoundRobinPolicy`)</span>
+<span class="sd">    and will have a smaller number of connections opened against</span>
+<span class="sd">    them by default.</span>
+
+<span class="sd">    This distance is typically used for nodes outside of the</span>
+<span class="sd">    datacenter that the client is running in.</span>
+<span class="sd">    &quot;&quot;&quot;</span></div>
+
+
+<span class="k">class</span> <span class="nc">HostStateListener</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="nf">on_up</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; Called when a node is marked up. &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">on_down</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; Called when a node is marked down. &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">on_add</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Called when a node is added to the cluster.  The newly added node</span>
+<span class="sd">        should be considered up.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">on_remove</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; Called when a node is removed from the cluster. &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span>
+
+
+<div class="viewcode-block" id="LoadBalancingPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.LoadBalancingPolicy">[docs]</a><span class="k">class</span> <span class="nc">LoadBalancingPolicy</span><span class="p">(</span><span class="n">HostStateListener</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Load balancing policies are used to decide how to distribute</span>
+<span class="sd">    requests among all possible coordinator nodes in the cluster.</span>
+
+<span class="sd">    In particular, they may focus on querying &quot;near&quot; nodes (those</span>
+<span class="sd">    in a local datacenter) or on querying nodes who happen to</span>
+<span class="sd">    be replicas for the requested data.</span>
+
+<span class="sd">    You may also use subclasses of :class:`.LoadBalancingPolicy` for</span>
+<span class="sd">    custom behavior.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">_hosts_lock</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_hosts_lock</span> <span class="o">=</span> <span class="n">Lock</span><span class="p">()</span>
+
+<div class="viewcode-block" id="LoadBalancingPolicy.distance"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.LoadBalancingPolicy.distance">[docs]</a>    <span class="k">def</span> <span class="nf">distance</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a measure of how remote a :class:`~.pool.Host` is in</span>
+<span class="sd">        terms of the :class:`.HostDistance` enums.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LoadBalancingPolicy.populate"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.LoadBalancingPolicy.populate">[docs]</a>    <span class="k">def</span> <span class="nf">populate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        This method is called to initialize the load balancing</span>
+<span class="sd">        policy with a set of :class:`.Host` instances before its</span>
+<span class="sd">        first use.  The `cluster` parameter is an instance of</span>
+<span class="sd">        :class:`.Cluster`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LoadBalancingPolicy.make_query_plan"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.LoadBalancingPolicy.make_query_plan">[docs]</a>    <span class="k">def</span> <span class="nf">make_query_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">working_keyspace</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">query</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Given a :class:`~.query.Statement` instance, return a iterable</span>
+<span class="sd">        of :class:`.Host` instances which should be queried in that</span>
+<span class="sd">        order.  A generator may work well for custom implementations</span>
+<span class="sd">        of this method.</span>
+
+<span class="sd">        Note that the `query` argument may be :const:`None` when preparing</span>
+<span class="sd">        statements.</span>
+
+<span class="sd">        `working_keyspace` should be the string name of the current keyspace,</span>
+<span class="sd">        as set through :meth:`.Session.set_keyspace()` or with a ``USE``</span>
+<span class="sd">        statement.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LoadBalancingPolicy.check_supported"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.LoadBalancingPolicy.check_supported">[docs]</a>    <span class="k">def</span> <span class="nf">check_supported</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        This will be called after the cluster Metadata has been initialized.</span>
+<span class="sd">        If the load balancing policy implementation cannot be supported for</span>
+<span class="sd">        some reason (such as a missing C extension), this is the point at</span>
+<span class="sd">        which it should raise an exception.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">pass</span></div></div>
+
+
+<div class="viewcode-block" id="RoundRobinPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RoundRobinPolicy">[docs]</a><span class="k">class</span> <span class="nc">RoundRobinPolicy</span><span class="p">(</span><span class="n">LoadBalancingPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A subclass of :class:`.LoadBalancingPolicy` which evenly</span>
+<span class="sd">    distributes queries across all nodes in the cluster,</span>
+<span class="sd">    regardless of what datacenter the nodes may be in.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">_live_hosts</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">(())</span>
+    <span class="n">_position</span> <span class="o">=</span> <span class="mi">0</span>
+
+<div class="viewcode-block" id="RoundRobinPolicy.populate"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RoundRobinPolicy.populate">[docs]</a>    <span class="k">def</span> <span class="nf">populate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_live_hosts</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">(</span><span class="n">hosts</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">hosts</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_position</span> <span class="o">=</span> <span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">hosts</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="RoundRobinPolicy.distance"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RoundRobinPolicy.distance">[docs]</a>    <span class="k">def</span> <span class="nf">distance</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">HostDistance</span><span class="o">.</span><span class="n">LOCAL</span></div>
+
+<div class="viewcode-block" id="RoundRobinPolicy.make_query_plan"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RoundRobinPolicy.make_query_plan">[docs]</a>    <span class="k">def</span> <span class="nf">make_query_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">working_keyspace</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">query</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="c1"># not thread-safe, but we don&#39;t care much about lost increments</span>
+        <span class="c1"># for the purposes of load balancing</span>
+        <span class="n">pos</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_position</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_position</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="n">hosts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_live_hosts</span>
+        <span class="n">length</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">hosts</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">length</span><span class="p">:</span>
+            <span class="n">pos</span> <span class="o">%=</span> <span class="n">length</span>
+            <span class="k">return</span> <span class="n">islice</span><span class="p">(</span><span class="n">cycle</span><span class="p">(</span><span class="n">hosts</span><span class="p">),</span> <span class="n">pos</span><span class="p">,</span> <span class="n">pos</span> <span class="o">+</span> <span class="n">length</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">[]</span></div>
+
+<div class="viewcode-block" id="RoundRobinPolicy.on_up"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RoundRobinPolicy.on_up">[docs]</a>    <span class="k">def</span> <span class="nf">on_up</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_hosts_lock</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_live_hosts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_live_hosts</span><span class="o">.</span><span class="n">union</span><span class="p">((</span><span class="n">host</span><span class="p">,</span> <span class="p">))</span></div>
+
+<div class="viewcode-block" id="RoundRobinPolicy.on_down"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RoundRobinPolicy.on_down">[docs]</a>    <span class="k">def</span> <span class="nf">on_down</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_hosts_lock</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_live_hosts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_live_hosts</span><span class="o">.</span><span class="n">difference</span><span class="p">((</span><span class="n">host</span><span class="p">,</span> <span class="p">))</span></div>
+
+<div class="viewcode-block" id="RoundRobinPolicy.on_add"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RoundRobinPolicy.on_add">[docs]</a>    <span class="k">def</span> <span class="nf">on_add</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_hosts_lock</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_live_hosts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_live_hosts</span><span class="o">.</span><span class="n">union</span><span class="p">((</span><span class="n">host</span><span class="p">,</span> <span class="p">))</span></div>
+
+<div class="viewcode-block" id="RoundRobinPolicy.on_remove"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RoundRobinPolicy.on_remove">[docs]</a>    <span class="k">def</span> <span class="nf">on_remove</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_hosts_lock</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_live_hosts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_live_hosts</span><span class="o">.</span><span class="n">difference</span><span class="p">((</span><span class="n">host</span><span class="p">,</span> <span class="p">))</span></div></div>
+
+
+<div class="viewcode-block" id="DCAwareRoundRobinPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DCAwareRoundRobinPolicy">[docs]</a><span class="k">class</span> <span class="nc">DCAwareRoundRobinPolicy</span><span class="p">(</span><span class="n">LoadBalancingPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Similar to :class:`.RoundRobinPolicy`, but prefers hosts</span>
+<span class="sd">    in the local datacenter and only uses nodes in remote</span>
+<span class="sd">    datacenters as a last resort.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">local_dc</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">used_hosts_per_remote_dc</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">local_dc</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">used_hosts_per_remote_dc</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        The `local_dc` parameter should be the name of the datacenter</span>
+<span class="sd">        (such as is reported by ``nodetool ring``) that should</span>
+<span class="sd">        be considered local. If not specified, the driver will choose</span>
+<span class="sd">        a local_dc based on the first host among :attr:`.Cluster.contact_points`</span>
+<span class="sd">        having a valid DC. If relying on this mechanism, all specified</span>
+<span class="sd">        contact points should be nodes in a single, local DC.</span>
+
+<span class="sd">        `used_hosts_per_remote_dc` controls how many nodes in</span>
+<span class="sd">        each remote datacenter will have connections opened</span>
+<span class="sd">        against them. In other words, `used_hosts_per_remote_dc` hosts</span>
+<span class="sd">        will be considered :attr:`~.HostDistance.REMOTE` and the</span>
+<span class="sd">        rest will be considered :attr:`~.HostDistance.IGNORED`.</span>
+<span class="sd">        By default, all remote hosts are ignored.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">local_dc</span> <span class="o">=</span> <span class="n">local_dc</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">used_hosts_per_remote_dc</span> <span class="o">=</span> <span class="n">used_hosts_per_remote_dc</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_dc_live_hosts</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_position</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_endpoints</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">LoadBalancingPolicy</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_dc</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">host</span><span class="o">.</span><span class="n">datacenter</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">local_dc</span>
+
+<div class="viewcode-block" id="DCAwareRoundRobinPolicy.populate"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DCAwareRoundRobinPolicy.populate">[docs]</a>    <span class="k">def</span> <span class="nf">populate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">dc</span><span class="p">,</span> <span class="n">dc_hosts</span> <span class="ow">in</span> <span class="n">groupby</span><span class="p">(</span><span class="n">hosts</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">h</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dc</span><span class="p">(</span><span class="n">h</span><span class="p">)):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_dc_live_hosts</span><span class="p">[</span><span class="n">dc</span><span class="p">]</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">dc_hosts</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">local_dc</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_endpoints</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">endpoint</span>
+                <span class="k">for</span> <span class="n">endpoint</span> <span class="ow">in</span> <span class="n">cluster</span><span class="o">.</span><span class="n">endpoints_resolved</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_position</span> <span class="o">=</span> <span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">hosts</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="k">if</span> <span class="n">hosts</span> <span class="k">else</span> <span class="mi">0</span></div>
+
+<div class="viewcode-block" id="DCAwareRoundRobinPolicy.distance"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DCAwareRoundRobinPolicy.distance">[docs]</a>    <span class="k">def</span> <span class="nf">distance</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="n">dc</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dc</span><span class="p">(</span><span class="n">host</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">dc</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">local_dc</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">HostDistance</span><span class="o">.</span><span class="n">LOCAL</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">used_hosts_per_remote_dc</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">HostDistance</span><span class="o">.</span><span class="n">IGNORED</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">dc_hosts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dc_live_hosts</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">dc</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">dc_hosts</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">HostDistance</span><span class="o">.</span><span class="n">IGNORED</span>
+
+            <span class="k">if</span> <span class="n">host</span> <span class="ow">in</span> <span class="nb">list</span><span class="p">(</span><span class="n">dc_hosts</span><span class="p">)[:</span><span class="bp">self</span><span class="o">.</span><span class="n">used_hosts_per_remote_dc</span><span class="p">]:</span>
+                <span class="k">return</span> <span class="n">HostDistance</span><span class="o">.</span><span class="n">REMOTE</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">HostDistance</span><span class="o">.</span><span class="n">IGNORED</span></div>
+
+<div class="viewcode-block" id="DCAwareRoundRobinPolicy.make_query_plan"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DCAwareRoundRobinPolicy.make_query_plan">[docs]</a>    <span class="k">def</span> <span class="nf">make_query_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">working_keyspace</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">query</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="c1"># not thread-safe, but we don&#39;t care much about lost increments</span>
+        <span class="c1"># for the purposes of load balancing</span>
+        <span class="n">pos</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_position</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_position</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="n">local_live</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dc_live_hosts</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">local_dc</span><span class="p">,</span> <span class="p">())</span>
+        <span class="n">pos</span> <span class="o">=</span> <span class="p">(</span><span class="n">pos</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">local_live</span><span class="p">))</span> <span class="k">if</span> <span class="n">local_live</span> <span class="k">else</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">islice</span><span class="p">(</span><span class="n">cycle</span><span class="p">(</span><span class="n">local_live</span><span class="p">),</span> <span class="n">pos</span><span class="p">,</span> <span class="n">pos</span> <span class="o">+</span> <span class="nb">len</span><span class="p">(</span><span class="n">local_live</span><span class="p">)):</span>
+            <span class="k">yield</span> <span class="n">host</span>
+
+        <span class="c1"># the dict can change, so get candidate DCs iterating over keys of a copy</span>
+        <span class="n">other_dcs</span> <span class="o">=</span> <span class="p">[</span><span class="n">dc</span> <span class="k">for</span> <span class="n">dc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dc_live_hosts</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span> <span class="k">if</span> <span class="n">dc</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">local_dc</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">dc</span> <span class="ow">in</span> <span class="n">other_dcs</span><span class="p">:</span>
+            <span class="n">remote_live</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dc_live_hosts</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">dc</span><span class="p">,</span> <span class="p">())</span>
+            <span class="k">for</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">remote_live</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">used_hosts_per_remote_dc</span><span class="p">]:</span>
+                <span class="k">yield</span> <span class="n">host</span></div>
+
+<div class="viewcode-block" id="DCAwareRoundRobinPolicy.on_up"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DCAwareRoundRobinPolicy.on_up">[docs]</a>    <span class="k">def</span> <span class="nf">on_up</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="c1"># not worrying about threads because this will happen during</span>
+        <span class="c1"># control connection startup/refresh</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">local_dc</span> <span class="ow">and</span> <span class="n">host</span><span class="o">.</span><span class="n">datacenter</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">host</span><span class="o">.</span><span class="n">endpoint</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_endpoints</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">local_dc</span> <span class="o">=</span> <span class="n">host</span><span class="o">.</span><span class="n">datacenter</span>
+                <span class="n">log</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Using datacenter &#39;</span><span class="si">%s</span><span class="s2">&#39; for DCAwareRoundRobinPolicy (via host &#39;</span><span class="si">%s</span><span class="s2">&#39;); &quot;</span>
+                         <span class="s2">&quot;if incorrect, please specify a local_dc to the constructor, &quot;</span>
+                         <span class="s2">&quot;or limit contact points to local cluster nodes&quot;</span> <span class="o">%</span>
+                         <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">local_dc</span><span class="p">,</span> <span class="n">host</span><span class="o">.</span><span class="n">endpoint</span><span class="p">))</span>
+                <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">_endpoints</span>
+
+        <span class="n">dc</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dc</span><span class="p">(</span><span class="n">host</span><span class="p">)</span>
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_hosts_lock</span><span class="p">:</span>
+            <span class="n">current_hosts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dc_live_hosts</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">dc</span><span class="p">,</span> <span class="p">())</span>
+            <span class="k">if</span> <span class="n">host</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">current_hosts</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_dc_live_hosts</span><span class="p">[</span><span class="n">dc</span><span class="p">]</span> <span class="o">=</span> <span class="n">current_hosts</span> <span class="o">+</span> <span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="p">)</span></div>
+
+<div class="viewcode-block" id="DCAwareRoundRobinPolicy.on_down"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DCAwareRoundRobinPolicy.on_down">[docs]</a>    <span class="k">def</span> <span class="nf">on_down</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="n">dc</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dc</span><span class="p">(</span><span class="n">host</span><span class="p">)</span>
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_hosts_lock</span><span class="p">:</span>
+            <span class="n">current_hosts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dc_live_hosts</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">dc</span><span class="p">,</span> <span class="p">())</span>
+            <span class="k">if</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">current_hosts</span><span class="p">:</span>
+                <span class="n">hosts</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">h</span> <span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="n">current_hosts</span> <span class="k">if</span> <span class="n">h</span> <span class="o">!=</span> <span class="n">host</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">hosts</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_dc_live_hosts</span><span class="p">[</span><span class="n">dc</span><span class="p">]</span> <span class="o">=</span> <span class="n">hosts</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dc_live_hosts</span><span class="p">[</span><span class="n">dc</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="DCAwareRoundRobinPolicy.on_add"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DCAwareRoundRobinPolicy.on_add">[docs]</a>    <span class="k">def</span> <span class="nf">on_add</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">on_up</span><span class="p">(</span><span class="n">host</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DCAwareRoundRobinPolicy.on_remove"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DCAwareRoundRobinPolicy.on_remove">[docs]</a>    <span class="k">def</span> <span class="nf">on_remove</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">on_down</span><span class="p">(</span><span class="n">host</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="TokenAwarePolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.TokenAwarePolicy">[docs]</a><span class="k">class</span> <span class="nc">TokenAwarePolicy</span><span class="p">(</span><span class="n">LoadBalancingPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`.LoadBalancingPolicy` wrapper that adds token awareness to</span>
+<span class="sd">    a child policy.</span>
+
+<span class="sd">    This alters the child policy&#39;s behavior so that it first attempts to</span>
+<span class="sd">    send queries to :attr:`~.HostDistance.LOCAL` replicas (as determined</span>
+<span class="sd">    by the child policy) based on the :class:`.Statement`&#39;s</span>
+<span class="sd">    :attr:`~.Statement.routing_key`. If :attr:`.shuffle_replicas` is</span>
+<span class="sd">    truthy, these replicas will be yielded in a random order. Once those</span>
+<span class="sd">    hosts are exhausted, the remaining hosts in the child policy&#39;s query</span>
+<span class="sd">    plan will be used in the order provided by the child policy.</span>
+
+<span class="sd">    If no :attr:`~.Statement.routing_key` is set on the query, the child</span>
+<span class="sd">    policy&#39;s query plan will be used as is.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">_child_policy</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">_cluster_metadata</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">shuffle_replicas</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Yield local replicas in a random order.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">child_policy</span><span class="p">,</span> <span class="n">shuffle_replicas</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span> <span class="o">=</span> <span class="n">child_policy</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shuffle_replicas</span> <span class="o">=</span> <span class="n">shuffle_replicas</span>
+
+<div class="viewcode-block" id="TokenAwarePolicy.populate"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.TokenAwarePolicy.populate">[docs]</a>    <span class="k">def</span> <span class="nf">populate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_cluster_metadata</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">metadata</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">populate</span><span class="p">(</span><span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TokenAwarePolicy.check_supported"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.TokenAwarePolicy.check_supported">[docs]</a>    <span class="k">def</span> <span class="nf">check_supported</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cluster_metadata</span><span class="o">.</span><span class="n">can_support_partitioner</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+                <span class="s1">&#39;</span><span class="si">%s</span><span class="s1"> cannot be used with the cluster partitioner (</span><span class="si">%s</span><span class="s1">) because &#39;</span>
+                <span class="s1">&#39;the relevant C extension for this driver was not compiled. &#39;</span>
+                <span class="s1">&#39;See the installation instructions for details on building &#39;</span>
+                <span class="s1">&#39;and installing the C extensions.&#39;</span> <span class="o">%</span>
+                <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cluster_metadata</span><span class="o">.</span><span class="n">partitioner</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="TokenAwarePolicy.distance"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.TokenAwarePolicy.distance">[docs]</a>    <span class="k">def</span> <span class="nf">distance</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">distance</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TokenAwarePolicy.make_query_plan"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.TokenAwarePolicy.make_query_plan">[docs]</a>    <span class="k">def</span> <span class="nf">make_query_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">working_keyspace</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">query</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">query</span> <span class="ow">and</span> <span class="n">query</span><span class="o">.</span><span class="n">keyspace</span><span class="p">:</span>
+            <span class="n">keyspace</span> <span class="o">=</span> <span class="n">query</span><span class="o">.</span><span class="n">keyspace</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">keyspace</span> <span class="o">=</span> <span class="n">working_keyspace</span>
+
+        <span class="n">child</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span>
+        <span class="k">if</span> <span class="n">query</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">child</span><span class="o">.</span><span class="n">make_query_plan</span><span class="p">(</span><span class="n">keyspace</span><span class="p">,</span> <span class="n">query</span><span class="p">):</span>
+                <span class="k">yield</span> <span class="n">host</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">routing_key</span> <span class="o">=</span> <span class="n">query</span><span class="o">.</span><span class="n">routing_key</span>
+            <span class="k">if</span> <span class="n">routing_key</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">keyspace</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">child</span><span class="o">.</span><span class="n">make_query_plan</span><span class="p">(</span><span class="n">keyspace</span><span class="p">,</span> <span class="n">query</span><span class="p">):</span>
+                    <span class="k">yield</span> <span class="n">host</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">replicas</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cluster_metadata</span><span class="o">.</span><span class="n">get_replicas</span><span class="p">(</span><span class="n">keyspace</span><span class="p">,</span> <span class="n">routing_key</span><span class="p">)</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">shuffle_replicas</span><span class="p">:</span>
+                    <span class="n">shuffle</span><span class="p">(</span><span class="n">replicas</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">replica</span> <span class="ow">in</span> <span class="n">replicas</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">replica</span><span class="o">.</span><span class="n">is_up</span> <span class="ow">and</span> \
+                            <span class="n">child</span><span class="o">.</span><span class="n">distance</span><span class="p">(</span><span class="n">replica</span><span class="p">)</span> <span class="o">==</span> <span class="n">HostDistance</span><span class="o">.</span><span class="n">LOCAL</span><span class="p">:</span>
+                        <span class="k">yield</span> <span class="n">replica</span>
+
+                <span class="k">for</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">child</span><span class="o">.</span><span class="n">make_query_plan</span><span class="p">(</span><span class="n">keyspace</span><span class="p">,</span> <span class="n">query</span><span class="p">):</span>
+                    <span class="c1"># skip if we&#39;ve already listed this host</span>
+                    <span class="k">if</span> <span class="n">host</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">replicas</span> <span class="ow">or</span> \
+                            <span class="n">child</span><span class="o">.</span><span class="n">distance</span><span class="p">(</span><span class="n">host</span><span class="p">)</span> <span class="o">==</span> <span class="n">HostDistance</span><span class="o">.</span><span class="n">REMOTE</span><span class="p">:</span>
+                        <span class="k">yield</span> <span class="n">host</span></div>
+
+<div class="viewcode-block" id="TokenAwarePolicy.on_up"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.TokenAwarePolicy.on_up">[docs]</a>    <span class="k">def</span> <span class="nf">on_up</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">on_up</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TokenAwarePolicy.on_down"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.TokenAwarePolicy.on_down">[docs]</a>    <span class="k">def</span> <span class="nf">on_down</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">on_down</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TokenAwarePolicy.on_add"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.TokenAwarePolicy.on_add">[docs]</a>    <span class="k">def</span> <span class="nf">on_add</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">on_add</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TokenAwarePolicy.on_remove"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.TokenAwarePolicy.on_remove">[docs]</a>    <span class="k">def</span> <span class="nf">on_remove</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">on_remove</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="WhiteListRoundRobinPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.WhiteListRoundRobinPolicy">[docs]</a><span class="k">class</span> <span class="nc">WhiteListRoundRobinPolicy</span><span class="p">(</span><span class="n">RoundRobinPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A subclass of :class:`.RoundRobinPolicy` which evenly</span>
+<span class="sd">    distributes queries across all nodes in the cluster,</span>
+<span class="sd">    regardless of what datacenter the nodes may be in, but</span>
+<span class="sd">    only if that node exists in the list of allowed nodes</span>
+
+<span class="sd">    This policy is addresses the issue described in</span>
+<span class="sd">    https://datastax-oss.atlassian.net/browse/JAVA-145</span>
+<span class="sd">    Where connection errors occur when connection</span>
+<span class="sd">    attempts are made to private IP addresses remotely</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hosts</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        The `hosts` parameter should be a sequence of hosts to permit</span>
+<span class="sd">        connections to.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_allowed_hosts</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">hosts</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_allowed_hosts_resolved</span> <span class="o">=</span> <span class="p">[</span><span class="n">endpoint</span><span class="p">[</span><span class="mi">4</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_allowed_hosts</span>
+                                        <span class="k">for</span> <span class="n">endpoint</span> <span class="ow">in</span> <span class="n">socket</span><span class="o">.</span><span class="n">getaddrinfo</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">AF_UNSPEC</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">)]</span>
+
+        <span class="n">RoundRobinPolicy</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+
+<div class="viewcode-block" id="WhiteListRoundRobinPolicy.populate"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.WhiteListRoundRobinPolicy.populate">[docs]</a>    <span class="k">def</span> <span class="nf">populate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_live_hosts</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">(</span><span class="n">h</span> <span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="n">hosts</span> <span class="k">if</span> <span class="n">h</span><span class="o">.</span><span class="n">address</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_allowed_hosts_resolved</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">hosts</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_position</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_position</span> <span class="o">=</span> <span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">hosts</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="WhiteListRoundRobinPolicy.distance"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.WhiteListRoundRobinPolicy.distance">[docs]</a>    <span class="k">def</span> <span class="nf">distance</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">host</span><span class="o">.</span><span class="n">address</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_allowed_hosts_resolved</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">HostDistance</span><span class="o">.</span><span class="n">LOCAL</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">HostDistance</span><span class="o">.</span><span class="n">IGNORED</span></div>
+
+<div class="viewcode-block" id="WhiteListRoundRobinPolicy.on_up"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.WhiteListRoundRobinPolicy.on_up">[docs]</a>    <span class="k">def</span> <span class="nf">on_up</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">host</span><span class="o">.</span><span class="n">address</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_allowed_hosts_resolved</span><span class="p">:</span>
+            <span class="n">RoundRobinPolicy</span><span class="o">.</span><span class="n">on_up</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="WhiteListRoundRobinPolicy.on_add"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.WhiteListRoundRobinPolicy.on_add">[docs]</a>    <span class="k">def</span> <span class="nf">on_add</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">host</span><span class="o">.</span><span class="n">address</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_allowed_hosts_resolved</span><span class="p">:</span>
+            <span class="n">RoundRobinPolicy</span><span class="o">.</span><span class="n">on_add</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="HostFilterPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.HostFilterPolicy">[docs]</a><span class="k">class</span> <span class="nc">HostFilterPolicy</span><span class="p">(</span><span class="n">LoadBalancingPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`.LoadBalancingPolicy` subclass configured with a child policy,</span>
+<span class="sd">    and a single-argument predicate. This policy defers to the child policy for</span>
+<span class="sd">    hosts where ``predicate(host)`` is truthy. Hosts for which</span>
+<span class="sd">    ``predicate(host)`` is falsey will be considered :attr:`.IGNORED`, and will</span>
+<span class="sd">    not be used in a query plan.</span>
+
+<span class="sd">    This can be used in the cases where you need a whitelist or blacklist</span>
+<span class="sd">    policy, e.g. to prepare for decommissioning nodes or for testing:</span>
+
+<span class="sd">    .. code-block:: python</span>
+
+<span class="sd">        def address_is_ignored(host):</span>
+<span class="sd">            return host.address in [ignored_address0, ignored_address1]</span>
+
+<span class="sd">        blacklist_filter_policy = HostFilterPolicy(</span>
+<span class="sd">            child_policy=RoundRobinPolicy(),</span>
+<span class="sd">            predicate=address_is_ignored</span>
+<span class="sd">        )</span>
+
+<span class="sd">        cluster = Cluster(</span>
+<span class="sd">            primary_host,</span>
+<span class="sd">            load_balancing_policy=blacklist_filter_policy,</span>
+<span class="sd">        )</span>
+
+<span class="sd">    See the note in the :meth:`.make_query_plan` documentation for a caveat on</span>
+<span class="sd">    how wrapping ordering polices (e.g. :class:`.RoundRobinPolicy`) may break</span>
+<span class="sd">    desirable properties of the wrapped policy.</span>
+
+<span class="sd">    Please note that whitelist and blacklist policies are not recommended for</span>
+<span class="sd">    general, day-to-day use. You probably want something like</span>
+<span class="sd">    :class:`.DCAwareRoundRobinPolicy`, which prefers a local DC but has</span>
+<span class="sd">    fallbacks, over a brute-force method like whitelisting or blacklisting.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">child_policy</span><span class="p">,</span> <span class="n">predicate</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param child_policy: an instantiated :class:`.LoadBalancingPolicy`</span>
+<span class="sd">                             that this one will defer to.</span>
+<span class="sd">        :param predicate: a one-parameter function that takes a :class:`.Host`.</span>
+<span class="sd">                          If it returns a falsey value, the :class:`.Host` will</span>
+<span class="sd">                          be :attr:`.IGNORED` and not returned in query plans.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">HostFilterPolicy</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span> <span class="o">=</span> <span class="n">child_policy</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_predicate</span> <span class="o">=</span> <span class="n">predicate</span>
+
+    <span class="k">def</span> <span class="nf">on_up</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">on_up</span><span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">on_down</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">on_down</span><span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">on_add</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">on_add</span><span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">on_remove</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">on_remove</span><span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">predicate</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        A predicate, set on object initialization, that takes a :class:`.Host`</span>
+<span class="sd">        and returns a value. If the value is falsy, the :class:`.Host` is</span>
+<span class="sd">        :class:`~HostDistance.IGNORED`. If the value is truthy,</span>
+<span class="sd">        :class:`.HostFilterPolicy` defers to the child policy to determine the</span>
+<span class="sd">        host&#39;s distance.</span>
+
+<span class="sd">        This is a read-only value set in ``__init__``, implemented as a</span>
+<span class="sd">        ``property``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_predicate</span>
+
+<div class="viewcode-block" id="HostFilterPolicy.distance"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.HostFilterPolicy.distance">[docs]</a>    <span class="k">def</span> <span class="nf">distance</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Checks if ``predicate(host)``, then returns</span>
+<span class="sd">        :attr:`~HostDistance.IGNORED` if falsey, and defers to the child policy</span>
+<span class="sd">        otherwise.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">predicate</span><span class="p">(</span><span class="n">host</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">distance</span><span class="p">(</span><span class="n">host</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">HostDistance</span><span class="o">.</span><span class="n">IGNORED</span></div>
+
+    <span class="k">def</span> <span class="nf">populate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">populate</span><span class="p">(</span><span class="n">cluster</span><span class="o">=</span><span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="o">=</span><span class="n">hosts</span><span class="p">)</span>
+
+<div class="viewcode-block" id="HostFilterPolicy.make_query_plan"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.HostFilterPolicy.make_query_plan">[docs]</a>    <span class="k">def</span> <span class="nf">make_query_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">working_keyspace</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">query</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Defers to the child policy&#39;s</span>
+<span class="sd">        :meth:`.LoadBalancingPolicy.make_query_plan` and filters the results.</span>
+
+<span class="sd">        Note that this filtering may break desirable properties of the wrapped</span>
+<span class="sd">        policy in some cases. For instance, imagine if you configure this</span>
+<span class="sd">        policy to filter out ``host2``, and to wrap a round-robin policy that</span>
+<span class="sd">        rotates through three hosts in the order ``host1, host2, host3``,</span>
+<span class="sd">        ``host2, host3, host1``, ``host3, host1, host2``, repeating. This</span>
+<span class="sd">        policy will yield ``host1, host3``, ``host3, host1``, ``host3, host1``,</span>
+<span class="sd">        disproportionately favoring ``host3``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">child_qp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">make_query_plan</span><span class="p">(</span>
+            <span class="n">working_keyspace</span><span class="o">=</span><span class="n">working_keyspace</span><span class="p">,</span> <span class="n">query</span><span class="o">=</span><span class="n">query</span>
+        <span class="p">)</span>
+        <span class="k">for</span> <span class="n">host</span> <span class="ow">in</span> <span class="n">child_qp</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">predicate</span><span class="p">(</span><span class="n">host</span><span class="p">):</span>
+                <span class="k">yield</span> <span class="n">host</span></div>
+
+    <span class="k">def</span> <span class="nf">check_supported</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">check_supported</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="ConvictionPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.ConvictionPolicy">[docs]</a><span class="k">class</span> <span class="nc">ConvictionPolicy</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A policy which decides when hosts should be considered down</span>
+<span class="sd">    based on the types of failures and the number of failures.</span>
+
+<span class="sd">    If custom behavior is needed, this class may be subclassed.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        `host` is an instance of :class:`.Host`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">host</span> <span class="o">=</span> <span class="n">host</span>
+
+<div class="viewcode-block" id="ConvictionPolicy.add_failure"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.ConvictionPolicy.add_failure">[docs]</a>    <span class="k">def</span> <span class="nf">add_failure</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">connection_exc</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Implementations should return :const:`True` if the host should be</span>
+<span class="sd">        convicted, :const:`False` otherwise.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="ConvictionPolicy.reset"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.ConvictionPolicy.reset">[docs]</a>    <span class="k">def</span> <span class="nf">reset</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Implementations should clear out any convictions or state regarding</span>
+<span class="sd">        the host.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span></div></div>
+
+
+<div class="viewcode-block" id="SimpleConvictionPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.SimpleConvictionPolicy">[docs]</a><span class="k">class</span> <span class="nc">SimpleConvictionPolicy</span><span class="p">(</span><span class="n">ConvictionPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The default implementation of :class:`ConvictionPolicy`,</span>
+<span class="sd">    which simply marks a host as down after the first failure</span>
+<span class="sd">    of any kind.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="SimpleConvictionPolicy.add_failure"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.SimpleConvictionPolicy.add_failure">[docs]</a>    <span class="k">def</span> <span class="nf">add_failure</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">connection_exc</span><span class="p">):</span>
+        <span class="k">return</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">connection_exc</span><span class="p">,</span> <span class="n">OperationTimedOut</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SimpleConvictionPolicy.reset"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.SimpleConvictionPolicy.reset">[docs]</a>    <span class="k">def</span> <span class="nf">reset</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">pass</span></div></div>
+
+
+<div class="viewcode-block" id="ReconnectionPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.ReconnectionPolicy">[docs]</a><span class="k">class</span> <span class="nc">ReconnectionPolicy</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This class and its subclasses govern how frequently an attempt is made</span>
+<span class="sd">    to reconnect to nodes that are marked as dead.</span>
+
+<span class="sd">    If custom behavior is needed, this class may be subclassed.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="ReconnectionPolicy.new_schedule"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.ReconnectionPolicy.new_schedule">[docs]</a>    <span class="k">def</span> <span class="nf">new_schedule</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        This should return a finite or infinite iterable of delays (each as a</span>
+<span class="sd">        floating point number of seconds) inbetween each failed reconnection</span>
+<span class="sd">        attempt.  Note that if the iterable is finite, reconnection attempts</span>
+<span class="sd">        will cease once the iterable is exhausted.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span></div></div>
+
+
+<div class="viewcode-block" id="ConstantReconnectionPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.ConstantReconnectionPolicy">[docs]</a><span class="k">class</span> <span class="nc">ConstantReconnectionPolicy</span><span class="p">(</span><span class="n">ReconnectionPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`.ReconnectionPolicy` subclass which sleeps for a fixed delay</span>
+<span class="sd">    inbetween each reconnection attempt.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">delay</span><span class="p">,</span> <span class="n">max_attempts</span><span class="o">=</span><span class="mi">64</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        `delay` should be a floating point number of seconds to wait inbetween</span>
+<span class="sd">        each attempt.</span>
+
+<span class="sd">        `max_attempts` should be a total number of attempts to be made before</span>
+<span class="sd">        giving up, or :const:`None` to continue reconnection attempts forever.</span>
+<span class="sd">        The default is 64.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">delay</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;delay must not be negative&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">max_attempts</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">max_attempts</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;max_attempts must not be negative&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">delay</span> <span class="o">=</span> <span class="n">delay</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">max_attempts</span> <span class="o">=</span> <span class="n">max_attempts</span>
+
+<div class="viewcode-block" id="ConstantReconnectionPolicy.new_schedule"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.ConstantReconnectionPolicy.new_schedule">[docs]</a>    <span class="k">def</span> <span class="nf">new_schedule</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_attempts</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">repeat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">delay</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_attempts</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">repeat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">delay</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="ExponentialReconnectionPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.ExponentialReconnectionPolicy">[docs]</a><span class="k">class</span> <span class="nc">ExponentialReconnectionPolicy</span><span class="p">(</span><span class="n">ReconnectionPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`.ReconnectionPolicy` subclass which exponentially increases</span>
+<span class="sd">    the length of the delay inbetween each reconnection attempt up to</span>
+<span class="sd">    a set maximum delay.</span>
+
+<span class="sd">    A random amount of jitter (+/- 15%) will be added to the pure exponential</span>
+<span class="sd">    delay value to avoid the situations where many reconnection handlers are</span>
+<span class="sd">    trying to reconnect at exactly the same time.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># TODO: max_attempts is 64 to preserve legacy default behavior</span>
+    <span class="c1"># consider changing to None in major release to prevent the policy</span>
+    <span class="c1"># giving up forever</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">base_delay</span><span class="p">,</span> <span class="n">max_delay</span><span class="p">,</span> <span class="n">max_attempts</span><span class="o">=</span><span class="mi">64</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        `base_delay` and `max_delay` should be in floating point units of</span>
+<span class="sd">        seconds.</span>
+
+<span class="sd">        `max_attempts` should be a total number of attempts to be made before</span>
+<span class="sd">        giving up, or :const:`None` to continue reconnection attempts forever.</span>
+<span class="sd">        The default is 64.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">base_delay</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">max_delay</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Delays may not be negative&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">max_delay</span> <span class="o">&lt;</span> <span class="n">base_delay</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Max delay must be greater than base delay&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">max_attempts</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">max_attempts</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;max_attempts must not be negative&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">base_delay</span> <span class="o">=</span> <span class="n">base_delay</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">max_delay</span> <span class="o">=</span> <span class="n">max_delay</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">max_attempts</span> <span class="o">=</span> <span class="n">max_attempts</span>
+
+<div class="viewcode-block" id="ExponentialReconnectionPolicy.new_schedule"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.ExponentialReconnectionPolicy.new_schedule">[docs]</a>    <span class="k">def</span> <span class="nf">new_schedule</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">i</span><span class="p">,</span> <span class="n">overflowed</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">False</span>
+        <span class="k">while</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_attempts</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_attempts</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">overflowed</span><span class="p">:</span>
+                <span class="k">yield</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_delay</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="k">yield</span> <span class="bp">self</span><span class="o">.</span><span class="n">_add_jitter</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">base_delay</span> <span class="o">*</span> <span class="p">(</span><span class="mi">2</span> <span class="o">**</span> <span class="n">i</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_delay</span><span class="p">))</span>
+                <span class="k">except</span> <span class="ne">OverflowError</span><span class="p">:</span>
+                    <span class="n">overflowed</span> <span class="o">=</span> <span class="kc">True</span>
+                    <span class="k">yield</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_delay</span>
+
+            <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span></div>
+
+    <span class="c1"># Adds -+ 15% to the delay provided</span>
+    <span class="k">def</span> <span class="nf">_add_jitter</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="n">jitter</span> <span class="o">=</span> <span class="n">randint</span><span class="p">(</span><span class="mi">85</span><span class="p">,</span> <span class="mi">115</span><span class="p">)</span>
+        <span class="n">delay</span> <span class="o">=</span> <span class="p">(</span><span class="n">jitter</span> <span class="o">*</span> <span class="n">value</span><span class="p">)</span> <span class="o">/</span> <span class="mi">100</span>
+        <span class="k">return</span> <span class="nb">min</span><span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">base_delay</span><span class="p">,</span> <span class="n">delay</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_delay</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="RetryPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RetryPolicy">[docs]</a><span class="k">class</span> <span class="nc">RetryPolicy</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A policy that describes whether to retry, rethrow, or ignore coordinator</span>
+<span class="sd">    timeout and unavailable failures. These are failures reported from the</span>
+<span class="sd">    server side. Timeouts are configured by</span>
+<span class="sd">    `settings in cassandra.yaml &lt;https://github.com/apache/cassandra/blob/cassandra-2.1.4/conf/cassandra.yaml#L568-L584&gt;`_.</span>
+<span class="sd">    Unavailable failures occur when the coordinator cannot acheive the consistency</span>
+<span class="sd">    level for a request. For further information see the method descriptions</span>
+<span class="sd">    below.</span>
+
+<span class="sd">    To specify a default retry policy, set the</span>
+<span class="sd">    :attr:`.Cluster.default_retry_policy` attribute to an instance of this</span>
+<span class="sd">    class or one of its subclasses.</span>
+
+<span class="sd">    To specify a retry policy per query, set the :attr:`.Statement.retry_policy`</span>
+<span class="sd">    attribute to an instance of this class or one of its subclasses.</span>
+
+<span class="sd">    If custom behavior is needed for retrying certain operations,</span>
+<span class="sd">    this class may be subclassed.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">RETRY</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This should be returned from the below methods if the operation</span>
+<span class="sd">    should be retried on the same connection.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">RETHROW</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This should be returned from the below methods if the failure</span>
+<span class="sd">    should be propagated and no more retries attempted.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">IGNORE</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This should be returned from the below methods if the failure</span>
+<span class="sd">    should be ignored but no more retries should be attempted.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">RETRY_NEXT_HOST</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This should be returned from the below methods if the operation</span>
+<span class="sd">    should be retried on another connection.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="RetryPolicy.on_read_timeout"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RetryPolicy.on_read_timeout">[docs]</a>    <span class="k">def</span> <span class="nf">on_read_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">query</span><span class="p">,</span> <span class="n">consistency</span><span class="p">,</span> <span class="n">required_responses</span><span class="p">,</span>
+                        <span class="n">received_responses</span><span class="p">,</span> <span class="n">data_retrieved</span><span class="p">,</span> <span class="n">retry_num</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        This is called when a read operation times out from the coordinator&#39;s</span>
+<span class="sd">        perspective (i.e. a replica did not respond to the coordinator in time).</span>
+<span class="sd">        It should return a tuple with two items: one of the class enums (such</span>
+<span class="sd">        as :attr:`.RETRY`) and a :class:`.ConsistencyLevel` to retry the</span>
+<span class="sd">        operation at or :const:`None` to keep the same consistency level.</span>
+
+<span class="sd">        `query` is the :class:`.Statement` that timed out.</span>
+
+<span class="sd">        `consistency` is the :class:`.ConsistencyLevel` that the operation was</span>
+<span class="sd">        attempted at.</span>
+
+<span class="sd">        The `required_responses` and `received_responses` parameters describe</span>
+<span class="sd">        how many replicas needed to respond to meet the requested consistency</span>
+<span class="sd">        level and how many actually did respond before the coordinator timed</span>
+<span class="sd">        out the request. `data_retrieved` is a boolean indicating whether</span>
+<span class="sd">        any of those responses contained data (as opposed to just a digest).</span>
+
+<span class="sd">        `retry_num` counts how many times the operation has been retried, so</span>
+<span class="sd">        the first time this method is called, `retry_num` will be 0.</span>
+
+<span class="sd">        By default, operations will be retried at most once, and only if</span>
+<span class="sd">        a sufficient number of replicas responded (with data digests).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">retry_num</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="k">elif</span> <span class="n">received_responses</span> <span class="o">&gt;=</span> <span class="n">required_responses</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">data_retrieved</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETRY</span><span class="p">,</span> <span class="n">consistency</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="RetryPolicy.on_write_timeout"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RetryPolicy.on_write_timeout">[docs]</a>    <span class="k">def</span> <span class="nf">on_write_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">query</span><span class="p">,</span> <span class="n">consistency</span><span class="p">,</span> <span class="n">write_type</span><span class="p">,</span>
+                         <span class="n">required_responses</span><span class="p">,</span> <span class="n">received_responses</span><span class="p">,</span> <span class="n">retry_num</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        This is called when a write operation times out from the coordinator&#39;s</span>
+<span class="sd">        perspective (i.e. a replica did not respond to the coordinator in time).</span>
+
+<span class="sd">        `query` is the :class:`.Statement` that timed out.</span>
+
+<span class="sd">        `consistency` is the :class:`.ConsistencyLevel` that the operation was</span>
+<span class="sd">        attempted at.</span>
+
+<span class="sd">        `write_type` is one of the :class:`.WriteType` enums describing the</span>
+<span class="sd">        type of write operation.</span>
+
+<span class="sd">        The `required_responses` and `received_responses` parameters describe</span>
+<span class="sd">        how many replicas needed to acknowledge the write to meet the requested</span>
+<span class="sd">        consistency level and how many replicas actually did acknowledge the</span>
+<span class="sd">        write before the coordinator timed out the request.</span>
+
+<span class="sd">        `retry_num` counts how many times the operation has been retried, so</span>
+<span class="sd">        the first time this method is called, `retry_num` will be 0.</span>
+
+<span class="sd">        By default, failed write operations will retried at most once, and</span>
+<span class="sd">        they will only be retried if the `write_type` was</span>
+<span class="sd">        :attr:`~.WriteType.BATCH_LOG`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">retry_num</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="k">elif</span> <span class="n">write_type</span> <span class="o">==</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">BATCH_LOG</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETRY</span><span class="p">,</span> <span class="n">consistency</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="RetryPolicy.on_unavailable"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RetryPolicy.on_unavailable">[docs]</a>    <span class="k">def</span> <span class="nf">on_unavailable</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">query</span><span class="p">,</span> <span class="n">consistency</span><span class="p">,</span> <span class="n">required_replicas</span><span class="p">,</span> <span class="n">alive_replicas</span><span class="p">,</span> <span class="n">retry_num</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        This is called when the coordinator node determines that a read or</span>
+<span class="sd">        write operation cannot be successful because the number of live</span>
+<span class="sd">        replicas are too low to meet the requested :class:`.ConsistencyLevel`.</span>
+<span class="sd">        This means that the read or write operation was never forwarded to</span>
+<span class="sd">        any replicas.</span>
+
+<span class="sd">        `query` is the :class:`.Statement` that failed.</span>
+
+<span class="sd">        `consistency` is the :class:`.ConsistencyLevel` that the operation was</span>
+<span class="sd">        attempted at.</span>
+
+<span class="sd">        `required_replicas` is the number of replicas that would have needed to</span>
+<span class="sd">        acknowledge the operation to meet the requested consistency level.</span>
+<span class="sd">        `alive_replicas` is the number of replicas that the coordinator</span>
+<span class="sd">        considered alive at the time of the request.</span>
+
+<span class="sd">        `retry_num` counts how many times the operation has been retried, so</span>
+<span class="sd">        the first time this method is called, `retry_num` will be 0.</span>
+
+<span class="sd">        By default, if this is the first retry, it triggers a retry on the next</span>
+<span class="sd">        host in the query plan with the same consistency level. If this is not the</span>
+<span class="sd">        first retry, no retries will be attempted and the error will be re-raised.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">RETRY_NEXT_HOST</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="k">if</span> <span class="n">retry_num</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="RetryPolicy.on_request_error"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.RetryPolicy.on_request_error">[docs]</a>    <span class="k">def</span> <span class="nf">on_request_error</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">query</span><span class="p">,</span> <span class="n">consistency</span><span class="p">,</span> <span class="n">error</span><span class="p">,</span> <span class="n">retry_num</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        This is called when an unexpected error happens. This can be in the</span>
+<span class="sd">        following situations:</span>
+
+<span class="sd">        * On a connection error</span>
+<span class="sd">        * On server errors: overloaded, isBootstrapping, serverError, etc.</span>
+
+<span class="sd">        `query` is the :class:`.Statement` that timed out.</span>
+
+<span class="sd">        `consistency` is the :class:`.ConsistencyLevel` that the operation was</span>
+<span class="sd">        attempted at.</span>
+
+<span class="sd">        `error` the instance of the exception.</span>
+
+<span class="sd">        `retry_num` counts how many times the operation has been retried, so</span>
+<span class="sd">        the first time this method is called, `retry_num` will be 0.</span>
+
+<span class="sd">        The default, it triggers a retry on the next host in the query plan</span>
+<span class="sd">        with the same consistency level.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># TODO revisit this for the next major</span>
+        <span class="c1"># To preserve the same behavior than before, we don&#39;t take retry_num into account</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETRY_NEXT_HOST</span><span class="p">,</span> <span class="kc">None</span></div></div>
+
+
+<div class="viewcode-block" id="FallthroughRetryPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.FallthroughRetryPolicy">[docs]</a><span class="k">class</span> <span class="nc">FallthroughRetryPolicy</span><span class="p">(</span><span class="n">RetryPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A retry policy that never retries and always propagates failures to</span>
+<span class="sd">    the application.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="FallthroughRetryPolicy.on_read_timeout"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.FallthroughRetryPolicy.on_read_timeout">[docs]</a>    <span class="k">def</span> <span class="nf">on_read_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="FallthroughRetryPolicy.on_write_timeout"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.FallthroughRetryPolicy.on_write_timeout">[docs]</a>    <span class="k">def</span> <span class="nf">on_write_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="FallthroughRetryPolicy.on_unavailable"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.FallthroughRetryPolicy.on_unavailable">[docs]</a>    <span class="k">def</span> <span class="nf">on_unavailable</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="FallthroughRetryPolicy.on_request_error"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.FallthroughRetryPolicy.on_request_error">[docs]</a>    <span class="k">def</span> <span class="nf">on_request_error</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span></div></div>
+
+
+<div class="viewcode-block" id="DowngradingConsistencyRetryPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DowngradingConsistencyRetryPolicy">[docs]</a><span class="k">class</span> <span class="nc">DowngradingConsistencyRetryPolicy</span><span class="p">(</span><span class="n">RetryPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    *Deprecated:* This retry policy will be removed in the next major release.</span>
+
+<span class="sd">    A retry policy that sometimes retries with a lower consistency level than</span>
+<span class="sd">    the one initially requested.</span>
+
+<span class="sd">    **BEWARE**: This policy may retry queries using a lower consistency</span>
+<span class="sd">    level than the one initially requested. By doing so, it may break</span>
+<span class="sd">    consistency guarantees. In other words, if you use this retry policy,</span>
+<span class="sd">    there are cases (documented below) where a read at :attr:`~.QUORUM`</span>
+<span class="sd">    *may not* see a preceding write at :attr:`~.QUORUM`. Do not use this</span>
+<span class="sd">    policy unless you have understood the cases where this can happen and</span>
+<span class="sd">    are ok with that. It is also recommended to subclass this class so</span>
+<span class="sd">    that queries that required a consistency level downgrade can be</span>
+<span class="sd">    recorded (so that repairs can be made later, etc).</span>
+
+<span class="sd">    This policy implements the same retries as :class:`.RetryPolicy`,</span>
+<span class="sd">    but on top of that, it also retries in the following cases:</span>
+
+<span class="sd">    * On a read timeout: if the number of replicas that responded is</span>
+<span class="sd">      greater than one but lower than is required by the requested</span>
+<span class="sd">      consistency level, the operation is retried at a lower consistency</span>
+<span class="sd">      level.</span>
+<span class="sd">    * On a write timeout: if the operation is an :attr:`~.UNLOGGED_BATCH`</span>
+<span class="sd">      and at least one replica acknowledged the write, the operation is</span>
+<span class="sd">      retried at a lower consistency level.  Furthermore, for other</span>
+<span class="sd">      write types, if at least one replica acknowledged the write, the</span>
+<span class="sd">      timeout is ignored.</span>
+<span class="sd">    * On an unavailable exception: if at least one replica is alive, the</span>
+<span class="sd">      operation is retried at a lower consistency level.</span>
+
+<span class="sd">    The reasoning behind this retry policy is as follows: if, based</span>
+<span class="sd">    on the information the Cassandra coordinator node returns, retrying the</span>
+<span class="sd">    operation with the initially requested consistency has a chance to</span>
+<span class="sd">    succeed, do it. Otherwise, if based on that information we know the</span>
+<span class="sd">    initially requested consistency level cannot be achieved currently, then:</span>
+
+<span class="sd">    * For writes, ignore the exception (thus silently failing the</span>
+<span class="sd">      consistency requirement) if we know the write has been persisted on at</span>
+<span class="sd">      least one replica.</span>
+<span class="sd">    * For reads, try reading at a lower consistency level (thus silently</span>
+<span class="sd">      failing the consistency requirement).</span>
+
+<span class="sd">    In other words, this policy implements the idea that if the requested</span>
+<span class="sd">    consistency level cannot be achieved, the next best thing for writes is</span>
+<span class="sd">    to make sure the data is persisted, and that reading something is better</span>
+<span class="sd">    than reading nothing, even if there is a risk of reading stale data.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">DowngradingConsistencyRetryPolicy</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s1">&#39;DowngradingConsistencyRetryPolicy is deprecated &#39;</span>
+                      <span class="s1">&#39;and will be removed in the next major release.&#39;</span><span class="p">,</span>
+                      <span class="ne">DeprecationWarning</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_pick_consistency</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_responses</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">num_responses</span> <span class="o">&gt;=</span> <span class="mi">3</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETRY</span><span class="p">,</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">THREE</span>
+        <span class="k">elif</span> <span class="n">num_responses</span> <span class="o">&gt;=</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETRY</span><span class="p">,</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">TWO</span>
+        <span class="k">elif</span> <span class="n">num_responses</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETRY</span><span class="p">,</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">ONE</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="DowngradingConsistencyRetryPolicy.on_read_timeout"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DowngradingConsistencyRetryPolicy.on_read_timeout">[docs]</a>    <span class="k">def</span> <span class="nf">on_read_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">query</span><span class="p">,</span> <span class="n">consistency</span><span class="p">,</span> <span class="n">required_responses</span><span class="p">,</span>
+                        <span class="n">received_responses</span><span class="p">,</span> <span class="n">data_retrieved</span><span class="p">,</span> <span class="n">retry_num</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">retry_num</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="k">elif</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">is_serial</span><span class="p">(</span><span class="n">consistency</span><span class="p">):</span>
+            <span class="c1"># Downgrading does not make sense for a CAS read query</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="k">elif</span> <span class="n">received_responses</span> <span class="o">&lt;</span> <span class="n">required_responses</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_pick_consistency</span><span class="p">(</span><span class="n">received_responses</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="ow">not</span> <span class="n">data_retrieved</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETRY</span><span class="p">,</span> <span class="n">consistency</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="DowngradingConsistencyRetryPolicy.on_write_timeout"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DowngradingConsistencyRetryPolicy.on_write_timeout">[docs]</a>    <span class="k">def</span> <span class="nf">on_write_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">query</span><span class="p">,</span> <span class="n">consistency</span><span class="p">,</span> <span class="n">write_type</span><span class="p">,</span>
+                         <span class="n">required_responses</span><span class="p">,</span> <span class="n">received_responses</span><span class="p">,</span> <span class="n">retry_num</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">retry_num</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="n">write_type</span> <span class="ow">in</span> <span class="p">(</span><span class="n">WriteType</span><span class="o">.</span><span class="n">SIMPLE</span><span class="p">,</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">BATCH</span><span class="p">,</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">COUNTER</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">received_responses</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="c1"># persisted on at least one replica</span>
+                <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">IGNORE</span><span class="p">,</span> <span class="kc">None</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="k">elif</span> <span class="n">write_type</span> <span class="o">==</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">UNLOGGED_BATCH</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_pick_consistency</span><span class="p">(</span><span class="n">received_responses</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">write_type</span> <span class="o">==</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">BATCH_LOG</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETRY</span><span class="p">,</span> <span class="n">consistency</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="DowngradingConsistencyRetryPolicy.on_unavailable"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DowngradingConsistencyRetryPolicy.on_unavailable">[docs]</a>    <span class="k">def</span> <span class="nf">on_unavailable</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">query</span><span class="p">,</span> <span class="n">consistency</span><span class="p">,</span> <span class="n">required_replicas</span><span class="p">,</span> <span class="n">alive_replicas</span><span class="p">,</span> <span class="n">retry_num</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">retry_num</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="k">elif</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">is_serial</span><span class="p">(</span><span class="n">consistency</span><span class="p">):</span>
+            <span class="c1"># failed at the paxos phase of a LWT, retry on the next host</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETRY_NEXT_HOST</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_pick_consistency</span><span class="p">(</span><span class="n">alive_replicas</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="AddressTranslator"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.AddressTranslator">[docs]</a><span class="k">class</span> <span class="nc">AddressTranslator</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Interface for translating cluster-defined endpoints.</span>
+
+<span class="sd">    The driver discovers nodes using server metadata and topology change events. Normally,</span>
+<span class="sd">    the endpoint defined by the server is the right way to connect to a node. In some environments,</span>
+<span class="sd">    these addresses may not be reachable, or not preferred (public vs. private IPs in cloud environments,</span>
+<span class="sd">    suboptimal routing, etc). This interface allows for translating from server defined endpoints to</span>
+<span class="sd">    preferred addresses for driver connections.</span>
+
+<span class="sd">    *Note:* :attr:`~Cluster.contact_points` provided while creating the :class:`~.Cluster` instance are not</span>
+<span class="sd">    translated using this mechanism -- only addresses received from Cassandra nodes are.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="AddressTranslator.translate"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.AddressTranslator.translate">[docs]</a>    <span class="k">def</span> <span class="nf">translate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">addr</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Accepts the node ip address, and returns a translated address to be used connecting to this node.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span></div></div>
+
+
+<div class="viewcode-block" id="IdentityTranslator"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.IdentityTranslator">[docs]</a><span class="k">class</span> <span class="nc">IdentityTranslator</span><span class="p">(</span><span class="n">AddressTranslator</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns the endpoint with no translation</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="IdentityTranslator.translate"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.IdentityTranslator.translate">[docs]</a>    <span class="k">def</span> <span class="nf">translate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">addr</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">addr</span></div></div>
+
+
+<div class="viewcode-block" id="EC2MultiRegionTranslator"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.EC2MultiRegionTranslator">[docs]</a><span class="k">class</span> <span class="nc">EC2MultiRegionTranslator</span><span class="p">(</span><span class="n">AddressTranslator</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Resolves private ips of the hosts in the same datacenter as the client, and public ips of hosts in other datacenters.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="EC2MultiRegionTranslator.translate"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.EC2MultiRegionTranslator.translate">[docs]</a>    <span class="k">def</span> <span class="nf">translate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">addr</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Reverse DNS the public broadcast_address, then lookup that hostname to get the AWS-resolved IP, which</span>
+<span class="sd">        will point to the private IP address within the same datacenter.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># get family of this address so we translate to the same</span>
+        <span class="n">family</span> <span class="o">=</span> <span class="n">socket</span><span class="o">.</span><span class="n">getaddrinfo</span><span class="p">(</span><span class="n">addr</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">AF_UNSPEC</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">host</span> <span class="o">=</span> <span class="n">socket</span><span class="o">.</span><span class="n">getfqdn</span><span class="p">(</span><span class="n">addr</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">socket</span><span class="o">.</span><span class="n">getaddrinfo</span><span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">family</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">):</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">a</span><span class="p">[</span><span class="mi">4</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+                <span class="k">pass</span>
+        <span class="k">return</span> <span class="n">addr</span></div></div>
+
+
+<div class="viewcode-block" id="SpeculativeExecutionPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.SpeculativeExecutionPolicy">[docs]</a><span class="k">class</span> <span class="nc">SpeculativeExecutionPolicy</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Interface for specifying speculative execution plans</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="SpeculativeExecutionPolicy.new_plan"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.SpeculativeExecutionPolicy.new_plan">[docs]</a>    <span class="k">def</span> <span class="nf">new_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">keyspace</span><span class="p">,</span> <span class="n">statement</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns</span>
+
+<span class="sd">        :param keyspace:</span>
+<span class="sd">        :param statement:</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span></div></div>
+
+
+<span class="k">class</span> <span class="nc">SpeculativeExecutionPlan</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">next_execution</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span>
+
+
+<span class="k">class</span> <span class="nc">NoSpeculativeExecutionPlan</span><span class="p">(</span><span class="n">SpeculativeExecutionPlan</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">next_execution</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">return</span> <span class="o">-</span><span class="mi">1</span>
+
+
+<span class="k">class</span> <span class="nc">NoSpeculativeExecutionPolicy</span><span class="p">(</span><span class="n">SpeculativeExecutionPolicy</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="nf">new_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">keyspace</span><span class="p">,</span> <span class="n">statement</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">NoSpeculativeExecutionPlan</span><span class="p">()</span>
+
+
+<div class="viewcode-block" id="ConstantSpeculativeExecutionPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.ConstantSpeculativeExecutionPolicy">[docs]</a><span class="k">class</span> <span class="nc">ConstantSpeculativeExecutionPolicy</span><span class="p">(</span><span class="n">SpeculativeExecutionPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A speculative execution policy that sends a new query every X seconds (**delay**) for a maximum of Y attempts (**max_attempts**).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">delay</span><span class="p">,</span> <span class="n">max_attempts</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">delay</span> <span class="o">=</span> <span class="n">delay</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">max_attempts</span> <span class="o">=</span> <span class="n">max_attempts</span>
+
+    <span class="k">class</span> <span class="nc">ConstantSpeculativeExecutionPlan</span><span class="p">(</span><span class="n">SpeculativeExecutionPlan</span><span class="p">):</span>
+        <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">delay</span><span class="p">,</span> <span class="n">max_attempts</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">delay</span> <span class="o">=</span> <span class="n">delay</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">remaining</span> <span class="o">=</span> <span class="n">max_attempts</span>
+
+        <span class="k">def</span> <span class="nf">next_execution</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">remaining</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">remaining</span> <span class="o">-=</span> <span class="mi">1</span>
+                <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">delay</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">return</span> <span class="o">-</span><span class="mi">1</span>
+
+<div class="viewcode-block" id="ConstantSpeculativeExecutionPolicy.new_plan"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.ConstantSpeculativeExecutionPolicy.new_plan">[docs]</a>    <span class="k">def</span> <span class="nf">new_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">keyspace</span><span class="p">,</span> <span class="n">statement</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">ConstantSpeculativeExecutionPlan</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">delay</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_attempts</span><span class="p">)</span></div></div>
+
+
+<span class="k">class</span> <span class="nc">WrapperPolicy</span><span class="p">(</span><span class="n">LoadBalancingPolicy</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">child_policy</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span> <span class="o">=</span> <span class="n">child_policy</span>
+
+    <span class="k">def</span> <span class="nf">distance</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">distance</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">populate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">populate</span><span class="p">(</span><span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">on_up</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">on_up</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">on_down</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">on_down</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">on_add</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">on_add</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">on_remove</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">on_remove</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="DefaultLoadBalancingPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DefaultLoadBalancingPolicy">[docs]</a><span class="k">class</span> <span class="nc">DefaultLoadBalancingPolicy</span><span class="p">(</span><span class="n">WrapperPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A :class:`.LoadBalancingPolicy` wrapper that adds the ability to target a specific host first.</span>
+
+<span class="sd">    If no host is set on the query, the child policy&#39;s query plan will be used as is.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">_cluster_metadata</span> <span class="o">=</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="DefaultLoadBalancingPolicy.populate"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DefaultLoadBalancingPolicy.populate">[docs]</a>    <span class="k">def</span> <span class="nf">populate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_cluster_metadata</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">metadata</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span><span class="o">.</span><span class="n">populate</span><span class="p">(</span><span class="n">cluster</span><span class="p">,</span> <span class="n">hosts</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DefaultLoadBalancingPolicy.make_query_plan"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DefaultLoadBalancingPolicy.make_query_plan">[docs]</a>    <span class="k">def</span> <span class="nf">make_query_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">working_keyspace</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">query</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">query</span> <span class="ow">and</span> <span class="n">query</span><span class="o">.</span><span class="n">keyspace</span><span class="p">:</span>
+            <span class="n">keyspace</span> <span class="o">=</span> <span class="n">query</span><span class="o">.</span><span class="n">keyspace</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">keyspace</span> <span class="o">=</span> <span class="n">working_keyspace</span>
+
+        <span class="c1"># TODO remove next major since execute(..., host=XXX) is now available</span>
+        <span class="n">addr</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="s1">&#39;target_host&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="k">if</span> <span class="n">query</span> <span class="k">else</span> <span class="kc">None</span>
+        <span class="n">target_host</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cluster_metadata</span><span class="o">.</span><span class="n">get_host</span><span class="p">(</span><span class="n">addr</span><span class="p">)</span>
+
+        <span class="n">child</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_child_policy</span>
+        <span class="k">if</span> <span class="n">target_host</span> <span class="ow">and</span> <span class="n">target_host</span><span class="o">.</span><span class="n">is_up</span><span class="p">:</span>
+            <span class="k">yield</span> <span class="n">target_host</span>
+            <span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="n">child</span><span class="o">.</span><span class="n">make_query_plan</span><span class="p">(</span><span class="n">keyspace</span><span class="p">,</span> <span class="n">query</span><span class="p">):</span>
+                <span class="k">if</span> <span class="n">h</span> <span class="o">!=</span> <span class="n">target_host</span><span class="p">:</span>
+                    <span class="k">yield</span> <span class="n">h</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="n">child</span><span class="o">.</span><span class="n">make_query_plan</span><span class="p">(</span><span class="n">keyspace</span><span class="p">,</span> <span class="n">query</span><span class="p">):</span>
+                <span class="k">yield</span> <span class="n">h</span></div></div>
+
+
+<span class="c1"># TODO for backward compatibility, remove in next major</span>
+<div class="viewcode-block" id="DSELoadBalancingPolicy"><a class="viewcode-back" href="../../api/cassandra/policies.html#cassandra.cluster.DSELoadBalancingPolicy">[docs]</a><span class="k">class</span> <span class="nc">DSELoadBalancingPolicy</span><span class="p">(</span><span class="n">DefaultLoadBalancingPolicy</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    *Deprecated:* This will be removed in the next major release,</span>
+<span class="sd">    consider using :class:`.DefaultLoadBalancingPolicy`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">DSELoadBalancingPolicy</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;DSELoadBalancingPolicy will be removed in 4.0. Consider using &quot;</span>
+                      <span class="s2">&quot;DefaultLoadBalancingPolicy.&quot;</span><span class="p">,</span> <span class="ne">DeprecationWarning</span><span class="p">)</span></div>
+
+
+<span class="k">class</span> <span class="nc">NeverRetryPolicy</span><span class="p">(</span><span class="n">RetryPolicy</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">_rethrow</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">RETHROW</span><span class="p">,</span> <span class="kc">None</span>
+
+    <span class="n">on_read_timeout</span> <span class="o">=</span> <span class="n">_rethrow</span>
+    <span class="n">on_write_timeout</span> <span class="o">=</span> <span class="n">_rethrow</span>
+    <span class="n">on_unavailable</span> <span class="o">=</span> <span class="n">_rethrow</span>
+</pre></div>
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api/index.html">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../object_mapper.html">Object Mapper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">3.22.0-scylla <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="../../../master/index.html">master</a></li>
+        <li><a href="policies.html">3.22.0-scylla</a></li>
+        <li><a href="../../../3.21.0-scylla/index.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="../../_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page cassandra.policies&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/_modules/cassandra/policies%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="../../_static/js/vendor/jquery.js"></script>
+<script src="../../_static/expertrec.js"></script>
+<script src="../../_static/js/foundation/foundation.js"></script>
+<script src="../../_static/js/foundation/foundation.topbar.js"></script>
+<script src="../../_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

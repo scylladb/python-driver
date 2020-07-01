@@ -1,0 +1,437 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    Models | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="../_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../_static/clipboard.min.js"></script>
+    <script src="../_static/copybutton.js"></script>
+
+    <script src="../_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="../_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+                <p>
+                    <strong>
+                    
+                    You're reading the documentation for a development version.
+                    For the latest released version, please have a look at <a href="../../master/cqlengine/models.html">master</a>.
+                    
+                    </strong>
+                </p>
+            
+
+            <div class="section" id="module-cqlengine.models">
+<span id="models"></span><h1>Models<a class="headerlink" href="#module-cqlengine.models" title="Permalink to this headline">¶</a></h1>
+<p>A model is a python class representing a CQL table. Models derive from <code class="xref py py-class docutils literal notranslate"><span class="pre">Model</span></code>, and
+define basic table properties and columns for a table.</p>
+<p>Columns in your models map to columns in your CQL table. You define CQL columns by defining column attributes on your model classes.
+For a model to be valid it needs at least one primary key column and one non-primary key column. Just as in CQL, the order you define
+your columns in is important, and is the same order they are defined in on a model’s corresponding table.</p>
+<p>Some basic examples defining models are shown below. Consult the <a class="reference internal" href="../api/cassandra/cqlengine/models.html"><span class="doc">Model API docs</span></a> and <a class="reference internal" href="../api/cassandra/cqlengine/columns.html"><span class="doc">Column API docs</span></a> for complete details.</p>
+<div class="section" id="example-definitions">
+<h2>Example Definitions<a class="headerlink" href="#example-definitions" title="Permalink to this headline">¶</a></h2>
+<p>This example defines a <code class="docutils literal notranslate"><span class="pre">Person</span></code> table, with the columns <code class="docutils literal notranslate"><span class="pre">first_name</span></code> and <code class="docutils literal notranslate"><span class="pre">last_name</span></code></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cqlengine</span> <span class="kn">import</span> <span class="n">columns</span>
+<span class="kn">from</span> <span class="nn">cassandra.cqlengine.models</span> <span class="kn">import</span> <span class="n">Model</span>
+
+ <span class="k">class</span> <span class="nc">Person</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+     <span class="nb">id</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+     <span class="n">first_name</span>  <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Text</span><span class="p">()</span>
+     <span class="n">last_name</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Text</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>The Person model would create this CQL table:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">cqlengine</span><span class="p">.</span><span class="n">person</span> <span class="p">(</span>
+    <span class="n">id</span> <span class="n">uuid</span><span class="p">,</span>
+    <span class="n">first_name</span> <span class="nb">text</span><span class="p">,</span>
+    <span class="n">last_name</span> <span class="nb">text</span><span class="p">,</span>
+    <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">id</span><span class="p">)</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>Here’s an example of a comment table created with clustering keys, in descending order:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cqlengine</span> <span class="kn">import</span> <span class="n">columns</span>
+<span class="kn">from</span> <span class="nn">cassandra.cqlengine.models</span> <span class="kn">import</span> <span class="n">Model</span>
+
+<span class="k">class</span> <span class="nc">Comment</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">photo_id</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">comment_id</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">TimeUUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">clustering_order</span><span class="o">=</span><span class="s2">&quot;DESC&quot;</span><span class="p">)</span>
+    <span class="n">comment</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Text</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>The Comment model’s <code class="docutils literal notranslate"><span class="pre">create</span> <span class="pre">table</span></code> would look like the following:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="k">comment</span> <span class="p">(</span>
+  <span class="n">photo_id</span> <span class="n">uuid</span><span class="p">,</span>
+  <span class="n">comment_id</span> <span class="n">timeuuid</span><span class="p">,</span>
+  <span class="k">comment</span> <span class="nb">text</span><span class="p">,</span>
+  <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">photo_id</span><span class="p">,</span> <span class="n">comment_id</span><span class="p">)</span>
+<span class="p">)</span> <span class="k">WITH</span> <span class="n">CLUSTERING</span> <span class="k">ORDER</span> <span class="k">BY</span> <span class="p">(</span><span class="n">comment_id</span> <span class="k">DESC</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>To sync the models to the database, you may do the following*:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cqlengine.management</span> <span class="kn">import</span> <span class="n">sync_table</span>
+<span class="n">sync_table</span><span class="p">(</span><span class="n">Person</span><span class="p">)</span>
+<span class="n">sync_table</span><span class="p">(</span><span class="n">Comment</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>*Note: synchronizing models causes schema changes, and should be done with caution.
+Please see the discussion in <a class="reference internal" href="../api/cassandra/cqlengine/management.html"><span class="doc">cassandra.cqlengine.management - Schema management for cqlengine</span></a> for considerations.</p>
+<p>For examples on manipulating data and creating queries, see <a class="reference internal" href="queryset.html"><span class="doc">Making Queries</span></a></p>
+</div>
+<div class="section" id="manipulating-model-instances-as-dictionaries">
+<h2>Manipulating model instances as dictionaries<a class="headerlink" href="#manipulating-model-instances-as-dictionaries" title="Permalink to this headline">¶</a></h2>
+<p>Model instances can be accessed like dictionaries.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">Person</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">first_name</span>  <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Text</span><span class="p">()</span>
+    <span class="n">last_name</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Text</span><span class="p">()</span>
+
+<span class="n">kevin</span> <span class="o">=</span> <span class="n">Person</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">first_name</span><span class="o">=</span><span class="s2">&quot;Kevin&quot;</span><span class="p">,</span> <span class="n">last_name</span><span class="o">=</span><span class="s2">&quot;Deldycke&quot;</span><span class="p">)</span>
+<span class="nb">dict</span><span class="p">(</span><span class="n">kevin</span><span class="p">)</span>  <span class="c1"># returns {&#39;first_name&#39;: &#39;Kevin&#39;, &#39;last_name&#39;: &#39;Deldycke&#39;}</span>
+<span class="n">kevin</span><span class="p">[</span><span class="s1">&#39;first_name&#39;</span><span class="p">]</span>  <span class="c1"># returns &#39;Kevin&#39;</span>
+<span class="n">kevin</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>  <span class="c1"># returns [&#39;first_name&#39;, &#39;last_name&#39;]</span>
+<span class="n">kevin</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>  <span class="c1"># returns [&#39;Kevin&#39;, &#39;Deldycke&#39;]</span>
+<span class="n">kevin</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>  <span class="c1"># returns [(&#39;first_name&#39;, &#39;Kevin&#39;), (&#39;last_name&#39;, &#39;Deldycke&#39;)]</span>
+
+<span class="n">kevin</span><span class="p">[</span><span class="s1">&#39;first_name&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;KEVIN5000&#39;</span>  <span class="c1"># changes the models first name</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="extending-model-validation">
+<h2>Extending Model Validation<a class="headerlink" href="#extending-model-validation" title="Permalink to this headline">¶</a></h2>
+<p>Each time you save a model instance in cqlengine, the data in the model is validated against the schema you’ve defined
+for your model. Most of the validation is fairly straightforward, it basically checks that you’re not trying to do
+something like save text into an integer column, and it enforces the <code class="docutils literal notranslate"><span class="pre">required</span></code> flag set on column definitions.
+It also performs any transformations needed to save the data properly.</p>
+<p>However, there are often additional constraints or transformations you want to impose on your data, beyond simply
+making sure that Cassandra won’t complain when you try to insert it. To define additional validation on a model,
+extend the model’s validation method:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">Member</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">person_id</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">Text</span><span class="p">(</span><span class="n">required</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">validate</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">Member</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">validate</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">==</span> <span class="s1">&#39;jon&#39;</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">ValidationError</span><span class="p">(</span><span class="s1">&#39;no jon</span><span class="se">\&#39;</span><span class="s1">s allowed&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><em>Note</em>: while not required, the convention is to raise a <code class="docutils literal notranslate"><span class="pre">ValidationError</span></code> (<code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">cassandra.cqlengine</span> <span class="pre">import</span> <span class="pre">ValidationError</span></code>)
+if validation fails.</p>
+</div>
+<div class="section" id="model-inheritance">
+<span id="id1"></span><h2>Model Inheritance<a class="headerlink" href="#model-inheritance" title="Permalink to this headline">¶</a></h2>
+<p>It is possible to save and load different model classes using a single CQL table.
+This is useful in situations where you have different object types that you want to store in a single cassandra row.</p>
+<p>For instance, suppose you want a table that stores rows of pets owned by an owner:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">Pet</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">__table_name__</span> <span class="o">=</span> <span class="s1">&#39;pet&#39;</span>
+    <span class="n">owner_id</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">pet_id</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">pet_type</span> <span class="o">=</span> <span class="n">Text</span><span class="p">(</span><span class="n">discriminator_column</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">Text</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">eat</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">food</span><span class="p">):</span>
+        <span class="k">pass</span>
+
+    <span class="k">def</span> <span class="nf">sleep</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">time</span><span class="p">):</span>
+        <span class="k">pass</span>
+
+<span class="k">class</span> <span class="nc">Cat</span><span class="p">(</span><span class="n">Pet</span><span class="p">):</span>
+    <span class="n">__discriminator_value__</span> <span class="o">=</span> <span class="s1">&#39;cat&#39;</span>
+    <span class="n">cuteness</span> <span class="o">=</span> <span class="n">Float</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">tear_up_couch</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">pass</span>
+
+<span class="k">class</span> <span class="nc">Dog</span><span class="p">(</span><span class="n">Pet</span><span class="p">):</span>
+    <span class="n">__discriminator_value__</span> <span class="o">=</span> <span class="s1">&#39;dog&#39;</span>
+    <span class="n">fierceness</span> <span class="o">=</span> <span class="n">Float</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">bark_all_night</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">pass</span>
+</pre></div>
+</div>
+<p>After calling <code class="docutils literal notranslate"><span class="pre">sync_table</span></code> on each of these tables, the columns defined in each model will be added to the
+<code class="docutils literal notranslate"><span class="pre">pet</span></code> table. Additionally, saving <code class="docutils literal notranslate"><span class="pre">Cat</span></code> and <code class="docutils literal notranslate"><span class="pre">Dog</span></code> models will save the meta data needed to identify each row
+as either a cat or dog.</p>
+<p>To setup a model structure with inheritance, follow these steps</p>
+<ol class="arabic simple">
+<li><p>Create a base model with a column set as the distriminator (<code class="docutils literal notranslate"><span class="pre">distriminator_column=True</span></code> in the column definition)</p></li>
+<li><p>Create subclass models, and define a unique <code class="docutils literal notranslate"><span class="pre">__discriminator_value__</span></code> value on each</p></li>
+<li><p>Run <code class="docutils literal notranslate"><span class="pre">sync_table</span></code> on each of the sub tables</p></li>
+</ol>
+<p><strong>About the discriminator value</strong></p>
+<p>The discriminator value is what cqlengine uses under the covers to map logical cql rows to the appropriate model type. The
+base model maintains a map of discriminator values to subclasses. When a specialized model is saved, its discriminator value is
+automatically saved into the discriminator column. The discriminator column may be any column type except counter and container types.
+Additionally, if you set <code class="docutils literal notranslate"><span class="pre">index=True</span></code> on your discriminator column, you can execute queries against specialized subclasses, and a
+<code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause will be automatically added to your query, returning only rows of that type. Note that you must
+define a unique <code class="docutils literal notranslate"><span class="pre">__discriminator_value__</span></code> to each subclass, and that you can only assign a single discriminator column per model.</p>
+</div>
+<div class="section" id="user-defined-types">
+<span id="user-types"></span><h2>User Defined Types<a class="headerlink" href="#user-defined-types" title="Permalink to this headline">¶</a></h2>
+<p>cqlengine models User Defined Types (UDTs) much like tables, with fields defined by column type attributes. However, UDT instances
+are only created, presisted, and queried via table Models. A short example to introduce the pattern:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cqlengine.columns</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">from</span> <span class="nn">cassandra.cqlengine.models</span> <span class="kn">import</span> <span class="n">Model</span>
+<span class="kn">from</span> <span class="nn">cassandra.cqlengine.usertype</span> <span class="kn">import</span> <span class="n">UserType</span>
+
+<span class="k">class</span> <span class="nc">address</span><span class="p">(</span><span class="n">UserType</span><span class="p">):</span>
+    <span class="n">street</span> <span class="o">=</span> <span class="n">Text</span><span class="p">()</span>
+    <span class="n">zipcode</span> <span class="o">=</span> <span class="n">Integer</span><span class="p">()</span>
+
+<span class="k">class</span> <span class="nc">users</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">__keyspace__</span> <span class="o">=</span> <span class="s1">&#39;account&#39;</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">Text</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">addr</span> <span class="o">=</span> <span class="n">UserDefinedType</span><span class="p">(</span><span class="n">address</span><span class="p">)</span>
+
+<span class="n">users</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Joe&quot;</span><span class="p">,</span> <span class="n">addr</span><span class="o">=</span><span class="n">address</span><span class="p">(</span><span class="n">street</span><span class="o">=</span><span class="s2">&quot;Easy St.&quot;</span><span class="p">,</span> <span class="n">zipcode</span><span class="o">=</span><span class="mi">99999</span><span class="p">))</span>
+<span class="n">user</span> <span class="o">=</span> <span class="n">users</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Joe&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+<span class="nb">print</span> <span class="n">user</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">user</span><span class="o">.</span><span class="n">addr</span>
+<span class="c1"># Joe address(street=u&#39;Easy St.&#39;, zipcode=99999)</span>
+</pre></div>
+</div>
+<p>UDTs are modeled by inheriting <a class="reference internal" href="../api/cassandra/cqlengine/usertype.html#cassandra.cqlengine.usertype.UserType" title="cassandra.cqlengine.usertype.UserType"><code class="xref py py-class docutils literal notranslate"><span class="pre">UserType</span></code></a>, and setting column type attributes. Types are then used in defining
+models by declaring a column of type <a class="reference internal" href="../api/cassandra/cqlengine/columns.html#cassandra.cqlengine.columns.UserDefinedType" title="cassandra.cqlengine.columns.UserDefinedType"><code class="xref py py-class docutils literal notranslate"><span class="pre">UserDefinedType</span></code></a>, with the <code class="docutils literal notranslate"><span class="pre">UserType</span></code> class as a parameter.</p>
+<p><code class="docutils literal notranslate"><span class="pre">sync_table</span></code> will implicitly
+synchronize any types contained in the table. Alternatively <a class="reference internal" href="../api/cassandra/cqlengine/management.html#cassandra.cqlengine.management.sync_type" title="cassandra.cqlengine.management.sync_type"><code class="xref py py-func docutils literal notranslate"><span class="pre">sync_type()</span></code></a> can be used to create/alter types
+explicitly.</p>
+<p>Upon declaration, types are automatically registered with the driver, so query results return instances of your <code class="docutils literal notranslate"><span class="pre">UserType</span></code>
+class*.</p>
+<p><strong>*Note</strong>: UDTs were not added to the native protocol until v3. When setting up the cqlengine connection, be sure to specify
+<code class="docutils literal notranslate"><span class="pre">protocol_version=3</span></code>. If using an earlier version, UDT queries will still work, but the returned type will be a namedtuple.</p>
+</div>
+</div>
+
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../api/index.html">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../object_mapper.html">Object Mapper</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="upgrade_guide.html">Upgrade Guide</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="queryset.html">Making Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="batches.html">Batch Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="connections.html">Connections</a></li>
+<li class="toctree-l2"><a class="reference internal" href="third_party.html">Third party integrations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../geo_types.html">DSE Geometry Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../graph.html">DataStax Graph Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../graph_fluent.html">DataStax Graph Fluent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cloud.html">Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">3.21.0-scylla <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="../../master/cqlengine/models.html">master</a></li>
+        <li><a href="../../3.22.0-scylla/cqlengine/models.html">3.22.0-scylla</a></li>
+        <li><a href="models.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="../_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page Models&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/cqlengine/models%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="../_static/js/vendor/jquery.js"></script>
+<script src="../_static/expertrec.js"></script>
+<script src="../_static/js/foundation/foundation.js"></script>
+<script src="../_static/js/foundation/foundation.topbar.js"></script>
+<script src="../_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

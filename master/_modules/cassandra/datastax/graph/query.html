@@ -1,0 +1,573 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    cassandra.datastax.graph.query | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="../../../../_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="../../../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/sphinx_tabs/semantic-ui-2.4.1/segment.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/sphinx_tabs/semantic-ui-2.4.1/menu.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/sphinx_tabs/tabs.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script src="../../../../_static/jquery.js"></script>
+    <script src="../../../../_static/underscore.js"></script>
+    <script src="../../../../_static/doctools.js"></script>
+    <script src="../../../../_static/language_data.js"></script>
+    <script src="../../../../_static/clipboard.min.js"></script>
+    <script src="../../../../_static/copybutton.js"></script>
+    <script src="../../../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.js"></script>
+    <script src="../../../../_static/sphinx_tabs/tabs.js"></script>
+
+    <script src="../../../../_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="../../../../_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+
+            <h1>Source code for cassandra.datastax.graph.query</h1><div class="highlight"><pre>
+<span></span><span class="c1"># Copyright DataStax, Inc.</span>
+<span class="c1">#</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># you may not use this file except in compliance with the License.</span>
+<span class="c1"># You may obtain a copy of the License at</span>
+<span class="c1">#</span>
+<span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
+<span class="c1">#</span>
+<span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
+<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
+<span class="c1"># See the License for the specific language governing permissions and</span>
+<span class="c1"># limitations under the License.</span>
+
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">from</span> <span class="nn">warnings</span> <span class="kn">import</span> <span class="n">warn</span>
+
+<span class="kn">import</span> <span class="nn">six</span>
+
+<span class="kn">from</span> <span class="nn">cassandra</span> <span class="kn">import</span> <span class="n">ConsistencyLevel</span>
+<span class="kn">from</span> <span class="nn">cassandra.query</span> <span class="kn">import</span> <span class="n">Statement</span><span class="p">,</span> <span class="n">SimpleStatement</span>
+<span class="kn">from</span> <span class="nn">cassandra.datastax.graph.types</span> <span class="kn">import</span> <span class="n">Vertex</span><span class="p">,</span> <span class="n">Edge</span><span class="p">,</span> <span class="n">Path</span><span class="p">,</span> <span class="n">VertexProperty</span>
+<span class="kn">from</span> <span class="nn">cassandra.datastax.graph.graphson</span> <span class="kn">import</span> <span class="n">GraphSON2Reader</span><span class="p">,</span> <span class="n">GraphSON3Reader</span>
+
+
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s1">&#39;GraphProtocol&#39;</span><span class="p">,</span> <span class="s1">&#39;GraphOptions&#39;</span><span class="p">,</span> <span class="s1">&#39;GraphStatement&#39;</span><span class="p">,</span> <span class="s1">&#39;SimpleGraphStatement&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;single_object_row_factory&#39;</span><span class="p">,</span> <span class="s1">&#39;graph_result_row_factory&#39;</span><span class="p">,</span> <span class="s1">&#39;graph_object_row_factory&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;graph_graphson2_row_factory&#39;</span><span class="p">,</span> <span class="s1">&#39;Result&#39;</span><span class="p">,</span> <span class="s1">&#39;graph_graphson3_row_factory&#39;</span>
+<span class="p">]</span>
+
+<span class="c1"># (attr, description, server option)</span>
+<span class="n">_graph_options</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="p">(</span><span class="s1">&#39;graph_name&#39;</span><span class="p">,</span> <span class="s1">&#39;name of the targeted graph.&#39;</span><span class="p">,</span> <span class="s1">&#39;graph-name&#39;</span><span class="p">),</span>
+    <span class="p">(</span><span class="s1">&#39;graph_source&#39;</span><span class="p">,</span> <span class="s1">&#39;choose the graph traversal source, configured on the server side.&#39;</span><span class="p">,</span> <span class="s1">&#39;graph-source&#39;</span><span class="p">),</span>
+    <span class="p">(</span><span class="s1">&#39;graph_language&#39;</span><span class="p">,</span> <span class="s1">&#39;the language used in the queries (default &quot;gremlin-groovy&quot;)&#39;</span><span class="p">,</span> <span class="s1">&#39;graph-language&#39;</span><span class="p">),</span>
+    <span class="p">(</span><span class="s1">&#39;graph_protocol&#39;</span><span class="p">,</span> <span class="s1">&#39;the graph protocol that the server should use for query results (default &quot;graphson-1-0&quot;)&#39;</span><span class="p">,</span> <span class="s1">&#39;graph-results&#39;</span><span class="p">),</span>
+    <span class="p">(</span><span class="s1">&#39;graph_read_consistency_level&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;&#39;read `cassandra.ConsistencyLevel &lt;http://docs.datastax.com/en/developer/python-driver/latest/api/cassandra/#cassandra.ConsistencyLevel&gt;`_ for graph queries (if distinct from session default).</span>
+<span class="s1">Setting this overrides the native `Statement.consistency_level &lt;http://docs.datastax.com/en/developer/python-driver/latest/api/cassandra/query/#cassandra.query.Statement.consistency_level&gt;`_ for read operations from Cassandra persistence&#39;&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;graph-read-consistency&#39;</span><span class="p">),</span>
+    <span class="p">(</span><span class="s1">&#39;graph_write_consistency_level&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;&#39;write `cassandra.ConsistencyLevel &lt;http://docs.datastax.com/en/developer/python-driver/latest/api/cassandra/#cassandra.ConsistencyLevel&gt;`_ for graph queries (if distinct from session default).</span>
+<span class="s1">Setting this overrides the native `Statement.consistency_level &lt;http://docs.datastax.com/en/developer/python-driver/latest/api/cassandra/query/#cassandra.query.Statement.consistency_level&gt;`_ for write operations to Cassandra persistence.&#39;&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;graph-write-consistency&#39;</span><span class="p">)</span>
+<span class="p">)</span>
+<span class="n">_graph_option_names</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">option</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">option</span> <span class="ow">in</span> <span class="n">_graph_options</span><span class="p">)</span>
+
+<span class="c1"># this is defined by the execution profile attribute, not in graph options</span>
+<span class="n">_request_timeout_key</span> <span class="o">=</span> <span class="s1">&#39;request-timeout&#39;</span>
+
+
+<div class="viewcode-block" id="GraphProtocol"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphProtocol">[docs]</a><span class="k">class</span> <span class="nc">GraphProtocol</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+
+    <span class="n">GRAPHSON_1_0</span> <span class="o">=</span> <span class="sa">b</span><span class="s1">&#39;graphson-1.0&#39;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    GraphSON1</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">GRAPHSON_2_0</span> <span class="o">=</span> <span class="sa">b</span><span class="s1">&#39;graphson-2.0&#39;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    GraphSON2</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">GRAPHSON_3_0</span> <span class="o">=</span> <span class="sa">b</span><span class="s1">&#39;graphson-3.0&#39;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    GraphSON3</span>
+<span class="sd">    &quot;&quot;&quot;</span></div>
+
+
+<div class="viewcode-block" id="GraphOptions"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphOptions">[docs]</a><span class="k">class</span> <span class="nc">GraphOptions</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Options for DSE Graph Query handler.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># See _graph_options map above for notes on valid options</span>
+
+    <span class="n">DEFAULT_GRAPH_PROTOCOL</span> <span class="o">=</span> <span class="n">GraphProtocol</span><span class="o">.</span><span class="n">GRAPHSON_1_0</span>
+    <span class="n">DEFAULT_GRAPH_LANGUAGE</span> <span class="o">=</span> <span class="sa">b</span><span class="s1">&#39;gremlin-groovy&#39;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_graph_options</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">kwargs</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s1">&#39;graph_source&#39;</span><span class="p">,</span> <span class="s1">&#39;g&#39;</span><span class="p">)</span>
+        <span class="n">kwargs</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s1">&#39;graph_language&#39;</span><span class="p">,</span> <span class="n">GraphOptions</span><span class="o">.</span><span class="n">DEFAULT_GRAPH_LANGUAGE</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">attr</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">six</span><span class="o">.</span><span class="n">iteritems</span><span class="p">(</span><span class="n">kwargs</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">attr</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_graph_option_names</span><span class="p">:</span>
+                <span class="n">warn</span><span class="p">(</span><span class="s2">&quot;Unknown keyword argument received for GraphOptions: </span><span class="si">{0}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">attr</span><span class="p">))</span>
+            <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">attr</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">copy</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">new_options</span> <span class="o">=</span> <span class="n">GraphOptions</span><span class="p">()</span>
+        <span class="n">new_options</span><span class="o">.</span><span class="n">_graph_options</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_graph_options</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">new_options</span>
+
+    <span class="k">def</span> <span class="nf">update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">options</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_graph_options</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">options</span><span class="o">.</span><span class="n">_graph_options</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">get_options_map</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other_options</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a map for these options updated with other options,</span>
+<span class="sd">        and mapped to graph payload types.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">options</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_graph_options</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">other_options</span><span class="p">:</span>
+            <span class="n">options</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">other_options</span><span class="o">.</span><span class="n">_graph_options</span><span class="p">)</span>
+
+        <span class="c1"># cls are special-cased so they can be enums in the API, and names in the protocol</span>
+        <span class="k">for</span> <span class="n">cl</span> <span class="ow">in</span> <span class="p">(</span><span class="s1">&#39;graph-write-consistency&#39;</span><span class="p">,</span> <span class="s1">&#39;graph-read-consistency&#39;</span><span class="p">):</span>
+            <span class="n">cl_enum</span> <span class="o">=</span> <span class="n">options</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">cl</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">cl_enum</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">options</span><span class="p">[</span><span class="n">cl</span><span class="p">]</span> <span class="o">=</span> <span class="n">six</span><span class="o">.</span><span class="n">b</span><span class="p">(</span><span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">value_to_name</span><span class="p">[</span><span class="n">cl_enum</span><span class="p">])</span>
+        <span class="k">return</span> <span class="n">options</span>
+
+<div class="viewcode-block" id="GraphOptions.set_source_default"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphOptions.set_source_default">[docs]</a>    <span class="k">def</span> <span class="nf">set_source_default</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets ``graph_source`` to the server-defined default traversal source (&#39;default&#39;)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_source</span> <span class="o">=</span> <span class="s1">&#39;default&#39;</span></div>
+
+<div class="viewcode-block" id="GraphOptions.set_source_analytics"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphOptions.set_source_analytics">[docs]</a>    <span class="k">def</span> <span class="nf">set_source_analytics</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets ``graph_source`` to the server-defined analytic traversal source (&#39;a&#39;)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_source</span> <span class="o">=</span> <span class="s1">&#39;a&#39;</span></div>
+
+<div class="viewcode-block" id="GraphOptions.set_source_graph"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphOptions.set_source_graph">[docs]</a>    <span class="k">def</span> <span class="nf">set_source_graph</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets ``graph_source`` to the server-defined graph traversal source (&#39;g&#39;)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_source</span> <span class="o">=</span> <span class="s1">&#39;g&#39;</span></div>
+
+    <span class="k">def</span> <span class="nf">set_graph_protocol</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">protocol</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets ``graph_protocol`` as server graph results format (See :class:`cassandra.datastax.graph.GraphProtocol`)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graph_protocol</span> <span class="o">=</span> <span class="n">protocol</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">is_default_source</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph_source</span> <span class="ow">in</span> <span class="p">(</span><span class="sa">b</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">is_analytics_source</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        True if ``graph_source`` is set to the server-defined analytics traversal source (&#39;a&#39;)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph_source</span> <span class="o">==</span> <span class="sa">b</span><span class="s1">&#39;a&#39;</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">is_graph_source</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        True if ``graph_source`` is set to the server-defined graph traversal source (&#39;g&#39;)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph_source</span> <span class="o">==</span> <span class="sa">b</span><span class="s1">&#39;g&#39;</span></div>
+
+
+<span class="k">for</span> <span class="n">opt</span> <span class="ow">in</span> <span class="n">_graph_options</span><span class="p">:</span>
+
+    <span class="k">def</span> <span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">opt</span><span class="p">[</span><span class="mi">2</span><span class="p">]):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_graph_options</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">set</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">opt</span><span class="p">[</span><span class="mi">2</span><span class="p">]):</span>
+        <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="c1"># normalize text here so it doesn&#39;t have to be done every time we get options map</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">six</span><span class="o">.</span><span class="n">text_type</span><span class="p">)</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">six</span><span class="o">.</span><span class="n">binary_type</span><span class="p">):</span>
+                <span class="n">value</span> <span class="o">=</span> <span class="n">six</span><span class="o">.</span><span class="n">b</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_graph_options</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_graph_options</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">delete</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">opt</span><span class="p">[</span><span class="mi">2</span><span class="p">]):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_graph_options</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="nb">setattr</span><span class="p">(</span><span class="n">GraphOptions</span><span class="p">,</span> <span class="n">opt</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="nb">property</span><span class="p">(</span><span class="n">get</span><span class="p">,</span> <span class="nb">set</span><span class="p">,</span> <span class="n">delete</span><span class="p">,</span> <span class="n">opt</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+
+
+<span class="k">class</span> <span class="nc">GraphStatement</span><span class="p">(</span><span class="n">Statement</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; An abstract class representing a graph query.&quot;&quot;&quot;</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">query</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="sa">u</span><span class="s1">&#39;&lt;GraphStatement query=&quot;</span><span class="si">{0}</span><span class="s1">&quot;&gt;&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">query</span><span class="p">)</span>
+    <span class="fm">__repr__</span> <span class="o">=</span> <span class="fm">__str__</span>
+
+
+<div class="viewcode-block" id="SimpleGraphStatement"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.SimpleGraphStatement">[docs]</a><span class="k">class</span> <span class="nc">SimpleGraphStatement</span><span class="p">(</span><span class="n">GraphStatement</span><span class="p">,</span> <span class="n">SimpleStatement</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Simple graph statement for :meth:`.Session.execute_graph`.</span>
+<span class="sd">    Takes the same parameters as :class:`.SimpleStatement`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">query</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_query_string</span></div>
+
+
+<div class="viewcode-block" id="single_object_row_factory"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.single_object_row_factory">[docs]</a><span class="k">def</span> <span class="nf">single_object_row_factory</span><span class="p">(</span><span class="n">column_names</span><span class="p">,</span> <span class="n">rows</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    returns the JSON string value of graph results</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="graph_result_row_factory"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.graph_result_row_factory">[docs]</a><span class="k">def</span> <span class="nf">graph_result_row_factory</span><span class="p">(</span><span class="n">column_names</span><span class="p">,</span> <span class="n">rows</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns a :class:`Result &lt;cassandra.datastax.graph.Result&gt;` object that can load graph results and produce specific types.</span>
+<span class="sd">    The Result JSON is deserialized and unpacked from the top-level &#39;result&#39; dict.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">Result</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])[</span><span class="s1">&#39;result&#39;</span><span class="p">])</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="graph_object_row_factory"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.graph_object_row_factory">[docs]</a><span class="k">def</span> <span class="nf">graph_object_row_factory</span><span class="p">(</span><span class="n">column_names</span><span class="p">,</span> <span class="n">rows</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Like :func:`~.graph_result_row_factory`, except known element types (:class:`~.Vertex`, :class:`~.Edge`) are</span>
+<span class="sd">    converted to their simplified objects. Some low-level metadata is shed in this conversion. Unknown result types are</span>
+<span class="sd">    still returned as :class:`Result &lt;cassandra.datastax.graph.Result&gt;`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">_graph_object_sequence</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])[</span><span class="s1">&#39;result&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">)</span></div>
+
+
+<span class="k">def</span> <span class="nf">_graph_object_sequence</span><span class="p">(</span><span class="n">objects</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">o</span> <span class="ow">in</span> <span class="n">objects</span><span class="p">:</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">Result</span><span class="p">(</span><span class="n">o</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">o</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="n">typ</span> <span class="o">=</span> <span class="n">res</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;type&#39;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">typ</span> <span class="o">==</span> <span class="s1">&#39;vertex&#39;</span><span class="p">:</span>
+                <span class="n">res</span> <span class="o">=</span> <span class="n">res</span><span class="o">.</span><span class="n">as_vertex</span><span class="p">()</span>
+            <span class="k">elif</span> <span class="n">typ</span> <span class="o">==</span> <span class="s1">&#39;edge&#39;</span><span class="p">:</span>
+                <span class="n">res</span> <span class="o">=</span> <span class="n">res</span><span class="o">.</span><span class="n">as_edge</span><span class="p">()</span>
+        <span class="k">yield</span> <span class="n">res</span>
+
+
+<span class="k">class</span> <span class="nc">_GraphSONContextRowFactory</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="n">graphson_reader_class</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">graphson_reader_kwargs</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cluster</span><span class="p">):</span>
+        <span class="n">context</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;cluster&#39;</span><span class="p">:</span> <span class="n">cluster</span><span class="p">}</span>
+        <span class="n">kwargs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graphson_reader_kwargs</span> <span class="ow">or</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">graphson_reader</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graphson_reader_class</span><span class="p">(</span><span class="n">context</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">column_names</span><span class="p">,</span> <span class="n">rows</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">graphson_reader</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])[</span><span class="s1">&#39;result&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">]</span>
+
+
+<span class="k">class</span> <span class="nc">_GraphSON2RowFactory</span><span class="p">(</span><span class="n">_GraphSONContextRowFactory</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Row factory to deserialize GraphSON2 results.&quot;&quot;&quot;</span>
+    <span class="n">graphson_reader_class</span> <span class="o">=</span> <span class="n">GraphSON2Reader</span>
+
+
+<span class="k">class</span> <span class="nc">_GraphSON3RowFactory</span><span class="p">(</span><span class="n">_GraphSONContextRowFactory</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Row factory to deserialize GraphSON3 results.&quot;&quot;&quot;</span>
+    <span class="n">graphson_reader_class</span> <span class="o">=</span> <span class="n">GraphSON3Reader</span>
+
+
+<span class="n">graph_graphson2_row_factory</span> <span class="o">=</span> <span class="n">_GraphSON2RowFactory</span>
+<span class="n">graph_graphson3_row_factory</span> <span class="o">=</span> <span class="n">_GraphSON3RowFactory</span>
+
+
+<div class="viewcode-block" id="Result"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.Result">[docs]</a><span class="k">class</span> <span class="nc">Result</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Represents deserialized graph results.</span>
+<span class="sd">    Property and item getters are provided for convenience.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">value</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Deserialized value from the result</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">value</span> <span class="o">=</span> <span class="n">value</span>
+
+    <span class="k">def</span> <span class="fm">__getattr__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">attr</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Value cannot be accessed as a dict&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">attr</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="p">[</span><span class="n">attr</span><span class="p">]</span>
+
+        <span class="k">raise</span> <span class="ne">AttributeError</span><span class="p">(</span><span class="s2">&quot;Result has no top-level attribute </span><span class="si">%r</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">attr</span><span class="p">,))</span>
+
+    <span class="k">def</span> <span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">item</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="n">six</span><span class="o">.</span><span class="n">string_types</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="p">[</span><span class="n">item</span><span class="p">]</span>
+        <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="p">[</span><span class="n">item</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Result cannot be indexed by </span><span class="si">%r</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">item</span><span class="p">,))</span>
+
+    <span class="k">def</span> <span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">(</span><span class="si">%r</span><span class="s2">)&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">Result</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__eq__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">value</span>
+
+<div class="viewcode-block" id="Result.as_vertex"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.Result.as_vertex">[docs]</a>    <span class="k">def</span> <span class="nf">as_vertex</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return a :class:`Vertex` parsed from this result</span>
+
+<span class="sd">        Raises TypeError if parsing fails (i.e. the result structure is not valid).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">Vertex</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">label</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">type</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;properties&#39;</span><span class="p">,</span> <span class="p">{}))</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">AttributeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">,</span> <span class="ne">TypeError</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">&quot;Could not create Vertex from </span><span class="si">%r</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="p">,))</span></div>
+
+<div class="viewcode-block" id="Result.as_edge"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.Result.as_edge">[docs]</a>    <span class="k">def</span> <span class="nf">as_edge</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return a :class:`Edge` parsed from this result</span>
+
+<span class="sd">        Raises TypeError if parsing fails (i.e. the result structure is not valid).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">Edge</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">label</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">type</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;properties&#39;</span><span class="p">,</span> <span class="p">{}),</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">inV</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">inVLabel</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">outV</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">outVLabel</span><span class="p">)</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">AttributeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">,</span> <span class="ne">TypeError</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">&quot;Could not create Edge from </span><span class="si">%r</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="p">,))</span></div>
+
+<div class="viewcode-block" id="Result.as_path"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.Result.as_path">[docs]</a>    <span class="k">def</span> <span class="nf">as_path</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return a :class:`Path` parsed from this result</span>
+
+<span class="sd">        Raises TypeError if parsing fails (i.e. the result structure is not valid).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">Path</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">labels</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">objects</span><span class="p">)</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">AttributeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">,</span> <span class="ne">TypeError</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">&quot;Could not create Path from </span><span class="si">%r</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="p">,))</span></div>
+
+    <span class="k">def</span> <span class="nf">as_vertex_property</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">VertexProperty</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;label&#39;</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;value&#39;</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;properties&#39;</span><span class="p">,</span> <span class="p">{}))</span></div>
+</pre></div>
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../api/index.html">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../scylla_specific.html">Scylla Specific Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../object_mapper.html">Object Mapper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">master <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="query.html">master</a></li>
+        <li><a href="../../../../../3.22.0-scylla/index.html">3.22.0-scylla</a></li>
+        <li><a href="../../../../../3.21.0-scylla/index.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="../../../../_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page cassandra.datastax.graph.query&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/_modules/cassandra/datastax/graph/query%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="../../../../_static/js/vendor/jquery.js"></script>
+<script src="../../../../_static/expertrec.js"></script>
+<script src="../../../../_static/js/foundation/foundation.js"></script>
+<script src="../../../../_static/js/foundation/foundation.topbar.js"></script>
+<script src="../../../../_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

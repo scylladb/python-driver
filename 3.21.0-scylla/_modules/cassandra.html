@@ -1,0 +1,974 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    cassandra | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="../_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx_tabs/semantic-ui-2.4.1/segment.min.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx_tabs/semantic-ui-2.4.1/menu.min.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx_tabs/tabs.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../_static/clipboard.min.js"></script>
+    <script src="../_static/copybutton.js"></script>
+    <script src="../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.js"></script>
+    <script src="../_static/sphinx_tabs/tabs.js"></script>
+
+    <script src="../_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="../_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+                <p>
+                    <strong>
+                    
+                    You're reading the documentation for a development version.
+                    For the latest released version, please have a look at <a href="../../master/index.html">master</a>.
+                    
+                    </strong>
+                </p>
+            
+
+            <h1>Source code for cassandra</h1><div class="highlight"><pre>
+<span></span><span class="c1"># Copyright DataStax, Inc.</span>
+<span class="c1">#</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># you may not use this file except in compliance with the License.</span>
+<span class="c1"># You may obtain a copy of the License at</span>
+<span class="c1">#</span>
+<span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
+<span class="c1">#</span>
+<span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
+<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
+<span class="c1"># See the License for the specific language governing permissions and</span>
+<span class="c1"># limitations under the License.</span>
+
+<span class="kn">import</span> <span class="nn">logging</span>
+
+
+<span class="k">class</span> <span class="nc">NullHandler</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">Handler</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="nf">emit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">record</span><span class="p">):</span>
+        <span class="k">pass</span>
+
+<span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s1">&#39;cassandra&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">addHandler</span><span class="p">(</span><span class="n">NullHandler</span><span class="p">())</span>
+
+<span class="n">__version_info__</span> <span class="o">=</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">22</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">__version__</span> <span class="o">=</span> <span class="s1">&#39;.&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">__version_info__</span><span class="p">))</span>
+
+
+<div class="viewcode-block" id="ConsistencyLevel"><a class="viewcode-back" href="../api/cassandra.html#cassandra.ConsistencyLevel">[docs]</a><span class="k">class</span> <span class="nc">ConsistencyLevel</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Spcifies how many replicas must respond for an operation to be considered</span>
+<span class="sd">    a success.  By default, ``ONE`` is used for all operations.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">ANY</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Only requires that one replica receives the write *or* the coordinator</span>
+<span class="sd">    stores a hint to replay later. Valid only for writes.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">ONE</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Only one replica needs to respond to consider the operation a success</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">TWO</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Two replicas must respond to consider the operation a success</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">THREE</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Three replicas must respond to consider the operation a success</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">QUORUM</span> <span class="o">=</span> <span class="mi">4</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    ``ceil(RF/2)`` replicas must respond to consider the operation a success</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">ALL</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    All replicas must respond to consider the operation a success</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">LOCAL_QUORUM</span> <span class="o">=</span> <span class="mi">6</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Requires a quorum of replicas in the local datacenter</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">EACH_QUORUM</span> <span class="o">=</span> <span class="mi">7</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Requires a quorum of replicas in each datacenter</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">SERIAL</span> <span class="o">=</span> <span class="mi">8</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    For conditional inserts/updates that utilize Cassandra&#39;s lightweight</span>
+<span class="sd">    transactions, this requires consensus among all replicas for the</span>
+<span class="sd">    modified data.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">LOCAL_SERIAL</span> <span class="o">=</span> <span class="mi">9</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Like :attr:`~ConsistencyLevel.SERIAL`, but only requires consensus</span>
+<span class="sd">    among replicas in the local datacenter.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">LOCAL_ONE</span> <span class="o">=</span> <span class="mi">10</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Sends a request only to replicas in the local datacenter and waits for</span>
+<span class="sd">    one response.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">is_serial</span><span class="p">(</span><span class="n">cl</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">cl</span> <span class="o">==</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">SERIAL</span> <span class="ow">or</span> <span class="n">cl</span> <span class="o">==</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">LOCAL_SERIAL</span></div>
+
+
+<span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">value_to_name</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">ANY</span><span class="p">:</span> <span class="s1">&#39;ANY&#39;</span><span class="p">,</span>
+    <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">ONE</span><span class="p">:</span> <span class="s1">&#39;ONE&#39;</span><span class="p">,</span>
+    <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">TWO</span><span class="p">:</span> <span class="s1">&#39;TWO&#39;</span><span class="p">,</span>
+    <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">THREE</span><span class="p">:</span> <span class="s1">&#39;THREE&#39;</span><span class="p">,</span>
+    <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">QUORUM</span><span class="p">:</span> <span class="s1">&#39;QUORUM&#39;</span><span class="p">,</span>
+    <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">ALL</span><span class="p">:</span> <span class="s1">&#39;ALL&#39;</span><span class="p">,</span>
+    <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">LOCAL_QUORUM</span><span class="p">:</span> <span class="s1">&#39;LOCAL_QUORUM&#39;</span><span class="p">,</span>
+    <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">EACH_QUORUM</span><span class="p">:</span> <span class="s1">&#39;EACH_QUORUM&#39;</span><span class="p">,</span>
+    <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">SERIAL</span><span class="p">:</span> <span class="s1">&#39;SERIAL&#39;</span><span class="p">,</span>
+    <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">LOCAL_SERIAL</span><span class="p">:</span> <span class="s1">&#39;LOCAL_SERIAL&#39;</span><span class="p">,</span>
+    <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">LOCAL_ONE</span><span class="p">:</span> <span class="s1">&#39;LOCAL_ONE&#39;</span>
+<span class="p">}</span>
+
+<span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">name_to_value</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s1">&#39;ANY&#39;</span><span class="p">:</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">ANY</span><span class="p">,</span>
+    <span class="s1">&#39;ONE&#39;</span><span class="p">:</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">ONE</span><span class="p">,</span>
+    <span class="s1">&#39;TWO&#39;</span><span class="p">:</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">TWO</span><span class="p">,</span>
+    <span class="s1">&#39;THREE&#39;</span><span class="p">:</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">THREE</span><span class="p">,</span>
+    <span class="s1">&#39;QUORUM&#39;</span><span class="p">:</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">QUORUM</span><span class="p">,</span>
+    <span class="s1">&#39;ALL&#39;</span><span class="p">:</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">ALL</span><span class="p">,</span>
+    <span class="s1">&#39;LOCAL_QUORUM&#39;</span><span class="p">:</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">LOCAL_QUORUM</span><span class="p">,</span>
+    <span class="s1">&#39;EACH_QUORUM&#39;</span><span class="p">:</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">EACH_QUORUM</span><span class="p">,</span>
+    <span class="s1">&#39;SERIAL&#39;</span><span class="p">:</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">SERIAL</span><span class="p">,</span>
+    <span class="s1">&#39;LOCAL_SERIAL&#39;</span><span class="p">:</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">LOCAL_SERIAL</span><span class="p">,</span>
+    <span class="s1">&#39;LOCAL_ONE&#39;</span><span class="p">:</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">LOCAL_ONE</span>
+<span class="p">}</span>
+
+
+<span class="k">def</span> <span class="nf">consistency_value_to_name</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">value_to_name</span><span class="p">[</span><span class="n">value</span><span class="p">]</span> <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="s2">&quot;Not Set&quot;</span>
+
+
+<div class="viewcode-block" id="ProtocolVersion"><a class="viewcode-back" href="../api/cassandra.html#cassandra.ProtocolVersion">[docs]</a><span class="k">class</span> <span class="nc">ProtocolVersion</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Defines native protocol versions supported by this driver.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">V1</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    v1, supported in Cassandra 1.2--&gt;2.2</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">V2</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    v2, supported in Cassandra 2.0--&gt;2.2;</span>
+<span class="sd">    added support for lightweight transactions, batch operations, and automatic query paging.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">V3</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    v3, supported in Cassandra 2.1--&gt;3.x+;</span>
+<span class="sd">    added support for protocol-level client-side timestamps (see :attr:`.Session.use_client_timestamp`),</span>
+<span class="sd">    serial consistency levels for :class:`~.BatchStatement`, and an improved connection pool.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">V4</span> <span class="o">=</span> <span class="mi">4</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    v4, supported in Cassandra 2.2--&gt;3.x+;</span>
+<span class="sd">    added a number of new types, server warnings, new failure messages, and custom payloads. Details in the</span>
+<span class="sd">    `project docs &lt;https://github.com/apache/cassandra/blob/trunk/doc/native_protocol_v4.spec&gt;`_</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">V5</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    v5, in beta from 3.x+</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">DSE_V1</span> <span class="o">=</span> <span class="mh">0x41</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    DSE private protocol v1, supported in DSE 5.1+</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">DSE_V2</span> <span class="o">=</span> <span class="mh">0x42</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    DSE private protocol v2, supported in DSE 6.0+</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">SUPPORTED_VERSIONS</span> <span class="o">=</span> <span class="p">(</span><span class="n">DSE_V2</span><span class="p">,</span> <span class="n">DSE_V1</span><span class="p">,</span> <span class="n">V5</span><span class="p">,</span> <span class="n">V4</span><span class="p">,</span> <span class="n">V3</span><span class="p">,</span> <span class="n">V2</span><span class="p">,</span> <span class="n">V1</span><span class="p">)</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A tuple of all supported protocol versions</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">BETA_VERSIONS</span> <span class="o">=</span> <span class="p">(</span><span class="n">V5</span><span class="p">,)</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A tuple of all beta protocol versions</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">MIN_SUPPORTED</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">SUPPORTED_VERSIONS</span><span class="p">)</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Minimum protocol version supported by this driver.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">MAX_SUPPORTED</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">SUPPORTED_VERSIONS</span><span class="p">)</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Maximum protocol version supported by this driver.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="ProtocolVersion.get_lower_supported"><a class="viewcode-back" href="../api/cassandra.html#cassandra.ProtocolVersion.get_lower_supported">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">get_lower_supported</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">previous_version</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return the lower supported protocol version. Beta versions are omitted.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">version</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">v</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">ProtocolVersion</span><span class="o">.</span><span class="n">SUPPORTED_VERSIONS</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">if</span>
+                           <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">ProtocolVersion</span><span class="o">.</span><span class="n">BETA_VERSIONS</span> <span class="ow">and</span> <span class="n">v</span> <span class="o">&lt;</span> <span class="n">previous_version</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">StopIteration</span><span class="p">:</span>
+            <span class="n">version</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="k">return</span> <span class="n">version</span></div>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">uses_int_query_flags</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">version</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">version</span> <span class="o">&gt;=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">V5</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">uses_prepare_flags</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">version</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">version</span> <span class="o">&gt;=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">V5</span> <span class="ow">and</span> <span class="n">version</span> <span class="o">!=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">DSE_V1</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">uses_prepared_metadata</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">version</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">version</span> <span class="o">&gt;=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">V5</span> <span class="ow">and</span> <span class="n">version</span> <span class="o">!=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">DSE_V1</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">uses_error_code_map</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">version</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">version</span> <span class="o">&gt;=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">V5</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">uses_keyspace_flag</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">version</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">version</span> <span class="o">&gt;=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">V5</span> <span class="ow">and</span> <span class="n">version</span> <span class="o">!=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">DSE_V1</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">has_continuous_paging_support</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">version</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">version</span> <span class="o">&gt;=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">DSE_V1</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">has_continuous_paging_next_pages</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">version</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">version</span> <span class="o">&gt;=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">DSE_V2</span></div>
+
+
+<div class="viewcode-block" id="WriteType"><a class="viewcode-back" href="../api/cassandra/policies.html#cassandra.WriteType">[docs]</a><span class="k">class</span> <span class="nc">WriteType</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    For usage with :class:`.RetryPolicy`, this describe a type</span>
+<span class="sd">    of write operation.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">SIMPLE</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A write to a single partition key. Such writes are guaranteed to be atomic</span>
+<span class="sd">    and isolated.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">BATCH</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A write to multiple partition keys that used the distributed batch log to</span>
+<span class="sd">    ensure atomicity.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">UNLOGGED_BATCH</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A write to multiple partition keys that did not use the distributed batch</span>
+<span class="sd">    log. Atomicity for such writes is not guaranteed.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">COUNTER</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A counter write (for one or multiple partition keys). Such writes should</span>
+<span class="sd">    not be replayed in order to avoid overcount.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">BATCH_LOG</span> <span class="o">=</span> <span class="mi">4</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The initial write to the distributed batch log that Cassandra performs</span>
+<span class="sd">    internally before a BATCH write.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">CAS</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A lighweight-transaction write, such as &quot;DELETE ... IF EXISTS&quot;.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">VIEW</span> <span class="o">=</span> <span class="mi">6</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This WriteType is only seen in results for requests that were unable to</span>
+<span class="sd">    complete MV operations.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">CDC</span> <span class="o">=</span> <span class="mi">7</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This WriteType is only seen in results for requests that were unable to</span>
+<span class="sd">    complete CDC operations.</span>
+<span class="sd">    &quot;&quot;&quot;</span></div>
+
+
+<span class="n">WriteType</span><span class="o">.</span><span class="n">name_to_value</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s1">&#39;SIMPLE&#39;</span><span class="p">:</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">SIMPLE</span><span class="p">,</span>
+    <span class="s1">&#39;BATCH&#39;</span><span class="p">:</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">BATCH</span><span class="p">,</span>
+    <span class="s1">&#39;UNLOGGED_BATCH&#39;</span><span class="p">:</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">UNLOGGED_BATCH</span><span class="p">,</span>
+    <span class="s1">&#39;COUNTER&#39;</span><span class="p">:</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">COUNTER</span><span class="p">,</span>
+    <span class="s1">&#39;BATCH_LOG&#39;</span><span class="p">:</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">BATCH_LOG</span><span class="p">,</span>
+    <span class="s1">&#39;CAS&#39;</span><span class="p">:</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">CAS</span><span class="p">,</span>
+    <span class="s1">&#39;VIEW&#39;</span><span class="p">:</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">VIEW</span><span class="p">,</span>
+    <span class="s1">&#39;CDC&#39;</span><span class="p">:</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">CDC</span>
+<span class="p">}</span>
+
+
+<span class="n">WriteType</span><span class="o">.</span><span class="n">value_to_name</span> <span class="o">=</span> <span class="p">{</span><span class="n">v</span><span class="p">:</span> <span class="n">k</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">name_to_value</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+
+
+<span class="k">class</span> <span class="nc">SchemaChangeType</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="n">DROPPED</span> <span class="o">=</span> <span class="s1">&#39;DROPPED&#39;</span>
+    <span class="n">CREATED</span> <span class="o">=</span> <span class="s1">&#39;CREATED&#39;</span>
+    <span class="n">UPDATED</span> <span class="o">=</span> <span class="s1">&#39;UPDATED&#39;</span>
+
+
+<span class="k">class</span> <span class="nc">SchemaTargetType</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="n">KEYSPACE</span> <span class="o">=</span> <span class="s1">&#39;KEYSPACE&#39;</span>
+    <span class="n">TABLE</span> <span class="o">=</span> <span class="s1">&#39;TABLE&#39;</span>
+    <span class="n">TYPE</span> <span class="o">=</span> <span class="s1">&#39;TYPE&#39;</span>
+    <span class="n">FUNCTION</span> <span class="o">=</span> <span class="s1">&#39;FUNCTION&#39;</span>
+    <span class="n">AGGREGATE</span> <span class="o">=</span> <span class="s1">&#39;AGGREGATE&#39;</span>
+
+
+<span class="k">class</span> <span class="nc">SignatureDescriptor</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">argument_types</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="n">name</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">argument_types</span> <span class="o">=</span> <span class="n">argument_types</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">signature</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        function signature string in the form &#39;name([type0[,type1[...]]])&#39;</span>
+
+<span class="sd">        can be used to uniquely identify overloaded function names within a keyspace</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">format_signature</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">argument_types</span><span class="p">)</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">format_signature</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">argument_types</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">(</span><span class="si">%s</span><span class="s2">)&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="s1">&#39;,&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">t</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">argument_types</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">(</span><span class="si">%s</span><span class="s2">, </span><span class="si">%s</span><span class="s2">)&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">argument_types</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="UserFunctionDescriptor"><a class="viewcode-back" href="../api/cassandra.html#cassandra.UserFunctionDescriptor">[docs]</a><span class="k">class</span> <span class="nc">UserFunctionDescriptor</span><span class="p">(</span><span class="n">SignatureDescriptor</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Describes a User function by name and argument signature</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">name</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    name of the function</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">argument_types</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Ordered list of CQL argument type names comprising the type signature</span>
+<span class="sd">    &quot;&quot;&quot;</span></div>
+
+
+<div class="viewcode-block" id="UserAggregateDescriptor"><a class="viewcode-back" href="../api/cassandra.html#cassandra.UserAggregateDescriptor">[docs]</a><span class="k">class</span> <span class="nc">UserAggregateDescriptor</span><span class="p">(</span><span class="n">SignatureDescriptor</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Describes a User aggregate function by name and argument signature</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">name</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    name of the aggregate</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">argument_types</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Ordered list of CQL argument type names comprising the type signature</span>
+<span class="sd">    &quot;&quot;&quot;</span></div>
+
+
+<div class="viewcode-block" id="DriverException"><a class="viewcode-back" href="../api/cassandra.html#cassandra.DriverException">[docs]</a><span class="k">class</span> <span class="nc">DriverException</span><span class="p">(</span><span class="ne">Exception</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Base for all exceptions explicitly raised by the driver.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="RequestExecutionException"><a class="viewcode-back" href="../api/cassandra.html#cassandra.RequestExecutionException">[docs]</a><span class="k">class</span> <span class="nc">RequestExecutionException</span><span class="p">(</span><span class="n">DriverException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Base for request execution exceptions returned from the server.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="Unavailable"><a class="viewcode-back" href="../api/cassandra.html#cassandra.Unavailable">[docs]</a><span class="k">class</span> <span class="nc">Unavailable</span><span class="p">(</span><span class="n">RequestExecutionException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    There were not enough live replicas to satisfy the requested consistency</span>
+<span class="sd">    level, so the coordinator node immediately failed the request without</span>
+<span class="sd">    forwarding it to any replicas.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">consistency</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot; The requested :class:`ConsistencyLevel` &quot;&quot;&quot;</span>
+
+    <span class="n">required_replicas</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot; The number of replicas that needed to be live to complete the operation &quot;&quot;&quot;</span>
+
+    <span class="n">alive_replicas</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot; The number of replicas that were actually alive &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">summary_message</span><span class="p">,</span> <span class="n">consistency</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">required_replicas</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">alive_replicas</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">consistency</span> <span class="o">=</span> <span class="n">consistency</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">required_replicas</span> <span class="o">=</span> <span class="n">required_replicas</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">alive_replicas</span> <span class="o">=</span> <span class="n">alive_replicas</span>
+        <span class="ne">Exception</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">summary_message</span> <span class="o">+</span> <span class="s1">&#39; info=&#39;</span> <span class="o">+</span>
+                           <span class="nb">repr</span><span class="p">({</span><span class="s1">&#39;consistency&#39;</span><span class="p">:</span> <span class="n">consistency_value_to_name</span><span class="p">(</span><span class="n">consistency</span><span class="p">),</span>
+                                 <span class="s1">&#39;required_replicas&#39;</span><span class="p">:</span> <span class="n">required_replicas</span><span class="p">,</span>
+                                 <span class="s1">&#39;alive_replicas&#39;</span><span class="p">:</span> <span class="n">alive_replicas</span><span class="p">}))</span></div>
+
+
+<div class="viewcode-block" id="Timeout"><a class="viewcode-back" href="../api/cassandra.html#cassandra.Timeout">[docs]</a><span class="k">class</span> <span class="nc">Timeout</span><span class="p">(</span><span class="n">RequestExecutionException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Replicas failed to respond to the coordinator node before timing out.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">consistency</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot; The requested :class:`ConsistencyLevel` &quot;&quot;&quot;</span>
+
+    <span class="n">required_responses</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot; The number of required replica responses &quot;&quot;&quot;</span>
+
+    <span class="n">received_responses</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The number of replicas that responded before the coordinator timed out</span>
+<span class="sd">    the operation</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">summary_message</span><span class="p">,</span> <span class="n">consistency</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">required_responses</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">received_responses</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">consistency</span> <span class="o">=</span> <span class="n">consistency</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">required_responses</span> <span class="o">=</span> <span class="n">required_responses</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">received_responses</span> <span class="o">=</span> <span class="n">received_responses</span>
+
+        <span class="k">if</span> <span class="s2">&quot;write_type&quot;</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">:</span>
+            <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;write_type&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">WriteType</span><span class="o">.</span><span class="n">value_to_name</span><span class="p">[</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;write_type&quot;</span><span class="p">]]</span>
+
+        <span class="n">info</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;consistency&#39;</span><span class="p">:</span> <span class="n">consistency_value_to_name</span><span class="p">(</span><span class="n">consistency</span><span class="p">),</span>
+                <span class="s1">&#39;required_responses&#39;</span><span class="p">:</span> <span class="n">required_responses</span><span class="p">,</span>
+                <span class="s1">&#39;received_responses&#39;</span><span class="p">:</span> <span class="n">received_responses</span><span class="p">}</span>
+        <span class="n">info</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">kwargs</span><span class="p">)</span>
+
+        <span class="ne">Exception</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">summary_message</span> <span class="o">+</span> <span class="s1">&#39; info=&#39;</span> <span class="o">+</span> <span class="nb">repr</span><span class="p">(</span><span class="n">info</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="ReadTimeout"><a class="viewcode-back" href="../api/cassandra.html#cassandra.ReadTimeout">[docs]</a><span class="k">class</span> <span class="nc">ReadTimeout</span><span class="p">(</span><span class="n">Timeout</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A subclass of :exc:`Timeout` for read operations.</span>
+
+<span class="sd">    This indicates that the replicas failed to respond to the coordinator</span>
+<span class="sd">    node before the configured timeout. This timeout is configured in</span>
+<span class="sd">    ``cassandra.yaml`` with the ``read_request_timeout_in_ms``</span>
+<span class="sd">    and ``range_request_timeout_in_ms`` options.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">data_retrieved</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A boolean indicating whether the requested data was retrieved</span>
+<span class="sd">    by the coordinator from any replicas before it timed out the</span>
+<span class="sd">    operation</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="n">data_retrieved</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="n">Timeout</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data_retrieved</span> <span class="o">=</span> <span class="n">data_retrieved</span></div>
+
+
+<div class="viewcode-block" id="WriteTimeout"><a class="viewcode-back" href="../api/cassandra.html#cassandra.WriteTimeout">[docs]</a><span class="k">class</span> <span class="nc">WriteTimeout</span><span class="p">(</span><span class="n">Timeout</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A subclass of :exc:`Timeout` for write operations.</span>
+
+<span class="sd">    This indicates that the replicas failed to respond to the coordinator</span>
+<span class="sd">    node before the configured timeout. This timeout is configured in</span>
+<span class="sd">    ``cassandra.yaml`` with the ``write_request_timeout_in_ms``</span>
+<span class="sd">    option.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">write_type</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The type of write operation, enum on :class:`~cassandra.policies.WriteType`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="n">write_type</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;write_type&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">write_type</span>
+        <span class="n">Timeout</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">write_type</span> <span class="o">=</span> <span class="n">write_type</span></div>
+
+
+<span class="k">class</span> <span class="nc">CDCWriteFailure</span><span class="p">(</span><span class="n">RequestExecutionException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Hit limit on data in CDC folder, writes are rejected</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">):</span>
+        <span class="ne">Exception</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="CoordinationFailure"><a class="viewcode-back" href="../api/cassandra.html#cassandra.CoordinationFailure">[docs]</a><span class="k">class</span> <span class="nc">CoordinationFailure</span><span class="p">(</span><span class="n">RequestExecutionException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Replicas sent a failure to the coordinator.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">consistency</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot; The requested :class:`ConsistencyLevel` &quot;&quot;&quot;</span>
+
+    <span class="n">required_responses</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot; The number of required replica responses &quot;&quot;&quot;</span>
+
+    <span class="n">received_responses</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The number of replicas that responded before the coordinator timed out</span>
+<span class="sd">    the operation</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">failures</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The number of replicas that sent a failure message</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">error_code_map</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A map of inet addresses to error codes representing replicas that sent</span>
+<span class="sd">    a failure message.  Only set when `protocol_version` is 5 or higher.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">summary_message</span><span class="p">,</span> <span class="n">consistency</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">required_responses</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">received_responses</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">failures</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">error_code_map</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">consistency</span> <span class="o">=</span> <span class="n">consistency</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">required_responses</span> <span class="o">=</span> <span class="n">required_responses</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">received_responses</span> <span class="o">=</span> <span class="n">received_responses</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">failures</span> <span class="o">=</span> <span class="n">failures</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">error_code_map</span> <span class="o">=</span> <span class="n">error_code_map</span>
+
+        <span class="n">info_dict</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s1">&#39;consistency&#39;</span><span class="p">:</span> <span class="n">consistency_value_to_name</span><span class="p">(</span><span class="n">consistency</span><span class="p">),</span>
+            <span class="s1">&#39;required_responses&#39;</span><span class="p">:</span> <span class="n">required_responses</span><span class="p">,</span>
+            <span class="s1">&#39;received_responses&#39;</span><span class="p">:</span> <span class="n">received_responses</span><span class="p">,</span>
+            <span class="s1">&#39;failures&#39;</span><span class="p">:</span> <span class="n">failures</span>
+        <span class="p">}</span>
+
+        <span class="k">if</span> <span class="n">error_code_map</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="c1"># make error codes look like &quot;0x002a&quot;</span>
+            <span class="n">formatted_map</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">((</span><span class="n">addr</span><span class="p">,</span> <span class="s1">&#39;0x</span><span class="si">%04x</span><span class="s1">&#39;</span> <span class="o">%</span> <span class="n">err_code</span><span class="p">)</span>
+                                 <span class="k">for</span> <span class="p">(</span><span class="n">addr</span><span class="p">,</span> <span class="n">err_code</span><span class="p">)</span> <span class="ow">in</span> <span class="n">error_code_map</span><span class="o">.</span><span class="n">items</span><span class="p">())</span>
+            <span class="n">info_dict</span><span class="p">[</span><span class="s1">&#39;error_code_map&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">formatted_map</span>
+
+        <span class="ne">Exception</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">summary_message</span> <span class="o">+</span> <span class="s1">&#39; info=&#39;</span> <span class="o">+</span> <span class="nb">repr</span><span class="p">(</span><span class="n">info_dict</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="ReadFailure"><a class="viewcode-back" href="../api/cassandra.html#cassandra.ReadFailure">[docs]</a><span class="k">class</span> <span class="nc">ReadFailure</span><span class="p">(</span><span class="n">CoordinationFailure</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A subclass of :exc:`CoordinationFailure` for read operations.</span>
+
+<span class="sd">    This indicates that the replicas sent a failure message to the coordinator.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">data_retrieved</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A boolean indicating whether the requested data was retrieved</span>
+<span class="sd">    by the coordinator from any replicas before it timed out the</span>
+<span class="sd">    operation</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="n">data_retrieved</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="n">CoordinationFailure</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data_retrieved</span> <span class="o">=</span> <span class="n">data_retrieved</span></div>
+
+
+<div class="viewcode-block" id="WriteFailure"><a class="viewcode-back" href="../api/cassandra.html#cassandra.WriteFailure">[docs]</a><span class="k">class</span> <span class="nc">WriteFailure</span><span class="p">(</span><span class="n">CoordinationFailure</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A subclass of :exc:`CoordinationFailure` for write operations.</span>
+
+<span class="sd">    This indicates that the replicas sent a failure message to the coordinator.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">write_type</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The type of write operation, enum on :class:`~cassandra.policies.WriteType`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="n">write_type</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="n">CoordinationFailure</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">write_type</span> <span class="o">=</span> <span class="n">write_type</span></div>
+
+
+<div class="viewcode-block" id="FunctionFailure"><a class="viewcode-back" href="../api/cassandra.html#cassandra.FunctionFailure">[docs]</a><span class="k">class</span> <span class="nc">FunctionFailure</span><span class="p">(</span><span class="n">RequestExecutionException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    User Defined Function failed during execution</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">keyspace</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Keyspace of the function</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">function</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Name of the function</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">arg_types</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    List of argument type names of the function</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">summary_message</span><span class="p">,</span> <span class="n">keyspace</span><span class="p">,</span> <span class="n">function</span><span class="p">,</span> <span class="n">arg_types</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">keyspace</span> <span class="o">=</span> <span class="n">keyspace</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">function</span> <span class="o">=</span> <span class="n">function</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">arg_types</span> <span class="o">=</span> <span class="n">arg_types</span>
+        <span class="ne">Exception</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">summary_message</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="RequestValidationException"><a class="viewcode-back" href="../api/cassandra.html#cassandra.RequestValidationException">[docs]</a><span class="k">class</span> <span class="nc">RequestValidationException</span><span class="p">(</span><span class="n">DriverException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Server request validation failed</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="ConfigurationException"><a class="viewcode-back" href="../api/cassandra.html#cassandra.ConfigurationException">[docs]</a><span class="k">class</span> <span class="nc">ConfigurationException</span><span class="p">(</span><span class="n">RequestValidationException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Server indicated request errro due to current configuration</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="AlreadyExists"><a class="viewcode-back" href="../api/cassandra.html#cassandra.AlreadyExists">[docs]</a><span class="k">class</span> <span class="nc">AlreadyExists</span><span class="p">(</span><span class="n">ConfigurationException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    An attempt was made to create a keyspace or table that already exists.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">keyspace</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The name of the keyspace that already exists, or, if an attempt was</span>
+<span class="sd">    made to create a new table, the keyspace that the table is in.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">table</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The name of the table that already exists, or, if an attempt was</span>
+<span class="sd">    make to create a keyspace, :const:`None`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">keyspace</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">table</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">table</span><span class="p">:</span>
+            <span class="n">message</span> <span class="o">=</span> <span class="s2">&quot;Table &#39;</span><span class="si">%s</span><span class="s2">.</span><span class="si">%s</span><span class="s2">&#39; already exists&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">keyspace</span><span class="p">,</span> <span class="n">table</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">message</span> <span class="o">=</span> <span class="s2">&quot;Keyspace &#39;</span><span class="si">%s</span><span class="s2">&#39; already exists&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">keyspace</span><span class="p">,)</span>
+
+        <span class="ne">Exception</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">keyspace</span> <span class="o">=</span> <span class="n">keyspace</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">table</span> <span class="o">=</span> <span class="n">table</span></div>
+
+
+<div class="viewcode-block" id="InvalidRequest"><a class="viewcode-back" href="../api/cassandra.html#cassandra.InvalidRequest">[docs]</a><span class="k">class</span> <span class="nc">InvalidRequest</span><span class="p">(</span><span class="n">RequestValidationException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A query was made that was invalid for some reason, such as trying to set</span>
+<span class="sd">    the keyspace for a connection to a nonexistent keyspace.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="Unauthorized"><a class="viewcode-back" href="../api/cassandra.html#cassandra.Unauthorized">[docs]</a><span class="k">class</span> <span class="nc">Unauthorized</span><span class="p">(</span><span class="n">RequestValidationException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The current user is not authorized to perform the requested operation.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="AuthenticationFailed"><a class="viewcode-back" href="../api/cassandra.html#cassandra.AuthenticationFailed">[docs]</a><span class="k">class</span> <span class="nc">AuthenticationFailed</span><span class="p">(</span><span class="n">DriverException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Failed to authenticate.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="OperationTimedOut"><a class="viewcode-back" href="../api/cassandra.html#cassandra.OperationTimedOut">[docs]</a><span class="k">class</span> <span class="nc">OperationTimedOut</span><span class="p">(</span><span class="n">DriverException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The operation took longer than the specified (client-side) timeout</span>
+<span class="sd">    to complete.  This is not an error generated by Cassandra, only</span>
+<span class="sd">    the driver.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">errors</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A dict of errors keyed by the :class:`~.Host` against which they occurred.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">last_host</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The last :class:`~.Host` this operation was attempted against.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">last_host</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">errors</span> <span class="o">=</span> <span class="n">errors</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">last_host</span> <span class="o">=</span> <span class="n">last_host</span>
+        <span class="n">message</span> <span class="o">=</span> <span class="s2">&quot;errors=</span><span class="si">%s</span><span class="s2">, last_host=</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">errors</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">last_host</span><span class="p">)</span>
+        <span class="ne">Exception</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">)</span></div>
+
+
+<span class="k">class</span> <span class="nc">UnsupportedOperation</span><span class="p">(</span><span class="n">DriverException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    An attempt was made to use a feature that is not supported by the</span>
+<span class="sd">    selected protocol version.  See :attr:`Cluster.protocol_version`</span>
+<span class="sd">    for more details.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span>
+
+
+<span class="k">class</span> <span class="nc">UnresolvableContactPoints</span><span class="p">(</span><span class="n">DriverException</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The driver was unable to resolve any provided hostnames.</span>
+
+<span class="sd">    Note that this is *not* raised when a :class:`.Cluster` is created with no</span>
+<span class="sd">    contact points, only when lookup fails for all hosts</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span>
+</pre></div>
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../api/index.html">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../object_mapper.html">Object Mapper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../geo_types.html">DSE Geometry Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../graph.html">DataStax Graph Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../graph_fluent.html">DataStax Graph Fluent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cloud.html">Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">3.21.0-scylla <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="../../master/index.html">master</a></li>
+        <li><a href="../../3.22.0-scylla/index.html">3.22.0-scylla</a></li>
+        <li><a href="cassandra.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="../_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page cassandra&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/_modules/cassandra%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="../_static/js/vendor/jquery.js"></script>
+<script src="../_static/expertrec.js"></script>
+<script src="../_static/js/foundation/foundation.js"></script>
+<script src="../_static/js/foundation/foundation.topbar.js"></script>
+<script src="../_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

@@ -1,0 +1,556 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    cassandra.datastax.graph.fluent | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="../../../../_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="../../../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/sphinx_tabs/semantic-ui-2.4.1/segment.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/sphinx_tabs/semantic-ui-2.4.1/menu.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/sphinx_tabs/tabs.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script src="../../../../_static/jquery.js"></script>
+    <script src="../../../../_static/underscore.js"></script>
+    <script src="../../../../_static/doctools.js"></script>
+    <script src="../../../../_static/language_data.js"></script>
+    <script src="../../../../_static/clipboard.min.js"></script>
+    <script src="../../../../_static/copybutton.js"></script>
+    <script src="../../../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.js"></script>
+    <script src="../../../../_static/sphinx_tabs/tabs.js"></script>
+
+    <script src="../../../../_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="../../../../_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+                <p>
+                    <strong>
+                    
+                    You're reading the documentation for a development version.
+                    For the latest released version, please have a look at <a href="../../../../../master/index.html">master</a>.
+                    
+                    </strong>
+                </p>
+            
+
+            <h1>Source code for cassandra.datastax.graph.fluent</h1><div class="highlight"><pre>
+<span></span><span class="c1"># Copyright DataStax, Inc.</span>
+<span class="c1">#</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># you may not use this file except in compliance with the License.</span>
+<span class="c1"># You may obtain a copy of the License at</span>
+<span class="c1">#</span>
+<span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
+<span class="c1">#</span>
+<span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
+<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
+<span class="c1"># See the License for the specific language governing permissions and</span>
+<span class="c1"># limitations under the License.</span>
+
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">copy</span>
+
+<span class="kn">from</span> <span class="nn">concurrent.futures</span> <span class="kn">import</span> <span class="n">Future</span>
+
+<span class="n">HAVE_GREMLIN</span> <span class="o">=</span> <span class="kc">False</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">gremlin_python</span>
+    <span class="n">HAVE_GREMLIN</span> <span class="o">=</span> <span class="kc">True</span>
+<span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+    <span class="c1"># gremlinpython is not installed.</span>
+    <span class="k">pass</span>
+
+<span class="k">if</span> <span class="n">HAVE_GREMLIN</span><span class="p">:</span>
+    <span class="kn">from</span> <span class="nn">gremlin_python.structure.graph</span> <span class="kn">import</span> <span class="n">Graph</span>
+    <span class="kn">from</span> <span class="nn">gremlin_python.driver.remote_connection</span> <span class="kn">import</span> <span class="n">RemoteConnection</span><span class="p">,</span> <span class="n">RemoteTraversal</span>
+    <span class="kn">from</span> <span class="nn">gremlin_python.process.traversal</span> <span class="kn">import</span> <span class="n">Traverser</span><span class="p">,</span> <span class="n">TraversalSideEffects</span>
+    <span class="kn">from</span> <span class="nn">gremlin_python.process.graph_traversal</span> <span class="kn">import</span> <span class="n">GraphTraversal</span>
+
+    <span class="kn">from</span> <span class="nn">cassandra.cluster</span> <span class="kn">import</span> <span class="n">Session</span><span class="p">,</span> <span class="n">GraphExecutionProfile</span><span class="p">,</span> <span class="n">EXEC_PROFILE_GRAPH_DEFAULT</span>
+    <span class="kn">from</span> <span class="nn">cassandra.datastax.graph</span> <span class="kn">import</span> <span class="n">GraphOptions</span><span class="p">,</span> <span class="n">GraphProtocol</span>
+    <span class="kn">from</span> <span class="nn">cassandra.datastax.graph.query</span> <span class="kn">import</span> <span class="n">_GraphSONContextRowFactory</span>
+
+    <span class="kn">from</span> <span class="nn">cassandra.datastax.graph.fluent.serializers</span> <span class="kn">import</span> <span class="p">(</span>
+        <span class="n">GremlinGraphSONReaderV2</span><span class="p">,</span>
+        <span class="n">GremlinGraphSONReaderV3</span><span class="p">,</span>
+        <span class="n">dse_graphson2_deserializers</span><span class="p">,</span>
+        <span class="n">gremlin_graphson2_deserializers</span><span class="p">,</span>
+        <span class="n">dse_graphson3_deserializers</span><span class="p">,</span>
+        <span class="n">gremlin_graphson3_deserializers</span>
+    <span class="p">)</span>
+    <span class="kn">from</span> <span class="nn">cassandra.datastax.graph.fluent.query</span> <span class="kn">import</span> <span class="n">_DefaultTraversalBatch</span><span class="p">,</span> <span class="n">_query_from_traversal</span>
+
+    <span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+    <span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;BaseGraphRowFactory&#39;</span><span class="p">,</span> <span class="s1">&#39;graph_traversal_row_factory&#39;</span><span class="p">,</span>
+               <span class="s1">&#39;graph_traversal_dse_object_row_factory&#39;</span><span class="p">,</span> <span class="s1">&#39;DSESessionRemoteGraphConnection&#39;</span><span class="p">,</span> <span class="s1">&#39;DseGraph&#39;</span><span class="p">]</span>
+
+    <span class="c1"># Traversal result keys</span>
+    <span class="n">_bulk_key</span> <span class="o">=</span> <span class="s1">&#39;bulk&#39;</span>
+    <span class="n">_result_key</span> <span class="o">=</span> <span class="s1">&#39;result&#39;</span>
+
+
+<div class="viewcode-block" id="BaseGraphRowFactory"><a class="viewcode-back" href="../../../../api/cassandra/datastax/graph/fluent/index.html#cassandra.datastax.graph.fluent.BaseGraphRowFactory">[docs]</a>    <span class="k">class</span> <span class="nc">BaseGraphRowFactory</span><span class="p">(</span><span class="n">_GraphSONContextRowFactory</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Base row factory for graph traversal. This class basically wraps a</span>
+<span class="sd">        graphson reader function to handle additional features of Gremlin/DSE</span>
+<span class="sd">        and is callable as a normal row factory.</span>
+
+<span class="sd">        Currently supported:</span>
+<span class="sd">          - bulk results</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">column_names</span><span class="p">,</span> <span class="n">rows</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">:</span>
+                <span class="n">parsed_row</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graphson_reader</span><span class="o">.</span><span class="n">readObject</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+                <span class="k">yield</span> <span class="n">parsed_row</span><span class="p">[</span><span class="n">_result_key</span><span class="p">]</span>
+                <span class="n">bulk</span> <span class="o">=</span> <span class="n">parsed_row</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">_bulk_key</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">bulk</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
+                    <span class="k">yield</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">parsed_row</span><span class="p">[</span><span class="n">_result_key</span><span class="p">])</span></div>
+
+
+    <span class="k">class</span> <span class="nc">_GremlinGraphSON2RowFactory</span><span class="p">(</span><span class="n">BaseGraphRowFactory</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Row Factory that returns the decoded graphson2.&quot;&quot;&quot;</span>
+        <span class="n">graphson_reader_class</span> <span class="o">=</span> <span class="n">GremlinGraphSONReaderV2</span>
+        <span class="n">graphson_reader_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;deserializer_map&#39;</span><span class="p">:</span> <span class="n">gremlin_graphson2_deserializers</span><span class="p">}</span>
+
+
+    <span class="k">class</span> <span class="nc">_DseGraphSON2RowFactory</span><span class="p">(</span><span class="n">BaseGraphRowFactory</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Row Factory that returns the decoded graphson2 as DSE types.&quot;&quot;&quot;</span>
+        <span class="n">graphson_reader_class</span> <span class="o">=</span> <span class="n">GremlinGraphSONReaderV2</span>
+        <span class="n">graphson_reader_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;deserializer_map&#39;</span><span class="p">:</span> <span class="n">dse_graphson2_deserializers</span><span class="p">}</span>
+
+    <span class="n">gremlin_graphson2_traversal_row_factory</span> <span class="o">=</span> <span class="n">_GremlinGraphSON2RowFactory</span>
+    <span class="c1"># TODO remove in next major</span>
+    <span class="n">graph_traversal_row_factory</span> <span class="o">=</span> <span class="n">gremlin_graphson2_traversal_row_factory</span>
+
+    <span class="n">dse_graphson2_traversal_row_factory</span> <span class="o">=</span> <span class="n">_DseGraphSON2RowFactory</span>
+    <span class="c1"># TODO remove in next major</span>
+    <span class="n">graph_traversal_dse_object_row_factory</span> <span class="o">=</span> <span class="n">dse_graphson2_traversal_row_factory</span>
+
+
+    <span class="k">class</span> <span class="nc">_GremlinGraphSON3RowFactory</span><span class="p">(</span><span class="n">BaseGraphRowFactory</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Row Factory that returns the decoded graphson2.&quot;&quot;&quot;</span>
+        <span class="n">graphson_reader_class</span> <span class="o">=</span> <span class="n">GremlinGraphSONReaderV3</span>
+        <span class="n">graphson_reader_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;deserializer_map&#39;</span><span class="p">:</span> <span class="n">gremlin_graphson3_deserializers</span><span class="p">}</span>
+
+
+    <span class="k">class</span> <span class="nc">_DseGraphSON3RowFactory</span><span class="p">(</span><span class="n">BaseGraphRowFactory</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Row Factory that returns the decoded graphson3 as DSE types.&quot;&quot;&quot;</span>
+        <span class="n">graphson_reader_class</span> <span class="o">=</span> <span class="n">GremlinGraphSONReaderV3</span>
+        <span class="n">graphson_reader_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;deserializer_map&#39;</span><span class="p">:</span> <span class="n">dse_graphson3_deserializers</span><span class="p">}</span>
+
+
+    <span class="n">gremlin_graphson3_traversal_row_factory</span> <span class="o">=</span> <span class="n">_GremlinGraphSON3RowFactory</span>
+    <span class="n">dse_graphson3_traversal_row_factory</span> <span class="o">=</span> <span class="n">_DseGraphSON3RowFactory</span>
+
+
+<div class="viewcode-block" id="DSESessionRemoteGraphConnection"><a class="viewcode-back" href="../../../../api/cassandra/datastax/graph/fluent/index.html#cassandra.datastax.graph.fluent.DSESessionRemoteGraphConnection">[docs]</a>    <span class="k">class</span> <span class="nc">DSESessionRemoteGraphConnection</span><span class="p">(</span><span class="n">RemoteConnection</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        A Tinkerpop RemoteConnection to execute traversal queries on DSE.</span>
+
+<span class="sd">        :param session: A DSE session</span>
+<span class="sd">        :param graph_name: (Optional) DSE Graph name.</span>
+<span class="sd">        :param execution_profile: (Optional) Execution profile for traversal queries. Default is set to `EXEC_PROFILE_GRAPH_DEFAULT`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">session</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">graph_name</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">execution_profile</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session</span><span class="p">,</span> <span class="n">graph_name</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">execution_profile</span><span class="o">=</span><span class="n">EXEC_PROFILE_GRAPH_DEFAULT</span><span class="p">):</span>
+            <span class="nb">super</span><span class="p">(</span><span class="n">DSESessionRemoteGraphConnection</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">session</span><span class="p">,</span> <span class="n">Session</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;A DSE Session must be provided to execute graph traversal queries.&#39;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">session</span> <span class="o">=</span> <span class="n">session</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">graph_name</span> <span class="o">=</span> <span class="n">graph_name</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">execution_profile</span> <span class="o">=</span> <span class="n">execution_profile</span>
+
+        <span class="nd">@staticmethod</span>
+        <span class="k">def</span> <span class="nf">_traversers_generator</span><span class="p">(</span><span class="n">traversers</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">traversers</span><span class="p">:</span>
+                <span class="k">yield</span> <span class="n">Traverser</span><span class="p">(</span><span class="n">t</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">_prepare_query</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bytecode</span><span class="p">):</span>
+            <span class="n">ep</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">session</span><span class="o">.</span><span class="n">execution_profile_clone_update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">execution_profile</span><span class="p">)</span>
+            <span class="n">graph_options</span> <span class="o">=</span> <span class="n">ep</span><span class="o">.</span><span class="n">graph_options</span>
+            <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_name</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">graph_name</span> <span class="ow">or</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_name</span>
+            <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_language</span> <span class="o">=</span> <span class="n">DseGraph</span><span class="o">.</span><span class="n">DSE_GRAPH_QUERY_LANGUAGE</span>
+            <span class="c1"># We resolve the execution profile options here , to know how what gremlin factory to set</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">session</span><span class="o">.</span><span class="n">_resolve_execution_profile_options</span><span class="p">(</span><span class="n">ep</span><span class="p">)</span>
+
+            <span class="n">context</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="k">if</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_protocol</span> <span class="o">==</span> <span class="n">GraphProtocol</span><span class="o">.</span><span class="n">GRAPHSON_2_0</span><span class="p">:</span>
+                <span class="n">row_factory</span> <span class="o">=</span> <span class="n">gremlin_graphson2_traversal_row_factory</span>
+            <span class="k">elif</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_protocol</span> <span class="o">==</span> <span class="n">GraphProtocol</span><span class="o">.</span><span class="n">GRAPHSON_3_0</span><span class="p">:</span>
+                <span class="n">row_factory</span> <span class="o">=</span> <span class="n">gremlin_graphson3_traversal_row_factory</span>
+                <span class="n">context</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="s1">&#39;cluster&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">session</span><span class="o">.</span><span class="n">cluster</span><span class="p">,</span>
+                    <span class="s1">&#39;graph_name&#39;</span><span class="p">:</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_name</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s1">&#39;utf-8&#39;</span><span class="p">)</span>
+                <span class="p">}</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;Unknown graph protocol: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">graph_options</span><span class="o">.</span><span class="n">graph_protocol</span><span class="p">))</span>
+
+            <span class="n">ep</span><span class="o">.</span><span class="n">row_factory</span> <span class="o">=</span> <span class="n">row_factory</span>
+            <span class="n">query</span> <span class="o">=</span> <span class="n">DseGraph</span><span class="o">.</span><span class="n">query_from_traversal</span><span class="p">(</span><span class="n">bytecode</span><span class="p">,</span> <span class="n">graph_options</span><span class="o">.</span><span class="n">graph_protocol</span><span class="p">,</span> <span class="n">context</span><span class="p">)</span>
+
+            <span class="k">return</span> <span class="n">query</span><span class="p">,</span> <span class="n">ep</span>
+
+        <span class="nd">@staticmethod</span>
+        <span class="k">def</span> <span class="nf">_handle_query_results</span><span class="p">(</span><span class="n">result_set</span><span class="p">,</span> <span class="n">gremlin_future</span><span class="p">):</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">gremlin_future</span><span class="o">.</span><span class="n">set_result</span><span class="p">(</span>
+                    <span class="n">RemoteTraversal</span><span class="p">(</span><span class="n">DSESessionRemoteGraphConnection</span><span class="o">.</span><span class="n">_traversers_generator</span><span class="p">(</span><span class="n">result_set</span><span class="p">),</span> <span class="n">TraversalSideEffects</span><span class="p">())</span>
+                <span class="p">)</span>
+            <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="n">gremlin_future</span><span class="o">.</span><span class="n">set_exception</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+
+        <span class="nd">@staticmethod</span>
+        <span class="k">def</span> <span class="nf">_handle_query_error</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="n">gremlin_future</span><span class="p">):</span>
+            <span class="n">gremlin_future</span><span class="o">.</span><span class="n">set_exception</span><span class="p">(</span><span class="n">response</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">submit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bytecode</span><span class="p">):</span>
+            <span class="c1"># the only reason I don&#39;t use submitAsync here</span>
+            <span class="c1"># is to avoid an unuseful future wrap</span>
+            <span class="n">query</span><span class="p">,</span> <span class="n">ep</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_prepare_query</span><span class="p">(</span><span class="n">bytecode</span><span class="p">)</span>
+
+            <span class="n">traversers</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">session</span><span class="o">.</span><span class="n">execute_graph</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">execution_profile</span><span class="o">=</span><span class="n">ep</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">RemoteTraversal</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_traversers_generator</span><span class="p">(</span><span class="n">traversers</span><span class="p">),</span> <span class="n">TraversalSideEffects</span><span class="p">())</span>
+
+        <span class="k">def</span> <span class="nf">submitAsync</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bytecode</span><span class="p">):</span>
+            <span class="n">query</span><span class="p">,</span> <span class="n">ep</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_prepare_query</span><span class="p">(</span><span class="n">bytecode</span><span class="p">)</span>
+
+            <span class="c1"># to be compatible with gremlinpython, we need to return a concurrent.futures.Future</span>
+            <span class="n">gremlin_future</span> <span class="o">=</span> <span class="n">Future</span><span class="p">()</span>
+            <span class="n">response_future</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">session</span><span class="o">.</span><span class="n">execute_graph_async</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">execution_profile</span><span class="o">=</span><span class="n">ep</span><span class="p">)</span>
+            <span class="n">response_future</span><span class="o">.</span><span class="n">add_callback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_handle_query_results</span><span class="p">,</span> <span class="n">gremlin_future</span><span class="p">)</span>
+            <span class="n">response_future</span><span class="o">.</span><span class="n">add_errback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_handle_query_error</span><span class="p">,</span> <span class="n">gremlin_future</span><span class="p">)</span>
+
+            <span class="k">return</span> <span class="n">gremlin_future</span>
+
+        <span class="k">def</span> <span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+            <span class="k">return</span> <span class="s2">&quot;&lt;DSESessionRemoteGraphConnection: graph_name=&#39;</span><span class="si">{0}</span><span class="s2">&#39;&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">graph_name</span><span class="p">)</span>
+
+        <span class="fm">__repr__</span> <span class="o">=</span> <span class="fm">__str__</span></div>
+
+
+<div class="viewcode-block" id="DseGraph"><a class="viewcode-back" href="../../../../api/cassandra/datastax/graph/fluent/index.html#cassandra.datastax.graph.fluent.DseGraph">[docs]</a>    <span class="k">class</span> <span class="nc">DseGraph</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Dse Graph utility class for GraphTraversal construction and execution.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">DSE_GRAPH_QUERY_LANGUAGE</span> <span class="o">=</span> <span class="s1">&#39;bytecode-json&#39;</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Graph query language, Default is &#39;bytecode-json&#39; (GraphSON).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">DSE_GRAPH_QUERY_PROTOCOL</span> <span class="o">=</span> <span class="n">GraphProtocol</span><span class="o">.</span><span class="n">GRAPHSON_2_0</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Graph query language, Default is GraphProtocol.GRAPHSON_2_0.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="DseGraph.query_from_traversal"><a class="viewcode-back" href="../../../../api/cassandra/datastax/graph/fluent/index.html#cassandra.datastax.graph.fluent.DseGraph.query_from_traversal">[docs]</a>        <span class="nd">@staticmethod</span>
+        <span class="k">def</span> <span class="nf">query_from_traversal</span><span class="p">(</span><span class="n">traversal</span><span class="p">,</span> <span class="n">graph_protocol</span><span class="o">=</span><span class="n">DSE_GRAPH_QUERY_PROTOCOL</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+            <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            From a GraphTraversal, return a query string based on the language specified in `DseGraph.DSE_GRAPH_QUERY_LANGUAGE`.</span>
+
+<span class="sd">            :param traversal: The GraphTraversal object</span>
+<span class="sd">            :param graph_protocol: The graph protocol. Default is `DseGraph.DSE_GRAPH_QUERY_PROTOCOL`.</span>
+<span class="sd">            :param context: The dict of the serialization context, needed for GraphSON3 (tuple, udt).</span>
+<span class="sd">                            e.g: {&#39;cluster&#39;: cluster, &#39;graph_name&#39;: name}</span>
+<span class="sd">            &quot;&quot;&quot;</span>
+
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">traversal</span><span class="p">,</span> <span class="n">GraphTraversal</span><span class="p">):</span>
+                <span class="k">for</span> <span class="n">strategy</span> <span class="ow">in</span> <span class="n">traversal</span><span class="o">.</span><span class="n">traversal_strategies</span><span class="o">.</span><span class="n">traversal_strategies</span><span class="p">:</span>
+                    <span class="n">rc</span> <span class="o">=</span> <span class="n">strategy</span><span class="o">.</span><span class="n">remote_connection</span>
+                    <span class="k">if</span> <span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">rc</span><span class="p">,</span> <span class="n">DSESessionRemoteGraphConnection</span><span class="p">)</span> <span class="ow">and</span>
+                            <span class="n">rc</span><span class="o">.</span><span class="n">session</span> <span class="ow">or</span> <span class="n">rc</span><span class="o">.</span><span class="n">graph_name</span> <span class="ow">or</span> <span class="n">rc</span><span class="o">.</span><span class="n">execution_profile</span><span class="p">):</span>
+                        <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;GraphTraversal session, graph_name and execution_profile are &quot;</span>
+                                    <span class="s2">&quot;only taken into account when executed with TinkerPop.&quot;</span><span class="p">)</span>
+
+            <span class="k">return</span> <span class="n">_query_from_traversal</span><span class="p">(</span><span class="n">traversal</span><span class="p">,</span> <span class="n">graph_protocol</span><span class="p">,</span> <span class="n">context</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DseGraph.traversal_source"><a class="viewcode-back" href="../../../../api/cassandra/datastax/graph/fluent/index.html#cassandra.datastax.graph.fluent.DseGraph.traversal_source">[docs]</a>        <span class="nd">@staticmethod</span>
+        <span class="k">def</span> <span class="nf">traversal_source</span><span class="p">(</span><span class="n">session</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">graph_name</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">execution_profile</span><span class="o">=</span><span class="n">EXEC_PROFILE_GRAPH_DEFAULT</span><span class="p">,</span>
+                             <span class="n">traversal_class</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+            <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            Returns a TinkerPop GraphTraversalSource binded to the session and graph_name if provided.</span>
+
+<span class="sd">            :param session: (Optional) A DSE session</span>
+<span class="sd">            :param graph_name: (Optional) DSE Graph name</span>
+<span class="sd">            :param execution_profile: (Optional) Execution profile for traversal queries. Default is set to `EXEC_PROFILE_GRAPH_DEFAULT`.</span>
+<span class="sd">            :param traversal_class: (Optional) The GraphTraversalSource class to use (DSL).</span>
+
+<span class="sd">            .. code-block:: python</span>
+
+<span class="sd">                from cassandra.cluster import Cluster</span>
+<span class="sd">                from cassandra.datastax.graph.fluent import DseGraph</span>
+
+<span class="sd">                c = Cluster()</span>
+<span class="sd">                session = c.connect()</span>
+
+<span class="sd">                g = DseGraph.traversal_source(session, &#39;my_graph&#39;)</span>
+<span class="sd">                print g.V().valueMap().toList()</span>
+
+<span class="sd">            &quot;&quot;&quot;</span>
+
+            <span class="n">graph</span> <span class="o">=</span> <span class="n">Graph</span><span class="p">()</span>
+            <span class="n">traversal_source</span> <span class="o">=</span> <span class="n">graph</span><span class="o">.</span><span class="n">traversal</span><span class="p">(</span><span class="n">traversal_class</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">session</span><span class="p">:</span>
+                <span class="n">traversal_source</span> <span class="o">=</span> <span class="n">traversal_source</span><span class="o">.</span><span class="n">withRemote</span><span class="p">(</span>
+                    <span class="n">DSESessionRemoteGraphConnection</span><span class="p">(</span><span class="n">session</span><span class="p">,</span> <span class="n">graph_name</span><span class="p">,</span> <span class="n">execution_profile</span><span class="p">))</span>
+
+            <span class="k">return</span> <span class="n">traversal_source</span></div>
+
+<div class="viewcode-block" id="DseGraph.create_execution_profile"><a class="viewcode-back" href="../../../../api/cassandra/datastax/graph/fluent/index.html#cassandra.datastax.graph.fluent.DseGraph.create_execution_profile">[docs]</a>        <span class="nd">@staticmethod</span>
+        <span class="k">def</span> <span class="nf">create_execution_profile</span><span class="p">(</span><span class="n">graph_name</span><span class="p">,</span> <span class="n">graph_protocol</span><span class="o">=</span><span class="n">DSE_GRAPH_QUERY_PROTOCOL</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+            <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            Creates an ExecutionProfile for GraphTraversal execution. You need to register that execution profile to the</span>
+<span class="sd">            cluster by using `cluster.add_execution_profile`.</span>
+
+<span class="sd">            :param graph_name: The graph name</span>
+<span class="sd">            :param graph_protocol: (Optional) The graph protocol, default is `DSE_GRAPH_QUERY_PROTOCOL`.</span>
+<span class="sd">            &quot;&quot;&quot;</span>
+
+            <span class="k">if</span> <span class="n">graph_protocol</span> <span class="o">==</span> <span class="n">GraphProtocol</span><span class="o">.</span><span class="n">GRAPHSON_2_0</span><span class="p">:</span>
+                <span class="n">row_factory</span> <span class="o">=</span> <span class="n">dse_graphson2_traversal_row_factory</span>
+            <span class="k">elif</span> <span class="n">graph_protocol</span> <span class="o">==</span> <span class="n">GraphProtocol</span><span class="o">.</span><span class="n">GRAPHSON_3_0</span><span class="p">:</span>
+                <span class="n">row_factory</span> <span class="o">=</span> <span class="n">dse_graphson3_traversal_row_factory</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;Unknown graph protocol: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">graph_protocol</span><span class="p">))</span>
+
+            <span class="n">ep</span> <span class="o">=</span> <span class="n">GraphExecutionProfile</span><span class="p">(</span><span class="n">row_factory</span><span class="o">=</span><span class="n">row_factory</span><span class="p">,</span>
+                                       <span class="n">graph_options</span><span class="o">=</span><span class="n">GraphOptions</span><span class="p">(</span><span class="n">graph_name</span><span class="o">=</span><span class="n">graph_name</span><span class="p">,</span>
+                                                                  <span class="n">graph_language</span><span class="o">=</span><span class="n">DseGraph</span><span class="o">.</span><span class="n">DSE_GRAPH_QUERY_LANGUAGE</span><span class="p">,</span>
+                                                                  <span class="n">graph_protocol</span><span class="o">=</span><span class="n">graph_protocol</span><span class="p">),</span>
+                                       <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">ep</span></div>
+
+<div class="viewcode-block" id="DseGraph.batch"><a class="viewcode-back" href="../../../../api/cassandra/datastax/graph/fluent/index.html#cassandra.datastax.graph.fluent.DseGraph.batch">[docs]</a>        <span class="nd">@staticmethod</span>
+        <span class="k">def</span> <span class="nf">batch</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+            <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            Returns the :class:`cassandra.datastax.graph.fluent.query.TraversalBatch` object allowing to</span>
+<span class="sd">            execute multiple traversals in the same transaction.</span>
+<span class="sd">            &quot;&quot;&quot;</span>
+            <span class="k">return</span> <span class="n">_DefaultTraversalBatch</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div></div>
+</pre></div>
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../api/index.html">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../object_mapper.html">Object Mapper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../geo_types.html">DSE Geometry Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../graph.html">DataStax Graph Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../graph_fluent.html">DataStax Graph Fluent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">3.21.0-scylla <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="../../../../../master/index.html">master</a></li>
+        <li><a href="../../../../../3.22.0-scylla/index.html">3.22.0-scylla</a></li>
+        <li><a href="fluent.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="../../../../_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page cassandra.datastax.graph.fluent&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/_modules/cassandra/datastax/graph/fluent%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="../../../../_static/js/vendor/jquery.js"></script>
+<script src="../../../../_static/expertrec.js"></script>
+<script src="../../../../_static/js/foundation/foundation.js"></script>
+<script src="../../../../_static/js/foundation/foundation.topbar.js"></script>
+<script src="../../../../_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

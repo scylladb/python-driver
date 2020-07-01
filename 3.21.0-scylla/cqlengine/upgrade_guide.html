@@ -1,0 +1,426 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    Upgrade Guide | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="../_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../_static/clipboard.min.js"></script>
+    <script src="../_static/copybutton.js"></script>
+
+    <script src="../_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="../_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+                <p>
+                    <strong>
+                    
+                    You're reading the documentation for a development version.
+                    For the latest released version, please have a look at <a href="../../master/cqlengine/upgrade_guide.html">master</a>.
+                    
+                    </strong>
+                </p>
+            
+
+            <div class="section" id="upgrade-guide">
+<h1>Upgrade Guide<a class="headerlink" href="#upgrade-guide" title="Permalink to this headline">¶</a></h1>
+<p>This is an overview of things that changed as the cqlengine project was merged into
+scylla-driver. While efforts were taken to preserve the API and most functionality exactly,
+conversion to this package will still require certain minimal updates (namely, imports).</p>
+<p><strong>THERE IS ONE FUNCTIONAL CHANGE</strong>, described in the first section below.</p>
+<div class="section" id="functional-changes">
+<h2>Functional Changes<a class="headerlink" href="#functional-changes" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="list-prepend-reversing">
+<h3>List Prepend Reversing<a class="headerlink" href="#list-prepend-reversing" title="Permalink to this headline">¶</a></h3>
+<p>Legacy cqlengine included a workaround for a Cassandra bug in which prepended list segments were
+reversed (<a class="reference external" href="https://issues.apache.org/jira/browse/CASSANDRA-8733">CASSANDRA-8733</a>). As of
+this integration, this workaround is removed. The first released integrated version emits
+a warning when prepend is used. Subsequent versions will have this warning removed.</p>
+</div>
+<div class="section" id="date-column-type">
+<h3>Date Column Type<a class="headerlink" href="#date-column-type" title="Permalink to this headline">¶</a></h3>
+<p>The Date column type in legacy cqlengine used a <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> CQL type and truncated the time.
+Going forward, the <a class="reference internal" href="../api/cassandra/cqlengine/columns.html#cassandra.cqlengine.columns.Date" title="cassandra.cqlengine.columns.Date"><code class="xref py py-class docutils literal notranslate"><span class="pre">Date</span></code></a> type represents a <code class="docutils literal notranslate"><span class="pre">date</span></code> for Cassandra 2.2+
+(<a class="reference external" href="https://datastax-oss.atlassian.net/browse/PYTHON-245">PYTHON-245</a>).
+Users of the legacy functionality should convert models to use <a class="reference internal" href="../api/cassandra/cqlengine/columns.html#cassandra.cqlengine.columns.DateTime" title="cassandra.cqlengine.columns.DateTime"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateTime</span></code></a> (which
+uses <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> internally), and use the build-in <code class="docutils literal notranslate"><span class="pre">datetime.date</span></code> for input values.</p>
+</div>
+</div>
+<div class="section" id="remove-cqlengine">
+<h2>Remove cqlengine<a class="headerlink" href="#remove-cqlengine" title="Permalink to this headline">¶</a></h2>
+<p>To avoid confusion or mistakes using the legacy package in your application, it
+is prudent to remove the cqlengine package when upgrading to the integrated version.</p>
+<p>The driver setup script will warn if the legacy package is detected during install,
+but it will not prevent side-by-side installation.</p>
+</div>
+<div class="section" id="organization">
+<h2>Organization<a class="headerlink" href="#organization" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="imports">
+<h3>Imports<a class="headerlink" href="#imports" title="Permalink to this headline">¶</a></h3>
+<p>cqlengine is now integrated as a sub-package of the driver base package ‘cassandra’.
+Upgrading will require adjusting imports to cqlengine. For example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cqlengine</span> <span class="kn">import</span> <span class="n">columns</span>
+</pre></div>
+</div>
+<p>is now:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cqlengine</span> <span class="kn">import</span> <span class="n">columns</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="package-level-aliases">
+<h3>Package-Level Aliases<a class="headerlink" href="#package-level-aliases" title="Permalink to this headline">¶</a></h3>
+<p>Legacy cqlengine defined a number of aliases at the package level, which became redundant
+when the package was integrated for a driver. These have been removed in favor of absolute
+imports, and referring to cannonical definitions. For example, <code class="docutils literal notranslate"><span class="pre">cqlengine.ONE</span></code> was an alias
+of <code class="docutils literal notranslate"><span class="pre">cassandra.ConsistencyLevel.ONE</span></code>. In the integrated package, only the
+<a class="reference internal" href="../api/cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">cassandra.ConsistencyLevel</span></code></a> remains.</p>
+<p>Additionally, submodule aliases are removed from cqlengine in favor of absolute imports.</p>
+<p>These aliases are removed, and not deprecated because they should be straightforward to iron out
+at module load time.</p>
+</div>
+<div class="section" id="exceptions">
+<h3>Exceptions<a class="headerlink" href="#exceptions" title="Permalink to this headline">¶</a></h3>
+<p>The legacy cqlengine.exceptions module had a number of Exception classes that were variously
+common to the package, or only used in specific modules. Common exceptions were relocated to
+cqlengine, and specialized exceptions were placed in the module that raises them. Below is a
+listing of updated locations:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 48%" />
+<col style="width: 52%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Exception class</p></th>
+<th class="head"><p>New module</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>CQLEngineException</p></td>
+<td><p>cassandra.cqlengine</p></td>
+</tr>
+<tr class="row-odd"><td><p>ModelException</p></td>
+<td><p>cassandra.cqlengine.models</p></td>
+</tr>
+<tr class="row-even"><td><p>ValidationError</p></td>
+<td><p>cassandra.cqlengine</p></td>
+</tr>
+<tr class="row-odd"><td><p>UndefinedKeyspaceException</p></td>
+<td><p>cassandra.cqlengine.connection</p></td>
+</tr>
+<tr class="row-even"><td><p>LWTException</p></td>
+<td><p>cassandra.cqlengine.query</p></td>
+</tr>
+<tr class="row-odd"><td><p>IfNotExistsWithCounterColumn</p></td>
+<td><p>cassandra.cqlengine.query</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="unicodemixin-consolidation">
+<h3>UnicodeMixin Consolidation<a class="headerlink" href="#unicodemixin-consolidation" title="Permalink to this headline">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">class</span> <span class="pre">UnicodeMixin</span></code> was defined in several cqlengine modules. This has been consolidated
+to a single definition in the cqlengine package init file. This is not technically part of
+the API, but noted here for completeness.</p>
+</div>
+</div>
+<div class="section" id="api-deprecations">
+<h2>API Deprecations<a class="headerlink" href="#api-deprecations" title="Permalink to this headline">¶</a></h2>
+<p>This upgrade served as a good juncture to deprecate certain API features and invite users to upgrade
+to new ones. The first released version does not change functionality – only introduces deprecation
+warnings. Future releases will remove these features in favor of the alternatives.</p>
+<div class="section" id="float-double-overload">
+<h3>Float/Double Overload<a class="headerlink" href="#float-double-overload" title="Permalink to this headline">¶</a></h3>
+<p>Previously there was no <code class="docutils literal notranslate"><span class="pre">Double</span></code> column type. Doubles were modeled by specifying <code class="docutils literal notranslate"><span class="pre">Float(double_precision=True)</span></code>.
+This inititializer parameter is now deprecated. Applications should use <a class="reference internal" href="../api/cassandra/cqlengine/columns.html#cassandra.cqlengine.columns.Double" title="cassandra.cqlengine.columns.Double"><code class="xref py py-class docutils literal notranslate"><span class="pre">Double</span></code></a> for CQL <code class="docutils literal notranslate"><span class="pre">double</span></code>, and <a class="reference internal" href="../api/cassandra/cqlengine/columns.html#cassandra.cqlengine.columns.Float" title="cassandra.cqlengine.columns.Float"><code class="xref py py-class docutils literal notranslate"><span class="pre">Float</span></code></a>
+for CQL <code class="docutils literal notranslate"><span class="pre">float</span></code>.</p>
+</div>
+<div class="section" id="schema-management">
+<h3>Schema Management<a class="headerlink" href="#schema-management" title="Permalink to this headline">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.management.create_keyspace</span></code> is deprecated. Instead, use the new replication-strategy-specific
+functions that accept explicit options for known strategies:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="../api/cassandra/cqlengine/management.html#cassandra.cqlengine.management.create_keyspace_simple" title="cassandra.cqlengine.management.create_keyspace_simple"><code class="xref py py-func docutils literal notranslate"><span class="pre">create_keyspace_simple()</span></code></a></p></li>
+<li><p><a class="reference internal" href="../api/cassandra/cqlengine/management.html#cassandra.cqlengine.management.create_keyspace_network_topology" title="cassandra.cqlengine.management.create_keyspace_network_topology"><code class="xref py py-func docutils literal notranslate"><span class="pre">create_keyspace_network_topology()</span></code></a></p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.management.delete_keyspace</span></code> is deprecated in favor of a new function, <a class="reference internal" href="../api/cassandra/cqlengine/management.html#cassandra.cqlengine.management.drop_keyspace" title="cassandra.cqlengine.management.drop_keyspace"><code class="xref py py-func docutils literal notranslate"><span class="pre">drop_keyspace()</span></code></a>. The
+intent is simply to make the function match the CQL verb it invokes.</p>
+</div>
+<div class="section" id="model-inheritance">
+<h3>Model Inheritance<a class="headerlink" href="#model-inheritance" title="Permalink to this headline">¶</a></h3>
+<p>The names for class attributes controlling model inheritance are changing. Changes are as follows:</p>
+<ul class="simple">
+<li><p>Replace ‘polymorphic_key’ in the base class Column definition with <a class="reference internal" href="../api/cassandra/cqlengine/columns.html#cassandra.cqlengine.columns.Column.discriminator_column" title="cassandra.cqlengine.columns.Column.discriminator_column"><code class="xref py py-attr docutils literal notranslate"><span class="pre">discriminator_column</span></code></a></p></li>
+<li><p>Replace the ‘__polymorphic_key__’ class attribute the derived classes with <a class="reference internal" href="../api/cassandra/cqlengine/models.html#cassandra.cqlengine.models.Model.__discriminator_value__" title="cassandra.cqlengine.models.Model.__discriminator_value__"><code class="xref py py-attr docutils literal notranslate"><span class="pre">__discriminator_value__</span></code></a></p></li>
+</ul>
+<p>The functionality is unchanged – the intent here is to make the names and language around these attributes more precise.
+For now, the old names are just deprecated, and the mapper will emit warnings if they are used. The old names
+will be removed in a future version.</p>
+<p>The example below shows a simple translation:</p>
+<p>Before:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">Pet</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">__table_name__</span> <span class="o">=</span> <span class="s1">&#39;pet&#39;</span>
+    <span class="n">owner_id</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">pet_id</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">pet_type</span> <span class="o">=</span> <span class="n">Text</span><span class="p">(</span><span class="n">polymorphic_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">Text</span><span class="p">()</span>
+
+<span class="k">class</span> <span class="nc">Cat</span><span class="p">(</span><span class="n">Pet</span><span class="p">):</span>
+    <span class="n">__polymorphic_key__</span> <span class="o">=</span> <span class="s1">&#39;cat&#39;</span>
+
+<span class="k">class</span> <span class="nc">Dog</span><span class="p">(</span><span class="n">Pet</span><span class="p">):</span>
+    <span class="n">__polymorphic_key__</span> <span class="o">=</span> <span class="s1">&#39;dog&#39;</span>
+</pre></div>
+</div>
+<p>After:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">Pet</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">__table_name__</span> <span class="o">=</span> <span class="s1">&#39;pet&#39;</span>
+    <span class="n">owner_id</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">pet_id</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">pet_type</span> <span class="o">=</span> <span class="n">Text</span><span class="p">(</span><span class="n">discriminator_column</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">Text</span><span class="p">()</span>
+
+<span class="k">class</span> <span class="nc">Cat</span><span class="p">(</span><span class="n">Pet</span><span class="p">):</span>
+    <span class="n">__discriminator_value__</span> <span class="o">=</span> <span class="s1">&#39;cat&#39;</span>
+
+<span class="k">class</span> <span class="nc">Dog</span><span class="p">(</span><span class="n">Pet</span><span class="p">):</span>
+    <span class="n">__discriminator_value__</span> <span class="o">=</span> <span class="s1">&#39;dog&#39;</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="timeuuid-from-datetime">
+<h3>TimeUUID.from_datetime<a class="headerlink" href="#timeuuid-from-datetime" title="Permalink to this headline">¶</a></h3>
+<p>This function is deprecated in favor of the core utility function <a class="reference internal" href="../api/cassandra/util.html#cassandra.util.uuid_from_time" title="cassandra.util.uuid_from_time"><code class="xref py py-func docutils literal notranslate"><span class="pre">uuid_from_time()</span></code></a>.</p>
+</div>
+</div>
+</div>
+
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../api/index.html">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../object_mapper.html">Object Mapper</a><ul class="current">
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Upgrade Guide</a></li>
+<li class="toctree-l2"><a class="reference internal" href="models.html">Models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="queryset.html">Making Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="batches.html">Batch Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="connections.html">Connections</a></li>
+<li class="toctree-l2"><a class="reference internal" href="third_party.html">Third party integrations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../geo_types.html">DSE Geometry Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../graph.html">DataStax Graph Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../graph_fluent.html">DataStax Graph Fluent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cloud.html">Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">3.21.0-scylla <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="../../master/cqlengine/upgrade_guide.html">master</a></li>
+        <li><a href="../../3.22.0-scylla/cqlengine/upgrade_guide.html">3.22.0-scylla</a></li>
+        <li><a href="upgrade_guide.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="../_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page Upgrade Guide&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/cqlengine/upgrade_guide%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="../_static/js/vendor/jquery.js"></script>
+<script src="../_static/expertrec.js"></script>
+<script src="../_static/js/foundation/foundation.js"></script>
+<script src="../_static/js/foundation/foundation.topbar.js"></script>
+<script src="../_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

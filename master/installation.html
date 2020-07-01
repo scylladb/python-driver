@@ -1,0 +1,446 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    Installation | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="_static/copybutton.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/doctools.js"></script>
+    <script src="_static/language_data.js"></script>
+    <script src="_static/clipboard.min.js"></script>
+    <script src="_static/copybutton.js"></script>
+
+    <script src="_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+
+            <div class="section" id="installation">
+<h1>Installation<a class="headerlink" href="#installation" title="Permalink to this headline">¶</a></h1>
+<div class="section" id="supported-platforms">
+<h2>Supported Platforms<a class="headerlink" href="#supported-platforms" title="Permalink to this headline">¶</a></h2>
+<p>Python 2.7, 3.4, 3.5, 3.6, 3.7 and 3.8 are supported. Both CPython (the standard Python
+implementation) and <a class="reference external" href="http://pypy.org">PyPy</a> are supported and tested.</p>
+<p>Linux, OSX, and Windows are supported.</p>
+</div>
+<div class="section" id="installation-through-pip">
+<h2>Installation through pip<a class="headerlink" href="#installation-through-pip" title="Permalink to this headline">¶</a></h2>
+<p><a class="reference external" href="https://pypi.org/project/pip/">pip</a> is the suggested tool for installing
+packages.  It will handle installing all Python dependencies for the driver at
+the same time as the driver itself.  To install the driver*:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">scylla</span><span class="o">-</span><span class="n">driver</span>
+</pre></div>
+</div>
+<p>You can use <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">--pre</span> <span class="pre">scylla-driver</span></code> if you need to install a beta version.</p>
+<p><strong>*Note</strong>: if intending to use optional extensions, install the <a class="reference external" href="#optional-non-python-dependencies">dependencies</a> first. The driver may need to be reinstalled if dependencies are added after the initial installation.</p>
+</div>
+<div class="section" id="verifying-your-installation">
+<h2>Verifying your Installation<a class="headerlink" href="#verifying-your-installation" title="Permalink to this headline">¶</a></h2>
+<p>To check if the installation was successful, you can run:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="o">-</span><span class="n">c</span> <span class="s1">&#39;import cassandra; print cassandra.__version__&#39;</span>
+</pre></div>
+</div>
+<p>It should print something like “3.22.0”.</p>
+</div>
+<div class="section" id="optional-datastax-graph">
+<span id="installation-datastax-graph"></span><h2>(<em>Optional</em>) DataStax Graph<a class="headerlink" href="#optional-datastax-graph" title="Permalink to this headline">¶</a></h2>
+<p>The driver provides an optional fluent graph API that depends on Apache TinkerPop (gremlinpython). It is
+not installed by default. To be able to build Gremlin traversals, you need to install
+the <cite>graph</cite> requirements:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">scylla</span><span class="o">-</span><span class="n">driver</span><span class="p">[</span><span class="n">graph</span><span class="p">]</span>
+</pre></div>
+</div>
+<p>See <a class="reference internal" href="graph_fluent.html"><span class="doc">DataStax Graph Fluent API</span></a> for more details about this API.</p>
+</div>
+<div class="section" id="optional-compression-support">
+<h2>(<em>Optional</em>) Compression Support<a class="headerlink" href="#optional-compression-support" title="Permalink to this headline">¶</a></h2>
+<p>Compression can optionally be used for communication between the driver and
+Cassandra.  There are currently two supported compression algorithms:
+snappy (in Cassandra 1.2+) and LZ4 (only in Cassandra 2.0+).  If either is
+available for the driver and Cassandra also supports it, it will
+be used automatically.</p>
+<p>For lz4 support:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">lz4</span>
+</pre></div>
+</div>
+<p>For snappy support:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">python</span><span class="o">-</span><span class="n">snappy</span>
+</pre></div>
+</div>
+<p>(If using a Debian Linux derivative such as Ubuntu, it may be easier to
+just run <code class="docutils literal notranslate"><span class="pre">apt-get</span> <span class="pre">install</span> <span class="pre">python-snappy</span></code>.)</p>
+</div>
+<div class="section" id="optional-metrics-support">
+<h2>(<em>Optional</em>) Metrics Support<a class="headerlink" href="#optional-metrics-support" title="Permalink to this headline">¶</a></h2>
+<p>The driver has built-in support for capturing <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Cluster.metrics" title="cassandra.cluster.Cluster.metrics"><code class="xref py py-attr docutils literal notranslate"><span class="pre">Cluster.metrics</span></code></a> about
+the queries you run.  However, the <code class="docutils literal notranslate"><span class="pre">scales</span></code> library is required to
+support this:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">scales</span>
+</pre></div>
+</div>
+<div class="section" id="speeding-up-installation">
+<h3>Speeding Up Installation<a class="headerlink" href="#speeding-up-installation" title="Permalink to this headline">¶</a></h3>
+<p>By default, installing the driver through <code class="docutils literal notranslate"><span class="pre">pip</span></code> uses a pre-compiled, platform-specific wheel when available.
+If using a source distribution rather than a wheel, Cython is used to compile certain parts of the driver.
+This makes those hot paths faster at runtime, but the Cython compilation
+process can take a long time – as long as 10 minutes in some environments.</p>
+<p>In environments where performance is less important, it may be worth it to
+<a class="reference internal" href="#cython-extensions"><span class="std std-ref">disable Cython as documented below</span></a>.
+You can also use <code class="docutils literal notranslate"><span class="pre">CASS_DRIVER_BUILD_CONCURRENCY</span></code> to increase the number of
+threads used to build the driver and any C extensions:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$ <span class="c1"># installing from source</span>
+$ <span class="nv">CASS_DRIVER_BUILD_CONCURRENCY</span><span class="o">=</span><span class="m">8</span> python setup.py install
+$ <span class="c1"># installing from pip</span>
+$ <span class="nv">CASS_DRIVER_BUILD_CONCURRENCY</span><span class="o">=</span><span class="m">8</span> pip install scylla-driver
+</pre></div>
+</div>
+</div>
+<div class="section" id="osx-installation-error">
+<h3>OSX Installation Error<a class="headerlink" href="#osx-installation-error" title="Permalink to this headline">¶</a></h3>
+<p>If you’re installing on OSX and have XCode 5.1 installed, you may see an error like this:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">clang</span><span class="p">:</span> <span class="n">error</span><span class="p">:</span> <span class="n">unknown</span> <span class="n">argument</span><span class="p">:</span> <span class="s1">&#39;-mno-fused-madd&#39;</span> <span class="p">[</span><span class="o">-</span><span class="n">Wunused</span><span class="o">-</span><span class="n">command</span><span class="o">-</span><span class="n">line</span><span class="o">-</span><span class="n">argument</span><span class="o">-</span><span class="n">hard</span><span class="o">-</span><span class="n">error</span><span class="o">-</span><span class="ow">in</span><span class="o">-</span><span class="n">future</span><span class="p">]</span>
+</pre></div>
+</div>
+<p>To fix this, re-run the installation with an extra compilation flag:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">ARCHFLAGS</span><span class="o">=</span>-Wno-error<span class="o">=</span>unused-command-line-argument-hard-error-in-future pip install scylla-driver
+</pre></div>
+</div>
+</div>
+</div>
+<div class="section" id="windows-installation-notes">
+<span id="windows-build"></span><h2>Windows Installation Notes<a class="headerlink" href="#windows-installation-notes" title="Permalink to this headline">¶</a></h2>
+<p>Installing the driver with extensions in Windows sometimes presents some challenges. A few notes about common
+hang-ups:</p>
+<p>Setup requires a compiler. When using Python 2, this is as simple as installing <a class="reference external" href="http://aka.ms/vcpython27">this package</a>
+(this link is also emitted during install if setuptools is unable to find the resources it needs). Depending on your
+system settings, this package may install as a user-specific application. Make sure to install for everyone, or at least
+as the user that will be building the Python environment.</p>
+<p>It is also possible to run the build with your compiler of choice. Just make sure to have your environment setup with
+the proper paths. Make sure the compiler target architecture matches the bitness of your Python runtime.
+Perhaps the easiest way to do this is to run the build/install from a Visual Studio Command Prompt (a
+shortcut installed with Visual Studio that sources the appropriate environment and presents a shell).</p>
+</div>
+<div class="section" id="manual-installation">
+<h2>Manual Installation<a class="headerlink" href="#manual-installation" title="Permalink to this headline">¶</a></h2>
+<p>You can always install the driver directly from a source checkout or tarball.
+When installing manually, ensure the python dependencies are already
+installed. You can find the list of dependencies in
+<a class="reference external" href="https://github.com/datastax/python-driver/blob/master/requirements.txt">requirements.txt</a>.</p>
+<p>Once the dependencies are installed, simply run:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="n">setup</span><span class="o">.</span><span class="n">py</span> <span class="n">install</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="optional-non-python-dependencies">
+<h2>(<em>Optional</em>) Non-python Dependencies<a class="headerlink" href="#optional-non-python-dependencies" title="Permalink to this headline">¶</a></h2>
+<p>The driver has several <strong>optional</strong> features that have non-Python dependencies.</p>
+<div class="section" id="c-extensions">
+<h3>C Extensions<a class="headerlink" href="#c-extensions" title="Permalink to this headline">¶</a></h3>
+<p>By default, a number of extensions are compiled, providing faster hashing
+for token-aware routing with the <code class="docutils literal notranslate"><span class="pre">Murmur3Partitioner</span></code>,
+<a class="reference external" href="http://software.schmorp.de/pkg/libev.html">libev</a> event loop integration,
+and Cython optimized extensions.</p>
+<p>When installing manually through setup.py, you can disable both with
+the <code class="docutils literal notranslate"><span class="pre">--no-extensions</span></code> option, or selectively disable them with
+with <code class="docutils literal notranslate"><span class="pre">--no-murmur3</span></code>, <code class="docutils literal notranslate"><span class="pre">--no-libev</span></code>, or <code class="docutils literal notranslate"><span class="pre">--no-cython</span></code>.</p>
+<p>To compile the extensions, ensure that GCC and the Python headers are available.</p>
+<p>On Ubuntu and Debian, this can be accomplished by running:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>$ sudo apt-get install gcc python-dev
+</pre></div>
+</div>
+<p>On RedHat and RedHat-based systems like CentOS and Fedora:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>$ sudo yum install gcc python-devel
+</pre></div>
+</div>
+<p>On OS X, homebrew installations of Python should provide the necessary headers.</p>
+<p>See <a class="reference internal" href="#windows-build"><span class="std std-ref">Windows Installation Notes</span></a> for notes on configuring the build environment on Windows.</p>
+<div class="section" id="cython-based-extensions">
+<span id="cython-extensions"></span><h4>Cython-based Extensions<a class="headerlink" href="#cython-based-extensions" title="Permalink to this headline">¶</a></h4>
+<p>By default, this package uses <a class="reference external" href="http://cython.org/">Cython</a> to optimize core modules and build custom extensions.
+This is not a hard requirement, but is engaged by default to build extensions offering better performance than the
+pure Python implementation.</p>
+<p>This is a costly build phase, especially in clean environments where the Cython compiler must be built
+This build phase can be avoided using the build switch, or an environment variable:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="n">setup</span><span class="o">.</span><span class="n">py</span> <span class="n">install</span> <span class="o">--</span><span class="n">no</span><span class="o">-</span><span class="n">cython</span>
+</pre></div>
+</div>
+<p>Alternatively, an environment variable can be used to switch this option regardless of
+context:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CASS_DRIVER_NO_CYTHON</span><span class="o">=</span><span class="mi">1</span> <span class="o">&lt;</span><span class="n">your</span> <span class="n">script</span> <span class="n">here</span><span class="o">&gt;</span>
+<span class="o">-</span> <span class="ow">or</span><span class="p">,</span> <span class="n">to</span> <span class="n">disable</span> <span class="nb">all</span> <span class="n">extensions</span><span class="p">:</span>
+<span class="n">CASS_DRIVER_NO_EXTENSIONS</span><span class="o">=</span><span class="mi">1</span> <span class="o">&lt;</span><span class="n">your</span> <span class="n">script</span> <span class="n">here</span><span class="o">&gt;</span>
+</pre></div>
+</div>
+<p>This method is required when using pip, which provides no other way of injecting user options in a single command:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CASS_DRIVER_NO_CYTHON</span><span class="o">=</span><span class="mi">1</span> <span class="n">pip</span> <span class="n">install</span> <span class="n">scylla</span><span class="o">-</span><span class="n">driver</span>
+<span class="n">CASS_DRIVER_NO_CYTHON</span><span class="o">=</span><span class="mi">1</span> <span class="n">sudo</span> <span class="o">-</span><span class="n">E</span> <span class="n">pip</span> <span class="n">install</span> <span class="o">~/</span><span class="n">python</span><span class="o">-</span><span class="n">driver</span>
+</pre></div>
+</div>
+<p>The environment variable is the preferred option because it spans all invocations of setup.py, and will
+prevent Cython from being materialized as a setup requirement.</p>
+<p>If your sudo configuration does not allow SETENV, you must push the option flag down via pip. However, pip
+applies these options to all dependencies (which break on the custom flag). Therefore, you must first install
+dependencies, then use install-option:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sudo</span> <span class="n">pip</span> <span class="n">install</span> <span class="n">six</span> <span class="n">futures</span>
+<span class="n">sudo</span> <span class="n">pip</span> <span class="n">install</span> <span class="o">--</span><span class="n">install</span><span class="o">-</span><span class="n">option</span><span class="o">=</span><span class="s2">&quot;--no-cython&quot;</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="section" id="libev-support">
+<h3>libev support<a class="headerlink" href="#libev-support" title="Permalink to this headline">¶</a></h3>
+<p>The driver currently uses Python’s <code class="docutils literal notranslate"><span class="pre">asyncore</span></code> module for its default
+event loop.  For better performance, <code class="docutils literal notranslate"><span class="pre">libev</span></code> is also supported through
+a C extension.</p>
+<p>If you’re on Linux, you should be able to install libev
+through a package manager.  For example, on Debian/Ubuntu:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>$ sudo apt-get install libev4 libev-dev
+</pre></div>
+</div>
+<p>On RHEL/CentOS/Fedora:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>$ sudo yum install libev libev-devel
+</pre></div>
+</div>
+<p>If you’re on Mac OS X, you should be able to install libev
+through <a class="reference external" href="http://brew.sh/">Homebrew</a>. For example, on Mac OS X:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>$ brew install libev
+</pre></div>
+</div>
+<p>The libev extension is not built for Windows (the build process is complex, and the Windows implementation uses
+select anyway).</p>
+<p>If successful, you should be able to build and install the extension
+(just using <code class="docutils literal notranslate"><span class="pre">setup.py</span> <span class="pre">build</span></code> or <code class="docutils literal notranslate"><span class="pre">setup.py</span> <span class="pre">install</span></code>) and then use
+the libev event loop by doing the following:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">cassandra.io.libevreactor</span> <span class="kn">import</span> <span class="n">LibevConnection</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">cassandra.cluster</span> <span class="kn">import</span> <span class="n">Cluster</span>
+
+<span class="gp">&gt;&gt;&gt; </span><span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">()</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">cluster</span><span class="o">.</span><span class="n">connection_class</span> <span class="o">=</span> <span class="n">LibevConnection</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">session</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="section" id="optional-configuring-ssl">
+<h2>(<em>Optional</em>) Configuring SSL<a class="headerlink" href="#optional-configuring-ssl" title="Permalink to this headline">¶</a></h2>
+<p>Andrew Mussey has published a thorough guide on
+<a class="reference external" href="http://blog.amussey.com/post/64036730812/cassandra-2-0-client-server-ssl-with-datastax-python">Using SSL with the DataStax Python driver</a>.</p>
+</div>
+</div>
+
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="api/index.html">API Documentation</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="scylla_specific.html">Scylla Specific Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="object_mapper.html">Object Mapper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">master <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="installation.html">master</a></li>
+        <li><a href="../3.22.0-scylla/installation.html">3.22.0-scylla</a></li>
+        <li><a href="../3.21.0-scylla/installation.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page Installation&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/installation%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="_static/js/vendor/jquery.js"></script>
+<script src="_static/expertrec.js"></script>
+<script src="_static/js/foundation/foundation.js"></script>
+<script src="_static/js/foundation/foundation.topbar.js"></script>
+<script src="_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

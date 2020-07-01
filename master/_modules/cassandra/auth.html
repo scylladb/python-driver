@@ -1,0 +1,549 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    cassandra.auth | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="../../_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx_tabs/semantic-ui-2.4.1/segment.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx_tabs/semantic-ui-2.4.1/menu.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx_tabs/tabs.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/language_data.js"></script>
+    <script src="../../_static/clipboard.min.js"></script>
+    <script src="../../_static/copybutton.js"></script>
+    <script src="../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.js"></script>
+    <script src="../../_static/sphinx_tabs/tabs.js"></script>
+
+    <script src="../../_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="../../_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+
+            <h1>Source code for cassandra.auth</h1><div class="highlight"><pre>
+<span></span><span class="c1"># Copyright DataStax, Inc.</span>
+<span class="c1">#</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># you may not use this file except in compliance with the License.</span>
+<span class="c1"># You may obtain a copy of the License at</span>
+<span class="c1">#</span>
+<span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
+<span class="c1">#</span>
+<span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
+<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
+<span class="c1"># See the License for the specific language governing permissions and</span>
+<span class="c1"># limitations under the License.</span>
+
+<span class="kn">import</span> <span class="nn">socket</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">kerberos</span>
+    <span class="n">_have_kerberos</span> <span class="o">=</span> <span class="kc">True</span>
+<span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+    <span class="n">_have_kerberos</span> <span class="o">=</span> <span class="kc">False</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">from</span> <span class="nn">puresasl.client</span> <span class="kn">import</span> <span class="n">SASLClient</span>
+    <span class="n">_have_puresasl</span> <span class="o">=</span> <span class="kc">True</span>
+<span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+    <span class="n">_have_puresasl</span> <span class="o">=</span> <span class="kc">False</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">from</span> <span class="nn">puresasl.client</span> <span class="kn">import</span> <span class="n">SASLClient</span>
+<span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+    <span class="n">SASLClient</span> <span class="o">=</span> <span class="kc">None</span>
+
+<span class="kn">import</span> <span class="nn">six</span>
+
+<span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+<span class="c1"># Custom payload keys related to DSE Unified Auth</span>
+<span class="n">_proxy_execute_key</span> <span class="o">=</span> <span class="s1">&#39;ProxyExecute&#39;</span>
+
+
+<div class="viewcode-block" id="AuthProvider"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.AuthProvider">[docs]</a><span class="k">class</span> <span class="nc">AuthProvider</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    An abstract class that defines the interface that will be used for</span>
+<span class="sd">    creating :class:`~.Authenticator` instances when opening new</span>
+<span class="sd">    connections to Cassandra.</span>
+
+<span class="sd">    .. versionadded:: 2.0.0</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="AuthProvider.new_authenticator"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.AuthProvider.new_authenticator">[docs]</a>    <span class="k">def</span> <span class="nf">new_authenticator</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Implementations of this class should return a new instance</span>
+<span class="sd">        of :class:`~.Authenticator` or one of its subclasses.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span></div></div>
+
+
+<div class="viewcode-block" id="Authenticator"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.Authenticator">[docs]</a><span class="k">class</span> <span class="nc">Authenticator</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    An abstract class that handles SASL authentication with Cassandra servers.</span>
+
+<span class="sd">    Each time a new connection is created and the server requires authentication,</span>
+<span class="sd">    a new instance of this class will be created by the corresponding</span>
+<span class="sd">    :class:`~.AuthProvider` to handler that authentication. The lifecycle of the</span>
+<span class="sd">    new :class:`~.Authenticator` will the be:</span>
+
+<span class="sd">    1) The :meth:`~.initial_response()` method will be called. The return</span>
+<span class="sd">    value will be sent to the server to initiate the handshake.</span>
+
+<span class="sd">    2) The server will respond to each client response by either issuing a</span>
+<span class="sd">    challenge or indicating that the authentication is complete (successful or not).</span>
+<span class="sd">    If a new challenge is issued, :meth:`~.evaluate_challenge()`</span>
+<span class="sd">    will be called to produce a response that will be sent to the</span>
+<span class="sd">    server. This challenge/response negotiation will continue until the server</span>
+<span class="sd">    responds that authentication is successful (or an :exc:`~.AuthenticationFailed`</span>
+<span class="sd">    is raised).</span>
+
+<span class="sd">    3) When the server indicates that authentication is successful,</span>
+<span class="sd">    :meth:`~.on_authentication_success` will be called a token string that</span>
+<span class="sd">    that the server may optionally have sent.</span>
+
+<span class="sd">    The exact nature of the negotiation between the client and server is specific</span>
+<span class="sd">    to the authentication mechanism configured server-side.</span>
+
+<span class="sd">    .. versionadded:: 2.0.0</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">server_authenticator_class</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot; Set during the connection AUTHENTICATE phase &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="Authenticator.initial_response"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.Authenticator.initial_response">[docs]</a>    <span class="k">def</span> <span class="nf">initial_response</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns an message to send to the server to initiate the SASL handshake.</span>
+<span class="sd">        :const:`None` may be returned to send an empty message.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="Authenticator.evaluate_challenge"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.Authenticator.evaluate_challenge">[docs]</a>    <span class="k">def</span> <span class="nf">evaluate_challenge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">challenge</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Called when the server sends a challenge message.  Generally, this method</span>
+<span class="sd">        should return :const:`None` when authentication is complete from a</span>
+<span class="sd">        client perspective.  Otherwise, a string should be returned.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="Authenticator.on_authentication_success"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.Authenticator.on_authentication_success">[docs]</a>    <span class="k">def</span> <span class="nf">on_authentication_success</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">token</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Called when the server indicates that authentication was successful.</span>
+<span class="sd">        Depending on the authentication mechanism, `token` may be :const:`None`</span>
+<span class="sd">        or a string.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">pass</span></div></div>
+
+
+<div class="viewcode-block" id="PlainTextAuthProvider"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.PlainTextAuthProvider">[docs]</a><span class="k">class</span> <span class="nc">PlainTextAuthProvider</span><span class="p">(</span><span class="n">AuthProvider</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    An :class:`~.AuthProvider` that works with Cassandra&#39;s PasswordAuthenticator.</span>
+
+<span class="sd">    Example usage::</span>
+
+<span class="sd">        from cassandra.cluster import Cluster</span>
+<span class="sd">        from cassandra.auth import PlainTextAuthProvider</span>
+
+<span class="sd">        auth_provider = PlainTextAuthProvider(</span>
+<span class="sd">                username=&#39;cassandra&#39;, password=&#39;cassandra&#39;)</span>
+<span class="sd">        cluster = Cluster(auth_provider=auth_provider)</span>
+
+<span class="sd">    .. versionadded:: 2.0.0</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">username</span><span class="p">,</span> <span class="n">password</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">username</span> <span class="o">=</span> <span class="n">username</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">password</span> <span class="o">=</span> <span class="n">password</span>
+
+<div class="viewcode-block" id="PlainTextAuthProvider.new_authenticator"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.PlainTextAuthProvider.new_authenticator">[docs]</a>    <span class="k">def</span> <span class="nf">new_authenticator</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">PlainTextAuthenticator</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">username</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">password</span><span class="p">)</span></div></div>
+
+
+<span class="k">class</span> <span class="nc">TransitionalModePlainTextAuthProvider</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    An :class:`~.AuthProvider` that works with DSE TransitionalModePlainTextAuthenticator.</span>
+
+<span class="sd">    Example usage::</span>
+
+<span class="sd">        from cassandra.cluster import Cluster</span>
+<span class="sd">        from cassandra.auth import TransitionalModePlainTextAuthProvider</span>
+
+<span class="sd">        auth_provider = TransitionalModePlainTextAuthProvider()</span>
+<span class="sd">        cluster = Cluster(auth_provider=auth_provider)</span>
+
+<span class="sd">    .. warning:: TransitionalModePlainTextAuthProvider will be removed in scylla-driver</span>
+<span class="sd">                 4.0. The transitional mode will be handled internally without the need</span>
+<span class="sd">                 of any auth provider.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># TODO remove next major</span>
+        <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;TransitionalModePlainTextAuthProvider will be removed in scylla-driver &quot;</span>
+                    <span class="s2">&quot;4.0. The transitional mode will be handled internally without the need &quot;</span>
+                    <span class="s2">&quot;of any auth provider.&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">new_authenticator</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">TransitionalModePlainTextAuthenticator</span><span class="p">()</span>
+
+
+<div class="viewcode-block" id="SaslAuthProvider"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.SaslAuthProvider">[docs]</a><span class="k">class</span> <span class="nc">SaslAuthProvider</span><span class="p">(</span><span class="n">AuthProvider</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    An :class:`~.AuthProvider` supporting general SASL auth mechanisms</span>
+
+<span class="sd">    Suitable for GSSAPI or other SASL mechanisms</span>
+
+<span class="sd">    Example usage::</span>
+
+<span class="sd">        from cassandra.cluster import Cluster</span>
+<span class="sd">        from cassandra.auth import SaslAuthProvider</span>
+
+<span class="sd">        sasl_kwargs = {&#39;service&#39;: &#39;something&#39;,</span>
+<span class="sd">                       &#39;mechanism&#39;: &#39;GSSAPI&#39;,</span>
+<span class="sd">                       &#39;qops&#39;: &#39;auth&#39;.split(&#39;,&#39;)}</span>
+<span class="sd">        auth_provider = SaslAuthProvider(**sasl_kwargs)</span>
+<span class="sd">        cluster = Cluster(auth_provider=auth_provider)</span>
+
+<span class="sd">    .. versionadded:: 2.1.4</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">sasl_kwargs</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">SASLClient</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span><span class="s1">&#39;The puresasl library has not been installed&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="s1">&#39;host&#39;</span> <span class="ow">in</span> <span class="n">sasl_kwargs</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;kwargs should not contain &#39;host&#39; since it is passed dynamically to new_authenticator&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sasl_kwargs</span> <span class="o">=</span> <span class="n">sasl_kwargs</span>
+
+<div class="viewcode-block" id="SaslAuthProvider.new_authenticator"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.SaslAuthProvider.new_authenticator">[docs]</a>    <span class="k">def</span> <span class="nf">new_authenticator</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">SaslAuthenticator</span><span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">sasl_kwargs</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="SaslAuthenticator"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.SaslAuthenticator">[docs]</a><span class="k">class</span> <span class="nc">SaslAuthenticator</span><span class="p">(</span><span class="n">Authenticator</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A pass-through :class:`~.Authenticator` using the third party package</span>
+<span class="sd">    &#39;pure-sasl&#39; for authentication</span>
+
+<span class="sd">    .. versionadded:: 2.1.4</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">,</span> <span class="n">service</span><span class="p">,</span> <span class="n">mechanism</span><span class="o">=</span><span class="s1">&#39;GSSAPI&#39;</span><span class="p">,</span> <span class="o">**</span><span class="n">sasl_kwargs</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">SASLClient</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span><span class="s1">&#39;The puresasl library has not been installed&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sasl</span> <span class="o">=</span> <span class="n">SASLClient</span><span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="n">service</span><span class="p">,</span> <span class="n">mechanism</span><span class="p">,</span> <span class="o">**</span><span class="n">sasl_kwargs</span><span class="p">)</span>
+
+<div class="viewcode-block" id="SaslAuthenticator.initial_response"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.SaslAuthenticator.initial_response">[docs]</a>    <span class="k">def</span> <span class="nf">initial_response</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">sasl</span><span class="o">.</span><span class="n">process</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SaslAuthenticator.evaluate_challenge"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.SaslAuthenticator.evaluate_challenge">[docs]</a>    <span class="k">def</span> <span class="nf">evaluate_challenge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">challenge</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">sasl</span><span class="o">.</span><span class="n">process</span><span class="p">(</span><span class="n">challenge</span><span class="p">)</span></div></div>
+
+<span class="c1"># TODO remove me next major</span>
+<span class="n">DSEPlainTextAuthProvider</span> <span class="o">=</span> <span class="n">PlainTextAuthProvider</span>
+
+
+<span class="k">class</span> <span class="nc">DSEGSSAPIAuthProvider</span><span class="p">(</span><span class="n">AuthProvider</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Auth provider for GSS API authentication. Works with legacy `KerberosAuthenticator`</span>
+<span class="sd">    or `DseAuthenticator` if `kerberos` scheme is enabled.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">service</span><span class="o">=</span><span class="s1">&#39;dse&#39;</span><span class="p">,</span> <span class="n">qops</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;auth&#39;</span><span class="p">,),</span> <span class="n">resolve_host_name</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="o">**</span><span class="n">properties</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param service: name of the service</span>
+<span class="sd">        :param qops: iterable of &quot;Quality of Protection&quot; allowed; see ``puresasl.QOP``</span>
+<span class="sd">        :param resolve_host_name: boolean flag indicating whether the authenticator should reverse-lookup an FQDN when</span>
+<span class="sd">            creating a new authenticator. Default is ``True``, which will resolve, or return the numeric address if there is no PTR</span>
+<span class="sd">            record. Setting ``False`` creates the authenticator with the numeric address known by Cassandra</span>
+<span class="sd">        :param properties: additional keyword properties to pass for the ``puresasl.mechanisms.GSSAPIMechanism`` class.</span>
+<span class="sd">            Presently, &#39;principal&#39; (user) is the only one referenced in the ``pure-sasl`` implementation</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">_have_puresasl</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span><span class="s1">&#39;The puresasl library has not been installed&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">_have_kerberos</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span><span class="s1">&#39;The kerberos library has not been installed&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">service</span> <span class="o">=</span> <span class="n">service</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">qops</span> <span class="o">=</span> <span class="n">qops</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">resolve_host_name</span> <span class="o">=</span> <span class="n">resolve_host_name</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">properties</span> <span class="o">=</span> <span class="n">properties</span>
+
+    <span class="k">def</span> <span class="nf">new_authenticator</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">resolve_host_name</span><span class="p">:</span>
+            <span class="n">host</span> <span class="o">=</span> <span class="n">socket</span><span class="o">.</span><span class="n">getnameinfo</span><span class="p">((</span><span class="n">host</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="mi">0</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">GSSAPIAuthenticator</span><span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">service</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">qops</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">properties</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">BaseDSEAuthenticator</span><span class="p">(</span><span class="n">Authenticator</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">get_mechanism</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;get_mechanism not implemented&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">get_initial_challenge</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;get_initial_challenge not implemented&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">initial_response</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">server_authenticator_class</span> <span class="o">==</span> <span class="s2">&quot;com.datastax.bdp.cassandra.auth.DseAuthenticator&quot;</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_mechanism</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">evaluate_challenge</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_initial_challenge</span><span class="p">())</span>
+
+
+<div class="viewcode-block" id="PlainTextAuthenticator"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.PlainTextAuthenticator">[docs]</a><span class="k">class</span> <span class="nc">PlainTextAuthenticator</span><span class="p">(</span><span class="n">BaseDSEAuthenticator</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">username</span><span class="p">,</span> <span class="n">password</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">username</span> <span class="o">=</span> <span class="n">username</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">password</span> <span class="o">=</span> <span class="n">password</span>
+
+    <span class="k">def</span> <span class="nf">get_mechanism</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">six</span><span class="o">.</span><span class="n">b</span><span class="p">(</span><span class="s2">&quot;PLAIN&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">get_initial_challenge</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">six</span><span class="o">.</span><span class="n">b</span><span class="p">(</span><span class="s2">&quot;PLAIN-START&quot;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="PlainTextAuthenticator.evaluate_challenge"><a class="viewcode-back" href="../../api/cassandra/auth.html#cassandra.auth.PlainTextAuthenticator.evaluate_challenge">[docs]</a>    <span class="k">def</span> <span class="nf">evaluate_challenge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">challenge</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">challenge</span> <span class="o">==</span> <span class="n">six</span><span class="o">.</span><span class="n">b</span><span class="p">(</span><span class="s1">&#39;PLAIN-START&#39;</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">six</span><span class="o">.</span><span class="n">b</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\x00</span><span class="si">%s</span><span class="se">\x00</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">username</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">password</span><span class="p">))</span>
+        <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s1">&#39;Did not receive a valid challenge response from server&#39;</span><span class="p">)</span></div></div>
+
+
+<span class="k">class</span> <span class="nc">TransitionalModePlainTextAuthenticator</span><span class="p">(</span><span class="n">PlainTextAuthenticator</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">     Authenticator that accounts for DSE authentication is configured with transitional mode.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">TransitionalModePlainTextAuthenticator</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">GSSAPIAuthenticator</span><span class="p">(</span><span class="n">BaseDSEAuthenticator</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">,</span> <span class="n">service</span><span class="p">,</span> <span class="n">qops</span><span class="p">,</span> <span class="n">properties</span><span class="p">):</span>
+        <span class="n">properties</span> <span class="o">=</span> <span class="n">properties</span> <span class="ow">or</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sasl</span> <span class="o">=</span> <span class="n">SASLClient</span><span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="n">service</span><span class="p">,</span> <span class="s1">&#39;GSSAPI&#39;</span><span class="p">,</span> <span class="n">qops</span><span class="o">=</span><span class="n">qops</span><span class="p">,</span> <span class="o">**</span><span class="n">properties</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">get_mechanism</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">six</span><span class="o">.</span><span class="n">b</span><span class="p">(</span><span class="s2">&quot;GSSAPI&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">get_initial_challenge</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">six</span><span class="o">.</span><span class="n">b</span><span class="p">(</span><span class="s2">&quot;GSSAPI-START&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">evaluate_challenge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">challenge</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">challenge</span> <span class="o">==</span> <span class="n">six</span><span class="o">.</span><span class="n">b</span><span class="p">(</span><span class="s1">&#39;GSSAPI-START&#39;</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">sasl</span><span class="o">.</span><span class="n">process</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">sasl</span><span class="o">.</span><span class="n">process</span><span class="p">(</span><span class="n">challenge</span><span class="p">)</span>
+</pre></div>
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api/index.html">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../scylla_specific.html">Scylla Specific Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../object_mapper.html">Object Mapper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">master <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="auth.html">master</a></li>
+        <li><a href="../../../3.22.0-scylla/index.html">3.22.0-scylla</a></li>
+        <li><a href="../../../3.21.0-scylla/index.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="../../_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page cassandra.auth&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/_modules/cassandra/auth%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="../../_static/js/vendor/jquery.js"></script>
+<script src="../../_static/expertrec.js"></script>
+<script src="../../_static/js/foundation/foundation.js"></script>
+<script src="../../_static/js/foundation/foundation.topbar.js"></script>
+<script src="../../_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

@@ -1,0 +1,1390 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    cassandra.datastax.graph.graphson | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="../../../../_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="../../../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/sphinx_tabs/semantic-ui-2.4.1/segment.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/sphinx_tabs/semantic-ui-2.4.1/menu.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../../_static/sphinx_tabs/tabs.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script src="../../../../_static/jquery.js"></script>
+    <script src="../../../../_static/underscore.js"></script>
+    <script src="../../../../_static/doctools.js"></script>
+    <script src="../../../../_static/language_data.js"></script>
+    <script src="../../../../_static/clipboard.min.js"></script>
+    <script src="../../../../_static/copybutton.js"></script>
+    <script src="../../../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.js"></script>
+    <script src="../../../../_static/sphinx_tabs/tabs.js"></script>
+
+    <script src="../../../../_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="../../../../_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+                <p>
+                    <strong>
+                    
+                    You're reading the documentation for a development version.
+                    For the latest released version, please have a look at <a href="../../../../../master/index.html">master</a>.
+                    
+                    </strong>
+                </p>
+            
+
+            <h1>Source code for cassandra.datastax.graph.graphson</h1><div class="highlight"><pre>
+<span></span><span class="c1"># Copyright DataStax, Inc.</span>
+<span class="c1">#</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># you may not use this file except in compliance with the License.</span>
+<span class="c1"># You may obtain a copy of the License at</span>
+<span class="c1">#</span>
+<span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
+<span class="c1">#</span>
+<span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
+<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
+<span class="c1"># See the License for the specific language governing permissions and</span>
+<span class="c1"># limitations under the License.</span>
+
+<span class="kn">import</span> <span class="nn">datetime</span>
+<span class="kn">import</span> <span class="nn">base64</span>
+<span class="kn">import</span> <span class="nn">uuid</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">from</span> <span class="nn">decimal</span> <span class="kn">import</span> <span class="n">Decimal</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="kn">import</span> <span class="n">OrderedDict</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">itertools</span>
+<span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span>
+
+<span class="kn">import</span> <span class="nn">six</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">ipaddress</span>
+<span class="k">except</span><span class="p">:</span>
+    <span class="n">ipaddress</span> <span class="o">=</span> <span class="kc">None</span>
+
+
+<span class="kn">from</span> <span class="nn">cassandra.cqltypes</span> <span class="kn">import</span> <span class="n">cql_types_from_string</span>
+<span class="kn">from</span> <span class="nn">cassandra.metadata</span> <span class="kn">import</span> <span class="n">UserType</span>
+<span class="kn">from</span> <span class="nn">cassandra.util</span> <span class="kn">import</span> <span class="n">Polygon</span><span class="p">,</span> <span class="n">Point</span><span class="p">,</span> <span class="n">LineString</span><span class="p">,</span> <span class="n">Duration</span>
+<span class="kn">from</span> <span class="nn">cassandra.datastax.graph.types</span> <span class="kn">import</span> <span class="n">Vertex</span><span class="p">,</span> <span class="n">VertexProperty</span><span class="p">,</span> <span class="n">Edge</span><span class="p">,</span> <span class="n">Path</span>
+
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;GraphSON1Serializer&#39;</span><span class="p">,</span> <span class="s1">&#39;GraphSON1Deserializer&#39;</span><span class="p">,</span> <span class="s1">&#39;GraphSON1TypeDeserializer&#39;</span><span class="p">,</span>
+           <span class="s1">&#39;GraphSON2Serializer&#39;</span><span class="p">,</span> <span class="s1">&#39;GraphSON2Deserializer&#39;</span><span class="p">,</span> <span class="s1">&#39;GraphSON2Reader&#39;</span><span class="p">,</span>
+           <span class="s1">&#39;GraphSON3Serializer&#39;</span><span class="p">,</span> <span class="s1">&#39;GraphSON3Deserializer&#39;</span><span class="p">,</span> <span class="s1">&#39;GraphSON3Reader&#39;</span><span class="p">,</span>
+           <span class="s1">&#39;to_bigint&#39;</span><span class="p">,</span> <span class="s1">&#39;to_int&#39;</span><span class="p">,</span> <span class="s1">&#39;to_double&#39;</span><span class="p">,</span> <span class="s1">&#39;to_float&#39;</span><span class="p">,</span> <span class="s1">&#39;to_smallint&#39;</span><span class="p">,</span>
+           <span class="s1">&#39;BooleanTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;Int16TypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;Int32TypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;DoubleTypeIO&#39;</span><span class="p">,</span>
+           <span class="s1">&#39;FloatTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;UUIDTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;BigDecimalTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;DurationTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;InetTypeIO&#39;</span><span class="p">,</span>
+           <span class="s1">&#39;InstantTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;LocalDateTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;LocalTimeTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;Int64TypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;BigIntegerTypeIO&#39;</span><span class="p">,</span>
+           <span class="s1">&#39;LocalDateTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;PolygonTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;PointTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;LineStringTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;BlobTypeIO&#39;</span><span class="p">,</span>
+           <span class="s1">&#39;GraphSON3Serializer&#39;</span><span class="p">,</span> <span class="s1">&#39;GraphSON3Deserializer&#39;</span><span class="p">,</span> <span class="s1">&#39;UserTypeIO&#39;</span><span class="p">,</span> <span class="s1">&#39;TypeWrapperTypeIO&#39;</span><span class="p">]</span>
+
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Supported types:</span>
+
+<span class="sd">DSE Graph      GraphSON 2.0     GraphSON 3.0   |  Python Driver</span>
+<span class="sd">------------ | -------------- | -------------- | ------------</span>
+<span class="sd">text         | string         | string         | str</span>
+<span class="sd">boolean      | g:Boolean      | g:Boolean      | bool</span>
+<span class="sd">bigint       | g:Int64        | g:Int64        | long</span>
+<span class="sd">int          | g:Int32        | g:Int32        | int</span>
+<span class="sd">double       | g:Double       | g:Double       | float</span>
+<span class="sd">float        | g:Float        | g:Float        | float</span>
+<span class="sd">uuid         | g:UUID         | g:UUID         | UUID</span>
+<span class="sd">bigdecimal   | gx:BigDecimal  | gx:BigDecimal  | Decimal</span>
+<span class="sd">duration     | gx:Duration    | N/A            | timedelta              (Classic graph only)</span>
+<span class="sd">DSE Duration | N/A            | dse:Duration   | Duration               (Core graph only)</span>
+<span class="sd">inet         | gx:InetAddress | gx:InetAddress | str (unicode), IPV4Address/IPV6Address (PY3)</span>
+<span class="sd">timestamp    | gx:Instant     | gx:Instant     | datetime.datetime</span>
+<span class="sd">date         | gx:LocalDate   | gx:LocalDate   | datetime.date</span>
+<span class="sd">time         | gx:LocalTime   | gx:LocalTime   | datetime.time</span>
+<span class="sd">smallint     | gx:Int16       | gx:Int16       | int</span>
+<span class="sd">varint       | gx:BigInteger  | gx:BigInteger  | long</span>
+<span class="sd">date         | gx:LocalDate   | gx:LocalDate   | Date</span>
+<span class="sd">polygon      | dse:Polygon    | dse:Polygon    | Polygon</span>
+<span class="sd">point        | dse:Point      | dse:Point      | Point</span>
+<span class="sd">linestring   | dse:Linestring | dse:LineString | LineString</span>
+<span class="sd">blob         | dse:Blob       | dse:Blob       | bytearray, buffer (PY2), memoryview (PY3), bytes (PY3)</span>
+<span class="sd">blob         | gx:ByteBuffer  | gx:ByteBuffer  | bytearray, buffer (PY2), memoryview (PY3), bytes (PY3)</span>
+<span class="sd">list         | N/A            | g:List         | list                   (Core graph only)</span>
+<span class="sd">map          | N/A            | g:Map          | dict                   (Core graph only)</span>
+<span class="sd">set          | N/A            | g:Set          | set or list            (Core graph only)</span>
+<span class="sd">                                                 Can return a list due to numerical values returned by Java</span>
+<span class="sd">tuple        | N/A            | dse:Tuple      | tuple                  (Core graph only)</span>
+<span class="sd">udt          | N/A            | dse:UDT        | class or namedtuple    (Core graph only)</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="n">MAX_INT32</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">**</span> <span class="mi">32</span> <span class="o">-</span> <span class="mi">1</span>
+<span class="n">MIN_INT32</span> <span class="o">=</span> <span class="o">-</span><span class="mi">2</span> <span class="o">**</span> <span class="mi">31</span>
+
+<span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">_GraphSONTypeType</span><span class="p">(</span><span class="nb">type</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;GraphSONType metaclass, required to create a class property.&quot;&quot;&quot;</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">graphson_type</span><span class="p">(</span><span class="bp">cls</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s2">&quot;</span><span class="si">{0}</span><span class="s2">:</span><span class="si">{1}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="n">prefix</span><span class="p">,</span> <span class="bp">cls</span><span class="o">.</span><span class="n">graphson_base_type</span><span class="p">)</span>
+
+
+<span class="nd">@six</span><span class="o">.</span><span class="n">add_metaclass</span><span class="p">(</span><span class="n">_GraphSONTypeType</span><span class="p">)</span>
+<span class="k">class</span> <span class="nc">GraphSONTypeIO</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Represent a serializable GraphSON type&quot;&quot;&quot;</span>
+
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;g&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">definition</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;cqlType&#39;</span><span class="p">:</span> <span class="bp">cls</span><span class="o">.</span><span class="n">cql_type</span><span class="p">}</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">six</span><span class="o">.</span><span class="n">text_type</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">value</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">get_specialized_serializer</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span>
+
+
+<span class="k">class</span> <span class="nc">TextTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;text&#39;</span>
+
+
+<span class="k">class</span> <span class="nc">BooleanTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Boolean&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;boolean&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">bool</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">IntegerTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">value</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">get_specialized_serializer</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="ow">in</span> <span class="n">six</span><span class="o">.</span><span class="n">integer_types</span> <span class="ow">and</span> <span class="p">(</span><span class="n">value</span> <span class="o">&gt;</span> <span class="n">MAX_INT32</span> <span class="ow">or</span> <span class="n">value</span> <span class="o">&lt;</span> <span class="n">MIN_INT32</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">Int64TypeIO</span>
+
+        <span class="k">return</span> <span class="n">Int32TypeIO</span>
+
+
+<span class="k">class</span> <span class="nc">Int16TypeIO</span><span class="p">(</span><span class="n">IntegerTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;gx&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Int16&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;smallint&#39;</span>
+
+
+<span class="k">class</span> <span class="nc">Int32TypeIO</span><span class="p">(</span><span class="n">IntegerTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Int32&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;int&#39;</span>
+
+
+<span class="k">class</span> <span class="nc">Int64TypeIO</span><span class="p">(</span><span class="n">IntegerTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Int64&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;bigint&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">six</span><span class="o">.</span><span class="n">PY3</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">value</span>
+        <span class="k">return</span> <span class="n">long</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">FloatTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Float&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;float&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">value</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">DoubleTypeIO</span><span class="p">(</span><span class="n">FloatTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Double&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;double&#39;</span>
+
+
+<span class="k">class</span> <span class="nc">BigIntegerTypeIO</span><span class="p">(</span><span class="n">IntegerTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;gx&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;BigInteger&#39;</span>
+
+
+<span class="k">class</span> <span class="nc">LocalDateTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">FORMAT</span> <span class="o">=</span> <span class="s1">&#39;%Y-%m-</span><span class="si">%d</span><span class="s1">&#39;</span>
+
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;gx&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;LocalDate&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;date&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">value</span><span class="o">.</span><span class="n">isoformat</span><span class="p">()</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">strptime</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="bp">cls</span><span class="o">.</span><span class="n">FORMAT</span><span class="p">)</span><span class="o">.</span><span class="n">date</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+            <span class="c1"># negative date</span>
+            <span class="k">return</span> <span class="n">value</span>
+
+
+<span class="k">class</span> <span class="nc">InstantTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;gx&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Instant&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;timestamp&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="p">):</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="p">(</span><span class="o">*</span><span class="n">value</span><span class="o">.</span><span class="n">utctimetuple</span><span class="p">()[:</span><span class="mi">6</span><span class="p">])</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">microsecond</span><span class="o">=</span><span class="n">value</span><span class="o">.</span><span class="n">microsecond</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">combine</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">min</span><span class="o">.</span><span class="n">time</span><span class="p">())</span>
+
+        <span class="k">return</span> <span class="s2">&quot;</span><span class="si">{0}</span><span class="s2">Z&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">isoformat</span><span class="p">())</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">d</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">strptime</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="s1">&#39;%Y-%m-</span><span class="si">%d</span><span class="s1">T%H:%M:%S.</span><span class="si">%f</span><span class="s1">Z&#39;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+            <span class="n">d</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">strptime</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="s1">&#39;%Y-%m-</span><span class="si">%d</span><span class="s1">T%H:%M:%SZ&#39;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">d</span>
+
+
+<span class="k">class</span> <span class="nc">LocalTimeTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">FORMATS</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="s1">&#39;%H:%M&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;%H:%M:%S&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;%H:%M:%S.</span><span class="si">%f</span><span class="s1">&#39;</span>
+    <span class="p">]</span>
+
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;gx&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;LocalTime&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;time&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">value</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="n">FORMATS</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">dt</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="bp">cls</span><span class="o">.</span><span class="n">FORMATS</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">dt</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">strptime</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">f</span><span class="p">)</span>
+                <span class="k">break</span>
+            <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+                <span class="k">continue</span>
+
+        <span class="k">if</span> <span class="n">dt</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;Unable to decode LocalTime: </span><span class="si">{0}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">value</span><span class="p">))</span>
+
+        <span class="k">return</span> <span class="n">dt</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+
+<span class="k">class</span> <span class="nc">BlobTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;dse&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Blob&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;blob&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="n">base64</span><span class="o">.</span><span class="n">b64encode</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">six</span><span class="o">.</span><span class="n">PY3</span><span class="p">:</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="n">value</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s1">&#39;utf-8&#39;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">value</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">bytearray</span><span class="p">(</span><span class="n">base64</span><span class="o">.</span><span class="n">b64decode</span><span class="p">(</span><span class="n">value</span><span class="p">))</span>
+
+
+<span class="k">class</span> <span class="nc">ByteBufferTypeIO</span><span class="p">(</span><span class="n">BlobTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;gx&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;ByteBuffer&#39;</span>
+
+
+<span class="k">class</span> <span class="nc">UUIDTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;UUID&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;uuid&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">uuid</span><span class="o">.</span><span class="n">UUID</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">BigDecimalTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;gx&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;BigDecimal&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;bigdecimal&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">Decimal</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">DurationTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;gx&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Duration&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;duration&#39;</span>
+
+    <span class="n">_duration_regex</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">        ^P((?P&lt;days&gt;\d+)D)?</span>
+<span class="s2">        T((?P&lt;hours&gt;\d+)H)?</span>
+<span class="s2">        ((?P&lt;minutes&gt;\d+)M)?</span>
+<span class="s2">        ((?P&lt;seconds&gt;[0-9.]+)S)?$</span>
+<span class="s2">    &quot;&quot;&quot;</span><span class="p">,</span> <span class="n">re</span><span class="o">.</span><span class="n">VERBOSE</span><span class="p">)</span>
+    <span class="n">_duration_format</span> <span class="o">=</span> <span class="s2">&quot;P</span><span class="si">{days}</span><span class="s2">DT</span><span class="si">{hours}</span><span class="s2">H</span><span class="si">{minutes}</span><span class="s2">M</span><span class="si">{seconds}</span><span class="s2">S&quot;</span>
+
+    <span class="n">_seconds_in_minute</span> <span class="o">=</span> <span class="mi">60</span>
+    <span class="n">_seconds_in_hour</span> <span class="o">=</span> <span class="mi">60</span> <span class="o">*</span> <span class="n">_seconds_in_minute</span>
+    <span class="n">_seconds_in_day</span> <span class="o">=</span> <span class="mi">24</span> <span class="o">*</span> <span class="n">_seconds_in_hour</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">total_seconds</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">())</span>
+        <span class="n">days</span><span class="p">,</span> <span class="n">total_seconds</span> <span class="o">=</span> <span class="nb">divmod</span><span class="p">(</span><span class="n">total_seconds</span><span class="p">,</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_seconds_in_day</span><span class="p">)</span>
+        <span class="n">hours</span><span class="p">,</span> <span class="n">total_seconds</span> <span class="o">=</span> <span class="nb">divmod</span><span class="p">(</span><span class="n">total_seconds</span><span class="p">,</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_seconds_in_hour</span><span class="p">)</span>
+        <span class="n">minutes</span><span class="p">,</span> <span class="n">total_seconds</span> <span class="o">=</span> <span class="nb">divmod</span><span class="p">(</span><span class="n">total_seconds</span><span class="p">,</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_seconds_in_minute</span><span class="p">)</span>
+        <span class="n">total_seconds</span> <span class="o">+=</span> <span class="n">value</span><span class="o">.</span><span class="n">microseconds</span> <span class="o">/</span> <span class="mf">1e6</span>
+
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_duration_format</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">days</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">days</span><span class="p">),</span> <span class="n">hours</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">hours</span><span class="p">),</span> <span class="n">minutes</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">minutes</span><span class="p">),</span> <span class="n">seconds</span><span class="o">=</span><span class="n">total_seconds</span>
+        <span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">duration</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_duration_regex</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">duration</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;Invalid duration: </span><span class="si">{0}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">value</span><span class="p">))</span>
+
+        <span class="n">duration</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="mi">0</span>
+                    <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">six</span><span class="o">.</span><span class="n">iteritems</span><span class="p">(</span><span class="n">duration</span><span class="o">.</span><span class="n">groupdict</span><span class="p">())}</span>
+        <span class="k">return</span> <span class="n">datetime</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="n">duration</span><span class="p">[</span><span class="s1">&#39;days&#39;</span><span class="p">],</span> <span class="n">hours</span><span class="o">=</span><span class="n">duration</span><span class="p">[</span><span class="s1">&#39;hours&#39;</span><span class="p">],</span>
+                                  <span class="n">minutes</span><span class="o">=</span><span class="n">duration</span><span class="p">[</span><span class="s1">&#39;minutes&#39;</span><span class="p">],</span> <span class="n">seconds</span><span class="o">=</span><span class="n">duration</span><span class="p">[</span><span class="s1">&#39;seconds&#39;</span><span class="p">])</span>
+
+
+<span class="k">class</span> <span class="nc">DseDurationTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;dse&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Duration&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;duration&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="s1">&#39;months&#39;</span><span class="p">:</span> <span class="n">value</span><span class="o">.</span><span class="n">months</span><span class="p">,</span>
+            <span class="s1">&#39;days&#39;</span><span class="p">:</span> <span class="n">value</span><span class="o">.</span><span class="n">days</span><span class="p">,</span>
+            <span class="s1">&#39;nanos&#39;</span><span class="p">:</span> <span class="n">value</span><span class="o">.</span><span class="n">nanoseconds</span>
+        <span class="p">}</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">Duration</span><span class="p">(</span>
+            <span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="s1">&#39;months&#39;</span><span class="p">]),</span>
+            <span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="s1">&#39;days&#39;</span><span class="p">]),</span>
+            <span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="s1">&#39;nanos&#39;</span><span class="p">])</span>
+        <span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">TypeWrapperTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">definition</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;cqlType&#39;</span><span class="p">:</span> <span class="n">value</span><span class="o">.</span><span class="n">type_io</span><span class="o">.</span><span class="n">cql_type</span><span class="p">}</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">value</span><span class="o">.</span><span class="n">type_io</span><span class="o">.</span><span class="n">serialize</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">value</span><span class="o">.</span><span class="n">type_io</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">PointTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;dse&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Point&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s2">&quot;org.apache.cassandra.db.marshal.PointType&quot;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">Point</span><span class="o">.</span><span class="n">from_wkt</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">LineStringTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;dse&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;LineString&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s2">&quot;org.apache.cassandra.db.marshal.LineStringType&quot;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">LineString</span><span class="o">.</span><span class="n">from_wkt</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">PolygonTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;dse&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Polygon&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s2">&quot;org.apache.cassandra.db.marshal.PolygonType&quot;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">Polygon</span><span class="o">.</span><span class="n">from_wkt</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">InetTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;gx&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;InetAddress&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;inet&#39;</span>
+
+
+<span class="k">class</span> <span class="nc">VertexTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Vertex&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">vertex</span> <span class="o">=</span> <span class="n">Vertex</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">]),</span>
+                        <span class="n">label</span><span class="o">=</span><span class="n">value</span><span class="p">[</span><span class="s2">&quot;label&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;label&quot;</span> <span class="ow">in</span> <span class="n">value</span> <span class="k">else</span> <span class="s2">&quot;vertex&quot;</span><span class="p">,</span>
+                        <span class="nb">type</span><span class="o">=</span><span class="s1">&#39;vertex&#39;</span><span class="p">,</span>
+                        <span class="n">properties</span><span class="o">=</span><span class="p">{})</span>
+        <span class="c1"># avoid the properties processing in Vertex.__init__</span>
+        <span class="n">vertex</span><span class="o">.</span><span class="n">properties</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;properties&#39;</span><span class="p">,</span> <span class="p">{}))</span>
+        <span class="k">return</span> <span class="n">vertex</span>
+
+
+<span class="k">class</span> <span class="nc">VertexPropertyTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;VertexProperty&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">VertexProperty</span><span class="p">(</span><span class="n">label</span><span class="o">=</span><span class="n">value</span><span class="p">[</span><span class="s1">&#39;label&#39;</span><span class="p">],</span>
+                              <span class="n">value</span><span class="o">=</span><span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">]),</span>
+                              <span class="n">properties</span><span class="o">=</span><span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;properties&#39;</span><span class="p">,</span> <span class="p">{})))</span>
+
+
+<span class="k">class</span> <span class="nc">EdgeTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Edge&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">in_vertex</span> <span class="o">=</span> <span class="n">Vertex</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="s2">&quot;inV&quot;</span><span class="p">]),</span>
+                           <span class="n">label</span><span class="o">=</span><span class="n">value</span><span class="p">[</span><span class="s1">&#39;inVLabel&#39;</span><span class="p">],</span>
+                           <span class="nb">type</span><span class="o">=</span><span class="s1">&#39;vertex&#39;</span><span class="p">,</span>
+                           <span class="n">properties</span><span class="o">=</span><span class="p">{})</span>
+        <span class="n">out_vertex</span> <span class="o">=</span> <span class="n">Vertex</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="s2">&quot;outV&quot;</span><span class="p">]),</span>
+                            <span class="n">label</span><span class="o">=</span><span class="n">value</span><span class="p">[</span><span class="s1">&#39;outVLabel&#39;</span><span class="p">],</span>
+                            <span class="nb">type</span><span class="o">=</span><span class="s1">&#39;vertex&#39;</span><span class="p">,</span>
+                            <span class="n">properties</span><span class="o">=</span><span class="p">{})</span>
+        <span class="k">return</span> <span class="n">Edge</span><span class="p">(</span>
+            <span class="nb">id</span><span class="o">=</span><span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">]),</span>
+            <span class="n">label</span><span class="o">=</span><span class="n">value</span><span class="p">[</span><span class="s2">&quot;label&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;label&quot;</span> <span class="ow">in</span> <span class="n">value</span> <span class="k">else</span> <span class="s2">&quot;vertex&quot;</span><span class="p">,</span>
+            <span class="nb">type</span><span class="o">=</span><span class="s1">&#39;edge&#39;</span><span class="p">,</span>
+            <span class="n">properties</span><span class="o">=</span><span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;properties&quot;</span><span class="p">,</span> <span class="p">{})),</span>
+            <span class="n">inV</span><span class="o">=</span><span class="n">in_vertex</span><span class="p">,</span>
+            <span class="n">inVLabel</span><span class="o">=</span><span class="n">value</span><span class="p">[</span><span class="s1">&#39;inVLabel&#39;</span><span class="p">],</span>
+            <span class="n">outV</span><span class="o">=</span><span class="n">out_vertex</span><span class="p">,</span>
+            <span class="n">outVLabel</span><span class="o">=</span><span class="n">value</span><span class="p">[</span><span class="s1">&#39;outVLabel&#39;</span><span class="p">]</span>
+        <span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">PropertyTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Property&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">{</span><span class="n">value</span><span class="p">[</span><span class="s2">&quot;key&quot;</span><span class="p">]:</span> <span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">])}</span>
+
+
+<span class="k">class</span> <span class="nc">PathTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Path&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">labels</span> <span class="o">=</span> <span class="p">[</span><span class="nb">set</span><span class="p">(</span><span class="n">label</span><span class="p">)</span> <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="s1">&#39;labels&#39;</span><span class="p">])]</span>
+        <span class="n">objects</span> <span class="o">=</span> <span class="p">[</span><span class="n">obj</span> <span class="k">for</span> <span class="n">obj</span> <span class="ow">in</span> <span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="s1">&#39;objects&#39;</span><span class="p">])]</span>
+        <span class="n">p</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">labels</span><span class="p">,</span> <span class="p">[])</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">objects</span> <span class="o">=</span> <span class="n">objects</span>  <span class="c1"># avoid the object processing in Path.__init__</span>
+        <span class="k">return</span> <span class="n">p</span>
+
+
+<span class="k">class</span> <span class="nc">TraversalMetricsTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;TraversalMetrics&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">MetricsTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Metrics&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">JsonMapTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;In GraphSON2, dict are simply serialized as json map&quot;&quot;&quot;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">six</span><span class="o">.</span><span class="n">iteritems</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+            <span class="n">out</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="n">writer</span><span class="o">.</span><span class="n">serialize</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">writer</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">out</span>
+
+
+<span class="k">class</span> <span class="nc">MapTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;In GraphSON3, dict has its own type&quot;&quot;&quot;</span>
+
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Map&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;map&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">definition</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">([(</span><span class="s1">&#39;cqlType&#39;</span><span class="p">,</span> <span class="bp">cls</span><span class="o">.</span><span class="n">cql_type</span><span class="p">)])</span>
+        <span class="n">out</span><span class="p">[</span><span class="s1">&#39;definition&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">six</span><span class="o">.</span><span class="n">iteritems</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+            <span class="c1"># we just need the first pair to write the def</span>
+            <span class="n">out</span><span class="p">[</span><span class="s1">&#39;definition&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">writer</span><span class="o">.</span><span class="n">definition</span><span class="p">(</span><span class="n">k</span><span class="p">))</span>
+            <span class="n">out</span><span class="p">[</span><span class="s1">&#39;definition&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">writer</span><span class="o">.</span><span class="n">definition</span><span class="p">(</span><span class="n">v</span><span class="p">))</span>
+            <span class="k">break</span>
+        <span class="k">return</span> <span class="n">out</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">six</span><span class="o">.</span><span class="n">iteritems</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+            <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">writer</span><span class="o">.</span><span class="n">serialize</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">writer</span><span class="p">))</span>
+            <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">writer</span><span class="o">.</span><span class="n">serialize</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">writer</span><span class="p">))</span>
+
+        <span class="k">return</span> <span class="n">out</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">itertools</span><span class="o">.</span><span class="n">tee</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span>
+            <span class="n">itertools</span><span class="o">.</span><span class="n">islice</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+            <span class="n">itertools</span><span class="o">.</span><span class="n">islice</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="p">):</span>
+            <span class="n">out</span><span class="p">[</span><span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">key</span><span class="p">)]</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">val</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">out</span>
+
+
+<span class="k">class</span> <span class="nc">ListTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;In GraphSON3, list has its own type&quot;&quot;&quot;</span>
+
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;List&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;list&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">definition</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">([(</span><span class="s1">&#39;cqlType&#39;</span><span class="p">,</span> <span class="bp">cls</span><span class="o">.</span><span class="n">cql_type</span><span class="p">)])</span>
+        <span class="n">out</span><span class="p">[</span><span class="s1">&#39;definition&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">if</span> <span class="n">value</span><span class="p">:</span>
+            <span class="n">out</span><span class="p">[</span><span class="s1">&#39;definition&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">writer</span><span class="o">.</span><span class="n">definition</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="k">return</span> <span class="n">out</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">[</span><span class="n">writer</span><span class="o">.</span><span class="n">serialize</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">writer</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">value</span><span class="p">]</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">[</span><span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">obj</span><span class="p">)</span> <span class="k">for</span> <span class="n">obj</span> <span class="ow">in</span> <span class="n">value</span><span class="p">]</span>
+
+
+<span class="k">class</span> <span class="nc">SetTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;In GraphSON3, set has its own type&quot;&quot;&quot;</span>
+
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Set&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;set&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">definition</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">([(</span><span class="s1">&#39;cqlType&#39;</span><span class="p">,</span> <span class="bp">cls</span><span class="o">.</span><span class="n">cql_type</span><span class="p">)])</span>
+        <span class="n">out</span><span class="p">[</span><span class="s1">&#39;definition&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">value</span><span class="p">:</span>
+            <span class="c1"># we only take into account the first value for the definition</span>
+            <span class="n">out</span><span class="p">[</span><span class="s1">&#39;definition&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">writer</span><span class="o">.</span><span class="n">definition</span><span class="p">(</span><span class="n">v</span><span class="p">))</span>
+            <span class="k">break</span>
+        <span class="k">return</span> <span class="n">out</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">[</span><span class="n">writer</span><span class="o">.</span><span class="n">serialize</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">writer</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">value</span><span class="p">]</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">lst</span> <span class="o">=</span> <span class="p">[</span><span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">obj</span><span class="p">)</span> <span class="k">for</span> <span class="n">obj</span> <span class="ow">in</span> <span class="n">value</span><span class="p">]</span>
+
+        <span class="n">s</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">lst</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">s</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">lst</span><span class="p">):</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Coercing g:Set to list due to numerical values returned by Java. &quot;</span>
+                        <span class="s2">&quot;See TINKERPOP-1844 for details.&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">lst</span>
+
+        <span class="k">return</span> <span class="n">s</span>
+
+
+<span class="k">class</span> <span class="nc">BulkSetTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s2">&quot;BulkSet&quot;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">itertools</span><span class="o">.</span><span class="n">tee</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">val</span><span class="p">,</span> <span class="n">bulk</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span>
+            <span class="n">itertools</span><span class="o">.</span><span class="n">islice</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+            <span class="n">itertools</span><span class="o">.</span><span class="n">islice</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="p">):</span>
+            <span class="n">val</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">val</span><span class="p">)</span>
+            <span class="n">bulk</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">bulk</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">bulk</span><span class="p">):</span>
+                <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">val</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">out</span>
+
+
+<span class="k">class</span> <span class="nc">TupleTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;dse&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;Tuple&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;tuple&#39;</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">definition</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">()</span>
+        <span class="n">out</span><span class="p">[</span><span class="s1">&#39;cqlType&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">cql_type</span>
+        <span class="n">serializers</span> <span class="o">=</span> <span class="p">[</span><span class="n">writer</span><span class="o">.</span><span class="n">get_serializer</span><span class="p">(</span><span class="n">s</span><span class="p">)</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">value</span><span class="p">]</span>
+        <span class="n">out</span><span class="p">[</span><span class="s1">&#39;definition&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">s</span><span class="o">.</span><span class="n">definition</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">writer</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span><span class="p">,</span> <span class="n">s</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">serializers</span><span class="p">)]</span>
+        <span class="k">return</span> <span class="n">out</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">definition</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="p">)</span>
+        <span class="n">out</span><span class="p">[</span><span class="s1">&#39;value&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">writer</span><span class="o">.</span><span class="n">serialize</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">writer</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">value</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">out</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">obj</span><span class="p">)</span> <span class="k">for</span> <span class="n">obj</span> <span class="ow">in</span> <span class="n">value</span><span class="p">[</span><span class="s1">&#39;value&#39;</span><span class="p">])</span>
+
+
+<span class="k">class</span> <span class="nc">UserTypeIO</span><span class="p">(</span><span class="n">GraphSONTypeIO</span><span class="p">):</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="s1">&#39;dse&#39;</span>
+    <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="s1">&#39;UDT&#39;</span>
+    <span class="n">cql_type</span> <span class="o">=</span> <span class="s1">&#39;udt&#39;</span>
+
+    <span class="n">FROZEN_REMOVAL_REGEX</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="sa">r</span><span class="s1">&#39;frozen&lt;&quot;*([^&quot;]+)&quot;*&gt;&#39;</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">cql_types_from_string</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">typ</span><span class="p">):</span>
+        <span class="c1"># sanitizing: remove frozen references and double quotes...</span>
+        <span class="k">return</span> <span class="n">cql_types_from_string</span><span class="p">(</span>
+            <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="n">FROZEN_REMOVAL_REGEX</span><span class="p">,</span> <span class="sa">r</span><span class="s1">&#39;\1&#39;</span><span class="p">,</span> <span class="n">typ</span><span class="p">)</span>
+        <span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">get_udt_definition</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="p">):</span>
+        <span class="n">user_type_name</span> <span class="o">=</span> <span class="n">writer</span><span class="o">.</span><span class="n">user_types</span><span class="p">[</span><span class="nb">type</span><span class="p">(</span><span class="n">value</span><span class="p">)]</span>
+        <span class="n">keyspace</span> <span class="o">=</span> <span class="n">writer</span><span class="o">.</span><span class="n">context</span><span class="p">[</span><span class="s1">&#39;graph_name&#39;</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">writer</span><span class="o">.</span><span class="n">context</span><span class="p">[</span><span class="s1">&#39;cluster&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">keyspaces</span><span class="p">[</span><span class="n">keyspace</span><span class="p">]</span><span class="o">.</span><span class="n">user_types</span><span class="p">[</span><span class="n">user_type_name</span><span class="p">]</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">is_collection</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">typ</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">typ</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;list&#39;</span><span class="p">,</span> <span class="s1">&#39;tuple&#39;</span><span class="p">,</span> <span class="s1">&#39;map&#39;</span><span class="p">,</span> <span class="s1">&#39;set&#39;</span><span class="p">]</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">is_udt</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">typ</span><span class="p">,</span> <span class="n">writer</span><span class="p">):</span>
+        <span class="n">keyspace</span> <span class="o">=</span> <span class="n">writer</span><span class="o">.</span><span class="n">context</span><span class="p">[</span><span class="s1">&#39;graph_name&#39;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">keyspace</span> <span class="ow">in</span> <span class="n">writer</span><span class="o">.</span><span class="n">context</span><span class="p">[</span><span class="s1">&#39;cluster&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">keyspaces</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">typ</span> <span class="ow">in</span> <span class="n">writer</span><span class="o">.</span><span class="n">context</span><span class="p">[</span><span class="s1">&#39;cluster&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">keyspaces</span><span class="p">[</span><span class="n">keyspace</span><span class="p">]</span><span class="o">.</span><span class="n">user_types</span>
+        <span class="k">return</span> <span class="kc">False</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">field_definition</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">types</span><span class="p">,</span> <span class="n">writer</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Build the udt field definition. This is required when we have a complex udt type.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="p">[</span><span class="n">OrderedDict</span><span class="p">()</span> <span class="k">if</span> <span class="n">name</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">OrderedDict</span><span class="p">([(</span><span class="s1">&#39;fieldName&#39;</span><span class="p">,</span> <span class="n">name</span><span class="p">)])]</span>
+
+        <span class="k">while</span> <span class="n">types</span><span class="p">:</span>
+            <span class="n">index</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="n">typ</span> <span class="o">=</span> <span class="n">types</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">index</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">OrderedDict</span><span class="p">())</span>
+
+            <span class="k">if</span> <span class="bp">cls</span><span class="o">.</span><span class="n">is_udt</span><span class="p">(</span><span class="n">typ</span><span class="p">,</span> <span class="n">writer</span><span class="p">):</span>
+                <span class="n">keyspace</span> <span class="o">=</span> <span class="n">writer</span><span class="o">.</span><span class="n">context</span><span class="p">[</span><span class="s1">&#39;graph_name&#39;</span><span class="p">]</span>
+                <span class="n">udt</span> <span class="o">=</span> <span class="n">writer</span><span class="o">.</span><span class="n">context</span><span class="p">[</span><span class="s1">&#39;cluster&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">keyspaces</span><span class="p">[</span><span class="n">keyspace</span><span class="p">]</span><span class="o">.</span><span class="n">user_types</span><span class="p">[</span><span class="n">typ</span><span class="p">]</span>
+                <span class="n">out</span><span class="p">[</span><span class="n">index</span><span class="p">]</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="n">definition</span><span class="p">(</span><span class="n">udt</span><span class="p">,</span> <span class="n">writer</span><span class="p">))</span>
+            <span class="k">elif</span> <span class="bp">cls</span><span class="o">.</span><span class="n">is_collection</span><span class="p">(</span><span class="n">typ</span><span class="p">):</span>
+                <span class="n">out</span><span class="p">[</span><span class="n">index</span><span class="p">][</span><span class="s1">&#39;cqlType&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">typ</span>
+                <span class="n">definition</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">field_definition</span><span class="p">(</span><span class="n">types</span><span class="p">,</span> <span class="n">writer</span><span class="p">)</span>
+                <span class="n">out</span><span class="p">[</span><span class="n">index</span><span class="p">][</span><span class="s1">&#39;definition&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">definition</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">definition</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span> <span class="k">else</span> <span class="p">[</span><span class="n">definition</span><span class="p">]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">out</span><span class="p">[</span><span class="n">index</span><span class="p">][</span><span class="s1">&#39;cqlType&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">typ</span>
+
+        <span class="k">return</span> <span class="n">out</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">out</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">out</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">definition</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">udt</span> <span class="o">=</span> <span class="n">value</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">UserType</span><span class="p">)</span> <span class="k">else</span> <span class="bp">cls</span><span class="o">.</span><span class="n">get_udt_definition</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">OrderedDict</span><span class="p">([</span>
+            <span class="p">(</span><span class="s1">&#39;cqlType&#39;</span><span class="p">,</span> <span class="bp">cls</span><span class="o">.</span><span class="n">cql_type</span><span class="p">),</span>
+            <span class="p">(</span><span class="s1">&#39;keyspace&#39;</span><span class="p">,</span> <span class="n">udt</span><span class="o">.</span><span class="n">keyspace</span><span class="p">),</span>
+            <span class="p">(</span><span class="s1">&#39;name&#39;</span><span class="p">,</span> <span class="n">udt</span><span class="o">.</span><span class="n">name</span><span class="p">),</span>
+            <span class="p">(</span><span class="s1">&#39;definition&#39;</span><span class="p">,</span> <span class="p">[</span>
+                <span class="bp">cls</span><span class="o">.</span><span class="n">field_definition</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="n">cql_types_from_string</span><span class="p">(</span><span class="n">typ</span><span class="p">),</span> <span class="n">writer</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">typ</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">udt</span><span class="o">.</span><span class="n">field_names</span><span class="p">,</span> <span class="n">udt</span><span class="o">.</span><span class="n">field_types</span><span class="p">)])</span>
+        <span class="p">])</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">udt</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">get_udt_definition</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="p">)</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">definition</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="p">)</span>
+        <span class="n">out</span><span class="p">[</span><span class="s1">&#39;value&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">typ</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">udt</span><span class="o">.</span><span class="n">field_names</span><span class="p">,</span> <span class="n">udt</span><span class="o">.</span><span class="n">field_types</span><span class="p">):</span>
+            <span class="n">out</span><span class="p">[</span><span class="s1">&#39;value&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">writer</span><span class="o">.</span><span class="n">serialize</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">name</span><span class="p">),</span> <span class="n">writer</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">out</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">reader</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">udt_class</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">context</span><span class="p">[</span><span class="s1">&#39;cluster&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">_user_types</span><span class="p">[</span><span class="n">value</span><span class="p">[</span><span class="s1">&#39;keyspace&#39;</span><span class="p">]][</span><span class="n">value</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]]</span>
+        <span class="n">kwargs</span> <span class="o">=</span> <span class="nb">zip</span><span class="p">(</span>
+            <span class="nb">list</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">v</span><span class="p">:</span> <span class="n">v</span><span class="p">[</span><span class="s1">&#39;fieldName&#39;</span><span class="p">],</span> <span class="n">value</span><span class="p">[</span><span class="s1">&#39;definition&#39;</span><span class="p">])),</span>
+            <span class="p">[</span><span class="n">reader</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">value</span><span class="p">[</span><span class="s1">&#39;value&#39;</span><span class="p">]]</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">udt_class</span><span class="p">(</span><span class="o">**</span><span class="nb">dict</span><span class="p">(</span><span class="n">kwargs</span><span class="p">))</span>
+
+
+<span class="k">class</span> <span class="nc">_BaseGraphSONSerializer</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+
+    <span class="n">_serializers</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">()</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">register</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="nb">type</span><span class="p">,</span> <span class="n">serializer</span><span class="p">):</span>
+        <span class="bp">cls</span><span class="o">.</span><span class="n">_serializers</span><span class="p">[</span><span class="nb">type</span><span class="p">]</span> <span class="o">=</span> <span class="n">serializer</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">get_type_definitions</span><span class="p">(</span><span class="bp">cls</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_serializers</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">get_serializer</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the serializer for a python object.</span>
+
+<span class="sd">        :param value: The python object.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="c1"># The serializer matching logic is as follow:</span>
+        <span class="c1"># 1. Try to find the python type by direct access.</span>
+        <span class="c1"># 2. Try to find the first serializer by class inheritance.</span>
+        <span class="c1"># 3. If no serializer found, return the raw value.</span>
+
+        <span class="c1"># Note that when trying to find the serializer by class inheritance,</span>
+        <span class="c1"># the order that serializers are registered is important. The use of</span>
+        <span class="c1"># an OrderedDict is to avoid the difference between executions.</span>
+        <span class="n">serializer</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">serializer</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_serializers</span><span class="p">[</span><span class="nb">type</span><span class="p">(</span><span class="n">value</span><span class="p">)]</span>
+        <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">serializer_</span> <span class="ow">in</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_serializers</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
+                    <span class="n">serializer</span> <span class="o">=</span> <span class="n">serializer_</span>
+                    <span class="k">break</span>
+
+        <span class="k">if</span> <span class="n">serializer</span><span class="p">:</span>
+            <span class="c1"># A serializer can have specialized serializers (e.g for Int32 and Int64, so value dependant)</span>
+            <span class="n">serializer</span> <span class="o">=</span> <span class="n">serializer</span><span class="o">.</span><span class="n">get_specialized_serializer</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">serializer</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Serialize a python object to GraphSON.</span>
+
+<span class="sd">        e.g &#39;P42DT10H5M37S&#39;</span>
+<span class="sd">        e.g. {&#39;key&#39;: value}</span>
+
+<span class="sd">        :param value: The python object to serialize.</span>
+<span class="sd">        :param writer: A graphson serializer for recursive types (Optional)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">serializer</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">get_serializer</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">serializer</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">serializer</span><span class="o">.</span><span class="n">serialize</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">writer</span> <span class="ow">or</span> <span class="bp">cls</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">value</span>
+
+
+<div class="viewcode-block" id="GraphSON1Serializer"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Serializer">[docs]</a><span class="k">class</span> <span class="nc">GraphSON1Serializer</span><span class="p">(</span><span class="n">_BaseGraphSONSerializer</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Serialize python objects to graphson types.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># When we fall back to a superclass&#39;s serializer, we iterate over this map.</span>
+    <span class="c1"># We want that iteration order to be consistent, so we use an OrderedDict,</span>
+    <span class="c1"># not a dict.</span>
+    <span class="n">_serializers</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">([</span>
+        <span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">TextTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="nb">bool</span><span class="p">,</span> <span class="n">BooleanTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="nb">bytearray</span><span class="p">,</span> <span class="n">ByteBufferTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">Decimal</span><span class="p">,</span> <span class="n">BigDecimalTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">date</span><span class="p">,</span> <span class="n">LocalDateTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">time</span><span class="p">,</span> <span class="n">LocalTimeTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">timedelta</span><span class="p">,</span> <span class="n">DurationTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="p">,</span> <span class="n">InstantTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">uuid</span><span class="o">.</span><span class="n">UUID</span><span class="p">,</span> <span class="n">UUIDTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">Polygon</span><span class="p">,</span> <span class="n">PolygonTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">Point</span><span class="p">,</span> <span class="n">PointTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">LineString</span><span class="p">,</span> <span class="n">LineStringTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="nb">dict</span><span class="p">,</span> <span class="n">JsonMapTypeIO</span><span class="p">),</span>
+        <span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="n">FloatTypeIO</span><span class="p">)</span>
+    <span class="p">])</span></div>
+
+
+<span class="k">if</span> <span class="n">ipaddress</span><span class="p">:</span>
+    <span class="n">GraphSON1Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">ipaddress</span><span class="o">.</span><span class="n">IPv4Address</span><span class="p">,</span> <span class="n">InetTypeIO</span><span class="p">)</span>
+    <span class="n">GraphSON1Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">ipaddress</span><span class="o">.</span><span class="n">IPv6Address</span><span class="p">,</span> <span class="n">InetTypeIO</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="n">six</span><span class="o">.</span><span class="n">PY2</span><span class="p">:</span>
+    <span class="n">GraphSON1Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">buffer</span><span class="p">,</span> <span class="n">ByteBufferTypeIO</span><span class="p">)</span>
+    <span class="n">GraphSON1Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">unicode</span><span class="p">,</span> <span class="n">TextTypeIO</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">GraphSON1Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="nb">memoryview</span><span class="p">,</span> <span class="n">ByteBufferTypeIO</span><span class="p">)</span>
+    <span class="n">GraphSON1Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="nb">bytes</span><span class="p">,</span> <span class="n">ByteBufferTypeIO</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">_BaseGraphSONDeserializer</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+
+    <span class="n">_deserializers</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">get_type_definitions</span><span class="p">(</span><span class="bp">cls</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">register</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">graphson_type</span><span class="p">,</span> <span class="n">serializer</span><span class="p">):</span>
+        <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="p">[</span><span class="n">graphson_type</span><span class="p">]</span> <span class="o">=</span> <span class="n">serializer</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">get_deserializer</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">graphson_type</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="p">[</span><span class="n">graphson_type</span><span class="p">]</span>
+        <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;Invalid `graphson_type` specified: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">graphson_type</span><span class="p">))</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">graphson_type</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Deserialize a `graphson_type` value to a python object.</span>
+
+<span class="sd">        :param graphson_base_type: The graphson graphson_type. e.g. &#39;gx:Instant&#39;</span>
+<span class="sd">        :param value: The graphson value to deserialize.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">get_deserializer</span><span class="p">(</span><span class="n">graphson_type</span><span class="p">)</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="GraphSON1Deserializer"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer">[docs]</a><span class="k">class</span> <span class="nc">GraphSON1Deserializer</span><span class="p">(</span><span class="n">_BaseGraphSONDeserializer</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Deserialize graphson1 types to python objects.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">_TYPES</span> <span class="o">=</span> <span class="p">[</span><span class="n">UUIDTypeIO</span><span class="p">,</span> <span class="n">BigDecimalTypeIO</span><span class="p">,</span> <span class="n">InstantTypeIO</span><span class="p">,</span> <span class="n">BlobTypeIO</span><span class="p">,</span> <span class="n">ByteBufferTypeIO</span><span class="p">,</span>
+              <span class="n">PointTypeIO</span><span class="p">,</span> <span class="n">LineStringTypeIO</span><span class="p">,</span> <span class="n">PolygonTypeIO</span><span class="p">,</span> <span class="n">LocalDateTypeIO</span><span class="p">,</span>
+              <span class="n">LocalTimeTypeIO</span><span class="p">,</span> <span class="n">DurationTypeIO</span><span class="p">,</span> <span class="n">InetTypeIO</span><span class="p">]</span>
+
+    <span class="n">_deserializers</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">t</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">:</span> <span class="n">t</span>
+        <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">_TYPES</span>
+    <span class="p">}</span>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_date"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_date">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_date</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="p">[</span><span class="n">LocalDateTypeIO</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">]</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_time"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_time">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_time</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="p">[</span><span class="n">LocalTimeTypeIO</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">]</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_timestamp"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_timestamp">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_timestamp</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="p">[</span><span class="n">InstantTypeIO</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">]</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_duration"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_duration">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_duration</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="p">[</span><span class="n">DurationTypeIO</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">]</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_int"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_int">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_int</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+    <span class="n">deserialize_smallint</span> <span class="o">=</span> <span class="n">deserialize_int</span>
+
+    <span class="n">deserialize_varint</span> <span class="o">=</span> <span class="n">deserialize_int</span>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_bigint"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_bigint">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_bigint</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">six</span><span class="o">.</span><span class="n">PY3</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">deserialize_int</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">long</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_double"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_double">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_double</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+    <span class="n">deserialize_float</span> <span class="o">=</span> <span class="n">deserialize_double</span>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_uuid"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_uuid">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_uuid</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="p">[</span><span class="n">UUIDTypeIO</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">]</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_decimal"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_decimal">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_decimal</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="p">[</span><span class="n">BigDecimalTypeIO</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">]</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_blob"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_blob">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_blob</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="p">[</span><span class="n">ByteBufferTypeIO</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">]</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_point"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_point">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_point</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="p">[</span><span class="n">PointTypeIO</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">]</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_linestring"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_linestring">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_linestring</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="p">[</span><span class="n">LineStringTypeIO</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">]</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="GraphSON1Deserializer.deserialize_polygon"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON1Deserializer.deserialize_polygon">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_polygon</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_deserializers</span><span class="p">[</span><span class="n">PolygonTypeIO</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">]</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></div>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_inet</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">value</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">deserialize_boolean</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">value</span></div>
+
+
+<span class="c1"># TODO Remove in the next major</span>
+<span class="n">GraphSON1TypeDeserializer</span> <span class="o">=</span> <span class="n">GraphSON1Deserializer</span>
+<span class="n">GraphSON1TypeSerializer</span> <span class="o">=</span> <span class="n">GraphSON1Serializer</span>
+
+
+<span class="k">class</span> <span class="nc">GraphSON2Serializer</span><span class="p">(</span><span class="n">_BaseGraphSONSerializer</span><span class="p">):</span>
+    <span class="n">TYPE_KEY</span> <span class="o">=</span> <span class="s2">&quot;@type&quot;</span>
+    <span class="n">VALUE_KEY</span> <span class="o">=</span> <span class="s2">&quot;@value&quot;</span>
+
+    <span class="n">_serializers</span> <span class="o">=</span> <span class="n">GraphSON1Serializer</span><span class="o">.</span><span class="n">get_type_definitions</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">serialize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">writer</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Serialize a type to GraphSON2.</span>
+
+<span class="sd">        e.g {&#39;@type&#39;: &#39;gx:Duration&#39;, &#39;@value&#39;: &#39;P2DT4H&#39;}</span>
+
+<span class="sd">        :param value: The python object to serialize.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">serializer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_serializer</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">serializer</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Unable to find a serializer for value of type: &quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">value</span><span class="p">)))</span>
+
+        <span class="n">val</span> <span class="o">=</span> <span class="n">serializer</span><span class="o">.</span><span class="n">serialize</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">writer</span> <span class="ow">or</span> <span class="bp">self</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">serializer</span> <span class="ow">is</span> <span class="n">TypeWrapperTypeIO</span><span class="p">:</span>
+            <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="n">value</span><span class="o">.</span><span class="n">type_io</span><span class="o">.</span><span class="n">graphson_base_type</span>
+            <span class="n">graphson_type</span> <span class="o">=</span> <span class="n">value</span><span class="o">.</span><span class="n">type_io</span><span class="o">.</span><span class="n">graphson_type</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">graphson_base_type</span> <span class="o">=</span> <span class="n">serializer</span><span class="o">.</span><span class="n">graphson_base_type</span>
+            <span class="n">graphson_type</span> <span class="o">=</span> <span class="n">serializer</span><span class="o">.</span><span class="n">graphson_type</span>
+
+        <span class="k">if</span> <span class="n">graphson_base_type</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">out</span> <span class="o">=</span> <span class="n">val</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">out</span> <span class="o">=</span> <span class="p">{</span><span class="bp">self</span><span class="o">.</span><span class="n">TYPE_KEY</span><span class="p">:</span> <span class="n">graphson_type</span><span class="p">}</span>
+            <span class="k">if</span> <span class="n">val</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">out</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">VALUE_KEY</span><span class="p">]</span> <span class="o">=</span> <span class="n">val</span>
+
+        <span class="k">return</span> <span class="n">out</span>
+
+
+<span class="n">GraphSON2Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="n">IntegerTypeIO</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">six</span><span class="o">.</span><span class="n">PY2</span><span class="p">:</span>
+    <span class="n">GraphSON2Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">long</span><span class="p">,</span> <span class="n">IntegerTypeIO</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">GraphSON2Deserializer</span><span class="p">(</span><span class="n">_BaseGraphSONDeserializer</span><span class="p">):</span>
+
+    <span class="n">_TYPES</span> <span class="o">=</span> <span class="n">GraphSON1Deserializer</span><span class="o">.</span><span class="n">_TYPES</span> <span class="o">+</span> <span class="p">[</span>
+        <span class="n">Int16TypeIO</span><span class="p">,</span> <span class="n">Int32TypeIO</span><span class="p">,</span> <span class="n">Int64TypeIO</span><span class="p">,</span> <span class="n">DoubleTypeIO</span><span class="p">,</span> <span class="n">FloatTypeIO</span><span class="p">,</span>
+        <span class="n">BigIntegerTypeIO</span><span class="p">,</span> <span class="n">VertexTypeIO</span><span class="p">,</span> <span class="n">VertexPropertyTypeIO</span><span class="p">,</span> <span class="n">EdgeTypeIO</span><span class="p">,</span>
+        <span class="n">PathTypeIO</span><span class="p">,</span> <span class="n">PropertyTypeIO</span><span class="p">,</span> <span class="n">TraversalMetricsTypeIO</span><span class="p">,</span> <span class="n">MetricsTypeIO</span><span class="p">]</span>
+
+    <span class="n">_deserializers</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">t</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">:</span> <span class="n">t</span>
+        <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">_TYPES</span>
+    <span class="p">}</span>
+
+
+<div class="viewcode-block" id="GraphSON2Reader"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON2Reader">[docs]</a><span class="k">class</span> <span class="nc">GraphSON2Reader</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    GraphSON2 Reader that parse json and deserialize to python objects.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">context</span><span class="p">,</span> <span class="n">extra_deserializer_map</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param extra_deserializer_map: map from GraphSON type tag to deserializer instance implementing `deserialize`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">context</span> <span class="o">=</span> <span class="n">context</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">deserializers</span> <span class="o">=</span> <span class="n">GraphSON2Deserializer</span><span class="o">.</span><span class="n">get_type_definitions</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">extra_deserializer_map</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">deserializers</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">extra_deserializer_map</span><span class="p">)</span>
+
+<div class="viewcode-block" id="GraphSON2Reader.read"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON2Reader.read">[docs]</a>    <span class="k">def</span> <span class="nf">read</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">json_data</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Read and deserialize ``json_data``.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">json_data</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="GraphSON2Reader.deserialize"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON2Reader.deserialize">[docs]</a>    <span class="k">def</span> <span class="nf">deserialize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Deserialize GraphSON type-tagged dict values into objects mapped in self.deserializers</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">des</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">deserializers</span><span class="p">[</span><span class="n">obj</span><span class="p">[</span><span class="n">GraphSON2Serializer</span><span class="o">.</span><span class="n">TYPE_KEY</span><span class="p">]]</span>
+                <span class="k">return</span> <span class="n">des</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">obj</span><span class="p">[</span><span class="n">GraphSON2Serializer</span><span class="o">.</span><span class="n">VALUE_KEY</span><span class="p">],</span> <span class="bp">self</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
+                <span class="k">pass</span>
+            <span class="c1"># list and map are treated as normal json objs (could be isolated deserializers)</span>
+            <span class="k">return</span> <span class="p">{</span><span class="bp">self</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">k</span><span class="p">):</span> <span class="bp">self</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">six</span><span class="o">.</span><span class="n">iteritems</span><span class="p">(</span><span class="n">obj</span><span class="p">)}</span>
+        <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="k">return</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">deserialize</span><span class="p">(</span><span class="n">o</span><span class="p">)</span> <span class="k">for</span> <span class="n">o</span> <span class="ow">in</span> <span class="n">obj</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">obj</span></div></div>
+
+
+<span class="k">class</span> <span class="nc">TypeIOWrapper</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Used to force a graphson type during serialization&quot;&quot;&quot;</span>
+
+    <span class="n">type_io</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">value</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">type_io</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">type_io</span> <span class="o">=</span> <span class="n">type_io</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">value</span> <span class="o">=</span> <span class="n">value</span>
+
+
+<span class="k">def</span> <span class="nf">_wrap_value</span><span class="p">(</span><span class="n">type_io</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">TypeIOWrapper</span><span class="p">(</span><span class="n">type_io</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+
+
+<span class="n">to_bigint</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">_wrap_value</span><span class="p">,</span> <span class="n">Int64TypeIO</span><span class="p">)</span>
+<span class="n">to_int</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">_wrap_value</span><span class="p">,</span> <span class="n">Int32TypeIO</span><span class="p">)</span>
+<span class="n">to_smallint</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">_wrap_value</span><span class="p">,</span> <span class="n">Int16TypeIO</span><span class="p">)</span>
+<span class="n">to_double</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">_wrap_value</span><span class="p">,</span> <span class="n">DoubleTypeIO</span><span class="p">)</span>
+<span class="n">to_float</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">_wrap_value</span><span class="p">,</span> <span class="n">FloatTypeIO</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">GraphSON3Serializer</span><span class="p">(</span><span class="n">GraphSON2Serializer</span><span class="p">):</span>
+
+    <span class="n">_serializers</span> <span class="o">=</span> <span class="n">GraphSON2Serializer</span><span class="o">.</span><span class="n">get_type_definitions</span><span class="p">()</span>
+
+    <span class="n">context</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;A dict of the serialization context&quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">context</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">context</span> <span class="o">=</span> <span class="n">context</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">user_types</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="nf">definition</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="n">serializer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_serializer</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">serializer</span><span class="o">.</span><span class="n">definition</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">get_serializer</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Custom get_serializer to support UDT/Tuple&quot;&quot;&quot;</span>
+
+        <span class="n">serializer</span> <span class="o">=</span> <span class="nb">super</span><span class="p">(</span><span class="n">GraphSON3Serializer</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">get_serializer</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="n">is_namedtuple_udt</span> <span class="o">=</span> <span class="n">serializer</span> <span class="ow">is</span> <span class="n">TupleTypeIO</span> <span class="ow">and</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="s1">&#39;_fields&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">serializer</span> <span class="ow">or</span> <span class="n">is_namedtuple_udt</span><span class="p">:</span>
+            <span class="c1"># Check if UDT</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">user_types</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="n">user_types</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">context</span><span class="p">[</span><span class="s1">&#39;cluster&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">_user_types</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">context</span><span class="p">[</span><span class="s1">&#39;graph_name&#39;</span><span class="p">]]</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">user_types</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="nb">reversed</span><span class="p">,</span> <span class="n">six</span><span class="o">.</span><span class="n">iteritems</span><span class="p">(</span><span class="n">user_types</span><span class="p">)))</span>
+                <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">user_types</span> <span class="o">=</span> <span class="p">{}</span>
+
+            <span class="n">serializer</span> <span class="o">=</span> <span class="n">UserTypeIO</span> <span class="k">if</span> <span class="p">(</span><span class="n">is_namedtuple_udt</span> <span class="ow">or</span> <span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">user_types</span><span class="p">))</span> <span class="k">else</span> <span class="n">serializer</span>
+
+        <span class="k">return</span> <span class="n">serializer</span>
+
+
+<span class="n">GraphSON3Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="nb">dict</span><span class="p">,</span> <span class="n">MapTypeIO</span><span class="p">)</span>
+<span class="n">GraphSON3Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="n">ListTypeIO</span><span class="p">)</span>
+<span class="n">GraphSON3Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="nb">set</span><span class="p">,</span> <span class="n">SetTypeIO</span><span class="p">)</span>
+<span class="n">GraphSON3Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="nb">tuple</span><span class="p">,</span> <span class="n">TupleTypeIO</span><span class="p">)</span>
+<span class="n">GraphSON3Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">Duration</span><span class="p">,</span> <span class="n">DseDurationTypeIO</span><span class="p">)</span>
+<span class="n">GraphSON3Serializer</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">TypeIOWrapper</span><span class="p">,</span> <span class="n">TypeWrapperTypeIO</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">GraphSON3Deserializer</span><span class="p">(</span><span class="n">GraphSON2Deserializer</span><span class="p">):</span>
+    <span class="n">_TYPES</span> <span class="o">=</span> <span class="n">GraphSON2Deserializer</span><span class="o">.</span><span class="n">_TYPES</span> <span class="o">+</span> <span class="p">[</span><span class="n">MapTypeIO</span><span class="p">,</span> <span class="n">ListTypeIO</span><span class="p">,</span>
+                                             <span class="n">SetTypeIO</span><span class="p">,</span> <span class="n">TupleTypeIO</span><span class="p">,</span>
+                                             <span class="n">UserTypeIO</span><span class="p">,</span> <span class="n">DseDurationTypeIO</span><span class="p">,</span> <span class="n">BulkSetTypeIO</span><span class="p">]</span>
+
+    <span class="n">_deserializers</span> <span class="o">=</span> <span class="p">{</span><span class="n">t</span><span class="o">.</span><span class="n">graphson_type</span><span class="p">:</span> <span class="n">t</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">_TYPES</span><span class="p">}</span>
+
+
+<div class="viewcode-block" id="GraphSON3Reader"><a class="viewcode-back" href="../../../../api/cassandra/graph.html#cassandra.datastax.graph.GraphSON3Reader">[docs]</a><span class="k">class</span> <span class="nc">GraphSON3Reader</span><span class="p">(</span><span class="n">GraphSON2Reader</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    GraphSON3 Reader that parse json and deserialize to python objects.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">context</span><span class="p">,</span> <span class="n">extra_deserializer_map</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param context: A dict of the context, mostly used as context for udt deserialization.</span>
+<span class="sd">        :param extra_deserializer_map: map from GraphSON type tag to deserializer instance implementing `deserialize`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">context</span> <span class="o">=</span> <span class="n">context</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">deserializers</span> <span class="o">=</span> <span class="n">GraphSON3Deserializer</span><span class="o">.</span><span class="n">get_type_definitions</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">extra_deserializer_map</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">deserializers</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">extra_deserializer_map</span><span class="p">)</span></div>
+</pre></div>
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../api/index.html">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../object_mapper.html">Object Mapper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">3.22.0-scylla <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="../../../../../master/index.html">master</a></li>
+        <li><a href="graphson.html">3.22.0-scylla</a></li>
+        <li><a href="../../../../../3.21.0-scylla/index.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="../../../../_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page cassandra.datastax.graph.graphson&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/_modules/cassandra/datastax/graph/graphson%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="../../../../_static/js/vendor/jquery.js"></script>
+<script src="../../../../_static/expertrec.js"></script>
+<script src="../../../../_static/js/foundation/foundation.js"></script>
+<script src="../../../../_static/js/foundation/foundation.topbar.js"></script>
+<script src="../../../../_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

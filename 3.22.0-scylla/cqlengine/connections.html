@@ -1,0 +1,362 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    Connections | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="../_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../_static/clipboard.min.js"></script>
+    <script src="../_static/copybutton.js"></script>
+
+    <script src="../_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="../_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+                <p>
+                    <strong>
+                    
+                    You're reading the documentation for a development version.
+                    For the latest released version, please have a look at <a href="../../master/cqlengine/connections.html">master</a>.
+                    
+                    </strong>
+                </p>
+            
+
+            <div class="section" id="connections">
+<h1>Connections<a class="headerlink" href="#connections" title="Permalink to this headline">¶</a></h1>
+<p>Connections aim to ease the use of multiple sessions with cqlengine. Connections can be set on a model class, per query or using a context manager.</p>
+<div class="section" id="register-a-new-connection">
+<h2>Register a new connection<a class="headerlink" href="#register-a-new-connection" title="Permalink to this headline">¶</a></h2>
+<p>To use cqlengine, you need at least a default connection. If you initialize cqlengine’s connections with with <a class="reference internal" href="../api/cassandra/cqlengine/connection.html#cassandra.cqlengine.connection.setup" title="cassandra.cqlengine.connection.setup"><code class="xref py py-func docutils literal notranslate"><span class="pre">connection.setup</span></code></a>, a connection will be created automatically. If you want to use another cluster/session, you need to register a new cqlengine connection. You register a connection with <a class="reference internal" href="../api/cassandra/cqlengine/connection.html#cassandra.cqlengine.connection.register_connection" title="cassandra.cqlengine.connection.register_connection"><code class="xref py py-func docutils literal notranslate"><span class="pre">register_connection()</span></code></a>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cqlengine</span> <span class="kn">import</span> <span class="n">connection</span>
+
+<span class="n">connection</span><span class="o">.</span><span class="n">setup</span><span class="p">([</span><span class="s1">&#39;127.0.0.1&#39;</span><span class="p">)</span>
+<span class="n">connection</span><span class="o">.</span><span class="n">register_connection</span><span class="p">(</span><span class="s1">&#39;cluster2&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;127.0.0.2&#39;</span><span class="p">])</span>
+</pre></div>
+</div>
+<p><a class="reference internal" href="../api/cassandra/cqlengine/connection.html#cassandra.cqlengine.connection.register_connection" title="cassandra.cqlengine.connection.register_connection"><code class="xref py py-func docutils literal notranslate"><span class="pre">register_connection()</span></code></a> can take a list of hosts, as shown above, in which case it will create a connection with a new session. It can also take a <cite>session</cite> argument if you’ve already created a session:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cqlengine</span> <span class="kn">import</span> <span class="n">connection</span>
+<span class="kn">from</span> <span class="nn">cassandra.cluster</span> <span class="kn">import</span> <span class="n">Cluster</span>
+
+<span class="n">session</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">([</span><span class="s1">&#39;127.0.0.1&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+<span class="n">connection</span><span class="o">.</span><span class="n">register_connection</span><span class="p">(</span><span class="s1">&#39;cluster3&#39;</span><span class="p">,</span> <span class="n">session</span><span class="o">=</span><span class="n">session</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="change-the-default-connection">
+<h2>Change the default connection<a class="headerlink" href="#change-the-default-connection" title="Permalink to this headline">¶</a></h2>
+<p>You can change the default cqlengine connection on registration:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cqlengine</span> <span class="kn">import</span> <span class="n">connection</span>
+
+<span class="n">connection</span><span class="o">.</span><span class="n">register_connection</span><span class="p">(</span><span class="s1">&#39;cluster2&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;127.0.0.2&#39;</span><span class="p">]</span> <span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>or on the fly using <a class="reference internal" href="../api/cassandra/cqlengine/connection.html#cassandra.cqlengine.connection.set_default_connection" title="cassandra.cqlengine.connection.set_default_connection"><code class="xref py py-func docutils literal notranslate"><span class="pre">set_default_connection()</span></code></a></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">connection</span><span class="o">.</span><span class="n">set_default_connection</span><span class="p">(</span><span class="s1">&#39;cluster2&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="unregister-a-connection">
+<h2>Unregister a connection<a class="headerlink" href="#unregister-a-connection" title="Permalink to this headline">¶</a></h2>
+<p>You can unregister a connection using <a class="reference internal" href="../api/cassandra/cqlengine/connection.html#cassandra.cqlengine.connection.unregister_connection" title="cassandra.cqlengine.connection.unregister_connection"><code class="xref py py-func docutils literal notranslate"><span class="pre">unregister_connection()</span></code></a>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">connection</span><span class="o">.</span><span class="n">unregister_connection</span><span class="p">(</span><span class="s1">&#39;cluster2&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="management">
+<h2>Management<a class="headerlink" href="#management" title="Permalink to this headline">¶</a></h2>
+<p>When using multiples connections, you also need to sync your models on all connections (and keyspaces) that you need operate on. Management commands have been improved to ease this part. Here is an example:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">cassandra.cqlengine</span> <span class="kn">import</span> <span class="n">management</span>
+
+<span class="n">keyspaces</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;ks1&#39;</span><span class="p">,</span> <span class="s1">&#39;ks2&#39;</span><span class="p">]</span>
+<span class="n">conns</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;cluster1&#39;</span><span class="p">,</span> <span class="s1">&#39;cluster2&#39;</span><span class="p">]</span>
+
+<span class="c1"># registers your connections</span>
+<span class="c1"># ...</span>
+
+<span class="c1"># create all keyspaces on all connections</span>
+<span class="k">for</span> <span class="n">ks</span> <span class="ow">in</span> <span class="n">keyspaces</span><span class="p">:</span>
+    <span class="n">management</span><span class="o">.</span><span class="n">create_simple_keyspace</span><span class="p">(</span><span class="n">ks</span><span class="p">,</span> <span class="n">connections</span><span class="o">=</span><span class="n">conns</span><span class="p">)</span>
+
+<span class="c1"># define your Automobile model</span>
+<span class="c1"># ...</span>
+
+<span class="c1"># sync your models</span>
+<span class="n">management</span><span class="o">.</span><span class="n">sync_table</span><span class="p">(</span><span class="n">Automobile</span><span class="p">,</span> <span class="n">keyspaces</span><span class="o">=</span><span class="n">keyspaces</span><span class="p">,</span> <span class="n">connections</span><span class="o">=</span><span class="n">conns</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="connection-selection">
+<h2>Connection Selection<a class="headerlink" href="#connection-selection" title="Permalink to this headline">¶</a></h2>
+<p>cqlengine will select the default connection, unless your specify a connection using one of the following methods.</p>
+<div class="section" id="default-model-connection">
+<h3>Default Model Connection<a class="headerlink" href="#default-model-connection" title="Permalink to this headline">¶</a></h3>
+<p>You can specify a default connection per model:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">Automobile</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">__keyspace__</span> <span class="o">=</span> <span class="s1">&#39;test&#39;</span>
+    <span class="n">__connection__</span> <span class="o">=</span> <span class="s1">&#39;cluster2&#39;</span>
+    <span class="n">manufacturer</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Text</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">year</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Integer</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Text</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="nb">print</span> <span class="nb">len</span><span class="p">(</span><span class="n">Automobile</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">all</span><span class="p">())</span>  <span class="c1"># executed on the connection &#39;cluster2&#39;</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="queryset-and-model-instance">
+<h3>QuerySet and model instance<a class="headerlink" href="#queryset-and-model-instance" title="Permalink to this headline">¶</a></h3>
+<p>You can use the <a class="reference internal" href="../api/cassandra/cqlengine/query.html#cassandra.cqlengine.query.ModelQuerySet.using" title="cassandra.cqlengine.query.ModelQuerySet.using"><code class="xref py py-attr docutils literal notranslate"><span class="pre">using()</span></code></a> method to select a connection (or keyspace):</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">Automobile</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">using</span><span class="p">(</span><span class="n">connection</span><span class="o">=</span><span class="s1">&#39;cluster1&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">manufacturer</span><span class="o">=</span><span class="s1">&#39;honda&#39;</span><span class="p">,</span> <span class="n">year</span><span class="o">=</span><span class="mi">2010</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s1">&#39;civic&#39;</span><span class="p">)</span>
+<span class="n">q</span> <span class="o">=</span> <span class="n">Automobile</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">manufacturer</span><span class="o">=</span><span class="s1">&#39;Tesla&#39;</span><span class="p">)</span>
+<span class="n">autos</span> <span class="o">=</span> <span class="n">q</span><span class="o">.</span><span class="n">using</span><span class="p">(</span><span class="n">keyspace</span><span class="o">=</span><span class="s1">&#39;ks2&#39;</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="s1">&#39;cluster2&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+
+<span class="k">for</span> <span class="n">auto</span> <span class="ow">in</span> <span class="n">autos</span><span class="p">:</span>
+    <span class="n">auto</span><span class="o">.</span><span class="n">using</span><span class="p">(</span><span class="n">connection</span><span class="o">=</span><span class="s1">&#39;cluster1&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="context-manager">
+<h3>Context Manager<a class="headerlink" href="#context-manager" title="Permalink to this headline">¶</a></h3>
+<p>You can use the ContextQuery as well to select a connection:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">ContextQuery</span><span class="p">(</span><span class="n">Automobile</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="s1">&#39;cluster1&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">A</span><span class="p">:</span>
+    <span class="n">A</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">manufacturer</span><span class="o">=</span><span class="s1">&#39;honda&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>  <span class="c1"># executed on &#39;cluster1&#39;</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="batchquery">
+<h3>BatchQuery<a class="headerlink" href="#batchquery" title="Permalink to this headline">¶</a></h3>
+<p>With a BatchQuery, you can select the connection with the context manager. Note that all operations in the batch need to use the same connection.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">BatchQuery</span><span class="p">(</span><span class="n">connection</span><span class="o">=</span><span class="s1">&#39;cluster1&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">b</span><span class="p">:</span>
+    <span class="n">Automobile</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">batch</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">manufacturer</span><span class="o">=</span><span class="s1">&#39;honda&#39;</span><span class="p">,</span> <span class="n">year</span><span class="o">=</span><span class="mi">2010</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s1">&#39;civic&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+</div>
+
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../api/index.html">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../object_mapper.html">Object Mapper</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="upgrade_guide.html">Upgrade Guide</a></li>
+<li class="toctree-l2"><a class="reference internal" href="models.html">Models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="queryset.html">Making Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="batches.html">Batch Queries</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Connections</a></li>
+<li class="toctree-l2"><a class="reference internal" href="third_party.html">Third party integrations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">3.22.0-scylla <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="../../master/cqlengine/connections.html">master</a></li>
+        <li><a href="connections.html">3.22.0-scylla</a></li>
+        <li><a href="../../3.21.0-scylla/cqlengine/connections.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="../_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page Connections&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/cqlengine/connections%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="../_static/js/vendor/jquery.js"></script>
+<script src="../_static/expertrec.js"></script>
+<script src="../_static/js/foundation/foundation.js"></script>
+<script src="../_static/js/foundation/foundation.topbar.js"></script>
+<script src="../_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

@@ -1,0 +1,1027 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    uuid | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="../_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx_tabs/semantic-ui-2.4.1/segment.min.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx_tabs/semantic-ui-2.4.1/menu.min.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx_tabs/tabs.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../_static/clipboard.min.js"></script>
+    <script src="../_static/copybutton.js"></script>
+    <script src="../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.js"></script>
+    <script src="../_static/sphinx_tabs/tabs.js"></script>
+
+    <script src="../_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="../_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+                <p>
+                    <strong>
+                    
+                    You're reading the documentation for a development version.
+                    For the latest released version, please have a look at <a href="../../master/index.html">master</a>.
+                    
+                    </strong>
+                </p>
+            
+
+            <h1>Source code for uuid</h1><div class="highlight"><pre>
+<span></span><span class="sa">r</span><span class="sd">&quot;&quot;&quot;UUID objects (universally unique identifiers) according to RFC 4122.</span>
+
+<span class="sd">This module provides immutable UUID objects (class UUID) and the functions</span>
+<span class="sd">uuid1(), uuid3(), uuid4(), uuid5() for generating version 1, 3, 4, and 5</span>
+<span class="sd">UUIDs as specified in RFC 4122.</span>
+
+<span class="sd">If all you want is a unique ID, you should probably call uuid1() or uuid4().</span>
+<span class="sd">Note that uuid1() may compromise privacy since it creates a UUID containing</span>
+<span class="sd">the computer&#39;s network address.  uuid4() creates a random UUID.</span>
+
+<span class="sd">Typical usage:</span>
+
+<span class="sd">    &gt;&gt;&gt; import uuid</span>
+
+<span class="sd">    # make a UUID based on the host ID and current time</span>
+<span class="sd">    &gt;&gt;&gt; uuid.uuid1()    # doctest: +SKIP</span>
+<span class="sd">    UUID(&#39;a8098c1a-f86e-11da-bd1a-00112444be1e&#39;)</span>
+
+<span class="sd">    # make a UUID using an MD5 hash of a namespace UUID and a name</span>
+<span class="sd">    &gt;&gt;&gt; uuid.uuid3(uuid.NAMESPACE_DNS, &#39;python.org&#39;)</span>
+<span class="sd">    UUID(&#39;6fa459ea-ee8a-3ca4-894e-db77e160355e&#39;)</span>
+
+<span class="sd">    # make a random UUID</span>
+<span class="sd">    &gt;&gt;&gt; uuid.uuid4()    # doctest: +SKIP</span>
+<span class="sd">    UUID(&#39;16fd2706-8baf-433b-82eb-8c7fada847da&#39;)</span>
+
+<span class="sd">    # make a UUID using a SHA-1 hash of a namespace UUID and a name</span>
+<span class="sd">    &gt;&gt;&gt; uuid.uuid5(uuid.NAMESPACE_DNS, &#39;python.org&#39;)</span>
+<span class="sd">    UUID(&#39;886313e1-3b8a-5372-9b90-0c9aee199e5d&#39;)</span>
+
+<span class="sd">    # make a UUID from a string of hex digits (braces and hyphens ignored)</span>
+<span class="sd">    &gt;&gt;&gt; x = uuid.UUID(&#39;{00010203-0405-0607-0809-0a0b0c0d0e0f}&#39;)</span>
+
+<span class="sd">    # convert a UUID to a string of hex digits in standard form</span>
+<span class="sd">    &gt;&gt;&gt; str(x)</span>
+<span class="sd">    &#39;00010203-0405-0607-0809-0a0b0c0d0e0f&#39;</span>
+
+<span class="sd">    # get the raw 16 bytes of the UUID</span>
+<span class="sd">    &gt;&gt;&gt; x.bytes</span>
+<span class="sd">    b&#39;\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f&#39;</span>
+
+<span class="sd">    # make a UUID from a 16-byte string</span>
+<span class="sd">    &gt;&gt;&gt; uuid.UUID(bytes=x.bytes)</span>
+<span class="sd">    UUID(&#39;00010203-0405-0607-0809-0a0b0c0d0e0f&#39;)</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="kn">from</span> <span class="nn">enum</span> <span class="kn">import</span> <span class="n">Enum</span>
+
+
+<span class="n">__author__</span> <span class="o">=</span> <span class="s1">&#39;Ka-Ping Yee &lt;ping@zesty.ca&gt;&#39;</span>
+
+<span class="n">RESERVED_NCS</span><span class="p">,</span> <span class="n">RFC_4122</span><span class="p">,</span> <span class="n">RESERVED_MICROSOFT</span><span class="p">,</span> <span class="n">RESERVED_FUTURE</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s1">&#39;reserved for NCS compatibility&#39;</span><span class="p">,</span> <span class="s1">&#39;specified in RFC 4122&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;reserved for Microsoft compatibility&#39;</span><span class="p">,</span> <span class="s1">&#39;reserved for future definition&#39;</span><span class="p">]</span>
+
+<span class="n">int_</span> <span class="o">=</span> <span class="nb">int</span>      <span class="c1"># The built-in int type</span>
+<span class="n">bytes_</span> <span class="o">=</span> <span class="nb">bytes</span>  <span class="c1"># The built-in bytes type</span>
+
+
+<span class="k">class</span> <span class="nc">SafeUUID</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
+    <span class="n">safe</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">unsafe</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+    <span class="n">unknown</span> <span class="o">=</span> <span class="kc">None</span>
+
+
+<span class="k">class</span> <span class="nc">UUID</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;Instances of the UUID class represent UUIDs as specified in RFC 4122.</span>
+<span class="sd">    UUID objects are immutable, hashable, and usable as dictionary keys.</span>
+<span class="sd">    Converting a UUID to a string with str() yields something in the form</span>
+<span class="sd">    &#39;12345678-1234-1234-1234-123456789abc&#39;.  The UUID constructor accepts</span>
+<span class="sd">    five possible forms: a similar string of hexadecimal digits, or a tuple</span>
+<span class="sd">    of six integer fields (with 32-bit, 16-bit, 16-bit, 8-bit, 8-bit, and</span>
+<span class="sd">    48-bit values respectively) as an argument named &#39;fields&#39;, or a string</span>
+<span class="sd">    of 16 bytes (with all the integer fields in big-endian order) as an</span>
+<span class="sd">    argument named &#39;bytes&#39;, or a string of 16 bytes (with the first three</span>
+<span class="sd">    fields in little-endian order) as an argument named &#39;bytes_le&#39;, or a</span>
+<span class="sd">    single 128-bit integer as an argument named &#39;int&#39;.</span>
+
+<span class="sd">    UUIDs have these read-only attributes:</span>
+
+<span class="sd">        bytes       the UUID as a 16-byte string (containing the six</span>
+<span class="sd">                    integer fields in big-endian byte order)</span>
+
+<span class="sd">        bytes_le    the UUID as a 16-byte string (with time_low, time_mid,</span>
+<span class="sd">                    and time_hi_version in little-endian byte order)</span>
+
+<span class="sd">        fields      a tuple of the six integer fields of the UUID,</span>
+<span class="sd">                    which are also available as six individual attributes</span>
+<span class="sd">                    and two derived attributes:</span>
+
+<span class="sd">            time_low                the first 32 bits of the UUID</span>
+<span class="sd">            time_mid                the next 16 bits of the UUID</span>
+<span class="sd">            time_hi_version         the next 16 bits of the UUID</span>
+<span class="sd">            clock_seq_hi_variant    the next 8 bits of the UUID</span>
+<span class="sd">            clock_seq_low           the next 8 bits of the UUID</span>
+<span class="sd">            node                    the last 48 bits of the UUID</span>
+
+<span class="sd">            time                    the 60-bit timestamp</span>
+<span class="sd">            clock_seq               the 14-bit sequence number</span>
+
+<span class="sd">        hex         the UUID as a 32-character hexadecimal string</span>
+
+<span class="sd">        int         the UUID as a 128-bit integer</span>
+
+<span class="sd">        urn         the UUID as a URN as specified in RFC 4122</span>
+
+<span class="sd">        variant     the UUID variant (one of the constants RESERVED_NCS,</span>
+<span class="sd">                    RFC_4122, RESERVED_MICROSOFT, or RESERVED_FUTURE)</span>
+
+<span class="sd">        version     the UUID version number (1 through 5, meaningful only</span>
+<span class="sd">                    when the variant is RFC_4122)</span>
+
+<span class="sd">        is_safe     An enum indicating whether the UUID has been generated in</span>
+<span class="sd">                    a way that is safe for multiprocessing applications, via</span>
+<span class="sd">                    uuid_generate_time_safe(3).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">hex</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="nb">bytes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">bytes_le</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fields</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                       <span class="nb">int</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                       <span class="o">*</span><span class="p">,</span> <span class="n">is_safe</span><span class="o">=</span><span class="n">SafeUUID</span><span class="o">.</span><span class="n">unknown</span><span class="p">):</span>
+        <span class="sa">r</span><span class="sd">&quot;&quot;&quot;Create a UUID from either a string of 32 hexadecimal digits,</span>
+<span class="sd">        a string of 16 bytes as the &#39;bytes&#39; argument, a string of 16 bytes</span>
+<span class="sd">        in little-endian order as the &#39;bytes_le&#39; argument, a tuple of six</span>
+<span class="sd">        integers (32-bit time_low, 16-bit time_mid, 16-bit time_hi_version,</span>
+<span class="sd">        8-bit clock_seq_hi_variant, 8-bit clock_seq_low, 48-bit node) as</span>
+<span class="sd">        the &#39;fields&#39; argument, or a single 128-bit integer as the &#39;int&#39;</span>
+<span class="sd">        argument.  When a string of hex digits is given, curly braces,</span>
+<span class="sd">        hyphens, and a URN prefix are all optional.  For example, these</span>
+<span class="sd">        expressions all yield the same UUID:</span>
+
+<span class="sd">        UUID(&#39;{12345678-1234-5678-1234-567812345678}&#39;)</span>
+<span class="sd">        UUID(&#39;12345678123456781234567812345678&#39;)</span>
+<span class="sd">        UUID(&#39;urn:uuid:12345678-1234-5678-1234-567812345678&#39;)</span>
+<span class="sd">        UUID(bytes=&#39;\x12\x34\x56\x78&#39;*4)</span>
+<span class="sd">        UUID(bytes_le=&#39;\x78\x56\x34\x12\x34\x12\x78\x56&#39; +</span>
+<span class="sd">                      &#39;\x12\x34\x56\x78\x12\x34\x56\x78&#39;)</span>
+<span class="sd">        UUID(fields=(0x12345678, 0x1234, 0x5678, 0x12, 0x34, 0x567812345678))</span>
+<span class="sd">        UUID(int=0x12345678123456781234567812345678)</span>
+
+<span class="sd">        Exactly one of &#39;hex&#39;, &#39;bytes&#39;, &#39;bytes_le&#39;, &#39;fields&#39;, or &#39;int&#39; must</span>
+<span class="sd">        be given.  The &#39;version&#39; argument is optional; if given, the resulting</span>
+<span class="sd">        UUID will have its variant and version set according to RFC 4122,</span>
+<span class="sd">        overriding the given &#39;hex&#39;, &#39;bytes&#39;, &#39;bytes_le&#39;, &#39;fields&#39;, or &#39;int&#39;.</span>
+
+<span class="sd">        is_safe is an enum exposed as an attribute on the instance.  It</span>
+<span class="sd">        indicates whether the UUID has been generated in a way that is safe</span>
+<span class="sd">        for multiprocessing applications, via uuid_generate_time_safe(3).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="p">[</span><span class="nb">hex</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">,</span> <span class="n">bytes_le</span><span class="p">,</span> <span class="n">fields</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span><span class="o">.</span><span class="n">count</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">4</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s1">&#39;one of the hex, bytes, bytes_le, fields, &#39;</span>
+                            <span class="s1">&#39;or int arguments must be given&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">hex</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="nb">hex</span> <span class="o">=</span> <span class="nb">hex</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;urn:&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;uuid:&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+            <span class="nb">hex</span> <span class="o">=</span> <span class="nb">hex</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;-&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nb">hex</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">32</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;badly formed hexadecimal UUID string&#39;</span><span class="p">)</span>
+            <span class="nb">int</span> <span class="o">=</span> <span class="n">int_</span><span class="p">(</span><span class="nb">hex</span><span class="p">,</span> <span class="mi">16</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">bytes_le</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">bytes_le</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">16</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;bytes_le is not a 16-char string&#39;</span><span class="p">)</span>
+            <span class="nb">bytes</span> <span class="o">=</span> <span class="p">(</span><span class="n">bytes_le</span><span class="p">[</span><span class="mi">4</span><span class="o">-</span><span class="mi">1</span><span class="p">::</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">bytes_le</span><span class="p">[</span><span class="mi">6</span><span class="o">-</span><span class="mi">1</span><span class="p">:</span><span class="mi">4</span><span class="o">-</span><span class="mi">1</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span>
+                     <span class="n">bytes_le</span><span class="p">[</span><span class="mi">8</span><span class="o">-</span><span class="mi">1</span><span class="p">:</span><span class="mi">6</span><span class="o">-</span><span class="mi">1</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">bytes_le</span><span class="p">[</span><span class="mi">8</span><span class="p">:])</span>
+        <span class="k">if</span> <span class="nb">bytes</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nb">bytes</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">16</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;bytes is not a 16-char string&#39;</span><span class="p">)</span>
+            <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="nb">bytes</span><span class="p">,</span> <span class="n">bytes_</span><span class="p">),</span> <span class="nb">repr</span><span class="p">(</span><span class="nb">bytes</span><span class="p">)</span>
+            <span class="nb">int</span> <span class="o">=</span> <span class="n">int_</span><span class="o">.</span><span class="n">from_bytes</span><span class="p">(</span><span class="nb">bytes</span><span class="p">,</span> <span class="n">byteorder</span><span class="o">=</span><span class="s1">&#39;big&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">fields</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">fields</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">6</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;fields is not a 6-tuple&#39;</span><span class="p">)</span>
+            <span class="p">(</span><span class="n">time_low</span><span class="p">,</span> <span class="n">time_mid</span><span class="p">,</span> <span class="n">time_hi_version</span><span class="p">,</span>
+             <span class="n">clock_seq_hi_variant</span><span class="p">,</span> <span class="n">clock_seq_low</span><span class="p">,</span> <span class="n">node</span><span class="p">)</span> <span class="o">=</span> <span class="n">fields</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">time_low</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="o">&lt;&lt;</span><span class="mi">32</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;field 1 out of range (need a 32-bit value)&#39;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">time_mid</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="o">&lt;&lt;</span><span class="mi">16</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;field 2 out of range (need a 16-bit value)&#39;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">time_hi_version</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="o">&lt;&lt;</span><span class="mi">16</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;field 3 out of range (need a 16-bit value)&#39;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">clock_seq_hi_variant</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="o">&lt;&lt;</span><span class="mi">8</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;field 4 out of range (need an 8-bit value)&#39;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">clock_seq_low</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="o">&lt;&lt;</span><span class="mi">8</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;field 5 out of range (need an 8-bit value)&#39;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">node</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="o">&lt;&lt;</span><span class="mi">48</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;field 6 out of range (need a 48-bit value)&#39;</span><span class="p">)</span>
+            <span class="n">clock_seq</span> <span class="o">=</span> <span class="p">(</span><span class="n">clock_seq_hi_variant</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">|</span> <span class="n">clock_seq_low</span>
+            <span class="nb">int</span> <span class="o">=</span> <span class="p">((</span><span class="n">time_low</span> <span class="o">&lt;&lt;</span> <span class="mi">96</span><span class="p">)</span> <span class="o">|</span> <span class="p">(</span><span class="n">time_mid</span> <span class="o">&lt;&lt;</span> <span class="mi">80</span><span class="p">)</span> <span class="o">|</span>
+                   <span class="p">(</span><span class="n">time_hi_version</span> <span class="o">&lt;&lt;</span> <span class="mi">64</span><span class="p">)</span> <span class="o">|</span> <span class="p">(</span><span class="n">clock_seq</span> <span class="o">&lt;&lt;</span> <span class="mi">48</span><span class="p">)</span> <span class="o">|</span> <span class="n">node</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">int</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="nb">int</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="o">&lt;&lt;</span><span class="mi">128</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;int is out of range (need a 128-bit value)&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">version</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="mi">1</span> <span class="o">&lt;=</span> <span class="n">version</span> <span class="o">&lt;=</span> <span class="mi">5</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;illegal version number&#39;</span><span class="p">)</span>
+            <span class="c1"># Set the variant to RFC 4122.</span>
+            <span class="nb">int</span> <span class="o">&amp;=</span> <span class="o">~</span><span class="p">(</span><span class="mh">0xc000</span> <span class="o">&lt;&lt;</span> <span class="mi">48</span><span class="p">)</span>
+            <span class="nb">int</span> <span class="o">|=</span> <span class="mh">0x8000</span> <span class="o">&lt;&lt;</span> <span class="mi">48</span>
+            <span class="c1"># Set the version number.</span>
+            <span class="nb">int</span> <span class="o">&amp;=</span> <span class="o">~</span><span class="p">(</span><span class="mh">0xf000</span> <span class="o">&lt;&lt;</span> <span class="mi">64</span><span class="p">)</span>
+            <span class="nb">int</span> <span class="o">|=</span> <span class="n">version</span> <span class="o">&lt;&lt;</span> <span class="mi">76</span>
+        <span class="bp">self</span><span class="o">.</span><span class="vm">__dict__</span><span class="p">[</span><span class="s1">&#39;int&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">int</span>
+        <span class="bp">self</span><span class="o">.</span><span class="vm">__dict__</span><span class="p">[</span><span class="s1">&#39;is_safe&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">is_safe</span>
+
+    <span class="k">def</span> <span class="nf">__getstate__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_safe</span> <span class="o">!=</span> <span class="n">SafeUUID</span><span class="o">.</span><span class="n">unknown</span><span class="p">:</span>
+            <span class="c1"># is_safe is a SafeUUID instance.  Return just its value, so that</span>
+            <span class="c1"># it can be un-pickled in older Python versions without SafeUUID.</span>
+            <span class="n">state</span><span class="p">[</span><span class="s1">&#39;is_safe&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_safe</span><span class="o">.</span><span class="n">value</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># omit is_safe when it is &quot;unknown&quot;</span>
+            <span class="k">del</span> <span class="n">state</span><span class="p">[</span><span class="s1">&#39;is_safe&#39;</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">state</span>
+
+    <span class="k">def</span> <span class="nf">__setstate__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
+        <span class="c1"># is_safe was added in 3.7; it is also omitted when it is &quot;unknown&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="vm">__dict__</span><span class="p">[</span><span class="s1">&#39;is_safe&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">SafeUUID</span><span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="s1">&#39;is_safe&#39;</span><span class="p">])</span>
+            <span class="k">if</span> <span class="s1">&#39;is_safe&#39;</span> <span class="ow">in</span> <span class="n">state</span> <span class="k">else</span> <span class="n">SafeUUID</span><span class="o">.</span><span class="n">unknown</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__eq__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">other</span><span class="p">,</span> <span class="n">UUID</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">int</span>
+        <span class="k">return</span> <span class="bp">NotImplemented</span>
+
+    <span class="c1"># Q. What&#39;s the value of being able to sort UUIDs?</span>
+    <span class="c1"># A. Use them as keys in a B-Tree or similar mapping.</span>
+
+    <span class="k">def</span> <span class="fm">__lt__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">other</span><span class="p">,</span> <span class="n">UUID</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&lt;</span> <span class="n">other</span><span class="o">.</span><span class="n">int</span>
+        <span class="k">return</span> <span class="bp">NotImplemented</span>
+
+    <span class="k">def</span> <span class="fm">__gt__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">other</span><span class="p">,</span> <span class="n">UUID</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&gt;</span> <span class="n">other</span><span class="o">.</span><span class="n">int</span>
+        <span class="k">return</span> <span class="bp">NotImplemented</span>
+
+    <span class="k">def</span> <span class="fm">__le__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">other</span><span class="p">,</span> <span class="n">UUID</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&lt;=</span> <span class="n">other</span><span class="o">.</span><span class="n">int</span>
+        <span class="k">return</span> <span class="bp">NotImplemented</span>
+
+    <span class="k">def</span> <span class="fm">__ge__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">other</span><span class="p">,</span> <span class="n">UUID</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&gt;=</span> <span class="n">other</span><span class="o">.</span><span class="n">int</span>
+        <span class="k">return</span> <span class="bp">NotImplemented</span>
+
+    <span class="k">def</span> <span class="fm">__hash__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">hash</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">int</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__int__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span>
+
+    <span class="k">def</span> <span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s1">&#39;</span><span class="si">%s</span><span class="s1">(</span><span class="si">%r</span><span class="s1">)&#39;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="fm">__setattr__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s1">&#39;UUID objects are immutable&#39;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">hex</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">%032x</span><span class="s1">&#39;</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span>
+        <span class="k">return</span> <span class="s1">&#39;</span><span class="si">%s</span><span class="s1">-</span><span class="si">%s</span><span class="s1">-</span><span class="si">%s</span><span class="s1">-</span><span class="si">%s</span><span class="s1">-</span><span class="si">%s</span><span class="s1">&#39;</span> <span class="o">%</span> <span class="p">(</span>
+            <span class="nb">hex</span><span class="p">[:</span><span class="mi">8</span><span class="p">],</span> <span class="nb">hex</span><span class="p">[</span><span class="mi">8</span><span class="p">:</span><span class="mi">12</span><span class="p">],</span> <span class="nb">hex</span><span class="p">[</span><span class="mi">12</span><span class="p">:</span><span class="mi">16</span><span class="p">],</span> <span class="nb">hex</span><span class="p">[</span><span class="mi">16</span><span class="p">:</span><span class="mi">20</span><span class="p">],</span> <span class="nb">hex</span><span class="p">[</span><span class="mi">20</span><span class="p">:])</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">bytes</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span><span class="o">.</span><span class="n">to_bytes</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="s1">&#39;big&#39;</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">bytes_le</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">bytes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bytes</span>
+        <span class="k">return</span> <span class="p">(</span><span class="nb">bytes</span><span class="p">[</span><span class="mi">4</span><span class="o">-</span><span class="mi">1</span><span class="p">::</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="nb">bytes</span><span class="p">[</span><span class="mi">6</span><span class="o">-</span><span class="mi">1</span><span class="p">:</span><span class="mi">4</span><span class="o">-</span><span class="mi">1</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="nb">bytes</span><span class="p">[</span><span class="mi">8</span><span class="o">-</span><span class="mi">1</span><span class="p">:</span><span class="mi">6</span><span class="o">-</span><span class="mi">1</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span>
+                <span class="nb">bytes</span><span class="p">[</span><span class="mi">8</span><span class="p">:])</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">fields</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">time_low</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">time_mid</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">time_hi_version</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">clock_seq_hi_variant</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">clock_seq_low</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">node</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">time_low</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&gt;&gt;</span> <span class="mi">96</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">time_mid</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&gt;&gt;</span> <span class="mi">80</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xffff</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">time_hi_version</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&gt;&gt;</span> <span class="mi">64</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xffff</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">clock_seq_hi_variant</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&gt;&gt;</span> <span class="mi">56</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xff</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">clock_seq_low</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&gt;&gt;</span> <span class="mi">48</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xff</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">time</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">(((</span><span class="bp">self</span><span class="o">.</span><span class="n">time_hi_version</span> <span class="o">&amp;</span> <span class="mh">0x0fff</span><span class="p">)</span> <span class="o">&lt;&lt;</span> <span class="mi">48</span><span class="p">)</span> <span class="o">|</span>
+                <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">time_mid</span> <span class="o">&lt;&lt;</span> <span class="mi">32</span><span class="p">)</span> <span class="o">|</span> <span class="bp">self</span><span class="o">.</span><span class="n">time_low</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">clock_seq</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">(((</span><span class="bp">self</span><span class="o">.</span><span class="n">clock_seq_hi_variant</span> <span class="o">&amp;</span> <span class="mh">0x3f</span><span class="p">)</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">|</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">clock_seq_low</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">node</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&amp;</span> <span class="mh">0xffffffffffff</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">hex</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s1">&#39;</span><span class="si">%032x</span><span class="s1">&#39;</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">urn</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s1">&#39;urn:uuid:&#39;</span> <span class="o">+</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">variant</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&amp;</span> <span class="p">(</span><span class="mh">0x8000</span> <span class="o">&lt;&lt;</span> <span class="mi">48</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">RESERVED_NCS</span>
+        <span class="k">elif</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&amp;</span> <span class="p">(</span><span class="mh">0x4000</span> <span class="o">&lt;&lt;</span> <span class="mi">48</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">RFC_4122</span>
+        <span class="k">elif</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&amp;</span> <span class="p">(</span><span class="mh">0x2000</span> <span class="o">&lt;&lt;</span> <span class="mi">48</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">RESERVED_MICROSOFT</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">RESERVED_FUTURE</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">version</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># The version bits are only meaningful for RFC 4122 UUIDs.</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">variant</span> <span class="o">==</span> <span class="n">RFC_4122</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">int</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">int</span> <span class="o">&gt;&gt;</span> <span class="mi">76</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xf</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">_popen</span><span class="p">(</span><span class="n">command</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
+    <span class="kn">import</span> <span class="nn">os</span><span class="o">,</span> <span class="nn">shutil</span><span class="o">,</span> <span class="nn">subprocess</span>
+    <span class="n">executable</span> <span class="o">=</span> <span class="n">shutil</span><span class="o">.</span><span class="n">which</span><span class="p">(</span><span class="n">command</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">executable</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">pathsep</span><span class="o">.</span><span class="n">join</span><span class="p">((</span><span class="s1">&#39;/sbin&#39;</span><span class="p">,</span> <span class="s1">&#39;/usr/sbin&#39;</span><span class="p">))</span>
+        <span class="n">executable</span> <span class="o">=</span> <span class="n">shutil</span><span class="o">.</span><span class="n">which</span><span class="p">(</span><span class="n">command</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="n">path</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">executable</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+    <span class="c1"># LC_ALL=C to ensure English output, stderr=DEVNULL to prevent output</span>
+    <span class="c1"># on stderr (Note: we don&#39;t have an example where the words we search</span>
+    <span class="c1"># for are actually localized, but in theory some system could do so.)</span>
+    <span class="n">env</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">)</span>
+    <span class="n">env</span><span class="p">[</span><span class="s1">&#39;LC_ALL&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;C&#39;</span>
+    <span class="n">proc</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">((</span><span class="n">executable</span><span class="p">,)</span> <span class="o">+</span> <span class="n">args</span><span class="p">,</span>
+                            <span class="n">stdout</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">PIPE</span><span class="p">,</span>
+                            <span class="n">stderr</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">DEVNULL</span><span class="p">,</span>
+                            <span class="n">env</span><span class="o">=</span><span class="n">env</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">proc</span>
+
+<span class="c1"># For MAC (a.k.a. IEEE 802, or EUI-48) addresses, the second least significant</span>
+<span class="c1"># bit of the first octet signifies whether the MAC address is universally (0)</span>
+<span class="c1"># or locally (1) administered.  Network cards from hardware manufacturers will</span>
+<span class="c1"># always be universally administered to guarantee global uniqueness of the MAC</span>
+<span class="c1"># address, but any particular machine may have other interfaces which are</span>
+<span class="c1"># locally administered.  An example of the latter is the bridge interface to</span>
+<span class="c1"># the Touch Bar on MacBook Pros.</span>
+<span class="c1">#</span>
+<span class="c1"># This bit works out to be the 42nd bit counting from 1 being the least</span>
+<span class="c1"># significant, or 1&lt;&lt;41.  We&#39;ll prefer universally administered MAC addresses</span>
+<span class="c1"># over locally administered ones since the former are globally unique, but</span>
+<span class="c1"># we&#39;ll return the first of the latter found if that&#39;s all the machine has.</span>
+<span class="c1">#</span>
+<span class="c1"># See https://en.wikipedia.org/wiki/MAC_address#Universal_vs._local</span>
+
+<span class="k">def</span> <span class="nf">_is_universal</span><span class="p">(</span><span class="n">mac</span><span class="p">):</span>
+    <span class="k">return</span> <span class="ow">not</span> <span class="p">(</span><span class="n">mac</span> <span class="o">&amp;</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">41</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">_find_mac</span><span class="p">(</span><span class="n">command</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">hw_identifiers</span><span class="p">,</span> <span class="n">get_index</span><span class="p">):</span>
+    <span class="n">first_local_mac</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">proc</span> <span class="o">=</span> <span class="n">_popen</span><span class="p">(</span><span class="n">command</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="o">.</span><span class="n">split</span><span class="p">())</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">proc</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="k">with</span> <span class="n">proc</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">proc</span><span class="o">.</span><span class="n">stdout</span><span class="p">:</span>
+                <span class="n">words</span> <span class="o">=</span> <span class="n">line</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">rstrip</span><span class="p">()</span><span class="o">.</span><span class="n">split</span><span class="p">()</span>
+                <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">words</span><span class="p">)):</span>
+                    <span class="k">if</span> <span class="n">words</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="ow">in</span> <span class="n">hw_identifiers</span><span class="p">:</span>
+                        <span class="k">try</span><span class="p">:</span>
+                            <span class="n">word</span> <span class="o">=</span> <span class="n">words</span><span class="p">[</span><span class="n">get_index</span><span class="p">(</span><span class="n">i</span><span class="p">)]</span>
+                            <span class="n">mac</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">word</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;:&#39;</span><span class="p">,</span> <span class="sa">b</span><span class="s1">&#39;&#39;</span><span class="p">),</span> <span class="mi">16</span><span class="p">)</span>
+                            <span class="k">if</span> <span class="n">_is_universal</span><span class="p">(</span><span class="n">mac</span><span class="p">):</span>
+                                <span class="k">return</span> <span class="n">mac</span>
+                            <span class="n">first_local_mac</span> <span class="o">=</span> <span class="n">first_local_mac</span> <span class="ow">or</span> <span class="n">mac</span>
+                        <span class="k">except</span> <span class="p">(</span><span class="ne">ValueError</span><span class="p">,</span> <span class="ne">IndexError</span><span class="p">):</span>
+                            <span class="c1"># Virtual interfaces, such as those provided by</span>
+                            <span class="c1"># VPNs, do not have a colon-delimited MAC address</span>
+                            <span class="c1"># as expected, but a 16-byte HWAddr separated by</span>
+                            <span class="c1"># dashes. These should be ignored in favor of a</span>
+                            <span class="c1"># real MAC address</span>
+                            <span class="k">pass</span>
+    <span class="k">except</span> <span class="ne">OSError</span><span class="p">:</span>
+        <span class="k">pass</span>
+    <span class="k">return</span> <span class="n">first_local_mac</span> <span class="ow">or</span> <span class="kc">None</span>
+
+<span class="k">def</span> <span class="nf">_ifconfig_getnode</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;Get the hardware address on Unix by running ifconfig.&quot;&quot;&quot;</span>
+    <span class="c1"># This works on Linux (&#39;&#39; or &#39;-a&#39;), Tru64 (&#39;-av&#39;), but not all Unixes.</span>
+    <span class="n">keywords</span> <span class="o">=</span> <span class="p">(</span><span class="sa">b</span><span class="s1">&#39;hwaddr&#39;</span><span class="p">,</span> <span class="sa">b</span><span class="s1">&#39;ether&#39;</span><span class="p">,</span> <span class="sa">b</span><span class="s1">&#39;address:&#39;</span><span class="p">,</span> <span class="sa">b</span><span class="s1">&#39;lladdr&#39;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">args</span> <span class="ow">in</span> <span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;-a&#39;</span><span class="p">,</span> <span class="s1">&#39;-av&#39;</span><span class="p">):</span>
+        <span class="n">mac</span> <span class="o">=</span> <span class="n">_find_mac</span><span class="p">(</span><span class="s1">&#39;ifconfig&#39;</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">keywords</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">i</span><span class="p">:</span> <span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">mac</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">mac</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+<span class="k">def</span> <span class="nf">_ip_getnode</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;Get the hardware address on Unix by running ip.&quot;&quot;&quot;</span>
+    <span class="c1"># This works on Linux with iproute2.</span>
+    <span class="n">mac</span> <span class="o">=</span> <span class="n">_find_mac</span><span class="p">(</span><span class="s1">&#39;ip&#39;</span><span class="p">,</span> <span class="s1">&#39;link&#39;</span><span class="p">,</span> <span class="p">[</span><span class="sa">b</span><span class="s1">&#39;link/ether&#39;</span><span class="p">],</span> <span class="k">lambda</span> <span class="n">i</span><span class="p">:</span> <span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">mac</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">mac</span>
+    <span class="k">return</span> <span class="kc">None</span>
+
+<span class="k">def</span> <span class="nf">_arp_getnode</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;Get the hardware address on Unix by running arp.&quot;&quot;&quot;</span>
+    <span class="kn">import</span> <span class="nn">os</span><span class="o">,</span> <span class="nn">socket</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">ip_addr</span> <span class="o">=</span> <span class="n">socket</span><span class="o">.</span><span class="n">gethostbyname</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">gethostname</span><span class="p">())</span>
+    <span class="k">except</span> <span class="ne">OSError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="c1"># Try getting the MAC addr from arp based on our IP address (Solaris).</span>
+    <span class="n">mac</span> <span class="o">=</span> <span class="n">_find_mac</span><span class="p">(</span><span class="s1">&#39;arp&#39;</span><span class="p">,</span> <span class="s1">&#39;-an&#39;</span><span class="p">,</span> <span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">fsencode</span><span class="p">(</span><span class="n">ip_addr</span><span class="p">)],</span> <span class="k">lambda</span> <span class="n">i</span><span class="p">:</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">mac</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">mac</span>
+
+    <span class="c1"># This works on OpenBSD</span>
+    <span class="n">mac</span> <span class="o">=</span> <span class="n">_find_mac</span><span class="p">(</span><span class="s1">&#39;arp&#39;</span><span class="p">,</span> <span class="s1">&#39;-an&#39;</span><span class="p">,</span> <span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">fsencode</span><span class="p">(</span><span class="n">ip_addr</span><span class="p">)],</span> <span class="k">lambda</span> <span class="n">i</span><span class="p">:</span> <span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">mac</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">mac</span>
+
+    <span class="c1"># This works on Linux, FreeBSD and NetBSD</span>
+    <span class="n">mac</span> <span class="o">=</span> <span class="n">_find_mac</span><span class="p">(</span><span class="s1">&#39;arp&#39;</span><span class="p">,</span> <span class="s1">&#39;-an&#39;</span><span class="p">,</span> <span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">fsencode</span><span class="p">(</span><span class="s1">&#39;(</span><span class="si">%s</span><span class="s1">)&#39;</span> <span class="o">%</span> <span class="n">ip_addr</span><span class="p">)],</span>
+                    <span class="k">lambda</span> <span class="n">i</span><span class="p">:</span> <span class="n">i</span><span class="o">+</span><span class="mi">2</span><span class="p">)</span>
+    <span class="c1"># Return None instead of 0.</span>
+    <span class="k">if</span> <span class="n">mac</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">mac</span>
+    <span class="k">return</span> <span class="kc">None</span>
+
+<span class="k">def</span> <span class="nf">_lanscan_getnode</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;Get the hardware address on Unix by running lanscan.&quot;&quot;&quot;</span>
+    <span class="c1"># This might work on HP-UX.</span>
+    <span class="k">return</span> <span class="n">_find_mac</span><span class="p">(</span><span class="s1">&#39;lanscan&#39;</span><span class="p">,</span> <span class="s1">&#39;-ai&#39;</span><span class="p">,</span> <span class="p">[</span><span class="sa">b</span><span class="s1">&#39;lan0&#39;</span><span class="p">],</span> <span class="k">lambda</span> <span class="n">i</span><span class="p">:</span> <span class="mi">0</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">_netstat_getnode</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;Get the hardware address on Unix by running netstat.&quot;&quot;&quot;</span>
+    <span class="c1"># This might work on AIX, Tru64 UNIX.</span>
+    <span class="n">first_local_mac</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">proc</span> <span class="o">=</span> <span class="n">_popen</span><span class="p">(</span><span class="s1">&#39;netstat&#39;</span><span class="p">,</span> <span class="s1">&#39;-ia&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">proc</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="k">with</span> <span class="n">proc</span><span class="p">:</span>
+            <span class="n">words</span> <span class="o">=</span> <span class="n">proc</span><span class="o">.</span><span class="n">stdout</span><span class="o">.</span><span class="n">readline</span><span class="p">()</span><span class="o">.</span><span class="n">rstrip</span><span class="p">()</span><span class="o">.</span><span class="n">split</span><span class="p">()</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">i</span> <span class="o">=</span> <span class="n">words</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;Address&#39;</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">None</span>
+            <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">proc</span><span class="o">.</span><span class="n">stdout</span><span class="p">:</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="n">words</span> <span class="o">=</span> <span class="n">line</span><span class="o">.</span><span class="n">rstrip</span><span class="p">()</span><span class="o">.</span><span class="n">split</span><span class="p">()</span>
+                    <span class="n">word</span> <span class="o">=</span> <span class="n">words</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+                    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">word</span><span class="p">)</span> <span class="o">==</span> <span class="mi">17</span> <span class="ow">and</span> <span class="n">word</span><span class="o">.</span><span class="n">count</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;:&#39;</span><span class="p">)</span> <span class="o">==</span> <span class="mi">5</span><span class="p">:</span>
+                        <span class="n">mac</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">word</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;:&#39;</span><span class="p">,</span> <span class="sa">b</span><span class="s1">&#39;&#39;</span><span class="p">),</span> <span class="mi">16</span><span class="p">)</span>
+                        <span class="k">if</span> <span class="n">_is_universal</span><span class="p">(</span><span class="n">mac</span><span class="p">):</span>
+                            <span class="k">return</span> <span class="n">mac</span>
+                        <span class="n">first_local_mac</span> <span class="o">=</span> <span class="n">first_local_mac</span> <span class="ow">or</span> <span class="n">mac</span>
+                <span class="k">except</span> <span class="p">(</span><span class="ne">ValueError</span><span class="p">,</span> <span class="ne">IndexError</span><span class="p">):</span>
+                    <span class="k">pass</span>
+    <span class="k">except</span> <span class="ne">OSError</span><span class="p">:</span>
+        <span class="k">pass</span>
+    <span class="k">return</span> <span class="n">first_local_mac</span> <span class="ow">or</span> <span class="kc">None</span>
+
+<span class="k">def</span> <span class="nf">_ipconfig_getnode</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;Get the hardware address on Windows by running ipconfig.exe.&quot;&quot;&quot;</span>
+    <span class="kn">import</span> <span class="nn">os</span><span class="o">,</span> <span class="nn">re</span><span class="o">,</span> <span class="nn">subprocess</span>
+    <span class="n">first_local_mac</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">dirs</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="sa">r</span><span class="s1">&#39;c:\windows\system32&#39;</span><span class="p">,</span> <span class="sa">r</span><span class="s1">&#39;c:\winnt\system32&#39;</span><span class="p">]</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="kn">import</span> <span class="nn">ctypes</span>
+        <span class="n">buffer</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">create_string_buffer</span><span class="p">(</span><span class="mi">300</span><span class="p">)</span>
+        <span class="n">ctypes</span><span class="o">.</span><span class="n">windll</span><span class="o">.</span><span class="n">kernel32</span><span class="o">.</span><span class="n">GetSystemDirectoryA</span><span class="p">(</span><span class="n">buffer</span><span class="p">,</span> <span class="mi">300</span><span class="p">)</span>
+        <span class="n">dirs</span><span class="o">.</span><span class="n">insert</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">buffer</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s1">&#39;mbcs&#39;</span><span class="p">))</span>
+    <span class="k">except</span><span class="p">:</span>
+        <span class="k">pass</span>
+    <span class="k">for</span> <span class="nb">dir</span> <span class="ow">in</span> <span class="n">dirs</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">proc</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">([</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">dir</span><span class="p">,</span> <span class="s1">&#39;ipconfig&#39;</span><span class="p">),</span> <span class="s1">&#39;/all&#39;</span><span class="p">],</span>
+                                    <span class="n">stdout</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">PIPE</span><span class="p">,</span>
+                                    <span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;oem&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">OSError</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="k">with</span> <span class="n">proc</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">proc</span><span class="o">.</span><span class="n">stdout</span><span class="p">:</span>
+                <span class="n">value</span> <span class="o">=</span> <span class="n">line</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;:&#39;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">re</span><span class="o">.</span><span class="n">fullmatch</span><span class="p">(</span><span class="s1">&#39;(?:[0-9a-f][0-9a-f]-)</span><span class="si">{5}</span><span class="s1">[0-9a-f][0-9a-f]&#39;</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+                    <span class="n">mac</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;-&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">),</span> <span class="mi">16</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">_is_universal</span><span class="p">(</span><span class="n">mac</span><span class="p">):</span>
+                        <span class="k">return</span> <span class="n">mac</span>
+                    <span class="n">first_local_mac</span> <span class="o">=</span> <span class="n">first_local_mac</span> <span class="ow">or</span> <span class="n">mac</span>
+    <span class="k">return</span> <span class="n">first_local_mac</span> <span class="ow">or</span> <span class="kc">None</span>
+
+<span class="k">def</span> <span class="nf">_netbios_getnode</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;Get the hardware address on Windows using NetBIOS calls.</span>
+<span class="sd">    See http://support.microsoft.com/kb/118623 for details.&quot;&quot;&quot;</span>
+    <span class="kn">import</span> <span class="nn">win32wnet</span><span class="o">,</span> <span class="nn">netbios</span>
+    <span class="n">first_local_mac</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">ncb</span> <span class="o">=</span> <span class="n">netbios</span><span class="o">.</span><span class="n">NCB</span><span class="p">()</span>
+    <span class="n">ncb</span><span class="o">.</span><span class="n">Command</span> <span class="o">=</span> <span class="n">netbios</span><span class="o">.</span><span class="n">NCBENUM</span>
+    <span class="n">ncb</span><span class="o">.</span><span class="n">Buffer</span> <span class="o">=</span> <span class="n">adapters</span> <span class="o">=</span> <span class="n">netbios</span><span class="o">.</span><span class="n">LANA_ENUM</span><span class="p">()</span>
+    <span class="n">adapters</span><span class="o">.</span><span class="n">_pack</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">win32wnet</span><span class="o">.</span><span class="n">Netbios</span><span class="p">(</span><span class="n">ncb</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="n">adapters</span><span class="o">.</span><span class="n">_unpack</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">adapters</span><span class="o">.</span><span class="n">length</span><span class="p">):</span>
+        <span class="n">ncb</span><span class="o">.</span><span class="n">Reset</span><span class="p">()</span>
+        <span class="n">ncb</span><span class="o">.</span><span class="n">Command</span> <span class="o">=</span> <span class="n">netbios</span><span class="o">.</span><span class="n">NCBRESET</span>
+        <span class="n">ncb</span><span class="o">.</span><span class="n">Lana_num</span> <span class="o">=</span> <span class="nb">ord</span><span class="p">(</span><span class="n">adapters</span><span class="o">.</span><span class="n">lana</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">win32wnet</span><span class="o">.</span><span class="n">Netbios</span><span class="p">(</span><span class="n">ncb</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">ncb</span><span class="o">.</span><span class="n">Reset</span><span class="p">()</span>
+        <span class="n">ncb</span><span class="o">.</span><span class="n">Command</span> <span class="o">=</span> <span class="n">netbios</span><span class="o">.</span><span class="n">NCBASTAT</span>
+        <span class="n">ncb</span><span class="o">.</span><span class="n">Lana_num</span> <span class="o">=</span> <span class="nb">ord</span><span class="p">(</span><span class="n">adapters</span><span class="o">.</span><span class="n">lana</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+        <span class="n">ncb</span><span class="o">.</span><span class="n">Callname</span> <span class="o">=</span> <span class="s1">&#39;*&#39;</span><span class="o">.</span><span class="n">ljust</span><span class="p">(</span><span class="mi">16</span><span class="p">)</span>
+        <span class="n">ncb</span><span class="o">.</span><span class="n">Buffer</span> <span class="o">=</span> <span class="n">status</span> <span class="o">=</span> <span class="n">netbios</span><span class="o">.</span><span class="n">ADAPTER_STATUS</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">win32wnet</span><span class="o">.</span><span class="n">Netbios</span><span class="p">(</span><span class="n">ncb</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">status</span><span class="o">.</span><span class="n">_unpack</span><span class="p">()</span>
+        <span class="nb">bytes</span> <span class="o">=</span> <span class="n">status</span><span class="o">.</span><span class="n">adapter_address</span><span class="p">[:</span><span class="mi">6</span><span class="p">]</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nb">bytes</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">6</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">mac</span> <span class="o">=</span> <span class="nb">int</span><span class="o">.</span><span class="n">from_bytes</span><span class="p">(</span><span class="nb">bytes</span><span class="p">,</span> <span class="s1">&#39;big&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">_is_universal</span><span class="p">(</span><span class="n">mac</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">mac</span>
+        <span class="n">first_local_mac</span> <span class="o">=</span> <span class="n">first_local_mac</span> <span class="ow">or</span> <span class="n">mac</span>
+    <span class="k">return</span> <span class="n">first_local_mac</span> <span class="ow">or</span> <span class="kc">None</span>
+
+
+<span class="n">_generate_time_safe</span> <span class="o">=</span> <span class="n">_UuidCreate</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="n">_has_uuid_generate_time_safe</span> <span class="o">=</span> <span class="kc">None</span>
+
+<span class="c1"># Import optional C extension at toplevel, to help disabling it when testing</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">_uuid</span>
+<span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+    <span class="n">_uuid</span> <span class="o">=</span> <span class="kc">None</span>
+
+
+<span class="k">def</span> <span class="nf">_load_system_functions</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Try to load platform-specific functions for generating uuids.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">global</span> <span class="n">_generate_time_safe</span><span class="p">,</span> <span class="n">_UuidCreate</span><span class="p">,</span> <span class="n">_has_uuid_generate_time_safe</span>
+
+    <span class="k">if</span> <span class="n">_has_uuid_generate_time_safe</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span>
+
+    <span class="n">_has_uuid_generate_time_safe</span> <span class="o">=</span> <span class="kc">False</span>
+
+    <span class="k">if</span> <span class="n">sys</span><span class="o">.</span><span class="n">platform</span> <span class="o">==</span> <span class="s2">&quot;darwin&quot;</span> <span class="ow">and</span> <span class="nb">int</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">uname</span><span class="p">()</span><span class="o">.</span><span class="n">release</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">])</span> <span class="o">&lt;</span> <span class="mi">9</span><span class="p">:</span>
+        <span class="c1"># The uuid_generate_* functions are broken on MacOS X 10.5, as noted</span>
+        <span class="c1"># in issue #8621 the function generates the same sequence of values</span>
+        <span class="c1"># in the parent process and all children created using fork (unless</span>
+        <span class="c1"># those children use exec as well).</span>
+        <span class="c1">#</span>
+        <span class="c1"># Assume that the uuid_generate functions are broken from 10.5 onward,</span>
+        <span class="c1"># the test can be adjusted when a later version is fixed.</span>
+        <span class="k">pass</span>
+    <span class="k">elif</span> <span class="n">_uuid</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">_generate_time_safe</span> <span class="o">=</span> <span class="n">_uuid</span><span class="o">.</span><span class="n">generate_time_safe</span>
+        <span class="n">_has_uuid_generate_time_safe</span> <span class="o">=</span> <span class="n">_uuid</span><span class="o">.</span><span class="n">has_uuid_generate_time_safe</span>
+        <span class="k">return</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="c1"># If we couldn&#39;t find an extension module, try ctypes to find</span>
+        <span class="c1"># system routines for UUID generation.</span>
+        <span class="c1"># Thanks to Thomas Heller for ctypes and for his help with its use here.</span>
+        <span class="kn">import</span> <span class="nn">ctypes</span>
+        <span class="kn">import</span> <span class="nn">ctypes.util</span>
+
+        <span class="c1"># The uuid_generate_* routines are provided by libuuid on at least</span>
+        <span class="c1"># Linux and FreeBSD, and provided by libc on Mac OS X.</span>
+        <span class="n">_libnames</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;uuid&#39;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">sys</span><span class="o">.</span><span class="n">platform</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;win&#39;</span><span class="p">):</span>
+            <span class="n">_libnames</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s1">&#39;c&#39;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">libname</span> <span class="ow">in</span> <span class="n">_libnames</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">lib</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">CDLL</span><span class="p">(</span><span class="n">ctypes</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">find_library</span><span class="p">(</span><span class="n">libname</span><span class="p">))</span>
+            <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>                           <span class="c1"># pragma: nocover</span>
+                <span class="k">continue</span>
+            <span class="c1"># Try to find the safe variety first.</span>
+            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">lib</span><span class="p">,</span> <span class="s1">&#39;uuid_generate_time_safe&#39;</span><span class="p">):</span>
+                <span class="n">_uuid_generate_time_safe</span> <span class="o">=</span> <span class="n">lib</span><span class="o">.</span><span class="n">uuid_generate_time_safe</span>
+                <span class="c1"># int uuid_generate_time_safe(uuid_t out);</span>
+                <span class="k">def</span> <span class="nf">_generate_time_safe</span><span class="p">():</span>
+                    <span class="n">_buffer</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">create_string_buffer</span><span class="p">(</span><span class="mi">16</span><span class="p">)</span>
+                    <span class="n">res</span> <span class="o">=</span> <span class="n">_uuid_generate_time_safe</span><span class="p">(</span><span class="n">_buffer</span><span class="p">)</span>
+                    <span class="k">return</span> <span class="nb">bytes</span><span class="p">(</span><span class="n">_buffer</span><span class="o">.</span><span class="n">raw</span><span class="p">),</span> <span class="n">res</span>
+                <span class="n">_has_uuid_generate_time_safe</span> <span class="o">=</span> <span class="kc">True</span>
+                <span class="k">break</span>
+
+            <span class="k">elif</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">lib</span><span class="p">,</span> <span class="s1">&#39;uuid_generate_time&#39;</span><span class="p">):</span>    <span class="c1"># pragma: nocover</span>
+                <span class="n">_uuid_generate_time</span> <span class="o">=</span> <span class="n">lib</span><span class="o">.</span><span class="n">uuid_generate_time</span>
+                <span class="c1"># void uuid_generate_time(uuid_t out);</span>
+                <span class="n">_uuid_generate_time</span><span class="o">.</span><span class="n">restype</span> <span class="o">=</span> <span class="kc">None</span>
+                <span class="k">def</span> <span class="nf">_generate_time_safe</span><span class="p">():</span>
+                    <span class="n">_buffer</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">create_string_buffer</span><span class="p">(</span><span class="mi">16</span><span class="p">)</span>
+                    <span class="n">_uuid_generate_time</span><span class="p">(</span><span class="n">_buffer</span><span class="p">)</span>
+                    <span class="k">return</span> <span class="nb">bytes</span><span class="p">(</span><span class="n">_buffer</span><span class="o">.</span><span class="n">raw</span><span class="p">),</span> <span class="kc">None</span>
+                <span class="k">break</span>
+
+        <span class="c1"># On Windows prior to 2000, UuidCreate gives a UUID containing the</span>
+        <span class="c1"># hardware address.  On Windows 2000 and later, UuidCreate makes a</span>
+        <span class="c1"># random UUID and UuidCreateSequential gives a UUID containing the</span>
+        <span class="c1"># hardware address.  These routines are provided by the RPC runtime.</span>
+        <span class="c1"># NOTE:  at least on Tim&#39;s WinXP Pro SP2 desktop box, while the last</span>
+        <span class="c1"># 6 bytes returned by UuidCreateSequential are fixed, they don&#39;t appear</span>
+        <span class="c1"># to bear any relationship to the MAC address of any network device</span>
+        <span class="c1"># on the box.</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">lib</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">windll</span><span class="o">.</span><span class="n">rpcrt4</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="n">lib</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">_UuidCreate</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">lib</span><span class="p">,</span> <span class="s1">&#39;UuidCreateSequential&#39;</span><span class="p">,</span>
+                              <span class="nb">getattr</span><span class="p">(</span><span class="n">lib</span><span class="p">,</span> <span class="s1">&#39;UuidCreate&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">))</span>
+
+    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+        <span class="kn">import</span> <span class="nn">warnings</span>
+        <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Could not find fallback ctypes uuid functions: </span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                      <span class="ne">ImportWarning</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_unix_getnode</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;Get the hardware address on Unix using the _uuid extension module</span>
+<span class="sd">    or ctypes.&quot;&quot;&quot;</span>
+    <span class="n">_load_system_functions</span><span class="p">()</span>
+    <span class="n">uuid_time</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">_generate_time_safe</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">UUID</span><span class="p">(</span><span class="nb">bytes</span><span class="o">=</span><span class="n">uuid_time</span><span class="p">)</span><span class="o">.</span><span class="n">node</span>
+
+<span class="k">def</span> <span class="nf">_windll_getnode</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;Get the hardware address on Windows using ctypes.&quot;&quot;&quot;</span>
+    <span class="kn">import</span> <span class="nn">ctypes</span>
+    <span class="n">_load_system_functions</span><span class="p">()</span>
+    <span class="n">_buffer</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">create_string_buffer</span><span class="p">(</span><span class="mi">16</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">_UuidCreate</span><span class="p">(</span><span class="n">_buffer</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">UUID</span><span class="p">(</span><span class="nb">bytes</span><span class="o">=</span><span class="n">bytes_</span><span class="p">(</span><span class="n">_buffer</span><span class="o">.</span><span class="n">raw</span><span class="p">))</span><span class="o">.</span><span class="n">node</span>
+
+<span class="k">def</span> <span class="nf">_random_getnode</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;Get a random node ID.&quot;&quot;&quot;</span>
+    <span class="c1"># RFC 4122, $4.1.6 says &quot;For systems with no IEEE address, a randomly or</span>
+    <span class="c1"># pseudo-randomly generated value may be used; see Section 4.5.  The</span>
+    <span class="c1"># multicast bit must be set in such addresses, in order that they will</span>
+    <span class="c1"># never conflict with addresses obtained from network cards.&quot;</span>
+    <span class="c1">#</span>
+    <span class="c1"># The &quot;multicast bit&quot; of a MAC address is defined to be &quot;the least</span>
+    <span class="c1"># significant bit of the first octet&quot;.  This works out to be the 41st bit</span>
+    <span class="c1"># counting from 1 being the least significant bit, or 1&lt;&lt;40.</span>
+    <span class="c1">#</span>
+    <span class="c1"># See https://en.wikipedia.org/wiki/MAC_address#Unicast_vs._multicast</span>
+    <span class="kn">import</span> <span class="nn">random</span>
+    <span class="k">return</span> <span class="n">random</span><span class="o">.</span><span class="n">getrandbits</span><span class="p">(</span><span class="mi">48</span><span class="p">)</span> <span class="o">|</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">40</span><span class="p">)</span>
+
+
+<span class="n">_node</span> <span class="o">=</span> <span class="kc">None</span>
+
+<span class="n">_NODE_GETTERS_WIN32</span> <span class="o">=</span> <span class="p">[</span><span class="n">_windll_getnode</span><span class="p">,</span> <span class="n">_netbios_getnode</span><span class="p">,</span> <span class="n">_ipconfig_getnode</span><span class="p">]</span>
+
+<span class="n">_NODE_GETTERS_UNIX</span> <span class="o">=</span> <span class="p">[</span><span class="n">_unix_getnode</span><span class="p">,</span> <span class="n">_ifconfig_getnode</span><span class="p">,</span> <span class="n">_ip_getnode</span><span class="p">,</span>
+                      <span class="n">_arp_getnode</span><span class="p">,</span> <span class="n">_lanscan_getnode</span><span class="p">,</span> <span class="n">_netstat_getnode</span><span class="p">]</span>
+
+<span class="k">def</span> <span class="nf">getnode</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">getters</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Get the hardware address as a 48-bit positive integer.</span>
+
+<span class="sd">    The first time this runs, it may launch a separate program, which could</span>
+<span class="sd">    be quite slow.  If all attempts to obtain the hardware address fail, we</span>
+<span class="sd">    choose a random 48-bit number with its eighth bit set to 1 as recommended</span>
+<span class="sd">    in RFC 4122.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">global</span> <span class="n">_node</span>
+    <span class="k">if</span> <span class="n">_node</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_node</span>
+
+    <span class="k">if</span> <span class="n">sys</span><span class="o">.</span><span class="n">platform</span> <span class="o">==</span> <span class="s1">&#39;win32&#39;</span><span class="p">:</span>
+        <span class="n">getters</span> <span class="o">=</span> <span class="n">_NODE_GETTERS_WIN32</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">getters</span> <span class="o">=</span> <span class="n">_NODE_GETTERS_UNIX</span>
+
+    <span class="k">for</span> <span class="n">getter</span> <span class="ow">in</span> <span class="n">getters</span> <span class="o">+</span> <span class="p">[</span><span class="n">_random_getnode</span><span class="p">]:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">_node</span> <span class="o">=</span> <span class="n">getter</span><span class="p">()</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">_node</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">_node</span> <span class="o">&lt;</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">48</span><span class="p">)):</span>
+            <span class="k">return</span> <span class="n">_node</span>
+    <span class="k">assert</span> <span class="kc">False</span><span class="p">,</span> <span class="s1">&#39;_random_getnode() returned invalid value: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">_node</span><span class="p">)</span>
+
+
+<span class="n">_last_timestamp</span> <span class="o">=</span> <span class="kc">None</span>
+
+<span class="k">def</span> <span class="nf">uuid1</span><span class="p">(</span><span class="n">node</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">clock_seq</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Generate a UUID from a host ID, sequence number, and the current time.</span>
+<span class="sd">    If &#39;node&#39; is not given, getnode() is used to obtain the hardware</span>
+<span class="sd">    address.  If &#39;clock_seq&#39; is given, it is used as the sequence number;</span>
+<span class="sd">    otherwise a random 14-bit sequence number is chosen.&quot;&quot;&quot;</span>
+
+    <span class="c1"># When the system provides a version-1 UUID generator, use it (but don&#39;t</span>
+    <span class="c1"># use UuidCreate here because its UUIDs don&#39;t conform to RFC 4122).</span>
+    <span class="n">_load_system_functions</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">_generate_time_safe</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">node</span> <span class="ow">is</span> <span class="n">clock_seq</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">uuid_time</span><span class="p">,</span> <span class="n">safely_generated</span> <span class="o">=</span> <span class="n">_generate_time_safe</span><span class="p">()</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">is_safe</span> <span class="o">=</span> <span class="n">SafeUUID</span><span class="p">(</span><span class="n">safely_generated</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+            <span class="n">is_safe</span> <span class="o">=</span> <span class="n">SafeUUID</span><span class="o">.</span><span class="n">unknown</span>
+        <span class="k">return</span> <span class="n">UUID</span><span class="p">(</span><span class="nb">bytes</span><span class="o">=</span><span class="n">uuid_time</span><span class="p">,</span> <span class="n">is_safe</span><span class="o">=</span><span class="n">is_safe</span><span class="p">)</span>
+
+    <span class="k">global</span> <span class="n">_last_timestamp</span>
+    <span class="kn">import</span> <span class="nn">time</span>
+    <span class="n">nanoseconds</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">*</span> <span class="mf">1e9</span><span class="p">)</span>
+    <span class="c1"># 0x01b21dd213814000 is the number of 100-ns intervals between the</span>
+    <span class="c1"># UUID epoch 1582-10-15 00:00:00 and the Unix epoch 1970-01-01 00:00:00.</span>
+    <span class="n">timestamp</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">nanoseconds</span><span class="o">/</span><span class="mi">100</span><span class="p">)</span> <span class="o">+</span> <span class="mh">0x01b21dd213814000</span>
+    <span class="k">if</span> <span class="n">_last_timestamp</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">timestamp</span> <span class="o">&lt;=</span> <span class="n">_last_timestamp</span><span class="p">:</span>
+        <span class="n">timestamp</span> <span class="o">=</span> <span class="n">_last_timestamp</span> <span class="o">+</span> <span class="mi">1</span>
+    <span class="n">_last_timestamp</span> <span class="o">=</span> <span class="n">timestamp</span>
+    <span class="k">if</span> <span class="n">clock_seq</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="kn">import</span> <span class="nn">random</span>
+        <span class="n">clock_seq</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">getrandbits</span><span class="p">(</span><span class="mi">14</span><span class="p">)</span> <span class="c1"># instead of stable storage</span>
+    <span class="n">time_low</span> <span class="o">=</span> <span class="n">timestamp</span> <span class="o">&amp;</span> <span class="mh">0xffffffff</span>
+    <span class="n">time_mid</span> <span class="o">=</span> <span class="p">(</span><span class="n">timestamp</span> <span class="o">&gt;&gt;</span> <span class="mi">32</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0xffff</span>
+    <span class="n">time_hi_version</span> <span class="o">=</span> <span class="p">(</span><span class="n">timestamp</span> <span class="o">&gt;&gt;</span> <span class="mi">48</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0x0fff</span>
+    <span class="n">clock_seq_low</span> <span class="o">=</span> <span class="n">clock_seq</span> <span class="o">&amp;</span> <span class="mh">0xff</span>
+    <span class="n">clock_seq_hi_variant</span> <span class="o">=</span> <span class="p">(</span><span class="n">clock_seq</span> <span class="o">&gt;&gt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mh">0x3f</span>
+    <span class="k">if</span> <span class="n">node</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">node</span> <span class="o">=</span> <span class="n">getnode</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">UUID</span><span class="p">(</span><span class="n">fields</span><span class="o">=</span><span class="p">(</span><span class="n">time_low</span><span class="p">,</span> <span class="n">time_mid</span><span class="p">,</span> <span class="n">time_hi_version</span><span class="p">,</span>
+                        <span class="n">clock_seq_hi_variant</span><span class="p">,</span> <span class="n">clock_seq_low</span><span class="p">,</span> <span class="n">node</span><span class="p">),</span> <span class="n">version</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">uuid3</span><span class="p">(</span><span class="n">namespace</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Generate a UUID from the MD5 hash of a namespace UUID and a name.&quot;&quot;&quot;</span>
+    <span class="kn">from</span> <span class="nn">hashlib</span> <span class="kn">import</span> <span class="n">md5</span>
+    <span class="nb">hash</span> <span class="o">=</span> <span class="n">md5</span><span class="p">(</span><span class="n">namespace</span><span class="o">.</span><span class="n">bytes</span> <span class="o">+</span> <span class="nb">bytes</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="s2">&quot;utf-8&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">digest</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">UUID</span><span class="p">(</span><span class="nb">bytes</span><span class="o">=</span><span class="nb">hash</span><span class="p">[:</span><span class="mi">16</span><span class="p">],</span> <span class="n">version</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">uuid4</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;Generate a random UUID.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">UUID</span><span class="p">(</span><span class="nb">bytes</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">urandom</span><span class="p">(</span><span class="mi">16</span><span class="p">),</span> <span class="n">version</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">uuid5</span><span class="p">(</span><span class="n">namespace</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Generate a UUID from the SHA-1 hash of a namespace UUID and a name.&quot;&quot;&quot;</span>
+    <span class="kn">from</span> <span class="nn">hashlib</span> <span class="kn">import</span> <span class="n">sha1</span>
+    <span class="nb">hash</span> <span class="o">=</span> <span class="n">sha1</span><span class="p">(</span><span class="n">namespace</span><span class="o">.</span><span class="n">bytes</span> <span class="o">+</span> <span class="nb">bytes</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="s2">&quot;utf-8&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">digest</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">UUID</span><span class="p">(</span><span class="nb">bytes</span><span class="o">=</span><span class="nb">hash</span><span class="p">[:</span><span class="mi">16</span><span class="p">],</span> <span class="n">version</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+
+<span class="c1"># The following standard UUIDs are for use with uuid3() or uuid5().</span>
+
+<span class="n">NAMESPACE_DNS</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="s1">&#39;6ba7b810-9dad-11d1-80b4-00c04fd430c8&#39;</span><span class="p">)</span>
+<span class="n">NAMESPACE_URL</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="s1">&#39;6ba7b811-9dad-11d1-80b4-00c04fd430c8&#39;</span><span class="p">)</span>
+<span class="n">NAMESPACE_OID</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="s1">&#39;6ba7b812-9dad-11d1-80b4-00c04fd430c8&#39;</span><span class="p">)</span>
+<span class="n">NAMESPACE_X500</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="s1">&#39;6ba7b814-9dad-11d1-80b4-00c04fd430c8&#39;</span><span class="p">)</span>
+</pre></div>
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../api/index.html">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../object_mapper.html">Object Mapper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../geo_types.html">DSE Geometry Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../graph.html">DataStax Graph Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../graph_fluent.html">DataStax Graph Fluent API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cloud.html">Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">3.21.0-scylla <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="../../master/index.html">master</a></li>
+        <li><a href="../../3.22.0-scylla/index.html">3.22.0-scylla</a></li>
+        <li><a href="uuid.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="../_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page uuid&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/_modules/uuid%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="../_static/js/vendor/jquery.js"></script>
+<script src="../_static/expertrec.js"></script>
+<script src="../_static/js/foundation/foundation.js"></script>
+<script src="../_static/js/foundation/foundation.topbar.js"></script>
+<script src="../_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

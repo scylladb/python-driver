@@ -1,0 +1,321 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    Working with Dates and Times | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="_static/copybutton.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/doctools.js"></script>
+    <script src="_static/language_data.js"></script>
+    <script src="_static/clipboard.min.js"></script>
+    <script src="_static/copybutton.js"></script>
+
+    <script src="_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+                <p>
+                    <strong>
+                    
+                    You're reading the documentation for a development version.
+                    For the latest released version, please have a look at <a href="../master/dates_and_times.html">master</a>.
+                    
+                    </strong>
+                </p>
+            
+
+            <div class="section" id="working-with-dates-and-times">
+<h1>Working with Dates and Times<a class="headerlink" href="#working-with-dates-and-times" title="Permalink to this headline">¶</a></h1>
+<p>This document is meant to provide on overview of the assumptions and limitations of the driver time handling, the
+reasoning behind it, and describe approaches to working with these types.</p>
+<div class="section" id="timestamps-cassandra-datetype">
+<h2>timestamps (Cassandra DateType)<a class="headerlink" href="#timestamps-cassandra-datetype" title="Permalink to this headline">¶</a></h2>
+<p>Timestamps in Cassandra are timezone-naive timestamps encoded as millseconds since UNIX epoch. Clients working with
+timestamps in this database usually find it easiest to reason about them if they are always assumed to be UTC. To quote the
+pytz documentation, “The preferred way of dealing with times is to always work in UTC, converting to localtime only when
+generating output to be read by humans.” The driver adheres to this tenant, and assumes UTC is always in the database. The
+driver attempts to make this correct on the way in, and assumes no timezone on the way out.</p>
+<div class="section" id="write-path">
+<h3>Write Path<a class="headerlink" href="#write-path" title="Permalink to this headline">¶</a></h3>
+<p>When inserting timestamps, the driver handles serialization for the write path as follows:</p>
+<p>If the input is a <code class="docutils literal notranslate"><span class="pre">datetime.datetime</span></code>, the serialization is normalized by starting with the <code class="docutils literal notranslate"><span class="pre">utctimetuple()</span></code> of the
+value.</p>
+<ul class="simple">
+<li><p>If the <code class="docutils literal notranslate"><span class="pre">datetime</span></code> object is timezone-aware, the timestamp is shifted, and represents the UTC timestamp equivalent.</p></li>
+<li><p>If the <code class="docutils literal notranslate"><span class="pre">datetime</span></code> object is timezone-naive, this results in no shift – any <code class="docutils literal notranslate"><span class="pre">datetime</span></code> with no timezone information is assumed to be UTC</p></li>
+</ul>
+<p>Note the second point above applies even to “local” times created using <code class="docutils literal notranslate"><span class="pre">now()</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">d</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span>
+
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">d</span><span class="o">.</span><span class="n">tzinfo</span><span class="p">)</span>
+<span class="go">None</span>
+</pre></div>
+</div>
+<p>These do not contain timezone information intrinsically, so they will be assumed to be UTC and not shifted. When generating
+timestamps in the application, it is clearer to use <code class="docutils literal notranslate"><span class="pre">datetime.utcnow()</span></code> to be explicit about it.</p>
+<p>If the input for a timestamp is numeric, it is assumed to be a epoch-relative millisecond timestamp, as specified in the
+CQL spec – no scaling or conversion is done.</p>
+</div>
+<div class="section" id="read-path">
+<h3>Read Path<a class="headerlink" href="#read-path" title="Permalink to this headline">¶</a></h3>
+<p>The driver always assumes persisted timestamps are UTC and makes no attempt to localize them. Returned values are
+timezone-naive <code class="docutils literal notranslate"><span class="pre">datetime.datetime</span></code>. We follow this approach because the datetime API has deficiencies around daylight
+saving time, and the defacto package for handling this is a third-party package (we try to minimize external dependencies
+and not make decisions for the integrator).</p>
+<p>The decision for how to handle timezones is left to the application. For the most part it is straightforward to apply
+localization to the <code class="docutils literal notranslate"><span class="pre">datetime</span></code>s returned by queries. One prevalent method is to use pytz for localization:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pytz</span>
+<span class="n">user_tz</span> <span class="o">=</span> <span class="n">pytz</span><span class="o">.</span><span class="n">timezone</span><span class="p">(</span><span class="s1">&#39;US/Central&#39;</span><span class="p">)</span>
+<span class="n">timestamp_naive</span> <span class="o">=</span> <span class="n">row</span><span class="o">.</span><span class="n">ts</span>
+<span class="n">timestamp_utc</span> <span class="o">=</span> <span class="n">pytz</span><span class="o">.</span><span class="n">utc</span><span class="o">.</span><span class="n">localize</span><span class="p">(</span><span class="n">timestamp_naive</span><span class="p">)</span>
+<span class="n">timestamp_presented</span> <span class="o">=</span> <span class="n">timestamp_utc</span><span class="o">.</span><span class="n">astimezone</span><span class="p">(</span><span class="n">user_tz</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>This is the most robust approach (likely refactored into a function). If it is deemed too cumbersome to apply for all call
+sites in the application, it is possible to patch the driver with custom deserialization for this type. However, doing
+this depends depends some on internal APIs and what extensions are present, so we will only mention the possibility, and
+not spell it out here.</p>
+</div>
+</div>
+<div class="section" id="date-time-cassandra-datetype">
+<h2>date, time (Cassandra DateType)<a class="headerlink" href="#date-time-cassandra-datetype" title="Permalink to this headline">¶</a></h2>
+<p>Date and time in Cassandra are idealized markers, much like <code class="docutils literal notranslate"><span class="pre">datetime.date</span></code> and <code class="docutils literal notranslate"><span class="pre">datetime.time</span></code> in the Python standard
+library. Unlike these Python implementations, the Cassandra encoding supports much wider ranges. To accommodate these
+ranges without overflow, this driver returns these data in custom types: <a class="reference internal" href="api/cassandra/util.html#cassandra.util.Date" title="cassandra.util.Date"><code class="xref py py-class docutils literal notranslate"><span class="pre">util.Date</span></code></a> and <a class="reference internal" href="api/cassandra/util.html#cassandra.util.Time" title="cassandra.util.Time"><code class="xref py py-class docutils literal notranslate"><span class="pre">util.Time</span></code></a>.</p>
+<div class="section" id="id1">
+<h3>Write Path<a class="headerlink" href="#id1" title="Permalink to this headline">¶</a></h3>
+<p>For simple (not prepared) statements, the input values for each of these can be either a string literal or an encoded
+integer. See <a class="reference external" href="https://github.com/apache/cassandra/blob/trunk/doc/cql3/CQL.textile#working-with-dates">Working with dates</a>
+or <a class="reference external" href="https://github.com/apache/cassandra/blob/trunk/doc/cql3/CQL.textile#working-with-time">Working with time</a> for details
+on the encoding or string formats.</p>
+<p>For prepared statements, the driver accepts anything that can be used to construct the <a class="reference internal" href="api/cassandra/util.html#cassandra.util.Date" title="cassandra.util.Date"><code class="xref py py-class docutils literal notranslate"><span class="pre">util.Date</span></code></a> or
+<a class="reference internal" href="api/cassandra/util.html#cassandra.util.Time" title="cassandra.util.Time"><code class="xref py py-class docutils literal notranslate"><span class="pre">util.Time</span></code></a> classes. See the linked API docs for details.</p>
+</div>
+<div class="section" id="id2">
+<h3>Read Path<a class="headerlink" href="#id2" title="Permalink to this headline">¶</a></h3>
+<p>The driver always returns custom types for <code class="docutils literal notranslate"><span class="pre">date</span></code> and <code class="docutils literal notranslate"><span class="pre">time</span></code>.</p>
+<p>The driver returns <a class="reference internal" href="api/cassandra/util.html#cassandra.util.Date" title="cassandra.util.Date"><code class="xref py py-class docutils literal notranslate"><span class="pre">util.Date</span></code></a> for <code class="docutils literal notranslate"><span class="pre">date</span></code> in order to accommodate the wider range of values without overflow.
+For applications working within the supported range of [<code class="docutils literal notranslate"><span class="pre">datetime.MINYEAR</span></code>, <code class="docutils literal notranslate"><span class="pre">datetime.MAXYEAR</span></code>], these are easily
+converted to standard <code class="docutils literal notranslate"><span class="pre">datetime.date</span></code> insances using <a class="reference internal" href="api/cassandra/util.html#cassandra.util.Date.date" title="cassandra.util.Date.date"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Date.date()</span></code></a>.</p>
+<p>The driver returns <a class="reference internal" href="api/cassandra/util.html#cassandra.util.Time" title="cassandra.util.Time"><code class="xref py py-class docutils literal notranslate"><span class="pre">util.Time</span></code></a> for <code class="docutils literal notranslate"><span class="pre">time</span></code> in order to retain nanosecond precision stored in the database.
+For applications not concerned with this level of precision, these are easily converted to standard <code class="docutils literal notranslate"><span class="pre">datetime.time</span></code>
+insances using <a class="reference internal" href="api/cassandra/util.html#cassandra.util.Time.time" title="cassandra.util.Time.time"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Time.time()</span></code></a>.</p>
+</div>
+</div>
+</div>
+
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="api/index.html">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="object_mapper.html">Object Mapper</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">3.22.0-scylla <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="../master/dates_and_times.html">master</a></li>
+        <li><a href="dates_and_times.html">3.22.0-scylla</a></li>
+        <li><a href="../3.21.0-scylla/dates_and_times.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page Working with Dates and Times&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/dates_and_times%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="_static/js/vendor/jquery.js"></script>
+<script src="_static/expertrec.js"></script>
+<script src="_static/js/foundation/foundation.js"></script>
+<script src="_static/js/foundation/foundation.topbar.js"></script>
+<script src="_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>

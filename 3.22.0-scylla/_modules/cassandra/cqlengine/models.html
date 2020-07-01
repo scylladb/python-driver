@@ -1,0 +1,1337 @@
+
+
+
+<!doctype html>
+<html class="no-js" lang="en">
+  
+<head><!-- begin head.html -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>
+    cassandra.cqlengine.models | Scylla Docs
+    </title>
+    <meta name="description" content="Scylla is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+
+    <link rel="icon" href="../../../_static/img/favicon.ico" type="image/x-icon"/>
+    <link rel="canonical" href="https://docs.scylladb.com/">
+
+    <link rel="author" href="mailto:info@scylladb.com">
+    <link rel="stylesheet" href="../../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/sphinx_tabs/semantic-ui-2.4.1/segment.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/sphinx_tabs/semantic-ui-2.4.1/menu.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/sphinx_tabs/tabs.css" />
+    
+    <link href='https://fonts.googleapis.com/css?family=Roboto:400,100,300,500,700' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/foundation/5.5.2/css/foundation.min.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/css/doc/main.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+
+    <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script src="../../../_static/jquery.js"></script>
+    <script src="../../../_static/underscore.js"></script>
+    <script src="../../../_static/doctools.js"></script>
+    <script src="../../../_static/language_data.js"></script>
+    <script src="../../../_static/clipboard.min.js"></script>
+    <script src="../../../_static/copybutton.js"></script>
+    <script src="../../../_static/sphinx_tabs/semantic-ui-2.4.1/tab.min.js"></script>
+    <script src="../../../_static/sphinx_tabs/tabs.js"></script>
+
+    <script src="../../../_static/js/vendor/modernizr.js"></script>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-T8P2JP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Marketo -->
+    <script type="text/javascript"> (function() { var didInit = false; function initMunchkin() { if(didInit === false) { didInit = true; Munchkin.init('791-QBF-350'); } } var s = document.createElement('script'); s.type = 'text/javascript'; s.async = true; s.src = '//munchkin.marketo.net/munchkin.js'; s.onreadystatechange = function() { if (this.readyState == 'complete' || this.readyState == 'loaded') { initMunchkin(); } }; s.onload = initMunchkin; document.getElementsByTagName('head')[0].appendChild(s); })(); </script>
+    <!-- End Marketo -->
+
+<!-- end head.html -->
+</head>
+
+<body>
+<header id="header" class="animated">
+    <div class="topbar_continer contain-to-grid clearfix">
+        <nav class="top-bar" id="top-bar" data-topbar role="navigation">
+            <ul class="title-area">
+                <li class="name">
+                    <div class="logo">
+                        <a href="https://docs.scylladb.com/"><img src="../../../_static/img/logo-scylla-docs.svg" alt="" width="151"></a>
+                    </div>
+                </li>
+                <li class="toggle-topbar"><a href="#"><span class="icon-manu"></span></a></li>
+            </ul>
+            <section class="top-bar-section clearfix">
+                <ul class="right">
+                    
+                    <li>
+                        <a href="https://scylladb.github.io/python-driver/">Scylla Python Driver</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">Scylla Cloud</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://university.scylladb.com/">Scylla University</a>
+                    </li>
+                    
+                    <li>
+                        <a href="https://www.scylladb.com/">ScyllaDB Home</a>
+                    </li>
+                    
+                    <li class="search_continer show-for-medium-up">	
+                        <ci-search></ci-search>	
+                    </li>	
+                </ul>
+            </section>
+        </nav>
+    </div>
+</header>
+<section id="content">
+    <div class="row">
+	
+	<div class="large-6 large-push-3 columns">
+            
+                <p>
+                    <strong>
+                    
+                    You're reading the documentation for a development version.
+                    For the latest released version, please have a look at <a href="../../../../master/index.html">master</a>.
+                    
+                    </strong>
+                </p>
+            
+
+            <h1>Source code for cassandra.cqlengine.models</h1><div class="highlight"><pre>
+<span></span><span class="c1"># Copyright DataStax, Inc.</span>
+<span class="c1">#</span>
+<span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
+<span class="c1"># you may not use this file except in compliance with the License.</span>
+<span class="c1"># You may obtain a copy of the License at</span>
+<span class="c1">#</span>
+<span class="c1"># http://www.apache.org/licenses/LICENSE-2.0</span>
+<span class="c1">#</span>
+<span class="c1"># Unless required by applicable law or agreed to in writing, software</span>
+<span class="c1"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="c1"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
+<span class="c1"># See the License for the specific language governing permissions and</span>
+<span class="c1"># limitations under the License.</span>
+
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">six</span>
+<span class="kn">from</span> <span class="nn">warnings</span> <span class="kn">import</span> <span class="n">warn</span>
+
+<span class="kn">from</span> <span class="nn">cassandra.cqlengine</span> <span class="kn">import</span> <span class="n">CQLEngineException</span><span class="p">,</span> <span class="n">ValidationError</span>
+<span class="kn">from</span> <span class="nn">cassandra.cqlengine</span> <span class="kn">import</span> <span class="n">columns</span>
+<span class="kn">from</span> <span class="nn">cassandra.cqlengine</span> <span class="kn">import</span> <span class="n">connection</span>
+<span class="kn">from</span> <span class="nn">cassandra.cqlengine</span> <span class="kn">import</span> <span class="n">query</span>
+<span class="kn">from</span> <span class="nn">cassandra.cqlengine.query</span> <span class="kn">import</span> <span class="n">DoesNotExist</span> <span class="k">as</span> <span class="n">_DoesNotExist</span>
+<span class="kn">from</span> <span class="nn">cassandra.cqlengine.query</span> <span class="kn">import</span> <span class="n">MultipleObjectsReturned</span> <span class="k">as</span> <span class="n">_MultipleObjectsReturned</span>
+<span class="kn">from</span> <span class="nn">cassandra.metadata</span> <span class="kn">import</span> <span class="n">protect_name</span>
+<span class="kn">from</span> <span class="nn">cassandra.util</span> <span class="kn">import</span> <span class="n">OrderedDict</span>
+
+<span class="n">log</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_clone_model_class</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">attrs</span><span class="p">):</span>
+    <span class="n">new_type</span> <span class="o">=</span> <span class="nb">type</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span> <span class="p">(</span><span class="n">model</span><span class="p">,),</span> <span class="n">attrs</span><span class="p">)</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">new_type</span><span class="o">.</span><span class="n">__abstract__</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">__abstract__</span>
+        <span class="n">new_type</span><span class="o">.</span><span class="n">__discriminator_value__</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">__discriminator_value__</span>
+        <span class="n">new_type</span><span class="o">.</span><span class="n">__default_ttl__</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">__default_ttl__</span>
+    <span class="k">except</span> <span class="ne">AttributeError</span><span class="p">:</span>
+        <span class="k">pass</span>
+    <span class="k">return</span> <span class="n">new_type</span>
+
+
+<span class="k">class</span> <span class="nc">ModelException</span><span class="p">(</span><span class="n">CQLEngineException</span><span class="p">):</span>
+    <span class="k">pass</span>
+
+
+<span class="k">class</span> <span class="nc">ModelDefinitionException</span><span class="p">(</span><span class="n">ModelException</span><span class="p">):</span>
+    <span class="k">pass</span>
+
+
+<span class="k">class</span> <span class="nc">PolymorphicModelException</span><span class="p">(</span><span class="n">ModelException</span><span class="p">):</span>
+    <span class="k">pass</span>
+
+
+<span class="k">class</span> <span class="nc">UndefinedKeyspaceWarning</span><span class="p">(</span><span class="ne">Warning</span><span class="p">):</span>
+    <span class="k">pass</span>
+
+<span class="n">DEFAULT_KEYSPACE</span> <span class="o">=</span> <span class="kc">None</span>
+
+
+<span class="k">class</span> <span class="nc">hybrid_classmethod</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Allows a method to behave as both a class method and</span>
+<span class="sd">    normal instance method depending on how it&#39;s called</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">clsmethod</span><span class="p">,</span> <span class="n">instmethod</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">clsmethod</span> <span class="o">=</span> <span class="n">clsmethod</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">instmethod</span> <span class="o">=</span> <span class="n">instmethod</span>
+
+    <span class="k">def</span> <span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">instance</span><span class="p">,</span> <span class="n">owner</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">instance</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">clsmethod</span><span class="o">.</span><span class="fm">__get__</span><span class="p">(</span><span class="n">owner</span><span class="p">,</span> <span class="n">owner</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">instmethod</span><span class="o">.</span><span class="fm">__get__</span><span class="p">(</span><span class="n">instance</span><span class="p">,</span> <span class="n">owner</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Just a hint to IDEs that it&#39;s ok to call this</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+
+<span class="k">class</span> <span class="nc">QuerySetDescriptor</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    returns a fresh queryset for the given model</span>
+<span class="sd">    it&#39;s declared on everytime it&#39;s accessed</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">obj</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; :rtype: ModelQuerySet &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">__abstract__</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">CQLEngineException</span><span class="p">(</span><span class="s1">&#39;cannot execute queries against abstract models&#39;</span><span class="p">)</span>
+        <span class="n">queryset</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">__queryset__</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+
+        <span class="c1"># if this is a concrete polymorphic model, and the discriminator</span>
+        <span class="c1"># key is an indexed column, add a filter clause to only return</span>
+        <span class="c1"># logical rows of the proper type</span>
+        <span class="k">if</span> <span class="n">model</span><span class="o">.</span><span class="n">_is_polymorphic</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">model</span><span class="o">.</span><span class="n">_is_polymorphic_base</span><span class="p">:</span>
+            <span class="n">name</span><span class="p">,</span> <span class="n">column</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">_discriminator_column_name</span><span class="p">,</span> <span class="n">model</span><span class="o">.</span><span class="n">_discriminator_column</span>
+            <span class="k">if</span> <span class="n">column</span><span class="o">.</span><span class="n">partition_key</span> <span class="ow">or</span> <span class="n">column</span><span class="o">.</span><span class="n">index</span><span class="p">:</span>
+                <span class="c1"># look for existing poly types</span>
+                <span class="k">return</span> <span class="n">queryset</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="o">**</span><span class="p">{</span><span class="n">name</span><span class="p">:</span> <span class="n">model</span><span class="o">.</span><span class="n">__discriminator_value__</span><span class="p">})</span>
+
+        <span class="k">return</span> <span class="n">queryset</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Just a hint to IDEs that it&#39;s ok to call this</span>
+
+<span class="sd">        :rtype: ModelQuerySet</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+
+<span class="k">class</span> <span class="nc">ConditionalDescriptor</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    returns a query set descriptor</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">instance</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">instance</span><span class="p">:</span>
+            <span class="k">def</span> <span class="nf">conditional_setter</span><span class="p">(</span><span class="o">*</span><span class="n">prepared_conditional</span><span class="p">,</span> <span class="o">**</span><span class="n">unprepared_conditionals</span><span class="p">):</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">prepared_conditional</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="n">conditionals</span> <span class="o">=</span> <span class="n">prepared_conditional</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">conditionals</span> <span class="o">=</span> <span class="n">instance</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">iff</span><span class="p">(</span><span class="o">**</span><span class="n">unprepared_conditionals</span><span class="p">)</span><span class="o">.</span><span class="n">_conditional</span>
+                <span class="n">instance</span><span class="o">.</span><span class="n">_conditional</span> <span class="o">=</span> <span class="n">conditionals</span>
+                <span class="k">return</span> <span class="n">instance</span>
+
+            <span class="k">return</span> <span class="n">conditional_setter</span>
+        <span class="n">qs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">__queryset__</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">conditional_setter</span><span class="p">(</span><span class="o">**</span><span class="n">unprepared_conditionals</span><span class="p">):</span>
+            <span class="n">conditionals</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">iff</span><span class="p">(</span><span class="o">**</span><span class="n">unprepared_conditionals</span><span class="p">)</span><span class="o">.</span><span class="n">_conditional</span>
+            <span class="n">qs</span><span class="o">.</span><span class="n">_conditional</span> <span class="o">=</span> <span class="n">conditionals</span>
+            <span class="k">return</span> <span class="n">qs</span>
+        <span class="k">return</span> <span class="n">conditional_setter</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+
+<span class="k">class</span> <span class="nc">TTLDescriptor</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    returns a query set descriptor</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">instance</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">instance</span><span class="p">:</span>
+            <span class="c1"># instance = copy.deepcopy(instance)</span>
+            <span class="c1"># instance method</span>
+            <span class="k">def</span> <span class="nf">ttl_setter</span><span class="p">(</span><span class="n">ts</span><span class="p">):</span>
+                <span class="n">instance</span><span class="o">.</span><span class="n">_ttl</span> <span class="o">=</span> <span class="n">ts</span>
+                <span class="k">return</span> <span class="n">instance</span>
+            <span class="k">return</span> <span class="n">ttl_setter</span>
+
+        <span class="n">qs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">__queryset__</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">ttl_setter</span><span class="p">(</span><span class="n">ts</span><span class="p">):</span>
+            <span class="n">qs</span><span class="o">.</span><span class="n">_ttl</span> <span class="o">=</span> <span class="n">ts</span>
+            <span class="k">return</span> <span class="n">qs</span>
+
+        <span class="k">return</span> <span class="n">ttl_setter</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+
+<span class="k">class</span> <span class="nc">TimestampDescriptor</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    returns a query set descriptor with a timestamp specified</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">instance</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">instance</span><span class="p">:</span>
+            <span class="c1"># instance method</span>
+            <span class="k">def</span> <span class="nf">timestamp_setter</span><span class="p">(</span><span class="n">ts</span><span class="p">):</span>
+                <span class="n">instance</span><span class="o">.</span><span class="n">_timestamp</span> <span class="o">=</span> <span class="n">ts</span>
+                <span class="k">return</span> <span class="n">instance</span>
+            <span class="k">return</span> <span class="n">timestamp_setter</span>
+
+        <span class="k">return</span> <span class="n">model</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">timestamp</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+
+<span class="k">class</span> <span class="nc">IfNotExistsDescriptor</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    return a query set descriptor with a if_not_exists flag specified</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">instance</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">instance</span><span class="p">:</span>
+            <span class="c1"># instance method</span>
+            <span class="k">def</span> <span class="nf">ifnotexists_setter</span><span class="p">(</span><span class="n">ife</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+                <span class="n">instance</span><span class="o">.</span><span class="n">_if_not_exists</span> <span class="o">=</span> <span class="n">ife</span>
+                <span class="k">return</span> <span class="n">instance</span>
+            <span class="k">return</span> <span class="n">ifnotexists_setter</span>
+
+        <span class="k">return</span> <span class="n">model</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">if_not_exists</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+
+<span class="k">class</span> <span class="nc">IfExistsDescriptor</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    return a query set descriptor with a if_exists flag specified</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">instance</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">instance</span><span class="p">:</span>
+            <span class="c1"># instance method</span>
+            <span class="k">def</span> <span class="nf">ifexists_setter</span><span class="p">(</span><span class="n">ife</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+                <span class="n">instance</span><span class="o">.</span><span class="n">_if_exists</span> <span class="o">=</span> <span class="n">ife</span>
+                <span class="k">return</span> <span class="n">instance</span>
+            <span class="k">return</span> <span class="n">ifexists_setter</span>
+
+        <span class="k">return</span> <span class="n">model</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">if_exists</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+
+<span class="k">class</span> <span class="nc">ConsistencyDescriptor</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    returns a query set descriptor if called on Class, instance if it was an instance call</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">instance</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">instance</span><span class="p">:</span>
+            <span class="c1"># instance = copy.deepcopy(instance)</span>
+            <span class="k">def</span> <span class="nf">consistency_setter</span><span class="p">(</span><span class="n">consistency</span><span class="p">):</span>
+                <span class="n">instance</span><span class="o">.</span><span class="n">__consistency__</span> <span class="o">=</span> <span class="n">consistency</span>
+                <span class="k">return</span> <span class="n">instance</span>
+            <span class="k">return</span> <span class="n">consistency_setter</span>
+
+        <span class="n">qs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">__queryset__</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">consistency_setter</span><span class="p">(</span><span class="n">consistency</span><span class="p">):</span>
+            <span class="n">qs</span><span class="o">.</span><span class="n">_consistency</span> <span class="o">=</span> <span class="n">consistency</span>
+            <span class="k">return</span> <span class="n">qs</span>
+
+        <span class="k">return</span> <span class="n">consistency_setter</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+
+<span class="k">class</span> <span class="nc">UsingDescriptor</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    return a query set descriptor with a connection context specified</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">instance</span><span class="p">,</span> <span class="n">model</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">instance</span><span class="p">:</span>
+            <span class="c1"># instance method</span>
+            <span class="k">def</span> <span class="nf">using_setter</span><span class="p">(</span><span class="n">connection</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+                <span class="k">if</span> <span class="n">connection</span><span class="p">:</span>
+                    <span class="n">instance</span><span class="o">.</span><span class="n">_connection</span> <span class="o">=</span> <span class="n">connection</span>
+                <span class="k">return</span> <span class="n">instance</span>
+            <span class="k">return</span> <span class="n">using_setter</span>
+
+        <span class="k">return</span> <span class="n">model</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">using</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+
+<span class="k">class</span> <span class="nc">ColumnQueryEvaluator</span><span class="p">(</span><span class="n">query</span><span class="o">.</span><span class="n">AbstractQueryableColumn</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Wraps a column and allows it to be used in comparator</span>
+<span class="sd">    expressions, returning query operators</span>
+
+<span class="sd">    ie:</span>
+<span class="sd">    Model.column == 5</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">column</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">column</span> <span class="o">=</span> <span class="n">column</span>
+
+    <span class="k">def</span> <span class="nf">__unicode__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">column</span><span class="o">.</span><span class="n">db_field_name</span>
+
+    <span class="k">def</span> <span class="nf">_get_column</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">column</span>
+
+
+<span class="k">class</span> <span class="nc">ColumnDescriptor</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Handles the reading and writing of column values to and from</span>
+<span class="sd">    a model instance&#39;s value manager, as well as creating</span>
+<span class="sd">    comparator queries</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">column</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param column:</span>
+<span class="sd">        :type column: columns.Column</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">column</span> <span class="o">=</span> <span class="n">column</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">query_evaluator</span> <span class="o">=</span> <span class="n">ColumnQueryEvaluator</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">column</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__get__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">instance</span><span class="p">,</span> <span class="n">owner</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns either the value or column, depending</span>
+<span class="sd">        on if an instance is provided or not</span>
+
+<span class="sd">        :param instance: the model instance</span>
+<span class="sd">        :type instance: Model</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">instance</span><span class="o">.</span><span class="n">_values</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">column</span><span class="o">.</span><span class="n">column_name</span><span class="p">]</span><span class="o">.</span><span class="n">getval</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">AttributeError</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">query_evaluator</span>
+
+    <span class="k">def</span> <span class="fm">__set__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">instance</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets the value on an instance, raises an exception with classes</span>
+<span class="sd">        TODO: use None instance to create update statements</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">instance</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">instance</span><span class="o">.</span><span class="n">_values</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">column</span><span class="o">.</span><span class="n">column_name</span><span class="p">]</span><span class="o">.</span><span class="n">setval</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">AttributeError</span><span class="p">(</span><span class="s1">&#39;cannot reassign column values&#39;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__delete__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">instance</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets the column value to None, if possible</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">instance</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">column</span><span class="o">.</span><span class="n">can_delete</span><span class="p">:</span>
+                <span class="n">instance</span><span class="o">.</span><span class="n">_values</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">column</span><span class="o">.</span><span class="n">column_name</span><span class="p">]</span><span class="o">.</span><span class="n">delval</span><span class="p">()</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">AttributeError</span><span class="p">(</span><span class="s1">&#39;cannot delete </span><span class="si">{0}</span><span class="s1"> columns&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">column</span><span class="o">.</span><span class="n">column_name</span><span class="p">))</span>
+
+
+<span class="k">class</span> <span class="nc">BaseModel</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The base model class, don&#39;t inherit from this, inherit from Model, defined below</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">class</span> <span class="nc">DoesNotExist</span><span class="p">(</span><span class="n">_DoesNotExist</span><span class="p">):</span>
+        <span class="k">pass</span>
+
+    <span class="k">class</span> <span class="nc">MultipleObjectsReturned</span><span class="p">(</span><span class="n">_MultipleObjectsReturned</span><span class="p">):</span>
+        <span class="k">pass</span>
+
+    <span class="n">objects</span> <span class="o">=</span> <span class="n">QuerySetDescriptor</span><span class="p">()</span>
+    <span class="n">ttl</span> <span class="o">=</span> <span class="n">TTLDescriptor</span><span class="p">()</span>
+    <span class="n">consistency</span> <span class="o">=</span> <span class="n">ConsistencyDescriptor</span><span class="p">()</span>
+    <span class="n">iff</span> <span class="o">=</span> <span class="n">ConditionalDescriptor</span><span class="p">()</span>
+
+    <span class="c1"># custom timestamps, see USING TIMESTAMP X</span>
+    <span class="n">timestamp</span> <span class="o">=</span> <span class="n">TimestampDescriptor</span><span class="p">()</span>
+
+    <span class="n">if_not_exists</span> <span class="o">=</span> <span class="n">IfNotExistsDescriptor</span><span class="p">()</span>
+
+    <span class="n">if_exists</span> <span class="o">=</span> <span class="n">IfExistsDescriptor</span><span class="p">()</span>
+
+    <span class="n">using</span> <span class="o">=</span> <span class="n">UsingDescriptor</span><span class="p">()</span>
+
+    <span class="c1"># _len is lazily created by __len__</span>
+
+    <span class="n">__table_name__</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="n">__table_name_case_sensitive__</span> <span class="o">=</span> <span class="kc">False</span>
+
+    <span class="n">__keyspace__</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="n">__connection__</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="n">__discriminator_value__</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="n">__options__</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="n">__compute_routing_key__</span> <span class="o">=</span> <span class="kc">True</span>
+
+    <span class="c1"># the queryset class used for this class</span>
+    <span class="n">__queryset__</span> <span class="o">=</span> <span class="n">query</span><span class="o">.</span><span class="n">ModelQuerySet</span>
+    <span class="n">__dmlquery__</span> <span class="o">=</span> <span class="n">query</span><span class="o">.</span><span class="n">DMLQuery</span>
+
+    <span class="n">__consistency__</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># can be set per query</span>
+
+    <span class="n">_timestamp</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># optional timestamp to include with the operation (USING TIMESTAMP)</span>
+
+    <span class="n">_if_not_exists</span> <span class="o">=</span> <span class="kc">False</span>  <span class="c1"># optional if_not_exists flag to check existence before insertion</span>
+
+    <span class="n">_if_exists</span> <span class="o">=</span> <span class="kc">False</span>  <span class="c1"># optional if_exists flag to check existence before update</span>
+
+    <span class="n">_table_name</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># used internally to cache a derived table name</span>
+
+    <span class="n">_connection</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">values</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_ttl</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_timestamp</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_conditional</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_batch</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span> <span class="o">=</span> <span class="n">connection</span><span class="o">.</span><span class="n">NOT_SET</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_is_persisted</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_connection</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_values</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">column</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="c1"># Set default values on instantiation. Thanks to this, we don&#39;t have</span>
+            <span class="c1"># to wait anylonger for a call to validate() to have CQLengine set</span>
+            <span class="c1"># default columns values.</span>
+            <span class="n">column_default</span> <span class="o">=</span> <span class="n">column</span><span class="o">.</span><span class="n">get_default</span><span class="p">()</span> <span class="k">if</span> <span class="n">column</span><span class="o">.</span><span class="n">has_default</span> <span class="k">else</span> <span class="kc">None</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">column_default</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">or</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">column</span><span class="p">,</span> <span class="n">columns</span><span class="o">.</span><span class="n">BaseContainerColumn</span><span class="p">):</span>
+                <span class="n">value</span> <span class="o">=</span> <span class="n">column</span><span class="o">.</span><span class="n">to_python</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+            <span class="n">value_mngr</span> <span class="o">=</span> <span class="n">column</span><span class="o">.</span><span class="n">value_manager</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">column</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+            <span class="n">value_mngr</span><span class="o">.</span><span class="n">explicit</span> <span class="o">=</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">values</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_values</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">value_mngr</span>
+
+    <span class="k">def</span> <span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s1">&#39;</span><span class="si">{0}</span><span class="s1">(</span><span class="si">{1}</span><span class="s1">)&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                               <span class="s1">&#39;, &#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{0}</span><span class="s1">=</span><span class="si">{1!r}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">k</span><span class="p">))</span>
+                                         <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_defined_columns</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+                                         <span class="k">if</span> <span class="n">k</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_discriminator_column_name</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Pretty printing of models by their primary key</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="s1">&#39;</span><span class="si">{0}</span><span class="s1"> &lt;</span><span class="si">{1}</span><span class="s1">&gt;&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                <span class="s1">&#39;, &#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{0}</span><span class="s1">=</span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">k</span><span class="p">))</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_primary_keys</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">_routing_key_from_values</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">pk_values</span><span class="p">,</span> <span class="n">protocol_version</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_key_serializer</span><span class="p">(</span><span class="n">pk_values</span><span class="p">,</span> <span class="n">protocol_version</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">_discover_polymorphic_submodels</span><span class="p">(</span><span class="bp">cls</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_is_polymorphic_base</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">ModelException</span><span class="p">(</span><span class="s1">&#39;_discover_polymorphic_submodels can only be called on polymorphic base classes&#39;</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">_discover</span><span class="p">(</span><span class="n">klass</span><span class="p">):</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">klass</span><span class="o">.</span><span class="n">_is_polymorphic_base</span> <span class="ow">and</span> <span class="n">klass</span><span class="o">.</span><span class="n">__discriminator_value__</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="bp">cls</span><span class="o">.</span><span class="n">_discriminator_map</span><span class="p">[</span><span class="n">klass</span><span class="o">.</span><span class="n">__discriminator_value__</span><span class="p">]</span> <span class="o">=</span> <span class="n">klass</span>
+            <span class="k">for</span> <span class="n">subklass</span> <span class="ow">in</span> <span class="n">klass</span><span class="o">.</span><span class="n">__subclasses__</span><span class="p">():</span>
+                <span class="n">_discover</span><span class="p">(</span><span class="n">subklass</span><span class="p">)</span>
+        <span class="n">_discover</span><span class="p">(</span><span class="bp">cls</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">_get_model_by_discriminator_value</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_is_polymorphic_base</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">ModelException</span><span class="p">(</span><span class="s1">&#39;_get_model_by_discriminator_value can only be called on polymorphic base classes&#39;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_discriminator_map</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">_construct_instance</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">values</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        method used to construct instances from query results</span>
+<span class="sd">        this is where polymorphic deserialization occurs</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># we&#39;re going to take the values, which is from the DB as a dict</span>
+        <span class="c1"># and translate that into our local fields</span>
+        <span class="c1"># the db_map is a db_field -&gt; model field map</span>
+        <span class="k">if</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_db_map</span><span class="p">:</span>
+            <span class="n">values</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">((</span><span class="bp">cls</span><span class="o">.</span><span class="n">_db_map</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">k</span><span class="p">),</span> <span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">values</span><span class="o">.</span><span class="n">items</span><span class="p">())</span>
+
+        <span class="k">if</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_is_polymorphic</span><span class="p">:</span>
+            <span class="n">disc_key</span> <span class="o">=</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="n">_discriminator_column_name</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">disc_key</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="n">PolymorphicModelException</span><span class="p">(</span><span class="s1">&#39;discriminator value was not found in values&#39;</span><span class="p">)</span>
+
+            <span class="n">poly_base</span> <span class="o">=</span> <span class="bp">cls</span> <span class="k">if</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_is_polymorphic_base</span> <span class="k">else</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_polymorphic_base</span>
+
+            <span class="n">klass</span> <span class="o">=</span> <span class="n">poly_base</span><span class="o">.</span><span class="n">_get_model_by_discriminator_value</span><span class="p">(</span><span class="n">disc_key</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">klass</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">poly_base</span><span class="o">.</span><span class="n">_discover_polymorphic_submodels</span><span class="p">()</span>
+                <span class="n">klass</span> <span class="o">=</span> <span class="n">poly_base</span><span class="o">.</span><span class="n">_get_model_by_discriminator_value</span><span class="p">(</span><span class="n">disc_key</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">klass</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="n">PolymorphicModelException</span><span class="p">(</span>
+                        <span class="s1">&#39;unrecognized discriminator column </span><span class="si">{0}</span><span class="s1"> for class </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">disc_key</span><span class="p">,</span> <span class="n">poly_base</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+                    <span class="p">)</span>
+
+            <span class="k">if</span> <span class="ow">not</span> <span class="nb">issubclass</span><span class="p">(</span><span class="n">klass</span><span class="p">,</span> <span class="bp">cls</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="n">PolymorphicModelException</span><span class="p">(</span>
+                    <span class="s1">&#39;</span><span class="si">{0}</span><span class="s1"> is not a subclass of </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">klass</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span> <span class="bp">cls</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+                <span class="p">)</span>
+
+            <span class="n">values</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">((</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">values</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">klass</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">klass</span> <span class="o">=</span> <span class="bp">cls</span>
+
+        <span class="n">instance</span> <span class="o">=</span> <span class="n">klass</span><span class="p">(</span><span class="o">**</span><span class="n">values</span><span class="p">)</span>
+        <span class="n">instance</span><span class="o">.</span><span class="n">_set_persisted</span><span class="p">(</span><span class="n">force</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">instance</span>
+
+    <span class="k">def</span> <span class="nf">_set_persisted</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">force</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="c1"># ensure we don&#39;t modify to any values not affected by the last save/update</span>
+        <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="p">[</span><span class="n">v</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_values</span><span class="o">.</span><span class="n">values</span><span class="p">()</span> <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">changed</span> <span class="ow">or</span> <span class="n">force</span><span class="p">]:</span>
+            <span class="n">v</span><span class="o">.</span><span class="n">reset_previous_value</span><span class="p">()</span>
+            <span class="n">v</span><span class="o">.</span><span class="n">explicit</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_is_persisted</span> <span class="o">=</span> <span class="kc">True</span>
+
+    <span class="k">def</span> <span class="nf">_can_update</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Called by the save function to check if this should be</span>
+<span class="sd">        persisted with update or insert</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_is_persisted</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="k">return</span> <span class="nb">all</span><span class="p">([</span><span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_values</span><span class="p">[</span><span class="n">k</span><span class="p">]</span><span class="o">.</span><span class="n">changed</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_primary_keys</span><span class="p">])</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">_get_keyspace</span><span class="p">(</span><span class="bp">cls</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns the manual keyspace, if set, otherwise the default keyspace</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">__keyspace__</span> <span class="ow">or</span> <span class="n">DEFAULT_KEYSPACE</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">_get_column</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns the column matching the given name, raising a key error if</span>
+<span class="sd">        it doesn&#39;t exist</span>
+
+<span class="sd">        :param name: the name of the column to return</span>
+<span class="sd">        :rtype: Column</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_columns</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">_get_column_by_db_name</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns the column, mapped by db_field name</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="n">_db_map</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">name</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="fm">__eq__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span> <span class="o">!=</span> <span class="n">other</span><span class="o">.</span><span class="vm">__class__</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="c1"># check attribute keys</span>
+        <span class="n">keys</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+        <span class="n">other_keys</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">other</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+        <span class="k">if</span> <span class="n">keys</span> <span class="o">!=</span> <span class="n">other_keys</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="k">return</span> <span class="nb">all</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="o">==</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">other</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">other_keys</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__ne__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="k">return</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="fm">__eq__</span><span class="p">(</span><span class="n">other</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">column_family_name</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">include_keyspace</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns the column family name if it&#39;s been defined</span>
+<span class="sd">        otherwise, it creates it from the module and class name</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">cf_name</span> <span class="o">=</span> <span class="n">protect_name</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="n">_raw_column_family_name</span><span class="p">())</span>
+        <span class="k">if</span> <span class="n">include_keyspace</span><span class="p">:</span>
+            <span class="n">keyspace</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_get_keyspace</span><span class="p">()</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">keyspace</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="n">CQLEngineException</span><span class="p">(</span><span class="s2">&quot;Model keyspace is not set and no default is available. Set model keyspace or setup connection before attempting to generate a query.&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="s1">&#39;</span><span class="si">{0}</span><span class="s1">.</span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">protect_name</span><span class="p">(</span><span class="n">keyspace</span><span class="p">),</span> <span class="n">cf_name</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">cf_name</span>
+
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">_raw_column_family_name</span><span class="p">(</span><span class="bp">cls</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_table_name</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">cls</span><span class="o">.</span><span class="n">__table_name__</span><span class="p">:</span>
+                <span class="k">if</span> <span class="bp">cls</span><span class="o">.</span><span class="n">__table_name_case_sensitive__</span><span class="p">:</span>
+                    <span class="n">warn</span><span class="p">(</span><span class="s2">&quot;Model __table_name_case_sensitive__ will be removed in 4.0.&quot;</span><span class="p">,</span> <span class="ne">PendingDeprecationWarning</span><span class="p">)</span>
+                    <span class="bp">cls</span><span class="o">.</span><span class="n">_table_name</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">__table_name__</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">table_name</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">__table_name__</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="bp">cls</span><span class="o">.</span><span class="n">__table_name__</span> <span class="o">!=</span> <span class="n">table_name</span><span class="p">:</span>
+                        <span class="n">warn</span><span class="p">((</span><span class="s2">&quot;Model __table_name__ will be case sensitive by default in 4.0. &quot;</span>
+                        <span class="s2">&quot;You should fix the __table_name__ value of the &#39;</span><span class="si">{0}</span><span class="s2">&#39; model.&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="vm">__name__</span><span class="p">))</span>
+                    <span class="bp">cls</span><span class="o">.</span><span class="n">_table_name</span> <span class="o">=</span> <span class="n">table_name</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">if</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_is_polymorphic</span> <span class="ow">and</span> <span class="ow">not</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_is_polymorphic_base</span><span class="p">:</span>
+                    <span class="bp">cls</span><span class="o">.</span><span class="n">_table_name</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_polymorphic_base</span><span class="o">.</span><span class="n">_raw_column_family_name</span><span class="p">()</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">camelcase</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="sa">r</span><span class="s1">&#39;([a-z])([A-Z])&#39;</span><span class="p">)</span>
+                    <span class="n">ccase</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">s</span><span class="p">:</span> <span class="n">camelcase</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="k">lambda</span> <span class="n">v</span><span class="p">:</span> <span class="s1">&#39;</span><span class="si">{0}</span><span class="s1">_</span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">v</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()),</span> <span class="n">s</span><span class="p">)</span>
+
+                    <span class="n">cf_name</span> <span class="o">=</span> <span class="n">ccase</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+                    <span class="c1"># trim to less than 48 characters or cassandra will complain</span>
+                    <span class="n">cf_name</span> <span class="o">=</span> <span class="n">cf_name</span><span class="p">[</span><span class="o">-</span><span class="mi">48</span><span class="p">:]</span>
+                    <span class="n">cf_name</span> <span class="o">=</span> <span class="n">cf_name</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+                    <span class="n">cf_name</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s1">&#39;^_+&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">cf_name</span><span class="p">)</span>
+                    <span class="bp">cls</span><span class="o">.</span><span class="n">_table_name</span> <span class="o">=</span> <span class="n">cf_name</span>
+
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_table_name</span>
+
+    <span class="k">def</span> <span class="nf">_set_column_value</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Function to change a column value without changing the value manager states&quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_values</span><span class="p">[</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">value</span> <span class="o">=</span> <span class="n">value</span>  <span class="c1"># internal assignement, skip the main setter</span>
+
+    <span class="k">def</span> <span class="nf">validate</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Cleans and validates the field values</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">v</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_values</span><span class="p">[</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">explicit</span> <span class="ow">and</span> <span class="n">col</span><span class="o">.</span><span class="n">has_default</span><span class="p">:</span>
+                <span class="n">v</span> <span class="o">=</span> <span class="n">col</span><span class="o">.</span><span class="n">get_default</span><span class="p">()</span>
+            <span class="n">val</span> <span class="o">=</span> <span class="n">col</span><span class="o">.</span><span class="n">validate</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_set_column_value</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">val</span><span class="p">)</span>
+
+    <span class="c1"># Let an instance be used like a dict of its columns keys/values</span>
+    <span class="k">def</span> <span class="fm">__iter__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; Iterate over column ids. &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">column_id</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="k">yield</span> <span class="n">column_id</span>
+
+    <span class="k">def</span> <span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; Returns column&#39;s value. &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">six</span><span class="o">.</span><span class="n">string_types</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span>
+        <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="ne">KeyError</span>
+        <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__setitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">val</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; Sets a column&#39;s value. &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">six</span><span class="o">.</span><span class="n">string_types</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span>
+        <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="k">raise</span> <span class="ne">KeyError</span>
+        <span class="k">return</span> <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">val</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns the number of columns defined on that model.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_len</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_len</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_len</span>
+
+    <span class="k">def</span> <span class="nf">keys</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; Returns a list of column IDs. &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">[</span><span class="n">k</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="bp">self</span><span class="p">]</span>
+
+    <span class="k">def</span> <span class="nf">values</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; Returns list of column values. &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">[</span><span class="bp">self</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="bp">self</span><span class="p">]</span>
+
+    <span class="k">def</span> <span class="nf">items</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; Returns a list of column ID/value tuples. &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">[(</span><span class="n">k</span><span class="p">,</span> <span class="bp">self</span><span class="p">[</span><span class="n">k</span><span class="p">])</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="bp">self</span><span class="p">]</span>
+
+    <span class="k">def</span> <span class="nf">_as_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; Returns a map of column names to cleaned values &quot;&quot;&quot;</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_dynamic_columns</span> <span class="ow">or</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">values</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">col</span><span class="o">.</span><span class="n">to_database</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="kc">None</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">values</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">create</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Create an instance of this model in the database.</span>
+
+<span class="sd">        Takes the model column values as keyword arguments. Setting a value to</span>
+<span class="sd">        `None` is equivalent to running a CQL `DELETE` on that column.</span>
+
+<span class="sd">        Returns the instance.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">extra_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">kwargs</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+        <span class="k">if</span> <span class="n">extra_columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">ValidationError</span><span class="p">(</span><span class="s2">&quot;Incorrect columns passed: </span><span class="si">{0}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">extra_columns</span><span class="p">))</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">all</span><span class="p">(</span><span class="bp">cls</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a queryset representing all stored objects</span>
+
+<span class="sd">        This is a pass-through to the model objects().all()</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">filter</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a queryset based on filter parameters.</span>
+
+<span class="sd">        This is a pass-through to the model objects().:method:`~cqlengine.queries.filter`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">get</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a single object based on the passed filter constraints.</span>
+
+<span class="sd">        This is a pass-through to the model objects().:method:`~cqlengine.queries.get`.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">timeout</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets a timeout for use in :meth:`~.save`, :meth:`~.update`, and :meth:`~.delete`</span>
+<span class="sd">        operations</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">_batch</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">,</span> <span class="s1">&#39;Setting both timeout and batch is not supported&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span> <span class="o">=</span> <span class="n">timeout</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="k">def</span> <span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Saves an object to the database.</span>
+
+<span class="sd">        .. code-block:: python</span>
+
+<span class="sd">            #create a person instance</span>
+<span class="sd">            person = Person(first_name=&#39;Kimberly&#39;, last_name=&#39;Eggleston&#39;)</span>
+<span class="sd">            #saves it to Cassandra</span>
+<span class="sd">            person.save()</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="c1"># handle polymorphic models</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_is_polymorphic</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_is_polymorphic_base</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="n">PolymorphicModelException</span><span class="p">(</span><span class="s1">&#39;cannot save polymorphic base model&#39;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_discriminator_column_name</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">__discriminator_value__</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">validate</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__dmlquery__</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">,</span> <span class="bp">self</span><span class="p">,</span>
+                          <span class="n">batch</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_batch</span><span class="p">,</span>
+                          <span class="n">ttl</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_ttl</span><span class="p">,</span>
+                          <span class="n">timestamp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_timestamp</span><span class="p">,</span>
+                          <span class="n">consistency</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">__consistency__</span><span class="p">,</span>
+                          <span class="n">if_not_exists</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_if_not_exists</span><span class="p">,</span>
+                          <span class="n">conditional</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_conditional</span><span class="p">,</span>
+                          <span class="n">timeout</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span><span class="p">,</span>
+                          <span class="n">if_exists</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_if_exists</span><span class="p">)</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_set_persisted</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_timestamp</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="k">def</span> <span class="nf">update</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">values</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Performs an update on the model instance. You can pass in values to set on the model</span>
+<span class="sd">        for updating, or you can call without values to execute an update against any modified</span>
+<span class="sd">        fields. If no fields on the model have been modified since loading, no query will be</span>
+<span class="sd">        performed. Model validation is performed normally. Setting a value to `None` is</span>
+<span class="sd">        equivalent to running a CQL `DELETE` on that column.</span>
+
+<span class="sd">        It is possible to do a blind update, that is, to update a field without having first selected the object out of the database.</span>
+<span class="sd">        See :ref:`Blind Updates &lt;blind_updates&gt;`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">column_id</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">values</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">col</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_columns</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">column_id</span><span class="p">)</span>
+
+            <span class="c1"># check for nonexistant columns</span>
+            <span class="k">if</span> <span class="n">col</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="n">ValidationError</span><span class="p">(</span>
+                    <span class="s2">&quot;</span><span class="si">{0}</span><span class="s2">.</span><span class="si">{1}</span><span class="s2"> has no column named: </span><span class="si">{2}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="vm">__module__</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span> <span class="n">column_id</span><span class="p">))</span>
+
+            <span class="c1"># check for primary key update attempts</span>
+            <span class="k">if</span> <span class="n">col</span><span class="o">.</span><span class="n">is_primary_key</span><span class="p">:</span>
+                <span class="n">current_value</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">column_id</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">v</span> <span class="o">!=</span> <span class="n">current_value</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="n">ValidationError</span><span class="p">(</span>
+                        <span class="s2">&quot;Cannot apply update to primary key &#39;</span><span class="si">{0}</span><span class="s2">&#39; for </span><span class="si">{1}</span><span class="s2">.</span><span class="si">{2}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                            <span class="n">column_id</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__module__</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">))</span>
+
+            <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">column_id</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span>
+
+        <span class="c1"># handle polymorphic models</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_is_polymorphic</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_is_polymorphic_base</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="n">PolymorphicModelException</span><span class="p">(</span><span class="s1">&#39;cannot update polymorphic base model&#39;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_discriminator_column_name</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">__discriminator_value__</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">validate</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__dmlquery__</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">,</span> <span class="bp">self</span><span class="p">,</span>
+                          <span class="n">batch</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_batch</span><span class="p">,</span>
+                          <span class="n">ttl</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_ttl</span><span class="p">,</span>
+                          <span class="n">timestamp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_timestamp</span><span class="p">,</span>
+                          <span class="n">consistency</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">__consistency__</span><span class="p">,</span>
+                          <span class="n">conditional</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_conditional</span><span class="p">,</span>
+                          <span class="n">timeout</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span><span class="p">,</span>
+                          <span class="n">if_exists</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_if_exists</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_set_persisted</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_timestamp</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="k">def</span> <span class="nf">delete</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Deletes the object from the database</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__dmlquery__</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">,</span> <span class="bp">self</span><span class="p">,</span>
+                          <span class="n">batch</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_batch</span><span class="p">,</span>
+                          <span class="n">timestamp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_timestamp</span><span class="p">,</span>
+                          <span class="n">consistency</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">__consistency__</span><span class="p">,</span>
+                          <span class="n">timeout</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span><span class="p">,</span>
+                          <span class="n">conditional</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_conditional</span><span class="p">,</span>
+                          <span class="n">if_exists</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_if_exists</span><span class="p">)</span><span class="o">.</span><span class="n">delete</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">get_changed_columns</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a list of the columns that have been updated since instantiation or save</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">[</span><span class="n">k</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_values</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">changed</span><span class="p">]</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">_class_batch</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">batch</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">batch</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_inst_batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">batch</span><span class="p">):</span>
+        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span> <span class="ow">is</span> <span class="n">connection</span><span class="o">.</span><span class="n">NOT_SET</span><span class="p">,</span> <span class="s1">&#39;Setting both timeout and batch is not supported&#39;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_connection</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">CQLEngineException</span><span class="p">(</span><span class="s2">&quot;Cannot specify a connection on model in batch mode.&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_batch</span> <span class="o">=</span> <span class="n">batch</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="n">batch</span> <span class="o">=</span> <span class="n">hybrid_classmethod</span><span class="p">(</span><span class="n">_class_batch</span><span class="p">,</span> <span class="n">_inst_batch</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">_class_get_connection</span><span class="p">(</span><span class="bp">cls</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">__connection__</span>
+
+    <span class="k">def</span> <span class="nf">_inst_get_connection</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_connection</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">__connection__</span>
+
+    <span class="n">_get_connection</span> <span class="o">=</span> <span class="n">hybrid_classmethod</span><span class="p">(</span><span class="n">_class_get_connection</span><span class="p">,</span> <span class="n">_inst_get_connection</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">ModelMetaClass</span><span class="p">(</span><span class="nb">type</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="fm">__new__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">bases</span><span class="p">,</span> <span class="n">attrs</span><span class="p">):</span>
+        <span class="c1"># move column definitions into columns dict</span>
+        <span class="c1"># and set default column names</span>
+        <span class="n">column_dict</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">()</span>
+        <span class="n">primary_keys</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">()</span>
+        <span class="n">pk_name</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="c1"># get inherited properties</span>
+        <span class="n">inherited_columns</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">base</span> <span class="ow">in</span> <span class="n">bases</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="s1">&#39;_defined_columns&#39;</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="n">inherited_columns</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span>
+
+        <span class="c1"># short circuit __abstract__ inheritance</span>
+        <span class="n">is_abstract</span> <span class="o">=</span> <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;__abstract__&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">attrs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;__abstract__&#39;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+
+        <span class="c1"># short circuit __discriminator_value__ inheritance</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;__discriminator_value__&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">attrs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;__discriminator_value__&#39;</span><span class="p">)</span>
+
+        <span class="c1"># TODO __default__ttl__ should be removed in the next major release</span>
+        <span class="n">options</span> <span class="o">=</span> <span class="n">attrs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;__options__&#39;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{}</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;__default_ttl__&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">options</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;default_time_to_live&#39;</span><span class="p">)</span>
+
+        <span class="n">column_definitions</span> <span class="o">=</span> <span class="p">[(</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">attrs</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">columns</span><span class="o">.</span><span class="n">Column</span><span class="p">)]</span>
+        <span class="n">column_definitions</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">column_definitions</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">position</span><span class="p">)</span>
+
+        <span class="n">is_polymorphic_base</span> <span class="o">=</span> <span class="nb">any</span><span class="p">([</span><span class="n">c</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">discriminator_column</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">column_definitions</span><span class="p">])</span>
+
+        <span class="n">column_definitions</span> <span class="o">=</span> <span class="p">[</span><span class="n">x</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">inherited_columns</span><span class="o">.</span><span class="n">items</span><span class="p">()]</span> <span class="o">+</span> <span class="n">column_definitions</span>
+        <span class="n">discriminator_columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">column_definitions</span> <span class="k">if</span> <span class="n">c</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">discriminator_column</span><span class="p">]</span>
+        <span class="n">is_polymorphic</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">discriminator_columns</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">discriminator_columns</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">ModelDefinitionException</span><span class="p">(</span><span class="s1">&#39;only one discriminator_column can be defined in a model, </span><span class="si">{0}</span><span class="s1"> found&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">discriminator_columns</span><span class="p">)))</span>
+
+        <span class="k">if</span> <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;__discriminator_value__&#39;</span><span class="p">]</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_polymorphic</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">ModelDefinitionException</span><span class="p">(</span><span class="s1">&#39;__discriminator_value__ specified, but no base columns defined with discriminator_column=True&#39;</span><span class="p">)</span>
+
+        <span class="n">discriminator_column_name</span><span class="p">,</span> <span class="n">discriminator_column</span> <span class="o">=</span> <span class="n">discriminator_columns</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="n">discriminator_columns</span> <span class="k">else</span> <span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">discriminator_column</span><span class="p">,</span> <span class="p">(</span><span class="n">columns</span><span class="o">.</span><span class="n">BaseContainerColumn</span><span class="p">,</span> <span class="n">columns</span><span class="o">.</span><span class="n">Counter</span><span class="p">)):</span>
+            <span class="k">raise</span> <span class="n">ModelDefinitionException</span><span class="p">(</span><span class="s1">&#39;counter and container columns cannot be used as discriminator columns&#39;</span><span class="p">)</span>
+
+        <span class="c1"># find polymorphic base class</span>
+        <span class="n">polymorphic_base</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">if</span> <span class="n">is_polymorphic</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_polymorphic_base</span><span class="p">:</span>
+            <span class="k">def</span> <span class="nf">_get_polymorphic_base</span><span class="p">(</span><span class="n">bases</span><span class="p">):</span>
+                <span class="k">for</span> <span class="n">base</span> <span class="ow">in</span> <span class="n">bases</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="s1">&#39;_is_polymorphic_base&#39;</span><span class="p">,</span> <span class="kc">False</span><span class="p">):</span>
+                        <span class="k">return</span> <span class="n">base</span>
+                    <span class="n">klass</span> <span class="o">=</span> <span class="n">_get_polymorphic_base</span><span class="p">(</span><span class="n">base</span><span class="o">.</span><span class="vm">__bases__</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">klass</span><span class="p">:</span>
+                        <span class="k">return</span> <span class="n">klass</span>
+            <span class="n">polymorphic_base</span> <span class="o">=</span> <span class="n">_get_polymorphic_base</span><span class="p">(</span><span class="n">bases</span><span class="p">)</span>
+
+        <span class="n">defined_columns</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">(</span><span class="n">column_definitions</span><span class="p">)</span>
+
+        <span class="c1"># check for primary key</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">is_abstract</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">any</span><span class="p">([</span><span class="n">v</span><span class="o">.</span><span class="n">primary_key</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">column_definitions</span><span class="p">]):</span>
+            <span class="k">raise</span> <span class="n">ModelDefinitionException</span><span class="p">(</span><span class="s2">&quot;At least 1 primary key is required.&quot;</span><span class="p">)</span>
+
+        <span class="n">counter_columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">defined_columns</span><span class="o">.</span><span class="n">values</span><span class="p">()</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">columns</span><span class="o">.</span><span class="n">Counter</span><span class="p">)]</span>
+        <span class="n">data_columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">defined_columns</span><span class="o">.</span><span class="n">values</span><span class="p">()</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">c</span><span class="o">.</span><span class="n">primary_key</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">columns</span><span class="o">.</span><span class="n">Counter</span><span class="p">)]</span>
+        <span class="k">if</span> <span class="n">counter_columns</span> <span class="ow">and</span> <span class="n">data_columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">ModelDefinitionException</span><span class="p">(</span><span class="s1">&#39;counter models may not have data columns&#39;</span><span class="p">)</span>
+
+        <span class="n">has_partition_keys</span> <span class="o">=</span> <span class="nb">any</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">partition_key</span> <span class="k">for</span> <span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="ow">in</span> <span class="n">column_definitions</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">_transform_column</span><span class="p">(</span><span class="n">col_name</span><span class="p">,</span> <span class="n">col_obj</span><span class="p">):</span>
+            <span class="n">column_dict</span><span class="p">[</span><span class="n">col_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">col_obj</span>
+            <span class="k">if</span> <span class="n">col_obj</span><span class="o">.</span><span class="n">primary_key</span><span class="p">:</span>
+                <span class="n">primary_keys</span><span class="p">[</span><span class="n">col_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">col_obj</span>
+            <span class="n">col_obj</span><span class="o">.</span><span class="n">set_column_name</span><span class="p">(</span><span class="n">col_name</span><span class="p">)</span>
+            <span class="c1"># set properties</span>
+            <span class="n">attrs</span><span class="p">[</span><span class="n">col_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">ColumnDescriptor</span><span class="p">(</span><span class="n">col_obj</span><span class="p">)</span>
+
+        <span class="n">partition_key_index</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="c1"># transform column definitions</span>
+        <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">column_definitions</span><span class="p">:</span>
+            <span class="c1"># don&#39;t allow a column with the same name as a built-in attribute or method</span>
+            <span class="k">if</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">BaseModel</span><span class="o">.</span><span class="vm">__dict__</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="n">ModelDefinitionException</span><span class="p">(</span><span class="s2">&quot;column &#39;</span><span class="si">{0}</span><span class="s2">&#39; conflicts with built-in attribute/method&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">k</span><span class="p">))</span>
+
+            <span class="c1"># counter column primary keys are not allowed</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">primary_key</span> <span class="ow">or</span> <span class="n">v</span><span class="o">.</span><span class="n">partition_key</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">columns</span><span class="o">.</span><span class="n">Counter</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="n">ModelDefinitionException</span><span class="p">(</span><span class="s1">&#39;counter columns cannot be used as primary keys&#39;</span><span class="p">)</span>
+
+            <span class="c1"># this will mark the first primary key column as a partition</span>
+            <span class="c1"># key, if one hasn&#39;t been set already</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">has_partition_keys</span> <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">primary_key</span><span class="p">:</span>
+                <span class="n">v</span><span class="o">.</span><span class="n">partition_key</span> <span class="o">=</span> <span class="kc">True</span>
+                <span class="n">has_partition_keys</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">partition_key</span><span class="p">:</span>
+                <span class="n">v</span><span class="o">.</span><span class="n">_partition_key_index</span> <span class="o">=</span> <span class="n">partition_key_index</span>
+                <span class="n">partition_key_index</span> <span class="o">+=</span> <span class="mi">1</span>
+
+            <span class="n">overriding</span> <span class="o">=</span> <span class="n">column_dict</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">k</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">overriding</span><span class="p">:</span>
+                <span class="n">v</span><span class="o">.</span><span class="n">position</span> <span class="o">=</span> <span class="n">overriding</span><span class="o">.</span><span class="n">position</span>
+                <span class="n">v</span><span class="o">.</span><span class="n">partition_key</span> <span class="o">=</span> <span class="n">overriding</span><span class="o">.</span><span class="n">partition_key</span>
+                <span class="n">v</span><span class="o">.</span><span class="n">_partition_key_index</span> <span class="o">=</span> <span class="n">overriding</span><span class="o">.</span><span class="n">_partition_key_index</span>
+            <span class="n">_transform_column</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span>
+
+        <span class="n">partition_keys</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">(</span><span class="n">k</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">primary_keys</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">k</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">partition_key</span><span class="p">)</span>
+        <span class="n">clustering_keys</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">(</span><span class="n">k</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">primary_keys</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">k</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">partition_key</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">attrs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;__compute_routing_key__&#39;</span><span class="p">,</span> <span class="kc">True</span><span class="p">):</span>
+            <span class="n">key_cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">partition_keys</span><span class="o">.</span><span class="n">values</span><span class="p">()]</span>
+            <span class="n">partition_key_index</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">((</span><span class="n">col</span><span class="o">.</span><span class="n">db_field_name</span><span class="p">,</span> <span class="n">col</span><span class="o">.</span><span class="n">_partition_key_index</span><span class="p">)</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">key_cols</span><span class="p">)</span>
+            <span class="n">key_cql_types</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span><span class="o">.</span><span class="n">cql_type</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">key_cols</span><span class="p">]</span>
+            <span class="n">key_serializer</span> <span class="o">=</span> <span class="nb">staticmethod</span><span class="p">(</span><span class="k">lambda</span> <span class="n">parts</span><span class="p">,</span> <span class="n">proto_version</span><span class="p">:</span> <span class="p">[</span><span class="n">t</span><span class="o">.</span><span class="n">to_binary</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">proto_version</span><span class="p">)</span> <span class="k">for</span> <span class="n">t</span><span class="p">,</span> <span class="n">p</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">key_cql_types</span><span class="p">,</span> <span class="n">parts</span><span class="p">)])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">partition_key_index</span> <span class="o">=</span> <span class="p">{}</span>
+            <span class="n">key_serializer</span> <span class="o">=</span> <span class="nb">staticmethod</span><span class="p">(</span><span class="k">lambda</span> <span class="n">parts</span><span class="p">,</span> <span class="n">proto_version</span><span class="p">:</span> <span class="kc">None</span><span class="p">)</span>
+
+        <span class="c1"># setup partition key shortcut</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">partition_keys</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">is_abstract</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="n">ModelException</span><span class="p">(</span><span class="s2">&quot;at least one partition key must be defined&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">partition_keys</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">pk_name</span> <span class="o">=</span> <span class="p">[</span><span class="n">x</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">partition_keys</span><span class="o">.</span><span class="n">keys</span><span class="p">()][</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;pk&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">attrs</span><span class="p">[</span><span class="n">pk_name</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># composite partition key case, get/set a tuple of values</span>
+            <span class="n">_get</span> <span class="o">=</span> <span class="k">lambda</span> <span class="bp">self</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_values</span><span class="p">[</span><span class="n">c</span><span class="p">]</span><span class="o">.</span><span class="n">getval</span><span class="p">()</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">partition_keys</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+            <span class="n">_set</span> <span class="o">=</span> <span class="k">lambda</span> <span class="bp">self</span><span class="p">,</span> <span class="n">val</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_values</span><span class="p">[</span><span class="n">c</span><span class="p">]</span><span class="o">.</span><span class="n">setval</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">partition_keys</span><span class="o">.</span><span class="n">keys</span><span class="p">(),</span> <span class="n">val</span><span class="p">))</span>
+            <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;pk&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">property</span><span class="p">(</span><span class="n">_get</span><span class="p">,</span> <span class="n">_set</span><span class="p">)</span>
+
+        <span class="c1"># some validation</span>
+        <span class="n">col_names</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">column_dict</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+            <span class="c1"># check for duplicate column names</span>
+            <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">db_field_name</span> <span class="ow">in</span> <span class="n">col_names</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="n">ModelException</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{0}</span><span class="s2"> defines the column &#39;</span><span class="si">{1}</span><span class="s2">&#39; more than once&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">v</span><span class="o">.</span><span class="n">db_field_name</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">clustering_order</span> <span class="ow">and</span> <span class="ow">not</span> <span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">primary_key</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">v</span><span class="o">.</span><span class="n">partition_key</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="n">ModelException</span><span class="p">(</span><span class="s2">&quot;clustering_order may be specified only for clustering primary keys&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">clustering_order</span> <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">clustering_order</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s1">&#39;asc&#39;</span><span class="p">,</span> <span class="s1">&#39;desc&#39;</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="n">ModelException</span><span class="p">(</span><span class="s2">&quot;invalid clustering order &#39;</span><span class="si">{0}</span><span class="s2">&#39; for column &#39;</span><span class="si">{1}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">repr</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">clustering_order</span><span class="p">),</span> <span class="n">v</span><span class="o">.</span><span class="n">db_field_name</span><span class="p">))</span>
+            <span class="n">col_names</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">db_field_name</span><span class="p">)</span>
+
+        <span class="c1"># create db_name -&gt; model name map for loading</span>
+        <span class="n">db_map</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">col_name</span><span class="p">,</span> <span class="n">field</span> <span class="ow">in</span> <span class="n">column_dict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">db_field</span> <span class="o">=</span> <span class="n">field</span><span class="o">.</span><span class="n">db_field_name</span>
+            <span class="k">if</span> <span class="n">db_field</span> <span class="o">!=</span> <span class="n">col_name</span><span class="p">:</span>
+                <span class="n">db_map</span><span class="p">[</span><span class="n">db_field</span><span class="p">]</span> <span class="o">=</span> <span class="n">col_name</span>
+
+        <span class="c1"># add management members to the class</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_columns&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">column_dict</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_primary_keys&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">primary_keys</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_defined_columns&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">defined_columns</span>
+
+        <span class="c1"># maps the database field to the models key</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_db_map&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">db_map</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_pk_name&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pk_name</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_dynamic_columns&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_partition_keys&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">partition_keys</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_partition_key_index&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">partition_key_index</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_key_serializer&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">key_serializer</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_clustering_keys&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">clustering_keys</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_has_counter&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">counter_columns</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
+
+        <span class="c1"># add polymorphic management attributes</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_is_polymorphic_base&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">is_polymorphic_base</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_is_polymorphic&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">is_polymorphic</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_polymorphic_base&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">polymorphic_base</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_discriminator_column&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">discriminator_column</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_discriminator_column_name&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">discriminator_column_name</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;_discriminator_map&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">is_polymorphic_base</span> <span class="k">else</span> <span class="kc">None</span>
+
+        <span class="c1"># setup class exceptions</span>
+        <span class="n">DoesNotExistBase</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">for</span> <span class="n">base</span> <span class="ow">in</span> <span class="n">bases</span><span class="p">:</span>
+            <span class="n">DoesNotExistBase</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="s1">&#39;DoesNotExist&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">DoesNotExistBase</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">break</span>
+
+        <span class="n">DoesNotExistBase</span> <span class="o">=</span> <span class="n">DoesNotExistBase</span> <span class="ow">or</span> <span class="n">attrs</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s1">&#39;DoesNotExist&#39;</span><span class="p">,</span> <span class="n">BaseModel</span><span class="o">.</span><span class="n">DoesNotExist</span><span class="p">)</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;DoesNotExist&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">type</span><span class="p">(</span><span class="s1">&#39;DoesNotExist&#39;</span><span class="p">,</span> <span class="p">(</span><span class="n">DoesNotExistBase</span><span class="p">,),</span> <span class="p">{})</span>
+
+        <span class="n">MultipleObjectsReturnedBase</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">for</span> <span class="n">base</span> <span class="ow">in</span> <span class="n">bases</span><span class="p">:</span>
+            <span class="n">MultipleObjectsReturnedBase</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="s1">&#39;MultipleObjectsReturned&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">MultipleObjectsReturnedBase</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">break</span>
+
+        <span class="n">MultipleObjectsReturnedBase</span> <span class="o">=</span> <span class="n">MultipleObjectsReturnedBase</span> <span class="ow">or</span> <span class="n">attrs</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s1">&#39;MultipleObjectsReturned&#39;</span><span class="p">,</span> <span class="n">BaseModel</span><span class="o">.</span><span class="n">MultipleObjectsReturned</span><span class="p">)</span>
+        <span class="n">attrs</span><span class="p">[</span><span class="s1">&#39;MultipleObjectsReturned&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">type</span><span class="p">(</span><span class="s1">&#39;MultipleObjectsReturned&#39;</span><span class="p">,</span> <span class="p">(</span><span class="n">MultipleObjectsReturnedBase</span><span class="p">,),</span> <span class="p">{})</span>
+
+        <span class="c1"># create the class and add a QuerySet to it</span>
+        <span class="n">klass</span> <span class="o">=</span> <span class="nb">super</span><span class="p">(</span><span class="n">ModelMetaClass</span><span class="p">,</span> <span class="bp">cls</span><span class="p">)</span><span class="o">.</span><span class="fm">__new__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">bases</span><span class="p">,</span> <span class="n">attrs</span><span class="p">)</span>
+
+        <span class="n">udts</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">column_dict</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+            <span class="n">columns</span><span class="o">.</span><span class="n">resolve_udts</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">udts</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">user_type</span> <span class="ow">in</span> <span class="nb">set</span><span class="p">(</span><span class="n">udts</span><span class="p">):</span>
+            <span class="n">user_type</span><span class="o">.</span><span class="n">register_for_keyspace</span><span class="p">(</span><span class="n">klass</span><span class="o">.</span><span class="n">_get_keyspace</span><span class="p">())</span>
+
+        <span class="k">return</span> <span class="n">klass</span>
+
+
+<div class="viewcode-block" id="Model"><a class="viewcode-back" href="../../../api/cassandra/cqlengine/models.html#cassandra.cqlengine.models.Model">[docs]</a><span class="nd">@six</span><span class="o">.</span><span class="n">add_metaclass</span><span class="p">(</span><span class="n">ModelMetaClass</span><span class="p">)</span>
+<span class="k">class</span> <span class="nc">Model</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">__abstract__</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    *Optional.* Indicates that this model is only intended to be used as a base class for other models.</span>
+<span class="sd">    You can&#39;t create tables for abstract models, but checks around schema validity are skipped during class construction.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">__table_name__</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    *Optional.* Sets the name of the CQL table for this model. If left blank, the table name will be the name of the model, with it&#39;s module name as it&#39;s prefix. Manually defined table names are not inherited.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">__table_name_case_sensitive__</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    *Optional.* By default, __table_name__ is case insensitive. Set this to True if you want to preserve the case sensitivity.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">__keyspace__</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Sets the name of the keyspace used by this model.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">__connection__</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Sets the name of the default connection used by this model.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">__options__</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    *Optional* Table options applied with this model</span>
+
+<span class="sd">    (e.g. compaction, default ttl, cache settings, tec.)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">__discriminator_value__</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    *Optional* Specifies a value for the discriminator column when using model inheritance.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">__compute_routing_key__</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    *Optional* Setting False disables computing the routing key for TokenAwareRouting</span>
+<span class="sd">    &quot;&quot;&quot;</span></div>
+</pre></div>
+        </div>
+
+        <div id="sidebar" class="large-3 large-pull-6 columns"><div class="side-nav">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/index.html">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upgrading.html">Upgrading</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../object_mapper.html">Object Mapper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+</div>
+        </div>
+
+        <div class="large-3 columns">
+            
+                <div class="versions-dropdown">
+    <button class="button"><span class="version">3.22.0-scylla <i class="fa fa-caret-down" aria-hidden="true"></i></button>
+    <ul class="content">
+        <li><a href="../../../../master/index.html">master</a></li>
+        <li><a href="models.html">3.22.0-scylla</a></li>
+        <li><a href="../../../../3.21.0-scylla/index.html">3.21.0-scylla</a></li>
+    </ul>
+</div>
+            
+        </div>
+
+    </div>
+</section>
+
+<!-- newsleter modal -->
+
+<div id="newsletter_signup" class="reveal-modal tiny radius dark_modal" data-reveal aria-labelledby="modalTitle" aria-hidden="true" role="dialog">
+    <a class="close-reveal-modal" aria-label="Close">×</a>
+    <h2 id="modalTitle">Sign up for the Scylla newsletter</h2>
+    <div id="mc_embed_signup">
+        <form action="//cloudius-systems.us10.list-manage.com/subscribe/post?u=df8bb543c68230d5f7b4dcf78&amp;id=9a4589f144" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+            <div id="mc_embed_signup_scroll">
+
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-EMAIL">Email</label></div>
+                        <div class="small-9 columns"><input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-FNAME">First Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="FNAME" class="" id="mce-FNAME"></div>
+                    </div>
+                </div>
+                <div class="mc-field-group">
+                    <div class="row collapse">
+                        <div class="small-3 columns"><label for="mce-LNAME">Last Name </label></div>
+                        <div class="small-9 columns"><input type="text" value="" name="LNAME" class="" id="mce-LNAME"></div>
+                    </div>
+                </div>
+                <div id="mce-responses" class="clear">
+                    <div class="response" id="mce-error-response" style="display:none"></div>
+                    <div class="response" id="mce-success-response" style="display:none"></div>
+                </div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+                <div style="position: absolute; left: -5000px;"><input type="text" name="b_df8bb543c68230d5f7b4dcf78_9a4589f144" tabindex="-1" value=""></div>
+                <div class="clear"><input type="submit" class="button" value="Sign up" name="subscribe" id="mc-embedded-subscribe"></div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- end newsleter modal -->
+
+
+
+<!-- footer.html -->
+<footer id="footer">
+    <div class="footer-top">
+        <a class="logo" href="https://www.scylladb.com"><img src="../../../_static/img/logo-scylla-horizontal-RGB.svg" alt=""></a>
+        <div class="footer-links">
+            <a class="link" href="https://docs.scylladb.com">Docs</a>
+            <a class="link" href="https://www.scylladb.com/company/contact-us/">Contact Us</a>
+            <a class="link" href="https://www.scylladb.com/company/">About Us</a>
+            <a class="link button" href="https://github.com/scylladb/python-driver/issues/new?title=Issue in page cassandra.cqlengine.models&&body=I%20would%20like%20to%20report%20an%20issue%20in%20page%20http://docs.scylladb.com/_modules/cassandra/cqlengine/models%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix" target="_blank">
+                Report an issue on this page</a>
+        </div>
+        <div class="footer-actions">
+            <a class="link-icon" href="https://github.com/ScyllaDB" target="_blank">
+                <span class="icon-github2"></span></a>
+            <a class="link-icon" href="https://twitter.com/ScyllaDB" target="_blank">
+                <span class="icon-twitter"></span></a>
+            <a class="link-icon" href="https://www.linkedin.com/company/scylladb"  target="_blank">
+                <span class="icon-linkedin2"></span></a>
+            <a class="link-icon" href="https://www.facebook.com/scylladb/" target="_blank">
+                <span class="icon-facebook"></span></a>
+        </div>
+    </div>
+
+    <div class="footer-bottom">
+        <div class="footer-info">
+            <div class="footer-copyright">
+                &#169; 2013-2017 DataStax
+            </div>
+        </div>
+        <div class="footer-links">
+        </div>
+    </div>
+</footer>
+<!-- end footer.html -->
+
+<!-- bodyscripts.html -->
+<!-- at the end of the BODY --> 
+<script src="../../../_static/js/vendor/jquery.js"></script>
+<script src="../../../_static/expertrec.js"></script>
+<script src="../../../_static/js/foundation/foundation.js"></script>
+<script src="../../../_static/js/foundation/foundation.topbar.js"></script>
+<script src="../../../_static/app.js"></script>
+<script>
+    $(document).foundation();
+</script>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+  <!-- end bodyscripts.html -->
+</body>
+</html>
