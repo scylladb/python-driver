@@ -1,6 +1,7 @@
--r ../requirements.txt
-sphinx==1.8.0
+-r ../test-requirements.txt
 sphinx_scylladb_theme==0.1.7
 sphinx-autobuild==0.7.1
-gevent>=1.0
-eventlet
+sphinx-multiversion==0.2.3
+sphinx==2.4.4
+jinja2==2.8.1
+gremlinpython==3.4.7

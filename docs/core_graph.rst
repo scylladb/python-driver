@@ -1,3 +1,5 @@
+:orphan:
+
 DataStax Graph Queries
 ======================
 
@@ -17,7 +19,7 @@ for more detail on working with profiles.
 In DSE 6.8.0, the Core graph engine has been introduced and is now the default. It
 provides a better unified multi-model, performance and scale. This guide
 is for graphs that use the core engine. If you work with previous versions of 
-DSE or existing graphs, see :doc:`classic_graph`.
+DSE or existing graphs, see ``classic_graph``.
 
 Getting Started with Graph and the Core Engine
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -400,11 +402,11 @@ with every UDT or tuple query. In the general case, the driver can't determine w
 is meant by, e.g., an int value, and so it can't serialize the value with the correct type in the schema.
 The driver provides some numerical type-wrapper factories that you can use to specify types:
 
-* :func:`~.to_int`
-* :func:`~.to_bigint`
-* :func:`~.to_smallint`
-* :func:`~.to_float`
-* :func:`~.to_double`
+* :func:`~cassandra.datastax.graph.to_int`
+* :func:`~cassandra.datastax.graph.to_bigint`
+* :func:`~cassandra.datastax.graph.to_smallint`
+* :func:`~cassandra.datastax.graph.to_float`
+* :func:`~cassandra.datastax.graph.to_double`
 
 Here's the working example of the case above::
 
