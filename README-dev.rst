@@ -75,6 +75,19 @@ Run the following command to build the docs.
 
 Once the command completes processing, open http://127.0.0.1:5500/ with your preferred browser.
 
+Building multiple documentation versions
+========================================
+
+Build docs for all the versions.
+
+```
+cd docs
+make multiversion
+```
+ Then, open ``docs/_build/dirhtml/<version>/index.html`` with your preferred browser.
+
+**NOTE:** If you only can see docs generated for the master branch, try to run ``git fetch --tags`` to download the latest tags from remote.
+
 Tests
 =====
 
