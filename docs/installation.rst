@@ -208,10 +208,9 @@ the libev event loop by doing the following:
 
 .. code-block:: python
 
-    >>> from scylla.io.libevreactor import LibevConnection
+    >>> from cassandra.io.libevreactor import LibevConnection
     >>> from scylla.cluster import Cluster
 
     >>> cluster = Cluster()
     >>> cluster.connection_class = LibevConnection
     >>> session = cluster.connect()
-
