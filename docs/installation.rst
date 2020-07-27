@@ -24,7 +24,7 @@ Verifying your Installation
 ---------------------------
 To check if the installation was successful, you can run::
 
-    python -c 'import scylla; print scylla.__version__'
+    python -c 'import cassandra; print cassandra.__version__'
 
 It should print something like "3.22.0".
 
@@ -214,5 +214,4 @@ the libev event loop by doing the following:
     >>> cluster = Cluster()
     >>> cluster.connection_class = LibevConnection
     >>> session = cluster.connect()
-
 
