@@ -232,5 +232,4 @@ the libev event loop by doing the following:
 
 (*Optional*) Configuring SSL
 -----------------------------
-Andrew Mussey has published a thorough guide on
-`Using SSL with the DataStax Python driver <http://blog.amussey.com/post/64036730812/cassandra-2-0-client-server-ssl-with-datastax-python>`_.
+Additional information can be found here: `Using SSL </operating-scylla/security/client_node_encryption/>`_.
