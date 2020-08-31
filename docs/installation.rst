@@ -213,4 +213,7 @@ the libev event loop by doing the following:
     >>> cluster = Cluster()
     >>> cluster.connection_class = LibevConnection
     >>> session = cluster.connect()
+    Additional Resources
+    -----------------------------
     
+    * `SSL Security <https://scylladb.github.io/python-driver/security/#ssl>`_
