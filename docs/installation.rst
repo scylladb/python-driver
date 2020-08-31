@@ -106,7 +106,7 @@ shortcut installed with Visual Studio that sources the appropriate environment a
 Manual Installation
 -------------------
 You can always install the driver directly from a source checkout or tarball.
-When installing manually, ensure the python dependencies are already installed. You can find the list of dependencies on the `requirements.txt page <https://github.com/scylladb/python-driver/blob/master/requirements.txt>`_
+When installing manually, ensure the python dependencies are already installed. You can find the list of dependencies on the `requirements.txt  <https://github.com/scylladb/python-driver/blob/master/requirements.txt>`_ page.
 
 Once the dependencies are installed, simply run::
 
