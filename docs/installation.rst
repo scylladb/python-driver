@@ -107,7 +107,6 @@ Manual Installation
 -------------------
 You can always install the driver directly from a source checkout or tarball.
 When installing manually, ensure the python dependencies are already installed. You can find the list of dependencies on the `requirements.txt page <https://github.com/scylladb/python-driver/blob/master/requirements.txt>`_
-installed. 
 
 Once the dependencies are installed, simply run::
 
