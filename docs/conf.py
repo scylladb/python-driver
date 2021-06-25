@@ -80,6 +80,7 @@ html_theme_options = {
     ('Scylla Cloud', 'https://docs.scylladb.com/scylla-cloud/'),
     ('Scylla University', 'https://university.scylladb.com/'),
     ('ScyllaDB Home', 'https://www.scylladb.com/')],
+    'hide_version_dropdown': ['master'],
     'github_issues_repository': 'scylladb/python-driver',
     'show_sidebar_index': True,
 }
@@ -117,7 +118,7 @@ redirects_file = "_utils/redirections.yaml"
 TAGS = ['3.21.0-scylla', '3.22.0-scylla', '3.22.3-scylla', '3.24.0-scylla', '3.24.1-scylla']
 smv_tag_whitelist = multiversion_regex_builder(TAGS)
 # Whitelist pattern for branches (set to None to ignore all branches)
-BRANCHES = []
+BRANCHES = ['master']
 smv_branch_whitelist = multiversion_regex_builder(BRANCHES)
 # Defines which version is considered to be the latest stable version.
 # Must be listed in smv_tag_whitelist or smv_branch_whitelist.
