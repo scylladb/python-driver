@@ -22,5 +22,7 @@ jobs:
         python-version: 3.7
     - name: Setup Cassandra dependencies
       run: sudo apt-get install gcc python-dev libev4 libev-dev
+    - name: Build driver
+      run: python setup.py develop
     - name: Build docs
       run: make -C docs test
