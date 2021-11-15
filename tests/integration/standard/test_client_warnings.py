@@ -20,18 +20,19 @@ except ImportError:
 
 from cassandra.query import BatchStatement
 
-from tests.integration import use_singledc, PROTOCOL_VERSION, local, TestCluster
+from tests.integration import use_singledc, PROTOCOL_VERSION, local, TestCluster, SCYLLA_VERSION
 
 
 def setup_module():
     use_singledc()
 
 
-@unittest.skip('Failing with scylla')
 class ClientWarningTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        if SCYLLA_VERSION:
+            raise unittest.SkipTest("Failing with scylla")
         if PROTOCOL_VERSION < 4:
             return
 
