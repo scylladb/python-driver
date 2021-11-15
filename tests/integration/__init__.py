@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import os
+import warnings
+
 from cassandra.cluster import Cluster
 
 from tests import connection_class, EVENT_LOOP_MANAGER
@@ -52,6 +54,12 @@ try:
     from ccmlib import common
 except ImportError as e:
     CCMClusterFactory = None
+
+warnings.filterwarnings(
+    action="ignore",
+    category=DeprecationWarning,
+    module="cassandra.io.asyncioreactor",
+)
 
 log = logging.getLogger(__name__)
 
