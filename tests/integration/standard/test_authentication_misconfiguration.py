@@ -14,10 +14,9 @@
 
 import unittest
 
-from tests.integration import USE_CASS_EXTERNAL, use_cluster, TestCluster
+from tests.integration import USE_CASS_EXTERNAL, use_cluster, TestCluster, SCYLLA_VERSION
 
 
-@unittest.skip('Failing with scylla')
 class MisconfiguredAuthenticationTests(unittest.TestCase):
     """ One node (not the contact point) has password auth. The rest of the nodes have no auth """
     # TODO: 	Fix ccm to apply following options to scylla.yaml
@@ -28,6 +27,8 @@ class MisconfiguredAuthenticationTests(unittest.TestCase):
     # To make it working for scylla
     @classmethod
     def setUpClass(cls):
+        if SCYLLA_VERSION:
+            raise unittest.SkipTest("Failing with scylla")
         if not USE_CASS_EXTERNAL:
             ccm_cluster = use_cluster(cls.__name__, [3], start=False)
             node3 = ccm_cluster.nodes['node3']
