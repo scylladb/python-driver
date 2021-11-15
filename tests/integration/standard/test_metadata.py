@@ -42,7 +42,7 @@ from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, exec
                                get_supported_protocol_versions, greaterthancass20,
                                greaterthancass21, assert_startswith, greaterthanorequalcass40,
                                greaterthanorequaldse67, lessthancass40,
-                               TestCluster, DSE_VERSION)
+                               TestCluster, DSE_VERSION, SCYLLA_VERSION)
 
 
 log = logging.getLogger(__name__)
@@ -1677,11 +1677,12 @@ class FunctionMetadata(FunctionTest):
             self.assertRegexpMatches(fn_meta.as_cql_query(), "CREATE FUNCTION.*\) RETURNS NULL ON NULL INPUT RETURNS .*")
 
 
-@unittest.skip('Failing with scylla')
 class AggregateMetadata(FunctionTest):
 
     @classmethod
     def setup_class(cls):
+        if SCYLLA_VERSION:
+            raise unittest.SkipTest("Failing with scylla")
         if PROTOCOL_VERSION >= 4:
             super(AggregateMetadata, cls).setup_class()
 
