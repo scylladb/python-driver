@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import pytest
 
 try:
     import unittest2 as unittest
@@ -734,7 +735,7 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         s.execute(u"SELECT * FROM system.local WHERE key = 'ef\u2052ef'")
         s.execute(u"SELECT * FROM system.local WHERE key = %s", (u"fe\u2051fe",))
 
-    @unittest.skip('Failing with scylla')
+    @pytest.mark.xfail
     def test_can_read_composite_type(self):
         """
         Test to ensure that CompositeTypes can be used in a query

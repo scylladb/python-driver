@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import pytest
 
 try:
     import unittest2 as unittest
@@ -31,6 +31,7 @@ def setup_module():
 #These test rely on the custom payload being returned but by default C*
 #ignores all the payloads.
 @local
+@pytest.mark.cassandra
 class CustomPayloadTests(unittest.TestCase):
 
     def setUp(self):
@@ -45,7 +46,6 @@ class CustomPayloadTests(unittest.TestCase):
 
         self.cluster.shutdown()
 
-    @unittest.skip('Failing with scylla')
     def test_custom_query_basic(self):
         """
         Test to validate that custom payloads work with simple queries
@@ -68,7 +68,6 @@ class CustomPayloadTests(unittest.TestCase):
         # Validate that various types of custom payloads are sent and received okay
         self.validate_various_custom_payloads(statement=statement)
 
-    @unittest.skip('Failing with scylla')
     def test_custom_query_batching(self):
         """
         Test to validate that custom payloads work with batch queries
@@ -93,7 +92,6 @@ class CustomPayloadTests(unittest.TestCase):
         # Validate that various types of custom payloads are sent and received okay
         self.validate_various_custom_payloads(statement=batch)
 
-    @unittest.skip('Failing with scylla')
     def test_custom_query_prepared(self):
         """
         Test to validate that custom payloads work with prepared queries

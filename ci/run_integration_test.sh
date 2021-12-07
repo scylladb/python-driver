@@ -7,7 +7,7 @@ source .test-venv/bin/activate
 pip install -U pip wheel setuptools
 
 # install driver wheel
-pip install --ignore-installed -r test-requirements.txt pytest
+pip install --ignore-installed -r test-requirements.txt
 pip install .
 
 # download awscli

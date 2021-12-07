@@ -16,6 +16,8 @@ import time
 import random
 from subprocess import run
 
+import pytest
+
 try:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 except ImportError:
@@ -164,6 +166,7 @@ class TestShardAwareIntegration(unittest.TestCase):
             for result in as_completed(futures):
                 print(result)
 
+    @pytest.mark.cassandra
     def test_closing_connections(self):
         """
         Verify that reconnection is working as expected, when connection are being closed.
