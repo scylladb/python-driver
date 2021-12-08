@@ -1,5 +1,18 @@
 #! /bin/bash -e
 
+aio_max_nr_recommended_value=1048576
+aio_max_nr=$(cat /proc/sys/fs/aio-max-nr)
+echo "The current aio-max-nr value is $aio_max_nr"
+if (( aio_max_nr ==  aio_max_nr_recommended_value  )); then
+   sudo sh -c  "echo 'fs.aio-max-nr = $aio_max_nr_recommended_value' >> /etc/sysctl.conf"
+   sudo sysctl -p
+   echo "The aio-max-nr was changed from $aio_max_nr to $(cat /proc/sys/fs/aio-max-nr)"
+   if (( $(cat /proc/sys/fs/aio-max-nr) !=  aio_max_nr_recommended_value  )); then
+     echo "The aio-max-nr value was not changed to $aio_max_nr_recommended_value"
+     exit 1
+   fi
+fi
+
 BRANCH='branch-4.6'
 
 python3 -m venv .test-venv
