@@ -19,5 +19,4 @@ jobs:
 
     - name: Test with pytest
       run: |
-        ./ci/run_integration_test.sh tests/integration/standard -m "not cassandra"
-        # can't run this, cause only 2 cpus on github actions: tests/integration/standard/test_shard_aware.py
+        ./ci/run_integration_test.sh
