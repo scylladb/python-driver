@@ -1,6 +1,6 @@
 #! /bin/bash -e
 
-BRANCH='master'
+BRANCH='branch-4.6'
 
 python3 -m venv .test-venv
 source .test-venv/bin/activate
