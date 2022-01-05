@@ -604,21 +604,12 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
                 # , use_single_interface=use_single_interface)
                 CCM_CLUSTER.populate(nodes, ipformat=ipformat)
     try:
-        jvm_args = []
-
-        # This will enable the Mirroring query handler which will echo our custom payload k,v pairs back
-
-        if 'graph' in workloads:
-            jvm_args += ['-Xms1500M', '-Xmx1500M']
-        else:
-            if PROTOCOL_VERSION >= 4 and not SCYLLA_VERSION:
-                jvm_args = [" -Dcassandra.custom_query_handler_class=org.apache.cassandra.cql3.CustomPayloadMirroringQueryHandler"]
         if len(workloads) > 0:
             for node in CCM_CLUSTER.nodes.values():
                 node.set_workloads(workloads)
         if start:
             log.debug("Starting CCM cluster: {0}".format(cluster_name))
-            CCM_CLUSTER.start(jvm_args=jvm_args, wait_for_binary_proto=True)
+            CCM_CLUSTER.start(wait_for_binary_proto=True)
             # Added to wait for slow nodes to start up
             log.debug("Cluster started waiting for binary ports")
             for node in CCM_CLUSTER.nodes.values():
