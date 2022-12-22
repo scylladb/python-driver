@@ -92,7 +92,6 @@ class QuerySetDescriptor(object):
         if model.__abstract__:
             raise CQLEngineException('cannot execute queries against abstract models')
         queryset = model.__queryset__(model)
-        queryset
 
         # if this is a concrete polymorphic model, and the discriminator
         # key is an indexed column, add a filter clause to only return
