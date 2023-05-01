@@ -56,6 +56,21 @@ Contents
 :doc:`scylla-cloud-serverless`
     Connect to ScyllaDB Cloud Serverless
 
+:doc:`column_encryption`
+    Transparent client-side per-column encryption and decryption
+
+:doc:`geo_types`
+    Working with DSE geometry types
+
+:doc:`graph`
+    Graph queries with the Core engine
+
+:doc:`classic_graph`
+    Graph queries with the Classic engine
+
+:doc:`graph_fluent`
+    DataStax Graph Fluent API
+
 :doc:`CHANGELOG`
     Log of changes to the driver, organized by version.
 
