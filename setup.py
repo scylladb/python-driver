@@ -421,11 +421,11 @@ def run_setup(extensions):
         'geomet>=0.1,<0.3',
         'pyyaml > 5.0',
         'six >=1.9',
-        'cryptography>=35.0'
     ]
 
     _EXTRAS_REQUIRE = {
-        'graph': ['gremlinpython==3.4.6']
+        'graph': ['gremlinpython==3.4.6'],
+        'cle': ['cryptography>=35.0']
     }
 
     setup(
@@ -444,7 +444,8 @@ def run_setup(extensions):
         packages=[
             'cassandra', 'cassandra.io', 'cassandra.cqlengine', 'cassandra.graph',
             'cassandra.datastax', 'cassandra.datastax.insights', 'cassandra.datastax.graph',
-            'cassandra.datastax.graph.fluent', 'cassandra.datastax.cloud', 'cassandra.scylla'
+            'cassandra.datastax.graph.fluent', 'cassandra.datastax.cloud', 'cassandra.scylla',
+            'cassandra.column_encryption'
         ],
         keywords='cassandra,cql,orm,dse,graph',
         include_package_data=True,
