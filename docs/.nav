@@ -11,7 +11,7 @@ upgrading
 user_defined_types
 dates-and-times
 cloud
-column_encryption
+column-encryption
 geo_types
 graph
 classic_graph
