@@ -3784,10 +3784,10 @@ class ControlConnection(object):
 
         return True
     
-    # Three functions below (_refresh_schema_async, _refresh_schema_async_inner, _wait_for_schema_agreement_async) are async
-    # versions of the functions without _async in name - instead of blocking and returning result, their first argument
-    # is a callback that will receive either a result or an exception.
-    # Purpose of those functions is to avoid filling whole thread pool and deadlocking.
+    # Three functions below (`_refresh_schema_async`, `_refresh_schema_async_inner`, `_wait_for_schema_agreement_async`)
+    # are async versions of, respectively, `refresh_schema`, `_refresh_schema`, `wait_for_schema_agreement` - instead of
+    # blocking and returning result, their first argument is a callback that will receive either a result or
+    # an exception. Purpose of those functions is to avoid filling whole thread pool and deadlocking.
     def _refresh_schema_async(self, callback, force=False, **kwargs):
         def new_callback(e):
             if isinstance(e, ReferenceError):
@@ -3822,9 +3822,10 @@ class ControlConnection(object):
                 callback(False)
                 return
             self._cluster.metadata.refresh(connection, self._timeout, fetch_size=self._schema_meta_page_size, **kwargs)
+            callback(True)
         
         self._wait_for_schema_agreement_async(new_callback,
-                                                connection=self._connection,
+                                                connection=connection,
                                                 preloaded_results=preloaded_results,
                                                 wait_time=schema_agreement_wait)
 
@@ -3865,7 +3866,6 @@ class ControlConnection(object):
 
             log.debug("[control connection] Waiting for schema agreement")
             start = self._time.time()
-            elapsed = 0
             cl = ConsistencyLevel.ONE
             schema_mismatches = None
             select_peers_query = self._get_peers_query(self.PeersQueryType.PEERS_SCHEMA, connection)
@@ -3875,6 +3875,7 @@ class ControlConnection(object):
             return
 
         def inner(first_iter):
+            nonlocal schema_mismatches, peers_result, local_result
             try:
                 elapsed = self._time.time() - start
                 if elapsed < total_timeout or first_iter:
@@ -3886,10 +3887,10 @@ class ControlConnection(object):
                             peers_query, local_query, timeout=timeout)
                     except OperationTimedOut as timeout:
                         log.debug("[control connection] Timed out waiting for "
-                                    "response during schema agreement check: %s", timeout)
+                                  "response during schema agreement check: %s", timeout)
                         self._cluster.scheduler.schedule_unique(0.2, inner, False)
                         return
-                    except ConnectionShutdown as e:
+                    except ConnectionShutdown:
                         if self._is_shutdown:
                             log.debug("[control connection] Aborting wait for schema match due to shutdown")
                             self._schema_agreement_lock.release()
@@ -4450,15 +4451,18 @@ class _Scheduler(Thread):
 
 
 def refresh_schema_and_set_result(control_conn, response_future, connection, **kwargs):
-    try:
-        log.debug("Refreshing schema in response to schema change. "
-                  "%s", kwargs)
-        response_future.is_schema_agreed = control_conn._refresh_schema(connection, **kwargs)
-    except Exception:
-        log.exception("Exception refreshing schema in response to schema change:")
-        response_future.session.submit(control_conn.refresh_schema, **kwargs)
-    finally:
+    log.debug("Refreshing schema in response to schema change. "
+              "%s", kwargs)
+
+    def callback(result):
+        if isinstance(result, Exception):
+            log.exception("Exception refreshing schema in response to schema change:")
+            response_future.session.submit(control_conn._refresh_schema_async, lambda _: None, **kwargs)
+        else:
+            response_future.is_schema_agreed = result
         response_future._set_final_result(None)
+
+    response_future.session.submit(control_conn._refresh_schema_async_inner, callback, connection, **kwargs)
 
 
 class ResponseFuture(object):
