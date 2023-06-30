@@ -3825,7 +3825,7 @@ class ControlConnection(object):
             callback(True)
         
         self._wait_for_schema_agreement_async(new_callback,
-                                                connection=connection,
+                                                connection=self._connection,
                                                 preloaded_results=preloaded_results,
                                                 wait_time=schema_agreement_wait)
 
