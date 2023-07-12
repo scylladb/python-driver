@@ -3558,7 +3558,6 @@ class ControlConnection(object):
         self._schema_meta_page_size = schema_meta_page_size
 
         self._lock = RLock()
-        self._schema_agreement_lock = Lock()
 
         self._reconnection_handler = None
         self._reconnection_lock = RLock()
@@ -3835,18 +3834,9 @@ class ControlConnection(object):
         if total_timeout <= 0:
             callback(True)
             return
-
-        # Each schema change typically generates two schema refreshes, one
-        # from the response type and one from the pushed notification. Holding
-        # a lock is just a simple way to cut down on the number of schema queries
-        # we'll make.
-        if not self._schema_agreement_lock.acquire(blocking=False):
-            self._cluster.scheduler.schedule_unique(0.2, self._wait_for_schema_agreement_async, callback, connection, preloaded_results, wait_time)
-            return
         
         try:
             if self._is_shutdown:
-                self._schema_agreement_lock.release()
                 callback(None)
                 return
 
@@ -3860,7 +3850,6 @@ class ControlConnection(object):
                 local_result = preloaded_results[1]
                 schema_mismatches = self._get_schema_mismatches(peers_result, local_result, connection.endpoint)
                 if schema_mismatches is None:
-                    self._schema_agreement_lock.release()
                     callback(True)
                     return
 
@@ -3870,7 +3859,6 @@ class ControlConnection(object):
             schema_mismatches = None
             select_peers_query = self._get_peers_query(self.PeersQueryType.PEERS_SCHEMA, connection)
         except Exception as e:
-            self._schema_agreement_lock.release()
             callback(e)
             return
 
@@ -3893,7 +3881,6 @@ class ControlConnection(object):
                     except ConnectionShutdown:
                         if self._is_shutdown:
                             log.debug("[control connection] Aborting wait for schema match due to shutdown")
-                            self._schema_agreement_lock.release()
                             callback(None)
                             return
                         else:
@@ -3901,7 +3888,6 @@ class ControlConnection(object):
 
                     schema_mismatches = self._get_schema_mismatches(peers_result, local_result, connection.endpoint)
                     if schema_mismatches is None:
-                        self._schema_agreement_lock.release()
                         callback(True)
                         return
 
@@ -3910,10 +3896,8 @@ class ControlConnection(object):
                 else:
                     log.warning("Node %s is reporting a schema disagreement: %s",
                                 connection.endpoint, schema_mismatches)
-                    self._schema_agreement_lock.release()
                     callback(False)
             except Exception as e:
-                self._schema_agreement_lock.release()
                 callback(e)
         inner(True)
 
@@ -4180,63 +4164,58 @@ class ControlConnection(object):
         if total_timeout <= 0:
             return True
 
-        # Each schema change typically generates two schema refreshes, one
-        # from the response type and one from the pushed notification. Holding
-        # a lock is just a simple way to cut down on the number of schema queries
-        # we'll make.
-        with self._schema_agreement_lock:
-            if self._is_shutdown:
-                return
+        if self._is_shutdown:
+            return
 
-            if not connection:
-                connection = self._connection
+        if not connection:
+            connection = self._connection
 
-            if preloaded_results:
-                log.debug("[control connection] Attempting to use preloaded results for schema agreement")
+        if preloaded_results:
+            log.debug("[control connection] Attempting to use preloaded results for schema agreement")
 
-                peers_result = preloaded_results[0]
-                local_result = preloaded_results[1]
-                schema_mismatches = self._get_schema_mismatches(peers_result, local_result, connection.endpoint)
-                if schema_mismatches is None:
-                    return True
+            peers_result = preloaded_results[0]
+            local_result = preloaded_results[1]
+            schema_mismatches = self._get_schema_mismatches(peers_result, local_result, connection.endpoint)
+            if schema_mismatches is None:
+                return True
 
-            log.debug("[control connection] Waiting for schema agreement")
-            start = self._time.time()
-            elapsed = 0
-            cl = ConsistencyLevel.ONE
-            schema_mismatches = None
-            select_peers_query = self._get_peers_query(self.PeersQueryType.PEERS_SCHEMA, connection)
+        log.debug("[control connection] Waiting for schema agreement")
+        start = self._time.time()
+        elapsed = 0
+        cl = ConsistencyLevel.ONE
+        schema_mismatches = None
+        select_peers_query = self._get_peers_query(self.PeersQueryType.PEERS_SCHEMA, connection)
 
-            while elapsed < total_timeout:
-                peers_query = QueryMessage(query=select_peers_query, consistency_level=cl)
-                local_query = QueryMessage(query=self._SELECT_SCHEMA_LOCAL, consistency_level=cl)
-                try:
-                    timeout = min(self._timeout, total_timeout - elapsed)
-                    peers_result, local_result = connection.wait_for_responses(
-                        peers_query, local_query, timeout=timeout)
-                except OperationTimedOut as timeout:
-                    log.debug("[control connection] Timed out waiting for "
-                              "response during schema agreement check: %s", timeout)
-                    elapsed = self._time.time() - start
-                    continue
-                except ConnectionShutdown:
-                    if self._is_shutdown:
-                        log.debug("[control connection] Aborting wait for schema match due to shutdown")
-                        return None
-                    else:
-                        raise
-
-                schema_mismatches = self._get_schema_mismatches(peers_result, local_result, connection.endpoint)
-                if schema_mismatches is None:
-                    return True
-
-                log.debug("[control connection] Schemas mismatched, trying again")
-                self._time.sleep(0.2)
+        while elapsed < total_timeout:
+            peers_query = QueryMessage(query=select_peers_query, consistency_level=cl)
+            local_query = QueryMessage(query=self._SELECT_SCHEMA_LOCAL, consistency_level=cl)
+            try:
+                timeout = min(self._timeout, total_timeout - elapsed)
+                peers_result, local_result = connection.wait_for_responses(
+                    peers_query, local_query, timeout=timeout)
+            except OperationTimedOut as timeout:
+                log.debug("[control connection] Timed out waiting for "
+                          "response during schema agreement check: %s", timeout)
                 elapsed = self._time.time() - start
+                continue
+            except ConnectionShutdown:
+                if self._is_shutdown:
+                    log.debug("[control connection] Aborting wait for schema match due to shutdown")
+                    return None
+                else:
+                    raise
 
-            log.warning("Node %s is reporting a schema disagreement: %s",
-                        connection.endpoint, schema_mismatches)
-            return False
+            schema_mismatches = self._get_schema_mismatches(peers_result, local_result, connection.endpoint)
+            if schema_mismatches is None:
+                return True
+
+            log.debug("[control connection] Schemas mismatched, trying again")
+            self._time.sleep(0.2)
+            elapsed = self._time.time() - start
+
+        log.warning("Node %s is reporting a schema disagreement: %s",
+                    connection.endpoint, schema_mismatches)
+        return False
 
     def _get_schema_mismatches(self, peers_result, local_result, local_address):
         peers_result = dict_factory(peers_result.column_names, peers_result.parsed_rows)
