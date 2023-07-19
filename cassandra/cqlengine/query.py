@@ -1070,7 +1070,7 @@ class SimpleQuerySet(AbstractQuerySet):
         """
         return ResultObject
 
-T = TypeVar('T', 'ModelQuerySet')
+T = TypeVar('T', bound=ModelQuerySet)
 
 class ModelQuerySet(AbstractQuerySet):
     """
