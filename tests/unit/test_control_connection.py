@@ -11,17 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import asyncio
 import unittest
+from threading import Thread
+from types import MethodType
 
 import six
 
-from concurrent.futures import ThreadPoolExecutor
-from mock import Mock, ANY, call
+from concurrent.futures import ThreadPoolExecutor, Future
+from mock import Mock, ANY, call, patch
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
-from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
+from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile, \
+    Cluster
 from cassandra.pool import Host
 from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
@@ -102,12 +105,32 @@ class MockCluster(object):
     down_host = None
     contact_points = []
     is_shutdown = False
+    _loop_bg_tasks = set()
 
     def __init__(self):
+        self._run_event_loop = MethodType(Cluster._run_event_loop, self)
+        self.register_background_loop_future = MethodType(Cluster.register_background_loop_future, self)
+        self.assert_not_in_self_loop = MethodType(Cluster.assert_not_in_self_loop, self)
+        self.spawn_delayed_coroutine_task = Mock(wraps=MethodType(Cluster.spawn_delayed_coroutine_task, self))
+        self.spawn_coroutine_task = Mock(wraps=MethodType(Cluster.spawn_coroutine_task, self))
+
         self.metadata = MockMetadata()
         self.added_hosts = []
         self.scheduler = Mock(spec=_Scheduler)
         self.executor = Mock(spec=ThreadPoolExecutor)
+
+        def fake_submit(fn, **args):
+            future = Future()
+            try:
+                result = fn(*args)
+                future.set_result(result)
+            except Exception as e:
+                future.set_exception(e)
+            return future
+        self.executor.submit = Mock(side_effect=fake_submit)
+        self.loop = asyncio.new_event_loop()
+        self._loop_thread = Thread(name='test_event_loop', target=self._run_event_loop)
+        self._loop_thread.start()
         self.profile_manager.profiles[EXEC_PROFILE_DEFAULT] = ExecutionProfile(RoundRobinPolicy())
         self.endpoint_factory = DefaultEndPointFactory().configure(self)
         self.ssl_options = None
@@ -126,6 +149,10 @@ class MockCluster(object):
 
     def on_down(self, host, is_host_addition, expect_host_to_be_down=False):
         self.down_host = host
+
+    def shutdown(self):
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self._loop_thread.join()
 
 
 def _node_meta_results(local_results, peer_results):
@@ -180,6 +207,9 @@ class FakeTime(object):
     def sleep(self, amount):
         self.clock += amount
 
+    async def sleep_async(self, amount):
+        self.clock += amount
+
 
 class ControlConnectionTest(unittest.TestCase):
 
@@ -204,7 +234,17 @@ class ControlConnectionTest(unittest.TestCase):
 
         self.control_connection = ControlConnection(self.cluster, 1, 0, 0, 0)
         self.control_connection._connection = self.connection
-        self.control_connection._time = self.time
+
+        self.patch_time = patch('time.time', new=self.time.time)
+        self.patch_sleep = patch('asyncio.sleep', new=self.time.sleep_async)
+
+        self.patch_time.start()
+        self.patch_sleep.start()
+
+    def tearDown(self) -> None:
+        self.patch_time.stop()
+        self.patch_sleep.stop()
+        self.cluster.shutdown()
 
     def test_wait_for_schema_agreement(self):
         """
@@ -510,18 +550,21 @@ class ControlConnectionTest(unittest.TestCase):
                 'keyspace': 'ks1',
                 'table': 'table1'
             }
-            self.cluster.scheduler.reset_mock()
+            self.cluster.spawn_delayed_coroutine_task.reset_mock()
             self.control_connection._handle_schema_change(event)
-            self.cluster.scheduler.schedule_unique.assert_called_once_with(ANY, self.control_connection.refresh_schema, **event)
+            self.cluster.spawn_delayed_coroutine_task.assert_called_once_with(ANY, self.control_connection._refresh_schema_async, **event)
 
-            self.cluster.scheduler.reset_mock()
+            self.cluster.spawn_delayed_coroutine_task.reset_mock()
             event['target_type'] = SchemaTargetType.KEYSPACE
             del event['table']
             self.control_connection._handle_schema_change(event)
-            self.cluster.scheduler.schedule_unique.assert_called_once_with(ANY, self.control_connection.refresh_schema, **event)
+            self.cluster.spawn_delayed_coroutine_task.assert_called_once_with(ANY, self.control_connection._refresh_schema_async, **event)
 
     def test_refresh_disabled(self):
+        # Make time non-zero - this is assumed by this test
+        self.time.sleep(1)
         cluster = MockCluster()
+        self.addCleanup(cluster.shutdown)
 
         schema_event = {
             'target_type': SchemaTargetType.TABLE,
@@ -542,11 +585,12 @@ class ControlConnectionTest(unittest.TestCase):
 
         cc_no_schema_refresh = ControlConnection(cluster, 1, -1, 0, 0)
         cluster.scheduler.reset_mock()
+        cluster.spawn_delayed_coroutine_task.reset_mock()
 
         # no call on schema refresh
         cc_no_schema_refresh._handle_schema_change(schema_event)
-        self.assertFalse(cluster.scheduler.schedule.called)
-        self.assertFalse(cluster.scheduler.schedule_unique.called)
+        self.assertFalse(cluster.spawn_delayed_coroutine_task.called)
+        self.assertFalse(cluster.spawn_delayed_coroutine_task.called)
 
         # topo and status changes as normal
         cc_no_schema_refresh._handle_status_change(status_event)
@@ -556,6 +600,7 @@ class ControlConnectionTest(unittest.TestCase):
 
         cc_no_topo_refresh = ControlConnection(cluster, 1, 0, -1, 0)
         cluster.scheduler.reset_mock()
+        cluster.spawn_delayed_coroutine_task.reset_mock()
 
         # no call on topo refresh
         cc_no_topo_refresh._handle_topology_change(topo_event)
@@ -565,9 +610,10 @@ class ControlConnectionTest(unittest.TestCase):
         # schema and status change refresh as normal
         cc_no_topo_refresh._handle_status_change(status_event)
         cc_no_topo_refresh._handle_schema_change(schema_event)
-        cluster.scheduler.schedule_unique.assert_has_calls([call(ANY, cc_no_topo_refresh.refresh_node_list_and_token_map),
-                                                            call(0.0, cc_no_topo_refresh.refresh_schema,
-                                                                 **schema_event)])
+        cluster.scheduler.schedule_unique.assert_called_once_with(ANY,
+                                                                  cc_no_topo_refresh.refresh_node_list_and_token_map)
+        cluster.spawn_delayed_coroutine_task.assert_called_once_with(0.0, cc_no_topo_refresh._refresh_schema_async,
+                                                                     **schema_event),
 
     def test_refresh_nodes_and_tokens_add_host_detects_port(self):
         del self.connection.peer_results[:]
@@ -617,13 +663,25 @@ class EventTimingTest(unittest.TestCase):
     """
     def setUp(self):
         self.cluster = MockCluster()
+        # This test assumes that scheduled tasks are not actually executed
+        self.cluster.spawn_delayed_coroutine_task = Mock()
         self.connection = MockConnection()
         self.time = FakeTime()
 
         # Use 2 for the schema_event_refresh_window which is what we would normally default to.
         self.control_connection = ControlConnection(self.cluster, 1, 2, 0, 0)
         self.control_connection._connection = self.connection
-        self.control_connection._time = self.time
+
+        self.patch_time = patch('time.time', new=self.time.time)
+        self.patch_sleep = patch('asyncio.sleep', new=self.time.sleep_async)
+
+        self.patch_time.start()
+        self.patch_sleep.start()
+
+    def tearDown(self) -> None:
+        self.cluster.shutdown()
+        self.patch_time.stop()
+        self.patch_sleep.stop()
 
     def test_event_delay_timing(self):
         """
@@ -639,10 +697,9 @@ class EventTimingTest(unittest.TestCase):
                 }
                 # This is to increment the fake time, we don't actually sleep here.
                 self.time.sleep(.001)
-                self.cluster.scheduler.reset_mock()
+                self.cluster.spawn_delayed_coroutine_task.reset_mock()
                 self.control_connection._handle_schema_change(event)
-                self.cluster.scheduler.mock_calls
-                # Grabs the delay parameter from the scheduler invocation
-                current_delay = self.cluster.scheduler.mock_calls[0][1][0]
+                # Grabs the delay parameter from the event loop invocation
+                current_delay = self.cluster.spawn_delayed_coroutine_task.mock_calls[0][1][0]
                 self.assertLess(prior_delay, current_delay)
                 prior_delay = current_delay

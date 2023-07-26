@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from __future__ import with_statement
+import asyncio
 import calendar
 import datetime
 from functools import total_ordering
@@ -2037,3 +2038,8 @@ class Version(object):
                 (is_major_ge and is_minor_ge and is_patch_ge and is_build_gt) or
                 (is_major_ge and is_minor_ge and is_patch_ge and is_build_ge and is_prerelease_gt)
                 )
+
+
+async def coroutine_delay(delay, coroutine):
+    await asyncio.sleep(delay)
+    return await coroutine

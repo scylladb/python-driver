@@ -18,6 +18,7 @@ This module houses the main classes you will interact with,
 """
 from __future__ import absolute_import
 
+import asyncio
 import atexit
 from binascii import hexlify
 from collections import defaultdict
@@ -81,7 +82,7 @@ from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
 from cassandra.marshal import int64_pack
 from cassandra.timestamps import MonotonicTimestampGenerator
 from cassandra.compat import Mapping
-from cassandra.util import _resolve_contact_points_to_string_map, Version
+from cassandra.util import _resolve_contact_points_to_string_map, Version, coroutine_delay
 
 from cassandra.datastax.insights.reporter import MonitorReporter
 from cassandra.datastax.insights.util import version_supports_insights
@@ -1081,7 +1082,10 @@ class Cluster(object):
     control_connection = None
     scheduler = None
     executor = None
+    loop = None
     is_shutdown = False
+    _loop_thread = None
+    _loop_bg_tasks = set()
     _is_setup = False
     _prepared_statements = None
     _prepared_statement_lock = None
@@ -1406,6 +1410,9 @@ class Cluster(object):
 
         self.executor = self._create_thread_pool_executor(max_workers=executor_threads)
         self.scheduler = _Scheduler(self.executor)
+        self.loop = asyncio.new_event_loop()
+        self._loop_thread = Thread(name=f'cluster_{id(self)}_eventloop', target=self._run_event_loop, daemon=True)
+        self._loop_thread.start()
 
         self._lock = RLock()
 
@@ -1462,6 +1469,15 @@ class Cluster(object):
                          "for more details."))
 
         return tpe_class(**kwargs)
+
+    def _run_event_loop(self):
+        self.loop.set_default_executor(self.executor)
+        asyncio.set_event_loop(self.loop)
+        try:
+            self.loop.run_forever()
+        finally:
+            self.loop.run_until_complete(self.loop.shutdown_asyncgens())
+            self.loop.close()
 
     def register_user_type(self, keyspace, user_type, klass):
         """
@@ -1832,6 +1848,10 @@ class Cluster(object):
 
         if self._idle_heartbeat:
             self._idle_heartbeat.stop()
+
+        self.loop.call_soon_threadsafe(self.loop.stop)
+
+        self._loop_thread.join()
 
         self.scheduler.shutdown()
 
@@ -2380,6 +2400,28 @@ class Cluster(object):
     def add_prepared(self, query_id, prepared_statement):
         with self._prepared_statement_lock:
             self._prepared_statements[query_id] = prepared_statement
+
+    def assert_not_in_self_loop(self):
+        try:
+            assert asyncio.get_running_loop() != self.loop
+        except RuntimeError:
+            return
+
+    # Required because asyncio only holds weak references to tasks
+    def register_background_loop_future(self, future):
+        self._loop_bg_tasks.add(future)
+        future.add_done_callback(self._loop_bg_tasks.discard)
+
+    def spawn_delayed_coroutine_task(self, delay, fn, *args, **kwargs):
+        self.assert_not_in_self_loop()
+        if delay > 0:
+            coro = coroutine_delay(delay, fn(*args, **kwargs))
+        else:
+            coro = fn(*args, **kwargs)
+        return asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+    def spawn_coroutine_task(self, fn, *args, **kwargs):
+        return self.spawn_delayed_coroutine_task(0,  fn, *args, **kwargs)
 
 
 class Session(object):
@@ -3534,9 +3576,6 @@ class ControlConnection(object):
 
     _uses_peers_v2 = True
 
-    # for testing purposes
-    _time = time
-
     def __init__(self, cluster, timeout,
                  schema_event_refresh_window,
                  topology_event_refresh_window,
@@ -3558,7 +3597,12 @@ class ControlConnection(object):
         self._schema_meta_page_size = schema_meta_page_size
 
         self._lock = RLock()
-        self._schema_agreement_lock = Lock()
+
+        # Ugly workaround for Python < 3.10, because it binds Lock to Event Loop on creation,
+        # instead of first usage.
+        async def create_lock():
+            return asyncio.Lock()
+        self._schema_agreement_lock = asyncio.run_coroutine_threadsafe(create_lock(), self._cluster.loop).result()
 
         self._reconnection_handler = None
         self._reconnection_lock = RLock()
@@ -3678,7 +3722,7 @@ class ControlConnection(object):
 
             shared_results = (peers_result, local_result)
             self._refresh_node_list_and_token_map(connection, preloaded_results=shared_results)
-            self._refresh_schema(connection, preloaded_results=shared_results, schema_agreement_wait=-1)
+            self._internal_refresh_schema(connection, preloaded_results=shared_results, schema_agreement_wait=-1)
         except Exception:
             connection.close()
             raise
@@ -3754,9 +3798,12 @@ class ControlConnection(object):
                 self._connection = None
 
     def refresh_schema(self, force=False, **kwargs):
+        return self._cluster.spawn_coroutine_task(self._refresh_schema_async, force, **kwargs).result()
+
+    async def _refresh_schema_async(self, force=False, **kwargs):
         try:
             if self._connection:
-                return self._refresh_schema(self._connection, force=force, **kwargs)
+                return await self._internal_refresh_schema_async(self._connection, force=force, **kwargs)
         except ReferenceError:
             pass  # our weak reference to the Cluster is no good
         except Exception:
@@ -3764,13 +3811,19 @@ class ControlConnection(object):
             self._signal_error()
         return False
 
-    def _refresh_schema(self, connection, preloaded_results=None, schema_agreement_wait=None, force=False, **kwargs):
+    def _internal_refresh_schema(self, connection, preloaded_results=None, schema_agreement_wait=None, force=False,
+                                 **kwargs):
+        return self._cluster.spawn_coroutine_task(self._internal_refresh_schema_async, connection, preloaded_results,
+                                           schema_agreement_wait, force, **kwargs).result()
+
+    async def _internal_refresh_schema_async(self, connection, preloaded_results=None, schema_agreement_wait=None,
+                                             force=False, **kwargs):
         if self._cluster.is_shutdown:
             return False
 
-        agreed = self.wait_for_schema_agreement(connection,
-                                                preloaded_results=preloaded_results,
-                                                wait_time=schema_agreement_wait)
+        agreed = await self._wait_for_schema_agreement_async(connection,
+                                                             preloaded_results=preloaded_results,
+                                                             wait_time=schema_agreement_wait)
 
         if not self._schema_meta_enabled and not force:
             log.debug("[control connection] Skipping schema refresh because schema metadata is disabled")
@@ -3780,7 +3833,9 @@ class ControlConnection(object):
             log.debug("Skipping schema refresh due to lack of schema agreement")
             return False
 
-        self._cluster.metadata.refresh(connection, self._timeout, fetch_size=self._schema_meta_page_size, **kwargs)
+        await self._cluster.loop.run_in_executor(None,
+                                                 partial(self._cluster.metadata.refresh, connection, self._timeout,
+                                                         fetch_size=self._schema_meta_page_size, **kwargs))
 
         return True
 
@@ -3986,7 +4041,7 @@ class ControlConnection(object):
         # this serves to order processing correlated events (received within the window)
         # the window and randomization still have the desired effect of skew across client instances
         next_time = self._event_schedule_times.get(event_type, 0)
-        now = self._time.time()
+        now = time.time()
         if now <= next_time:
             this_time = next_time + 0.01
             delay = this_time - now
@@ -4039,10 +4094,14 @@ class ControlConnection(object):
         if self._schema_event_refresh_window < 0:
             return
         delay = self._delay_for_event_type('schema_change', self._schema_event_refresh_window)
-        self._cluster.scheduler.schedule_unique(delay, self.refresh_schema, **event)
+        task = self._cluster.spawn_delayed_coroutine_task(delay, self._refresh_schema_async, **event)
+        self._cluster.register_background_loop_future(task)
 
     def wait_for_schema_agreement(self, connection=None, preloaded_results=None, wait_time=None):
+        return self._cluster.spawn_coroutine_task(self._wait_for_schema_agreement_async, connection, preloaded_results,
+                                           wait_time).result()
 
+    async def _wait_for_schema_agreement_async(self, connection=None, preloaded_results=None, wait_time=None):
         total_timeout = wait_time if wait_time is not None else self._cluster.max_schema_agreement_wait
         if total_timeout <= 0:
             return True
@@ -4051,7 +4110,7 @@ class ControlConnection(object):
         # from the response type and one from the pushed notification. Holding
         # a lock is just a simple way to cut down on the number of schema queries
         # we'll make.
-        with self._schema_agreement_lock:
+        async with self._schema_agreement_lock:
             if self._is_shutdown:
                 return
 
@@ -4068,7 +4127,7 @@ class ControlConnection(object):
                     return True
 
             log.debug("[control connection] Waiting for schema agreement")
-            start = self._time.time()
+            start = time.time()
             elapsed = 0
             cl = ConsistencyLevel.ONE
             schema_mismatches = None
@@ -4079,12 +4138,12 @@ class ControlConnection(object):
                 local_query = QueryMessage(query=self._SELECT_SCHEMA_LOCAL, consistency_level=cl)
                 try:
                     timeout = min(self._timeout, total_timeout - elapsed)
-                    peers_result, local_result = connection.wait_for_responses(
-                        peers_query, local_query, timeout=timeout)
+                    peers_result, local_result = await self._cluster.loop.run_in_executor(None, partial(
+                        connection.wait_for_responses, peers_query, local_query, timeout=timeout))
                 except OperationTimedOut as timeout:
                     log.debug("[control connection] Timed out waiting for "
                               "response during schema agreement check: %s", timeout)
-                    elapsed = self._time.time() - start
+                    elapsed = time.time() - start
                     continue
                 except ConnectionShutdown:
                     if self._is_shutdown:
@@ -4098,8 +4157,8 @@ class ControlConnection(object):
                     return True
 
                 log.debug("[control connection] Schemas mismatched, trying again")
-                self._time.sleep(0.2)
-                elapsed = self._time.time() - start
+                await asyncio.sleep(0.2)
+                elapsed = time.time() - start
 
             log.warning("Node %s is reporting a schema disagreement: %s",
                         connection.endpoint, schema_mismatches)
@@ -4317,14 +4376,15 @@ class _Scheduler(Thread):
                 exc_info=exc)
 
 
-def refresh_schema_and_set_result(control_conn, response_future, connection, **kwargs):
+async def refresh_schema_and_set_result(control_conn, response_future, connection, **kwargs):
     try:
         log.debug("Refreshing schema in response to schema change. "
                   "%s", kwargs)
-        response_future.is_schema_agreed = control_conn._refresh_schema(connection, **kwargs)
+        response_future.is_schema_agreed = await control_conn._internal_refresh_schema_async(connection, **kwargs)
     except Exception:
         log.exception("Exception refreshing schema in response to schema change:")
-        response_future.session.submit(control_conn.refresh_schema, **kwargs)
+        task = asyncio.create_task(control_conn._refresh_schema_async(**kwargs))
+        response_future.session.cluster.register_background_loop_future(task)
     finally:
         response_future._set_final_result(None)
 
@@ -4707,10 +4767,11 @@ class ResponseFuture(object):
                     # refresh the schema before responding, but do it in another
                     # thread instead of the event loop thread
                     self.is_schema_agreed = False
-                    self.session.submit(
-                        refresh_schema_and_set_result,
-                        self.session.cluster.control_connection,
-                        self, connection, **response.schema_change_event)
+                    task = self.session.cluster.spawn_coroutine_task(refresh_schema_and_set_result,
+                                                                             self.session.cluster.control_connection,
+                                                                             self, connection,
+                                                                             **response.schema_change_event)
+                    self.session.cluster.register_background_loop_future(task)
                 elif response.kind == RESULT_KIND_ROWS:
                     self._paging_state = response.paging_state
                     self._col_names = response.column_names

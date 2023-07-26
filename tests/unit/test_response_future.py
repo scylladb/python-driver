@@ -119,7 +119,7 @@ class ResponseFutureTests(unittest.TestCase):
                       schema_change_event=event_results)
         connection = Mock()
         rf._set_result(None, connection, None, result)
-        session.submit.assert_called_once_with(ANY, ANY, rf, connection, **event_results)
+        session.cluster.spawn_coroutine_task.assert_called_once_with(ANY, ANY, rf, connection, **event_results)
 
     def test_other_result_message_kind(self):
         session = self.make_session()
