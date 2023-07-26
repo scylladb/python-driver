@@ -3,7 +3,7 @@ Installation
 
 Supported Platforms
 -------------------
-Python 2.7, 3.5, 3.6, 3.7 and 3.8 are supported. Both CPython (the standard Python
+Python versions 3.6-3.11 are supported. Both CPython (the standard Python
 implementation) and `PyPy <http://pypy.org>`_ are supported and tested.
 
 Linux, OSX, and Windows are supported.
@@ -188,7 +188,7 @@ If your sudo configuration does not allow SETENV, you must push the option flag 
 applies these options to all dependencies (which break on the custom flag). Therefore, you must first install
 dependencies, then use install-option::
 
-    sudo pip install six futures
+    sudo pip install futures
     sudo pip install --install-option="--no-cython"
 
 
