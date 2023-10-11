@@ -1509,7 +1509,7 @@ class Connection(object):
         query = QueryMessage(query='USE "%s"' % (keyspace,),
                              consistency_level=ConsistencyLevel.ONE)
         try:
-            result = self.wait_for_response(query)
+            result = self.wait_for_response(query, timeout=self.connect_timeout)
         except InvalidRequestException as ire:
             # the keyspace probably doesn't exist
             raise ire.to_exception()
