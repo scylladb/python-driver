@@ -735,6 +735,7 @@ class OperationType(Enum):
     Read = 0
     Write = 1
 
+
 class RateLimitReached(ConfigurationException):
     '''
     Rate limit was exceeded for a partition affected by the request.
@@ -747,3 +748,20 @@ class RateLimitReached(ConfigurationException):
         self.rejected_by_coordinator = rejected_by_coordinator
         message = f"[request_error_rate_limit_reached OpType={op_type.name} RejectedByCoordinator={rejected_by_coordinator}]"
         Exception.__init__(self, message)
+
+
+class DependencyException(Exception):
+    """
+    Specific exception class for handling issues with driver dependencies
+    """
+
+    excs = []
+    """
+    A sequence of child exceptions
+    """
+
+    def __init__(self, msg, excs=[]):
+        complete_msg = msg
+        if excs:
+            complete_msg += ("The following exceptions were observed: \n" + '\n'.join(str(e) for e in excs))
+        Exception.__init__(self, complete_msg)
