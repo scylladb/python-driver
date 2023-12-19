@@ -1,6 +1,7 @@
 -r requirements.txt
 scales
 pytest
+pynose
 mock>1.1
 pytz
 sure
