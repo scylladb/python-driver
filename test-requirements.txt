@@ -11,6 +11,6 @@ gevent==23.9.0; python_version < '3.13' and (platform_machine == 'i686' or platf
 eventlet>=0.33.3; python_version < '3.13'
 cython>=0.20,<0.30
 packaging
-futurist; python_version >= '3.7'
+futurist
 asynctest
 pyyaml
