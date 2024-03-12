@@ -116,7 +116,8 @@ class AsyncioConnection(Connection):
                 cls._loop = None
             if cls._loop is None:
                 try:
-                    cls._loop = asyncio.get_running_loop()
+                    cls._loop = asyncio.get_running_loop() # Return the running event loop in the current OS thread.
+                    cls._loop_thread = threading.current_thread() # set _loop_thread  as loop already running in current OS thread
                 except RuntimeError:
                     cls._loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(cls._loop)
