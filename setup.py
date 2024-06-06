@@ -401,8 +401,7 @@ def run_setup(extensions):
         else:
             sys.stderr.write("Bypassing Cython setup requirement\n")
 
-    dependencies = ['six >=1.9',
-                    'geomet>=0.1,<0.3',
+    dependencies = ['geomet>=0.1,<0.3',
                     'pyyaml > 5.0']
 
     _EXTRAS_REQUIRE = {
@@ -441,8 +440,11 @@ def run_setup(extensions):
             'Natural Language :: English',
             'Operating System :: OS Independent',
             'Programming Language :: Python',
-            'Programming Language :: Python :: 3.7',
             'Programming Language :: Python :: 3.8',
+            'Programming Language :: Python :: 3.9',
+            'Programming Language :: Python :: 3.10',
+            'Programming Language :: Python :: 3.11',
+            'Programming Language :: Python :: 3.12',
             'Programming Language :: Python :: Implementation :: CPython',
             'Programming Language :: Python :: Implementation :: PyPy',
             'Topic :: Software Development :: Libraries :: Python Modules'

@@ -10,7 +10,7 @@ Scylla Enterprise (2018.1.x+) using exclusively Cassandra's binary protocol and 
 .. image:: https://github.com/scylladb/python-driver/workflows/CI%20Docs/badge.svg?tag=*-scylla
    :target: https://github.com/scylladb/python-driver/actions?query=workflow%3A%22CI+Docs%22+event%3Apush+branch%3A*-scylla
 
-The driver supports Python versions 3.6-3.12.
+The driver supports Python 3.8 through 3.12.
 
 .. **Note:** This driver does not support big-endian systems.
 
@@ -67,7 +67,7 @@ Contributing
 See `CONTRIBUTING <https://github.com/scylladb/python-driver/blob/master/CONTRIBUTING.rst>`_.
 
 Error Handling
-------------
+--------------
 While originally written for the Java driver, users may reference the `Cassandra error handling done right blog <https://www.datastax.com/blog/cassandra-error-handling-done-right>`_ for resolving error handling scenarios with Apache Cassandra.
 
 Reporting Problems

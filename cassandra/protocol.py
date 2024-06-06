@@ -18,8 +18,6 @@ import logging
 import socket
 from uuid import UUID
 
-import six
-from six.moves import range
 import io
 
 from cassandra import OperationType, ProtocolVersion
@@ -86,8 +84,7 @@ class _RegisterMessageType(type):
             register_class(cls)
 
 
-@six.add_metaclass(_RegisterMessageType)
-class _MessageType(object):
+class _MessageType(object, metaclass=_RegisterMessageType):
 
     tracing = False
     custom_payload = None
@@ -140,8 +137,6 @@ class ErrorMessage(_MessageType, Exception):
     def summary_msg(self):
         msg = 'Error from server: code=%04x [%s] message="%s"' \
               % (self.code, self.summary, self.message)
-        if six.PY2 and isinstance(msg, six.text_type):
-            msg = msg.encode('utf-8')
         return msg
 
     def __str__(self):
@@ -162,8 +157,7 @@ class ErrorMessageSubclass(_RegisterMessageType):
             error_classes[cls.error_code] = cls
 
 
-@six.add_metaclass(ErrorMessageSubclass)
-class ErrorMessageSub(ErrorMessage):
+class ErrorMessageSub(ErrorMessage, metaclass=ErrorMessageSubclass):
     error_code = None
 
 
@@ -1374,7 +1368,7 @@ def read_binary_string(f):
 
 
 def write_string(f, s):
-    if isinstance(s, six.text_type):
+    if isinstance(s, str):
         s = s.encode('utf8')
     write_short(f, len(s))
     f.write(s)
@@ -1391,7 +1385,7 @@ def read_longstring(f):
 
 
 def write_longstring(f, s):
-    if isinstance(s, six.text_type):
+    if isinstance(s, str):
         s = s.encode('utf8')
     write_int(f, len(s))
     f.write(s)
