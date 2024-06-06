@@ -42,7 +42,6 @@ from cassandra.query import dict_factory, bind_params
 from cassandra.util import OrderedDict, Version
 from cassandra.pool import HostDistance
 from cassandra.connection import EndPoint
-from cassandra.compat import Mapping
 from cassandra.tablets import Tablets
 
 log = logging.getLogger(__name__)
