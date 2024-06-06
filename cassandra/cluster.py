@@ -1030,6 +1030,12 @@ class Cluster(object):
     load the configuration and certificates.
     """
 
+    column_encryption_policy = None
+    """
+    An instance of :class:`cassandra.policies.ColumnEncryptionPolicy` specifying encryption materials to be
+    used for columns in this cluster.
+    """
+
     shard_aware_options = None
     """
     Can be set with :class:`ShardAwareOptions` or with a dict, to disable the automatic shardaware,
@@ -1150,6 +1156,7 @@ class Cluster(object):
                  monitor_reporting_interval=30,
                  client_id=None,
                  cloud=None,
+                 column_encryption_policy=None,
                  scylla_cloud=None,
                  shard_aware_options=None):
         """
@@ -1227,6 +1234,9 @@ class Cluster(object):
             self.contact_points = contact_points
 
         self.port = port
+
+        if column_encryption_policy is not None:
+            self.column_encryption_policy = column_encryption_policy
 
         self.endpoint_factory = endpoint_factory or DefaultEndPointFactory(port=self.port)
         self.endpoint_factory.configure(self)
@@ -2646,6 +2656,12 @@ class Session(object):
 
         self.encoder = Encoder()
 
+        if self.cluster.column_encryption_policy is not None:
+            try:
+                self.client_protocol_handler.column_encryption_policy = self.cluster.column_encryption_policy
+            except AttributeError:
+                log.info("Unable to set column encryption policy for session")
+
         # create connection pools in parallel
         self._initial_connect_futures = set()
         for host in hosts:
@@ -3185,7 +3201,7 @@ class Session(object):
         prepared_keyspace = keyspace if keyspace else None
         prepared_statement = PreparedStatement.from_message(
             response.query_id, response.bind_metadata, response.pk_indexes, self.cluster.metadata, query, prepared_keyspace,
-            self._protocol_version, response.column_metadata, response.result_metadata_id)
+            self._protocol_version, response.column_metadata, response.result_metadata_id, self.cluster.column_encryption_policy)
         prepared_statement.custom_payload = future.custom_payload
 
         self.cluster.add_prepared(response.query_id, prepared_statement)
