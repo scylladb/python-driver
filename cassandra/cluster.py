@@ -1017,7 +1017,7 @@ class Cluster(object):
     cloud = None
     """
     A dict of the cloud configuration. Example::
-        
+
         {
             # path to the secure connect bundle
             'secure_connect_bundle': '/path/to/secure-connect-dbname.zip',
@@ -1531,7 +1531,7 @@ class Cluster(object):
             # results will include Address instances
             results = session.execute("SELECT * FROM users")
             row = results[0]
-            print row.id, row.location.street, row.location.zipcode
+            print(row.id, row.location.street, row.location.zipcode)
 
         """
         if self.protocol_version < 3:
@@ -2656,12 +2656,6 @@ class Session(object):
 
         self.encoder = Encoder()
 
-        if self.cluster.column_encryption_policy is not None:
-            try:
-                self.client_protocol_handler.column_encryption_policy = self.cluster.column_encryption_policy
-            except AttributeError:
-                log.info("Unable to set column encryption policy for session")
-
         # create connection pools in parallel
         self._initial_connect_futures = set()
         for host in hosts:
@@ -2681,6 +2675,15 @@ class Session(object):
 
         self.session_id = uuid.uuid4()
         self._graph_paging_available = self._check_graph_paging_available()
+
+        if self.cluster.column_encryption_policy is not None:
+            try:
+                self.client_protocol_handler = type(
+                    str(self.session_id) + "-ProtocolHandler",
+                    (ProtocolHandler,),
+                    {"column_encryption_policy": self.cluster.column_encryption_policy})
+            except AttributeError:
+                log.info("Unable to set column encryption policy for session")
 
         if self.cluster.monitor_reporting_enabled:
             cc_host = self.cluster.get_control_connection_host()
