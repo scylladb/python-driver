@@ -32,9 +32,8 @@ from cassandra.policies import (RoundRobinPolicy, WhiteListRoundRobinPolicy, DCA
                                 RetryPolicy, WriteType,
                                 DowngradingConsistencyRetryPolicy, ConstantReconnectionPolicy,
                                 LoadBalancingPolicy, ConvictionPolicy, ReconnectionPolicy, FallthroughRetryPolicy,
-                                IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy, ExponentialBackoffRetryPolicy,
-                                ColDesc)
-
+                                IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy,
+                                ExponentialBackoffRetryPolicy)
 from cassandra.pool import Host
 from cassandra.connection import DefaultEndPoint, UnixSocketEndPoint
 

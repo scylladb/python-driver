@@ -1255,8 +1255,6 @@ class NeverRetryPolicy(RetryPolicy):
     on_unavailable = _rethrow
 
 
-ColDesc = namedtuple('ColDesc', ['ks', 'table', 'col'])
-
 class ColumnEncryptionPolicy(object):
     """
     A policy enabling (mostly) transparent encryption and decryption of data before it is

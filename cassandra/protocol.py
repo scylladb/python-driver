@@ -38,7 +38,7 @@ from cassandra.cqltypes import (AsciiType, BytesType, BooleanType,
 from cassandra.marshal import (int32_pack, int32_unpack, uint16_pack, uint16_unpack,
                                uint8_pack, int8_unpack, uint64_pack, header_pack,
                                v3_header_pack, uint32_pack, uint32_le_unpack, uint32_le_pack)
-from cassandra.policies import ColDesc
+from cassandra.util import ColDesc
 from cassandra import WriteType
 from cassandra.cython_deps import HAVE_CYTHON, HAVE_NUMPY
 from cassandra import util

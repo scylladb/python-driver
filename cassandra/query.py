@@ -29,7 +29,7 @@ from cassandra import ConsistencyLevel, OperationTimedOut
 from cassandra.util import unix_time_from_uuid1
 from cassandra.encoder import Encoder
 import cassandra.encoder
-from cassandra.policies import ColDesc
+from cassandra.util import ColDesc
 from cassandra.protocol import _UNSET_VALUE
 from cassandra.util import OrderedDict, _sanitize_identifiers
 

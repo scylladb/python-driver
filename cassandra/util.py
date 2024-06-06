@@ -15,7 +15,7 @@
 from __future__ import with_statement
 from _weakref import ref
 import calendar
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 from collections.abc import Mapping
 import datetime
 from functools import total_ordering
@@ -48,6 +48,9 @@ log = logging.getLogger(__name__)
 
 assert sys.byteorder in ('little', 'big')
 is_little_endian = sys.byteorder == 'little'
+
+
+ColDesc = namedtuple('ColDesc', ['ks', 'table', 'col'])
 
 
 def datetime_from_timestamp(timestamp):

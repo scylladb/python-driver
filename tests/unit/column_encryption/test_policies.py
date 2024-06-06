@@ -15,7 +15,7 @@
 import os
 import unittest
 
-from cassandra.policies import ColDesc
+from cassandra.util import ColDesc
 from cassandra.column_encryption.policies import AES256ColumnEncryptionPolicy, \
     AES256_BLOCK_SIZE_BYTES, AES256_KEY_SIZE_BYTES
 
