@@ -65,27 +65,6 @@ support this::
 
     pip install scales
 
-*Optional:* Column-Level Encryption (CLE) Support
---------------------------------------------------
-The driver has built-in support for client-side encryption and
-decryption of data. For more, see :doc:`column_encryption`.
-
-CLE depends on the Python `cryptography <https://cryptography.io/en/latest/>`_ module.
-When installing Python driver 3.27.0. the `cryptography` module is
-also downloaded and installed.
-If you are using Python driver 3.28.0 or later and want to use CLE, you must
-install the `cryptography <https://cryptography.io/en/latest/>`_ module.
-
-You can install this module along with the driver by specifying the `cle` extra::
-
-    pip install cassandra-driver[cle]
-
-Alternatively, you can also install the module directly via `pip`::
-
-    pip install cryptography
-
-Any version of cryptography >= 35.0 will work for the CLE feature.  You can find additional
-details at `PYTHON-1351 <https://datastax-oss.atlassian.net/browse/PYTHON-1351>`_
 
 Speeding Up Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^
