@@ -16,23 +16,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8.17", "3.11.4", "3.12.0b4"]
+        python-version: ["3.8", "3.11", "3.12", "3.13"]
         event_loop_manager: ["libev", "asyncio", "asyncore"]
         exclude:
-          - python-version: "3.12.0b4"
+          - python-version: "3.12"
+            event_loop_manager: "asyncore"
+          - python-version: "3.13"
             event_loop_manager: "asyncore"
 
     steps:
-    - uses: actions/checkout@v3
-    - name: setup pyenv ${{ matrix.python-version }}
-      uses: "gabrielfalcao/pyenv-action@v16"
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      name: Install Python
       with:
-        default: 2.7.14
-        versions: ${{ matrix.python-version }}
+        python-version: "${{ matrix.python_version }}"
+        allow-prereleases: true
+
     - name: Test with pytest
       run: |
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
-        export SCYLLA_VERSION='release:5.1'
+        export SCYLLA_VERSION='release:5.4'
         ./ci/run_integration_test.sh tests/integration/standard/ tests/integration/cqlengine/
     
     - name: Test tablets
