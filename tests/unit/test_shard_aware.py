@@ -23,7 +23,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from cassandra.cluster import ShardAwareOptions
 from cassandra.pool import HostConnection, HostDistance
-from cassandra.connection import ShardingInfo, DefaultEndPoint
+from cassandra.connection import DefaultEndPoint
+from cassandra.shard_info import ShardingInfo
 from cassandra.metadata import Murmur3Token
 from cassandra.protocol_features import ProtocolFeatures
 

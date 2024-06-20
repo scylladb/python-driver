@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
@@ -24,10 +25,8 @@ from tests.integration import local, use_singledc, TestCluster
 
 from concurrent.futures import wait as wait_futures
 
-
 def setup_module():
     use_singledc()
-
 
 class HostFilterPolicyTests(unittest.TestCase):
 
@@ -90,7 +89,6 @@ class WhiteListRoundRobinPolicyTests(unittest.TestCase):
             queried_hosts.update(response.response_future.attempted_hosts)
         queried_hosts = set(host.address for host in queried_hosts)
         self.assertEqual(queried_hosts, only_connect_hosts)
-
 
 class ExponentialRetryPolicyTests(unittest.TestCase):
 

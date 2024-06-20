@@ -1,3 +1,58 @@
+3.29.1
+======
+March 19, 2024
+
+Bug Fixes
+---------
+* cassandra-driver for Python 3.12 Linux is compiled without libev support (PYTHON-1378)
+* Consider moving to native wheel builds for OS X and removing universal2 wheels (PYTHON-1379)
+
+3.29.0
+======
+December 19, 2023
+
+Features
+--------
+* Add support for Python 3.9 through 3.12, drop support for 3.7 (PYTHON-1283)
+* Removal of dependency on six module (PR 1172)
+* Raise explicit exception when deserializing a vector with a subtype that isn’t a constant size (PYTHON-1371)
+
+Others
+------
+* Remove outdated Python pre-3.7 references (PR 1186)
+* Remove backup(.bak) files (PR 1185)
+* Fix doc typo in add_callbacks (PR 1177)
+
+3.28.0
+======
+June 5, 2023
+
+Features
+--------
+* Add support for vector type (PYTHON-1352)
+* Cryptography module is now an optional dependency (PYTHON-1351)
+
+Bug Fixes
+---------
+* Store IV along with encrypted text when using column-level encryption (PYTHON-1350)
+* Create session-specific protocol handlers to contain session-specific CLE policies (PYTHON-1356)
+
+Others
+------
+* Use Cython for smoke builds (PYTHON-1343)
+* Don't fail when inserting UDTs with prepared queries with some missing fields (PR 1151)
+* Convert print statement to function in docs (PR 1157)
+* Update comment for retry policy (DOC-3278)
+* Added error handling blog reference (DOC-2813)
+
+3.27.0
+======
+May 1, 2023
+
+Features
+--------
+* Add support for client-side encryption (PYTHON-1341)
+
 3.26.0
 ======
 March 13, 2023
@@ -17,7 +72,7 @@ Others
 * Fix deprecation warning in query tracing (PR 1103)
 * Remove mutable default values from some tests (PR 1116)
 * Remove dependency on unittest2 (PYTHON-1289)
-* Fix deprecation warnings for asyncio.coroutine annotation in asyncioreactor (PYTTHON-1290)
+* Fix deprecation warnings for asyncio.coroutine annotation in asyncioreactor (PYTHON-1290)
 * Fix typos in source files (PR 1126)
 * HostFilterPolicyInitTest fix for Python 3.11 (PR 1131)
 * Fix for DontPrepareOnIgnoredHostsTest (PYTHON-1287)

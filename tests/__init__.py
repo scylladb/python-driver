@@ -20,16 +20,20 @@ import platform
 import os
 from concurrent.futures import ThreadPoolExecutor
 
+from cassandra import DependencyException
+
 log = logging.getLogger()
+
 
 def is_eventlet_monkey_patched():
     if 'eventlet.patcher' not in sys.modules:
         return False
     try:
         import eventlet.patcher
+        return eventlet.patcher.is_monkey_patched('socket')
+    # Yet another case related to PYTHON-1364
     except AttributeError:
         return False
-    return eventlet.patcher.is_monkey_patched('socket')
 
 
 def is_gevent_monkey_patched():
@@ -85,17 +89,18 @@ elif "twisted" in EVENT_LOOP_MANAGER:
 elif "asyncio" in EVENT_LOOP_MANAGER:
     from cassandra.io.asyncioreactor import AsyncioConnection
     connection_class = AsyncioConnection
-
 else:
+    log.debug("Using default event loop (libev)")
     try:
         from cassandra.io.libevreactor import LibevConnection
         connection_class = LibevConnection
-    except ImportError as e:
+    except DependencyException as e:
         log.debug('Could not import LibevConnection, '
                   'using connection_class=None; '
                   'failed with error:\n {}'.format(
                       repr(e)
                   ))
+        log.debug("Will attempt to set connection class at cluster initialization")
         connection_class = None
 
 

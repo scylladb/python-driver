@@ -13,9 +13,10 @@ Test Profiles:
 Matrix Types:
 
   Full: All server versions, python runtimes tested with and without Cython.
-  Develop: Smaller matrix for dev purpose.
   Cassandra: All cassandra server versions.
   Dse: All dse server versions.
+  Smoke: CI-friendly configurations. Currently-supported Python version + modern Cassandra/DSE instances.
+         We also avoid cython since it's tested as part of the nightlies
 
 Parameters: 
 
@@ -29,35 +30,30 @@ import com.datastax.jenkins.drivers.python.Slack
 
 slack = new Slack()
 
-// Define our predefined matrices
-//
-// Smoke tests are CI-friendly test configuration.  Currently-supported Python version + modern C*/DSE instances.
-// We also avoid cython since it's tested as part of the nightlies.
+DEFAULT_CASSANDRA = ['3.0', '3.11', '4.0']
+DEFAULT_DSE = ['dse-5.1.35', 'dse-6.8.30']
+DEFAULT_RUNTIME = ['3.8.16', '3.9.16', '3.10.11', '3.11.3', '3.12.0']
+DEFAULT_CYTHON = ["True", "False"]
 matrices = [
   "FULL": [
-    "SERVER": ['2.1', '2.2', '3.0', '3.11', '4.0', 'dse-5.0.15', 'dse-5.1.35', 'dse-6.0.18', 'dse-6.7.17', 'dse-6.8.30'],
-    "RUNTIME": ['2.7.18', '3.5.9', '3.6.10', '3.7.7', '3.8.3'],
-    "CYTHON": ["True", "False"]
-  ],
-  "DEVELOP": [
-    "SERVER": ['2.1', '3.11', 'dse-6.8.30'],
-    "RUNTIME": ['2.7.18', '3.6.10'],
-    "CYTHON": ["True", "False"]
+    "SERVER": DEFAULT_CASSANDRA + DEFAULT_DSE,
+    "RUNTIME": DEFAULT_RUNTIME,
+    "CYTHON": DEFAULT_CYTHON
   ],
   "CASSANDRA": [
-    "SERVER": ['2.1', '2.2', '3.0', '3.11', '4.0'],
-    "RUNTIME": ['2.7.18', '3.5.9', '3.6.10', '3.7.7', '3.8.3'],
-    "CYTHON": ["True", "False"]
+    "SERVER": DEFAULT_CASSANDRA,
+    "RUNTIME": DEFAULT_RUNTIME,
+    "CYTHON": DEFAULT_CYTHON
   ],
   "DSE": [
-    "SERVER": ['dse-5.0.15', 'dse-5.1.35', 'dse-6.0.18', 'dse-6.7.17', 'dse-6.8.30'],
-    "RUNTIME": ['2.7.18', '3.5.9', '3.6.10', '3.7.7', '3.8.3'],
-    "CYTHON": ["True", "False"]
+    "SERVER": DEFAULT_DSE,
+    "RUNTIME": DEFAULT_RUNTIME,
+    "CYTHON": DEFAULT_CYTHON
   ],
   "SMOKE": [
-    "SERVER": ['3.11', '4.0', 'dse-6.8.30'],
-    "RUNTIME": ['3.7.7', '3.8.3'],
-    "CYTHON": ["False"]
+    "SERVER": DEFAULT_CASSANDRA.takeRight(2) + DEFAULT_DSE.takeRight(1),
+    "RUNTIME": DEFAULT_RUNTIME.take(1) + DEFAULT_RUNTIME.takeRight(1),
+    "CYTHON": ["True"]
   ]
 ]
 
@@ -84,24 +80,13 @@ def getBuildContext() {
   Based on schedule and parameters, configure the build context and env vars.
   */
 
-  def profile = "${params.PROFILE}"
+  def PROFILE = "${params.PROFILE}"
   def EVENT_LOOP = "${params.EVENT_LOOP.toLowerCase()}"
-  matrixType = "SMOKE"
-  developBranchPattern = ~"((dev|long)-)?python-.*"
 
-  if (developBranchPattern.matcher(env.BRANCH_NAME).matches()) {
-    matrixType = "DEVELOP"
-    if (env.BRANCH_NAME.contains("long")) {
-      profile = "FULL"
-    }
-  }
+  matrixType = params.MATRIX != "DEFAULT" ? params.MATRIX : "SMOKE"
+  matrix = matrices[matrixType].clone()
 
   // Check if parameters were set explicitly
-  if (params.MATRIX != "DEFAULT") {
-    matrixType = params.MATRIX
-  }
-
-  matrix = matrices[matrixType].clone()
   if (params.CYTHON != "DEFAULT") {
     matrix["CYTHON"] = [params.CYTHON]
   }
@@ -121,7 +106,7 @@ def getBuildContext() {
 
   context = [
     vars: [
-      "PROFILE=${profile}",
+      "PROFILE=${PROFILE}",
       "EVENT_LOOP=${EVENT_LOOP}"
     ],
     matrix: matrix
@@ -182,14 +167,27 @@ def initializeEnvironment() {
     sudo apt-get install socat
     pip install --upgrade pip
     pip install -U setuptools
+
+    # install a version of pyyaml<6.0 compatible with ccm-3.1.5 as of Aug 2023
+    # this works around the python-3.10+ compatibility problem as described in DSP-23524
+    pip install wheel
+    pip install "Cython<3.0" "pyyaml<6.0" --no-build-isolation
     pip install ${HOME}/ccm
   '''
 
   // Determine if server version is Apache CassandraⓇ or DataStax Enterprise
   if (env.CASSANDRA_VERSION.split('-')[0] == 'dse') {
-    sh label: 'Install DataStax Enterprise requirements', script: '''#!/bin/bash -lex
-      pip install -r test-datastax-requirements.txt
-    '''
+    if (env.PYTHON_VERSION =~ /3\.12\.\d+/) {
+      echo "Cannot install DSE dependencies for Python 3.12.x; installing Apache CassandraⓇ requirements only.  See PYTHON-1368 for more detail."
+      sh label: 'Install Apache CassandraⓇ requirements', script: '''#!/bin/bash -lex
+        pip install -r test-requirements.txt
+      '''
+    }
+    else {
+      sh label: 'Install DataStax Enterprise requirements', script: '''#!/bin/bash -lex
+        pip install -r test-datastax-requirements.txt
+      '''
+    }
   } else {
     sh label: 'Install Apache CassandraⓇ requirements', script: '''#!/bin/bash -lex
       pip install -r test-requirements.txt
@@ -201,7 +199,8 @@ def initializeEnvironment() {
   }
 
   sh label: 'Install unit test modules', script: '''#!/bin/bash -lex
-    pip install nose-ignore-docstring nose-exclude service_identity
+    pip install --no-deps nose-ignore-docstring nose-exclude
+    pip install service_identity
   '''
 
   if (env.CYTHON_ENABLED  == 'True') {
@@ -262,9 +261,9 @@ def executeStandardTests() {
     . ${HOME}/environment.txt
     set +o allexport
 
-    EVENT_LOOP=${EVENT_LOOP} VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=unit_results.xml tests/unit/ || true
-    EVENT_LOOP=eventlet VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=unit_eventlet_results.xml tests/unit/io/test_eventletreactor.py || true
-    EVENT_LOOP=gevent VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=unit_gevent_results.xml tests/unit/io/test_geventreactor.py || true
+    EVENT_LOOP=${EVENT_LOOP} VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=unit_results.xml tests/unit/ || true
+    EVENT_LOOP=eventlet VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=unit_eventlet_results.xml tests/unit/io/test_eventletreactor.py || true
+    EVENT_LOOP=gevent VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=unit_gevent_results.xml tests/unit/io/test_geventreactor.py || true
   '''
 
   sh label: 'Execute Simulacron integration tests', script: '''#!/bin/bash -lex
@@ -274,13 +273,13 @@ def executeStandardTests() {
     set +o allexport
 
     SIMULACRON_JAR="${HOME}/simulacron.jar"
-    SIMULACRON_JAR=${SIMULACRON_JAR} EVENT_LOOP=${EVENT_LOOP} CASSANDRA_DIR=${CCM_INSTALL_DIR} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --exclude test_backpressure.py --xunit-file=simulacron_results.xml tests/integration/simulacron/ || true
+    SIMULACRON_JAR=${SIMULACRON_JAR} EVENT_LOOP=${EVENT_LOOP} CASSANDRA_DIR=${CCM_INSTALL_DIR} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --exclude test_backpressure.py --xunit-file=simulacron_results.xml tests/integration/simulacron/ || true
 
     # Run backpressure tests separately to avoid memory issue
-    SIMULACRON_JAR=${SIMULACRON_JAR} EVENT_LOOP=${EVENT_LOOP} CASSANDRA_DIR=${CCM_INSTALL_DIR} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --exclude test_backpressure.py --xunit-file=simulacron_backpressure_1_results.xml tests/integration/simulacron/test_backpressure.py:TCPBackpressureTests.test_paused_connections || true
-    SIMULACRON_JAR=${SIMULACRON_JAR} EVENT_LOOP=${EVENT_LOOP} CASSANDRA_DIR=${CCM_INSTALL_DIR} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --exclude test_backpressure.py --xunit-file=simulacron_backpressure_2_results.xml tests/integration/simulacron/test_backpressure.py:TCPBackpressureTests.test_queued_requests_timeout || true
-    SIMULACRON_JAR=${SIMULACRON_JAR} EVENT_LOOP=${EVENT_LOOP} CASSANDRA_DIR=${CCM_INSTALL_DIR} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --exclude test_backpressure.py --xunit-file=simulacron_backpressure_3_results.xml tests/integration/simulacron/test_backpressure.py:TCPBackpressureTests.test_cluster_busy || true
-    SIMULACRON_JAR=${SIMULACRON_JAR} EVENT_LOOP=${EVENT_LOOP} CASSANDRA_DIR=${CCM_INSTALL_DIR} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --exclude test_backpressure.py --xunit-file=simulacron_backpressure_4_results.xml tests/integration/simulacron/test_backpressure.py:TCPBackpressureTests.test_node_busy || true
+    SIMULACRON_JAR=${SIMULACRON_JAR} EVENT_LOOP=${EVENT_LOOP} CASSANDRA_DIR=${CCM_INSTALL_DIR} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --exclude test_backpressure.py --xunit-file=simulacron_backpressure_1_results.xml tests/integration/simulacron/test_backpressure.py:TCPBackpressureTests.test_paused_connections || true
+    SIMULACRON_JAR=${SIMULACRON_JAR} EVENT_LOOP=${EVENT_LOOP} CASSANDRA_DIR=${CCM_INSTALL_DIR} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --exclude test_backpressure.py --xunit-file=simulacron_backpressure_2_results.xml tests/integration/simulacron/test_backpressure.py:TCPBackpressureTests.test_queued_requests_timeout || true
+    SIMULACRON_JAR=${SIMULACRON_JAR} EVENT_LOOP=${EVENT_LOOP} CASSANDRA_DIR=${CCM_INSTALL_DIR} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --exclude test_backpressure.py --xunit-file=simulacron_backpressure_3_results.xml tests/integration/simulacron/test_backpressure.py:TCPBackpressureTests.test_cluster_busy || true
+    SIMULACRON_JAR=${SIMULACRON_JAR} EVENT_LOOP=${EVENT_LOOP} CASSANDRA_DIR=${CCM_INSTALL_DIR} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --exclude test_backpressure.py --xunit-file=simulacron_backpressure_4_results.xml tests/integration/simulacron/test_backpressure.py:TCPBackpressureTests.test_node_busy || true
   '''
 
   sh label: 'Execute CQL engine integration tests', script: '''#!/bin/bash -lex
@@ -289,7 +288,7 @@ def executeStandardTests() {
     . ${HOME}/environment.txt
     set +o allexport
 
-    EVENT_LOOP_MANAGER=${EVENT_LOOP_MANAGER} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=cqle_results.xml tests/integration/cqlengine/ || true
+    EVENT_LOOP=${EVENT_LOOP} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=cqle_results.xml tests/integration/cqlengine/ || true
   '''
 
   sh label: 'Execute Apache CassandraⓇ integration tests', script: '''#!/bin/bash -lex
@@ -298,27 +297,32 @@ def executeStandardTests() {
     . ${HOME}/environment.txt
     set +o allexport
 
-    EVENT_LOOP=${EVENT_LOOP} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=standard_results.xml tests/integration/standard/ || true
+    EVENT_LOOP=${EVENT_LOOP} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=standard_results.xml tests/integration/standard/ || true
   '''
 
   if (env.CASSANDRA_VERSION.split('-')[0] == 'dse' && env.CASSANDRA_VERSION.split('-')[1] != '4.8') {
-    sh label: 'Execute DataStax Enterprise integration tests', script: '''#!/bin/bash -lex
-      # Load CCM environment variable
-      set -o allexport
-      . ${HOME}/environment.txt
-      set +o allexport
+    if (env.PYTHON_VERSION =~ /3\.12\.\d+/) {
+      echo "Cannot install DSE dependencies for Python 3.12.x.  See PYTHON-1368 for more detail."
+    }
+    else {
+      sh label: 'Execute DataStax Enterprise integration tests', script: '''#!/bin/bash -lex
+        # Load CCM environment variable
+        set -o allexport
+        . ${HOME}/environment.txt
+        set +o allexport
 
-      EVENT_LOOP_MANAGER=${EVENT_LOOP_MANAGER} CASSANDRA_DIR=${CCM_INSTALL_DIR} DSE_VERSION=${DSE_VERSION} ADS_HOME="${HOME}/" VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=dse_results.xml tests/integration/advanced/ || true
-    '''
+        EVENT_LOOP=${EVENT_LOOP} CASSANDRA_DIR=${CCM_INSTALL_DIR} DSE_VERSION=${DSE_VERSION} ADS_HOME="${HOME}/" VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=dse_results.xml tests/integration/advanced/ || true
+      '''
+    }
   }
 
-  sh label: 'Execute DataStax Constellation integration tests', script: '''#!/bin/bash -lex
+  sh label: 'Execute DataStax Astra integration tests', script: '''#!/bin/bash -lex
     # Load CCM environment variable
     set -o allexport
     . ${HOME}/environment.txt
     set +o allexport
 
-    EVENT_LOOP=${EVENT_LOOP} CLOUD_PROXY_PATH="${HOME}/proxy/" CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=advanced_results.xml tests/integration/cloud/ || true
+    EVENT_LOOP=${EVENT_LOOP} CLOUD_PROXY_PATH="${HOME}/proxy/" CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=advanced_results.xml tests/integration/cloud/ || true
   '''
 
   if (env.PROFILE == 'FULL') {
@@ -328,7 +332,7 @@ def executeStandardTests() {
       . ${HOME}/environment.txt
       set +o allexport
 
-      EVENT_LOOP=${EVENT_LOOP} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --exclude-dir=tests/integration/long/upgrade --with-ignore-docstrings --with-xunit --xunit-file=long_results.xml tests/integration/long/ || true
+      EVENT_LOOP=${EVENT_LOOP} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --exclude-dir=tests/integration/long/upgrade --with-ignore-docstrings --with-xunit --xunit-file=long_results.xml tests/integration/long/ || true
     '''
   }
 }
@@ -340,7 +344,7 @@ def executeDseSmokeTests() {
     . ${HOME}/environment.txt
     set +o allexport
 
-    EVENT_LOOP=${EVENT_LOOP} CCM_ARGS="${CCM_ARGS}" CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} DSE_VERSION=${DSE_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=standard_results.xml tests/integration/standard/test_dse.py || true
+    EVENT_LOOP=${EVENT_LOOP} CCM_ARGS="${CCM_ARGS}" CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} DSE_VERSION=${DSE_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=standard_results.xml tests/integration/standard/test_dse.py || true
   '''
 }
 
@@ -361,7 +365,7 @@ def executeEventLoopTests() {
       "tests/integration/simulacron/test_endpoint.py"
       "tests/integration/long/test_ssl.py"
     )
-    EVENT_LOOP=${EVENT_LOOP} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} nosetests -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=standard_results.xml ${EVENT_LOOP_TESTS[@]} || true
+    EVENT_LOOP=${EVENT_LOOP} CCM_ARGS="${CCM_ARGS}" DSE_VERSION=${DSE_VERSION} CASSANDRA_VERSION=${CCM_CASSANDRA_VERSION} MAPPED_CASSANDRA_VERSION=${MAPPED_CASSANDRA_VERSION} VERIFY_CYTHON=${CYTHON_ENABLED} pynose -s -v --logging-format="[%(levelname)s] %(asctime)s %(thread)d: %(message)s" --with-ignore-docstrings --with-xunit --xunit-file=standard_results.xml ${EVENT_LOOP_TESTS[@]} || true
   '''
 }
 
@@ -401,8 +405,9 @@ def describeBuild(buildContext) {
   }
 }
 
-def scheduleTriggerJobName() {
-  "drivers/python/oss/master/disabled"
+// branch pattern for cron
+def branchPatternCron() {
+  ~"(master)"
 }
 
 pipeline {
@@ -467,7 +472,7 @@ pipeline {
                       </table>''')
     choice(
       name: 'MATRIX',
-      choices: ['DEFAULT', 'SMOKE', 'FULL', 'DEVELOP', 'CASSANDRA', 'DSE'],
+      choices: ['DEFAULT', 'SMOKE', 'FULL', 'CASSANDRA', 'DSE'],
       description: '''<p>The matrix for the build.</p>
                       <table style="width:100%">
                         <col width="25%">
@@ -489,10 +494,6 @@ pipeline {
                           <td>All server versions, python runtimes tested with and without Cython.</td>
                         </tr>
                         <tr>
-                          <td><strong>DEVELOP</strong></td>
-                          <td>Smaller matrix for dev purpose.</td>
-                        </tr>
-                        <tr>
                           <td><strong>CASSANDRA</strong></td>
                           <td>All cassandra server versions.</td>
                         </tr>
@@ -503,22 +504,11 @@ pipeline {
                       </table>''')
     choice(
       name: 'PYTHON_VERSION',
-      choices: ['DEFAULT', '2.7.18', '3.5.9', '3.6.10', '3.7.7', '3.8.3'],
+      choices: ['DEFAULT'] + DEFAULT_RUNTIME,
       description: 'Python runtime version. Default to the build context.')
     choice(
       name: 'SERVER_VERSION',
-      choices: ['DEFAULT',
-                '2.1',       // Legacy Apache CassandraⓇ
-                '2.2',       // Legacy Apache CassandraⓇ
-                '3.0',       // Previous Apache CassandraⓇ
-                '3.11',      // Current Apache CassandraⓇ
-                '4.0',       // Development Apache CassandraⓇ
-                'dse-5.0.15',   // Long Term Support DataStax Enterprise
-                'dse-5.1.35',   // Legacy DataStax Enterprise
-                'dse-6.0.18',   // Previous DataStax Enterprise
-                'dse-6.7.17',   // Previous DataStax Enterprise
-                'dse-6.8.30',   // Current DataStax Enterprise
-                ],
+      choices: ['DEFAULT'] + DEFAULT_CASSANDRA + DEFAULT_DSE,
       description: '''Apache CassandraⓇ and DataStax Enterprise server version to use for adhoc <b>BUILD-AND-EXECUTE-TESTS</b> <strong>ONLY!</strong>
                       <table style="width:100%">
                         <col width="15%">
@@ -532,14 +522,6 @@ pipeline {
                           <td>Default to the build context.</td>
                         </tr>
                         <tr>
-                          <td><strong>2.1</strong></td>
-                          <td>Apache CassandraⓇ; v2.1.x</td>
-                        </tr>
-                        <tr>
-                          <td><strong>2.2</strong></td>
-                          <td>Apache CassandarⓇ; v2.2.x</td>
-                        </tr>
-                        <tr>
                           <td><strong>3.0</strong></td>
                           <td>Apache CassandraⓇ v3.0.x</td>
                         </tr>
@@ -549,23 +531,11 @@ pipeline {
                         </tr>
                         <tr>
                           <td><strong>4.0</strong></td>
-                          <td>Apache CassandraⓇ v4.x (<b>CURRENTLY UNDER DEVELOPMENT</b>)</td>
-                        </tr>
-                        <tr>
-                          <td><strong>dse-5.0.15</strong></td>
-                          <td>DataStax Enterprise v5.0.x (<b>Long Term Support</b>)</td>
+                          <td>Apache CassandraⓇ v4.0.x</td>
                         </tr>
                         <tr>
                           <td><strong>dse-5.1.35</strong></td>
                           <td>DataStax Enterprise v5.1.x</td>
-                        </tr>
-                        <tr>
-                          <td><strong>dse-6.0.18</strong></td>
-                          <td>DataStax Enterprise v6.0.x</td>
-                        </tr>
-                        <tr>
-                          <td><strong>dse-6.7.17</strong></td>
-                          <td>DataStax Enterprise v6.7.x</td>
                         </tr>
                         <tr>
                           <td><strong>dse-6.8.30</strong></td>
@@ -574,7 +544,7 @@ pipeline {
                       </table>''')
     choice(
       name: 'CYTHON',
-      choices: ['DEFAULT', 'True', 'False'],
+      choices: ['DEFAULT'] + DEFAULT_CYTHON,
       description: '''<p>Flag to determine if Cython should be enabled</p>
                       <table style="width:100%">
                         <col width="25%">
@@ -647,10 +617,10 @@ pipeline {
   }
 
   triggers {
-    parameterizedCron((scheduleTriggerJobName() == env.JOB_NAME) ? """
+    parameterizedCron(branchPatternCron().matcher(env.BRANCH_NAME).matches() ? """
       # Every weeknight (Monday - Friday) around 4:00 AM
-      # These schedules will run with and without Cython enabled for Python v2.7.18 and v3.5.9
-      H 4 * * 1-5 %CI_SCHEDULE=WEEKNIGHTS;EVENT_LOOP=LIBEV;CI_SCHEDULE_PYTHON_VERSION=2.7.18 3.5.9;CI_SCHEDULE_SERVER_VERSION=2.2 3.11 dse-5.1.35 dse-6.0.18 dse-6.7.17
+      # These schedules will run with and without Cython enabled for Python 3.8.16 and 3.12.0
+      H 4 * * 1-5 %CI_SCHEDULE=WEEKNIGHTS;EVENT_LOOP=LIBEV;CI_SCHEDULE_PYTHON_VERSION=3.8.16 3.12.0;CI_SCHEDULE_SERVER_VERSION=3.11 4.0 dse-5.1.35 dse-6.8.30
     """ : "")
   }
 

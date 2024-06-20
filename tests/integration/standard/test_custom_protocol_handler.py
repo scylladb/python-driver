@@ -25,7 +25,6 @@ from tests.integration import use_singledc, drop_keyspace_shutdown_cluster, \
     TestCluster, greaterthanorequalcass40, requirecassandra
 from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES
 from tests.integration.standard.utils import create_table_with_all_types, get_all_primitive_params
-from six import binary_type
 
 import uuid
 import mock
@@ -78,7 +77,7 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         session.client_protocol_handler = CustomTestRawRowType
         result_set = session.execute("SELECT schema_version FROM system.local")
         raw_value = result_set[0][0]
-        self.assertTrue(isinstance(raw_value, binary_type))
+        self.assertTrue(isinstance(raw_value, bytes))
         self.assertEqual(len(raw_value), 16)
 
         # Ensure that we get normal uuid back when we re-connect
@@ -264,7 +263,7 @@ class CustomResultMessageRaw(ResultMessage):
     my_type_codes[0xc] = UUIDType
     type_codes = my_type_codes
 
-    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata):
+    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
             self.recv_results_metadata(f, user_type_map)
             column_metadata = self.column_metadata or result_metadata
             rowcount = read_int(f)
@@ -293,7 +292,7 @@ class CustomResultMessageTracked(ResultMessage):
     type_codes = my_type_codes
     checked_rev_row_set = set()
 
-    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata):
+    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
         self.recv_results_metadata(f, user_type_map)
         column_metadata = self.column_metadata or result_metadata
         rowcount = read_int(f)

@@ -15,7 +15,9 @@
 from __future__ import print_function
 import os
 import sys
+import json
 import warnings
+from pathlib import Path
 
 if __name__ == '__main__' and sys.argv[1] == "gevent_nosetests":
     print("Running gevent tests")
@@ -138,15 +140,29 @@ class BuildFailed(Exception):
     def __init__(self, ext):
         self.ext = ext
 
+is_windows = sys.platform.startswith('win32')
+is_macos = sys.platform.startswith('darwin')
 
 murmur3_ext = Extension('cassandra.cmurmur3',
                         sources=['cassandra/cmurmur3.c'])
 
+libev_includes = ['/usr/include/libev', '/usr/local/include', '/opt/local/include', '/usr/include']
+libev_libdirs = ['/usr/local/lib', '/opt/local/lib', '/usr/lib64']
+if is_macos:
+    libev_includes.extend(['/opt/homebrew/include', os.path.expanduser('~/homebrew/include')])
+    libev_libdirs.extend(['/opt/homebrew/lib'])
+
+conan_envfile = Path(__file__).parent / 'build-release/conan/conandeps.env'
+if conan_envfile.exists():
+    conan_paths = json.loads(conan_envfile.read_text())
+    libev_includes.extend([conan_paths.get('include_dirs')])
+    libev_libdirs.extend([conan_paths.get('library_dirs')])
+
 libev_ext = Extension('cassandra.io.libevwrapper',
                       sources=['cassandra/io/libevwrapper.c'],
-                      include_dirs=['/usr/include/libev', '/usr/local/include', '/opt/local/include'],
+                      include_dirs=libev_includes,
                       libraries=['ev'],
-                      library_dirs=['/usr/local/lib', '/opt/local/lib'])
+                      library_dirs=libev_libdirs)
 
 platform_unsupported_msg = \
 """
@@ -169,8 +185,6 @@ Some optional C extensions are not supported in PyPy. Only murmur3 will be built
 =================================================================================
 """
 
-is_windows = os.name == 'nt'
-
 is_pypy = "PyPy" in sys.version
 if is_pypy:
     sys.stderr.write(pypy_unsupported_msg)
@@ -184,7 +198,7 @@ elif not is_supported_arch:
 
 try_extensions = "--no-extensions" not in sys.argv and is_supported_platform and is_supported_arch and not os.environ.get('CASS_DRIVER_NO_EXTENSIONS')
 try_murmur3 = try_extensions and "--no-murmur3" not in sys.argv
-try_libev = try_extensions and "--no-libev" not in sys.argv and not is_pypy and not is_windows
+try_libev = try_extensions and "--no-libev" not in sys.argv and not is_pypy
 try_cython = try_extensions and "--no-cython" not in sys.argv and not is_pypy and not os.environ.get('CASS_DRIVER_NO_CYTHON')
 try_cython &= 'egg_info' not in sys.argv  # bypass setup_requires for pip egg_info calls, which will never have --install-option"--no-cython" coming fomr pip
 
@@ -401,12 +415,12 @@ def run_setup(extensions):
         else:
             sys.stderr.write("Bypassing Cython setup requirement\n")
 
-    dependencies = ['six >=1.9',
-                    'geomet>=0.1,<0.3',
+    dependencies = ['geomet>=0.1,<0.3',
                     'pyyaml > 5.0']
 
     _EXTRAS_REQUIRE = {
-        'graph': ['gremlinpython==3.4.6']
+        'graph': ['gremlinpython==3.4.6'],
+        'cle': ['cryptography>=35.0']
     }
 
     setup(
@@ -425,7 +439,8 @@ def run_setup(extensions):
         packages=[
             'cassandra', 'cassandra.io', 'cassandra.cqlengine', 'cassandra.graph',
             'cassandra.datastax', 'cassandra.datastax.insights', 'cassandra.datastax.graph',
-            'cassandra.datastax.graph.fluent', 'cassandra.datastax.cloud', 'cassandra.scylla'
+            'cassandra.datastax.graph.fluent', 'cassandra.datastax.cloud', 'cassandra.column_encryption',
+            'cassandra.scylla',
         ],
         keywords='cassandra,cql,orm,dse,graph',
         include_package_data=True,
@@ -439,8 +454,11 @@ def run_setup(extensions):
             'Natural Language :: English',
             'Operating System :: OS Independent',
             'Programming Language :: Python',
-            'Programming Language :: Python :: 3.7',
             'Programming Language :: Python :: 3.8',
+            'Programming Language :: Python :: 3.9',
+            'Programming Language :: Python :: 3.10',
+            'Programming Language :: Python :: 3.11',
+            'Programming Language :: Python :: 3.12',
             'Programming Language :: Python :: Implementation :: CPython',
             'Programming Language :: Python :: Implementation :: PyPy',
             'Topic :: Software Development :: Libraries :: Python Modules'

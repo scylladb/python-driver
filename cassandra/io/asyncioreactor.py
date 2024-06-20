@@ -91,11 +91,8 @@ class AsyncioConnection(Connection):
 
         self._connect_socket()
         self._socket.setblocking(0)
-        loop_args = dict()
-        if sys.version_info[0] == 3 and sys.version_info[1] < 10:
-            loop_args['loop'] = self._loop
-        self._write_queue = asyncio.Queue(**loop_args)
-        self._write_queue_lock = asyncio.Lock(**loop_args)
+        self._write_queue = asyncio.Queue()
+        self._write_queue_lock = asyncio.Lock()
 
         # see initialize_reactor -- loop is running in a separate thread, so we
         # have to use a threadsafe call
