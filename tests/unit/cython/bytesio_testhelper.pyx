@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# cython: language_level=3
+
 from cassandra.bytesio cimport BytesIOReader
 
 def test_read1(assert_equal, assert_raises):

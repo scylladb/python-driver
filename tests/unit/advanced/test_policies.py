@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import unittest
+import pytest
 
 from mock import Mock
 
@@ -29,6 +30,7 @@ class ClusterMetaMock(object):
         return self.hosts.get(addr)
 
 
+@pytest.mark.filterwarnings("ignore:DSELoadBalancingPolicy will be removed:DeprecationWarning")
 class DSELoadBalancingPolicyTest(unittest.TestCase):
 
     def test_no_target(self):
