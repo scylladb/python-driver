@@ -1,3 +1,4 @@
+
 # Copyright DataStax, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -150,7 +151,7 @@ class ClusterTests(unittest.TestCase):
         get_node(1).pause()
         cluster = TestCluster(contact_points=['127.0.0.1'], connect_timeout=1)
 
-        with self.assertRaisesRegex(NoHostAvailable, "OperationTimedOut\('errors=Timed out creating connection \(1 seconds\)"):
+        with self.assertRaisesRegex(NoHostAvailable, r"OperationTimedOut\('errors=Timed out creating connection \(1 seconds\)"):
             cluster.connect()
         cluster.shutdown()
 
@@ -899,7 +900,7 @@ class ClusterTests(unittest.TestCase):
 
             # use a copied instance and override the row factory
             # assert last returned value can be accessed as a namedtuple so we can prove something different
-            named_tuple_row = rs[0]
+            named_tuple_row = rs.one()
             self.assertIsInstance(named_tuple_row, tuple)
             self.assertTrue(named_tuple_row.release_version)
 
@@ -1390,7 +1391,7 @@ class ContextManagementTest(unittest.TestCase):
             with cluster.connect() as session:
                 self.assertFalse(cluster.is_shutdown)
                 self.assertFalse(session.is_shutdown)
-                self.assertTrue(session.execute('select release_version from system.local')[0])
+                self.assertTrue(session.execute('select release_version from system.local').one())
             self.assertTrue(session.is_shutdown)
         self.assertTrue(cluster.is_shutdown)
 
@@ -1428,7 +1429,7 @@ class ContextManagementTest(unittest.TestCase):
             self.assertFalse(cluster.is_shutdown)
             self.assertFalse(session.is_shutdown)
             self.assertFalse(unmanaged_session.is_shutdown)
-            self.assertTrue(session.execute('select release_version from system.local')[0])
+            self.assertTrue(session.execute('select release_version from system.local').one())
         self.assertTrue(session.is_shutdown)
         self.assertFalse(cluster.is_shutdown)
         self.assertFalse(unmanaged_session.is_shutdown)
@@ -1567,7 +1568,7 @@ class DeprecationWarningTest(unittest.TestCase):
 
         @test_category logs
         """
-        with warnings.catch_warnings(record=True) as w:
+        with warnings.catch_warnings(record=True, action='once') as w:
             TestCluster(load_balancing_policy=RoundRobinPolicy())
             logging.info(w)
             self.assertGreaterEqual(len(w), 1)
@@ -1586,7 +1587,7 @@ class DeprecationWarningTest(unittest.TestCase):
 
         @test_category logs
         """
-        with warnings.catch_warnings(record=True) as w:
+        with warnings.catch_warnings(record=True, action='once') as w:
             cluster = TestCluster()
             cluster.set_meta_refresh_enabled(True)
             logging.info(w)

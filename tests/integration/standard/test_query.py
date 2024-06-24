@@ -167,7 +167,7 @@ class QueryTests(BasicSharedKeyspaceUnitTestCase):
         client_ip = trace.client
 
         # Ip address should be in the local_host range
-        pat = re.compile("127.0.0.\d{1,3}")
+        pat = re.compile(r"127.0.0.\d{1,3}")
 
         # Ensure that ip is set
         self.assertIsNotNone(client_ip, "Client IP was not set in trace with C* >= 2.2")
@@ -496,9 +496,9 @@ class PreparedStatementMetdataTest(unittest.TestCase):
             future = session.execute_async(select_statement)
             results = future.result()
             if base_line is None:
-                base_line = results[0]._asdict().keys()
+                base_line = results.one()._asdict().keys()
             else:
-                self.assertEqual(base_line, results[0]._asdict().keys())
+                self.assertEqual(base_line, results.one()._asdict().keys())
             cluster.shutdown()
 
 
@@ -815,7 +815,7 @@ class SerialConsistencyTests(unittest.TestCase):
         result = future.result()
         self.assertEqual(future.message.serial_consistency_level, ConsistencyLevel.SERIAL)
         self.assertTrue(result)
-        self.assertFalse(result[0].applied)
+        self.assertFalse(result.one().applied)
 
         statement = SimpleStatement(
             "UPDATE test3rf.test SET v=1 WHERE k=0 IF v=0",
@@ -825,7 +825,7 @@ class SerialConsistencyTests(unittest.TestCase):
         result = future.result()
         self.assertEqual(future.message.serial_consistency_level, ConsistencyLevel.LOCAL_SERIAL)
         self.assertTrue(result)
-        self.assertTrue(result[0].applied)
+        self.assertTrue(result.one().applied)
 
     def test_conditional_update_with_prepared_statements(self):
         self.session.execute("INSERT INTO test3rf.test (k, v) VALUES (0, 0)")
@@ -837,7 +837,7 @@ class SerialConsistencyTests(unittest.TestCase):
         result = future.result()
         self.assertEqual(future.message.serial_consistency_level, ConsistencyLevel.SERIAL)
         self.assertTrue(result)
-        self.assertFalse(result[0].applied)
+        self.assertFalse(result.one().applied)
 
         statement = self.session.prepare(
             "UPDATE test3rf.test SET v=1 WHERE k=0 IF v=0")
@@ -847,7 +847,7 @@ class SerialConsistencyTests(unittest.TestCase):
         result = future.result()
         self.assertEqual(future.message.serial_consistency_level, ConsistencyLevel.LOCAL_SERIAL)
         self.assertTrue(result)
-        self.assertTrue(result[0].applied)
+        self.assertTrue(result.one().applied)
 
     def test_conditional_update_with_batch_statements(self):
         self.session.execute("INSERT INTO test3rf.test (k, v) VALUES (0, 0)")
@@ -858,7 +858,7 @@ class SerialConsistencyTests(unittest.TestCase):
         result = future.result()
         self.assertEqual(future.message.serial_consistency_level, ConsistencyLevel.SERIAL)
         self.assertTrue(result)
-        self.assertFalse(result[0].applied)
+        self.assertFalse(result.one().applied)
 
         statement = BatchStatement(serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL)
         statement.add("UPDATE test3rf.test SET v=1 WHERE k=0 IF v=0")
@@ -867,7 +867,7 @@ class SerialConsistencyTests(unittest.TestCase):
         result = future.result()
         self.assertEqual(future.message.serial_consistency_level, ConsistencyLevel.LOCAL_SERIAL)
         self.assertTrue(result)
-        self.assertTrue(result[0].applied)
+        self.assertTrue(result.one().applied)
 
     def test_bad_consistency_level(self):
         statement = SimpleStatement("foo")

@@ -133,7 +133,7 @@ class MetaDataRemovalTest(unittest.TestCase):
 
         # verify the un-existing host was filtered
         for host in self.cluster.metadata.all_hosts():
-            self.assertNotEquals(host.endpoint.address, '126.0.0.186')
+            self.assertNotEqual(host.endpoint.address, '126.0.0.186')
 
 
 class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
@@ -163,8 +163,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         query = "SELECT * FROM system.local"
         no_schema_rs = no_schema_session.execute(query)
         no_token_rs = no_token_session.execute(query)
-        self.assertIsNotNone(no_schema_rs[0])
-        self.assertIsNotNone(no_token_rs[0])
+        self.assertIsNotNone(no_schema_rs.one())
+        self.assertIsNotNone(no_token_rs.one())
         no_schema.shutdown()
         no_token.shutdown()
 
@@ -1675,7 +1675,7 @@ class FunctionMetadata(FunctionTest):
 
         with self.VerifiedFunction(self, **kwargs) as vf:
             fn_meta = self.keyspace_function_meta[vf.signature]
-            self.assertRegex(fn_meta.as_cql_query(), "CREATE FUNCTION.*%s\(\) .*" % kwargs['name'])
+            self.assertRegex(fn_meta.as_cql_query(), r"CREATE FUNCTION.*%s\(\) .*" % kwargs['name'])
 
     def test_functions_follow_keyspace_alter(self):
         """
@@ -1723,12 +1723,12 @@ class FunctionMetadata(FunctionTest):
         kwargs['called_on_null_input'] = True
         with self.VerifiedFunction(self, **kwargs) as vf:
             fn_meta = self.keyspace_function_meta[vf.signature]
-            self.assertRegex(fn_meta.as_cql_query(), "CREATE FUNCTION.*\) CALLED ON NULL INPUT RETURNS .*")
+            self.assertRegex(fn_meta.as_cql_query(), r"CREATE FUNCTION.*\) CALLED ON NULL INPUT RETURNS .*")
 
         kwargs['called_on_null_input'] = False
         with self.VerifiedFunction(self, **kwargs) as vf:
             fn_meta = self.keyspace_function_meta[vf.signature]
-            self.assertRegex(fn_meta.as_cql_query(), "CREATE FUNCTION.*\) RETURNS NULL ON NULL INPUT RETURNS .*")
+            self.assertRegex(fn_meta.as_cql_query(), r"CREATE FUNCTION.*\) RETURNS NULL ON NULL INPUT RETURNS .*")
 
 
 @requires_java_udf

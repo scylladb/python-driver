@@ -77,9 +77,9 @@ class TestCounterColumn(BaseCassEngTestCase):
 
     def test_updates(self):
         """ Tests that counter updates work as intended """
-        instance = TestCounterModel.create()
+        instance = TestCounterModel()
         instance.counter += 5
-        instance.save()
+        instance.update()
 
         actual = TestCounterModel.get(partition=instance.partition)
         assert actual.counter == 5
@@ -102,7 +102,7 @@ class TestCounterColumn(BaseCassEngTestCase):
         """ Tests that updating from None uses a create statement """
         instance = TestCounterModel()
         instance.counter += 1
-        instance.save()
+        instance.update()
 
         new = TestCounterModel.get(partition=instance.partition)
         assert new.counter == 1
@@ -114,7 +114,7 @@ class TestCounterColumn(BaseCassEngTestCase):
 
     def test_save_after_no_update(self):
         expected_value = 15
-        instance = TestCounterModel.create()
+        instance = TestCounterModel()
         instance.update(counter=expected_value)
 
         # read back
@@ -122,7 +122,7 @@ class TestCounterColumn(BaseCassEngTestCase):
         self.assertEqual(instance.counter, expected_value)
 
         # save after doing nothing
-        instance.save()
+        instance.update()
         self.assertEqual(instance.counter, expected_value)
 
         # make sure there was no increment
