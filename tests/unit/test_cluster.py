@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import unittest
+import pytest
 
 import logging
 
@@ -274,6 +275,9 @@ class ExecutionProfileTest(unittest.TestCase):
         self.assertEqual(cluster.profile_manager.default.row_factory, named_tuple_factory)
 
     @mock_session_pools
+    @pytest.mark.filterwarnings("ignore:DowngradingConsistencyRetryPolicy:DeprecationWarning")
+    @pytest.mark.filterwarnings("ignore:Legacy execution parameters will be removed in 4.0:DeprecationWarning")
+    @pytest.mark.filterwarnings("ignore:Setting the consistency level at the session level will be removed in 4.0:DeprecationWarning")
     def test_default_legacy(self):
         cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), default_retry_policy=DowngradingConsistencyRetryPolicy())
         self.assertEqual(cluster._config_mode, _ConfigMode.LEGACY)
@@ -321,6 +325,8 @@ class ExecutionProfileTest(unittest.TestCase):
             ep = ExecutionProfile(RoundRobinPolicy(), serial_consistency_level=42)
 
     @mock_session_pools
+    @pytest.mark.filterwarnings("ignore:DowngradingConsistencyRetryPolicy:DeprecationWarning")
+    @pytest.mark.filterwarnings("ignore:Legacy execution parameters will be removed in 4.0:DeprecationWarning")
     def test_statement_params_override_legacy(self):
         cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), default_retry_policy=DowngradingConsistencyRetryPolicy())
         self.assertEqual(cluster._config_mode, _ConfigMode.LEGACY)
@@ -342,6 +348,7 @@ class ExecutionProfileTest(unittest.TestCase):
         self._verify_response_future_profile(rf, expected_profile)
 
     @mock_session_pools
+    @pytest.mark.filterwarnings("ignore:DowngradingConsistencyRetryPolicy:DeprecationWarning")
     def test_statement_params_override_profile(self):
         non_default_profile = ExecutionProfile(RoundRobinPolicy(), *[object() for _ in range(2)])
         cluster = Cluster(execution_profiles={'non-default': non_default_profile})
@@ -366,6 +373,9 @@ class ExecutionProfileTest(unittest.TestCase):
         self._verify_response_future_profile(rf, expected_profile)
 
     @mock_session_pools
+    @pytest.mark.filterwarnings("ignore:DowngradingConsistencyRetryPolicy:DeprecationWarning")
+    @pytest.mark.filterwarnings("ignore:Legacy execution parameters will be removed in 4.0:DeprecationWarning")
+    @pytest.mark.filterwarnings("ignore:Setting the consistency level at the session level will be removed in 4.0:DeprecationWarning")
     def test_no_profile_with_legacy(self):
         # don't construct with both
         self.assertRaises(ValueError, Cluster, load_balancing_policy=RoundRobinPolicy(), execution_profiles={'a': ExecutionProfile()})
@@ -392,6 +402,7 @@ class ExecutionProfileTest(unittest.TestCase):
         self.assertRaises(ValueError, session.execute_async, "query", execution_profile='some name here')
 
     @mock_session_pools
+    @pytest.mark.filterwarnings("ignore:Setting the consistency level at the session level will be removed in 4.0:DeprecationWarning")
     def test_no_legacy_with_profile(self):
         cluster_init = Cluster(execution_profiles={'name': ExecutionProfile()})
         cluster_add = Cluster()
@@ -512,6 +523,7 @@ class ExecutionProfileTest(unittest.TestCase):
         self.assertIn('please specify a load-balancing policy', warning_message)
         self.assertIn("contact_points = ['127.0.0.1']", warning_message)
 
+    @pytest.mark.filterwarnings("ignore:Legacy execution parameters will be removed in 4.0:DeprecationWarning")
     def test_no_warning_on_contact_points_with_lbp_legacy_mode(self):
         """
         Test that users aren't warned when they instantiate a Cluster object

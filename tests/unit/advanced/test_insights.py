@@ -14,6 +14,7 @@
 
 
 import unittest
+import pytest
 
 import logging
 from mock import sentinel
@@ -103,6 +104,7 @@ class TestGetConfig(unittest.TestCase):
 class TestConfigAsDict(unittest.TestCase):
 
     #  graph/query.py
+    @pytest.mark.filterwarnings("ignore:Unknown keyword argument received for GraphOptions:UserWarning")
     def test_graph_options(self):
         self.maxDiff = None
 
