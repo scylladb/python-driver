@@ -629,8 +629,16 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
                 else:
                     CCM_CLUSTER = CCMCluster(path, cluster_name, **ccm_options)
                     CCM_CLUSTER.set_configuration_options({'start_native_transport': True})
-                if Version(cassandra_version) >= Version('2.2'):
-                    CCM_CLUSTER.set_configuration_options({'enable_user_defined_functions': True})
+                if Version(cassandra_version) >= Version('4.1'):
+                    CCM_CLUSTER.set_configuration_options({
+                        'user_defined_functions_enabled': True,
+                        'scripted_user_defined_functions_enabled': True,
+                        'materialized_views_enabled': True,
+                        'sasi_indexes_enabled': True,
+                        'transient_replication_enabled': True,
+                    })
+                elif Version(cassandra_version) >= Version('2.2'):
+                    CCM_CLUSTER.set_configuration_options({'user_defined_functions_enabled': True})
                     if Version(cassandra_version) >= Version('3.0'):
                         CCM_CLUSTER.set_configuration_options({'enable_scripted_user_defined_functions': True})
                         if Version(cassandra_version) >= Version('4.0-a'):
