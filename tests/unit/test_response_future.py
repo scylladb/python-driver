@@ -82,7 +82,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         expected_result = (object(), object())
         rf._set_result(None, None, None, self.make_mock_response(expected_result[0], expected_result[1]))
-        result = rf.result()[0]
+        result = rf.result().one()
         self.assertEqual(result, expected_result)
 
     def test_unknown_result_class(self):
@@ -128,7 +128,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf.send_request()
         result = Mock(spec=ResultMessage, kind=999, results=[1, 2, 3])
         rf._set_result(None, None, None, result)
-        self.assertEqual(rf.result()[0], result)
+        self.assertEqual(rf.result().one(), result)
 
     def test_heartbeat_defunct_deadlock(self):
         """
@@ -396,7 +396,7 @@ class ResponseFutureTests(unittest.TestCase):
         expected_result = (object(), object())
         rf._set_result(None, None, None, self.make_mock_response(expected_result[0], expected_result[1]))
 
-        result = rf.result()[0]
+        result = rf.result().one()
         self.assertEqual(result, expected_result)
 
     def test_timeout_getting_connection_from_pool(self):
@@ -420,7 +420,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         expected_result = (object(), object())
         rf._set_result(None, None, None, self.make_mock_response(expected_result[0], expected_result[1]))
-        self.assertEqual(rf.result()[0], expected_result)
+        self.assertEqual(rf.result().one(), expected_result)
 
         # make sure the exception is recorded correctly
         self.assertEqual(rf._errors, {'ip1': exc})
@@ -438,7 +438,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf._set_result(None, None, None, self.make_mock_response(expected_result[0], expected_result[1]))
 
-        result = rf.result()[0]
+        result = rf.result().one()
         self.assertEqual(result, expected_result)
 
         callback.assert_called_once_with([expected_result], arg, **kwargs)
@@ -488,7 +488,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf._set_result(None, None, None, self.make_mock_response(expected_result[0], expected_result[1]))
 
-        result = rf.result()[0]
+        result = rf.result().one()
         self.assertEqual(result, expected_result)
 
         callback.assert_called_once_with([expected_result], arg, **kwargs)
@@ -561,7 +561,7 @@ class ResponseFutureTests(unittest.TestCase):
             errback=self.assertIsInstance, errback_args=(Exception,))
 
         rf._set_result(None, None, None, self.make_mock_response(expected_result[0], expected_result[1]))
-        self.assertEqual(rf.result()[0], expected_result)
+        self.assertEqual(rf.result().one(), expected_result)
 
         callback.assert_called_once_with([expected_result], arg, **kwargs)
 
