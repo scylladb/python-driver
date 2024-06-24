@@ -30,12 +30,17 @@ pip install awscli
 pip install https://github.com/scylladb/scylla-ccm/archive/master.zip
 
 # download version
-
-ccm create scylla-driver-temp -n 1 --scylla --version ${SCYLLA_VERSION}
-ccm remove
-
+if [[ -n "${SCYLLA_VERSION}" ]]; then
+  ccm create scylla-driver-temp -n 1 --scylla --version ${SCYLLA_VERSION}
+  ccm remove
+  export MAPPED_SCYLLA_VERSION=3.11.4
+  unset CASSANDRA_VERSION
+fi
+if [[ -n "${CASSANDRA_VERSION}" ]]; then
+  ccm create cassandra-driver-temp -n 1 --version ${CASSANDRA_VERSION}
+  ccm remove
+  unset SCYLLA_VERSION
+fi
 # run test
-
-export MAPPED_SCYLLA_VERSION=3.11.4
 PROTOCOL_VERSION=4  pytest -vv -s --log-cli-level=debug  -rf --import-mode append $*
 
