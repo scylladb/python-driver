@@ -46,7 +46,18 @@ class HostDistance(object):
     connections opened to it.
     """
 
-    LOCAL = 0
+    LOCAL_RACK = 0
+    """
+    Nodes with ``LOCAL_RACK`` distance will be preferred for operations
+    under some load balancing policies (such as :class:`.RackAwareRoundRobinPolicy`)
+    and will have a greater number of connections opened against
+    them by default.
+
+    This distance is typically used for nodes within the same
+    datacenter and the same rack as the client.
+    """
+
+    LOCAL = 1
     """
     Nodes with ``LOCAL`` distance will be preferred for operations
     under some load balancing policies (such as :class:`.DCAwareRoundRobinPolicy`)
@@ -57,12 +68,12 @@ class HostDistance(object):
     datacenter as the client.
     """
 
-    REMOTE = 1
+    REMOTE = 2
     """
     Nodes with ``REMOTE`` distance will be treated as a last resort
-    by some load balancing policies (such as :class:`.DCAwareRoundRobinPolicy`)
-    and will have a smaller number of connections opened against
-    them by default.
+    by some load balancing policies (such as :class:`.DCAwareRoundRobinPolicy`
+    and :class:`.RackAwareRoundRobinPolicy`)and will have a smaller number of
+    connections opened against them by default.
 
     This distance is typically used for nodes outside of the
     datacenter that the client is running in.
@@ -316,6 +327,118 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
     def on_remove(self, host):
         self.on_down(host)
 
+class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
+    """
+    Similar to :class:`.DCAwareRoundRobinPolicy`, but prefers hosts
+    in the local rack, before hosts in the local datacenter but a
+    different rack, before hosts in all other datercentres
+    """
+
+    local_dc = None
+    local_rack = None
+    used_hosts_per_remote_dc = 0
+
+    def __init__(self, local_dc, local_rack, used_hosts_per_remote_dc=0):
+        """
+        The `local_dc` and `local_rack` parameters should be the name of the
+        datacenter and rack (such as is reported by ``nodetool ring``) that
+        should be considered local.
+
+        `used_hosts_per_remote_dc` controls how many nodes in
+        each remote datacenter will have connections opened
+        against them. In other words, `used_hosts_per_remote_dc` hosts
+        will be considered :attr:`~.HostDistance.REMOTE` and the
+        rest will be considered :attr:`~.HostDistance.IGNORED`.
+        By default, all remote hosts are ignored.
+        """
+        self.local_rack = local_rack
+        self.local_dc = local_dc
+        self.used_hosts_per_remote_dc = used_hosts_per_remote_dc
+        self._live_hosts = {}
+        self._dc_live_hosts = {}
+        self._position = 0
+        self._endpoints = []
+        LoadBalancingPolicy.__init__(self)
+
+    def _rack(self, host):
+        return host.rack or self.local_rack
+
+    def _dc(self, host):
+        return host.datacenter or self.local_dc
+
+    def populate(self, cluster, hosts):
+        for (dc, rack), dc_hosts in groupby(hosts, lambda host: (self._dc(host), self._rack(host))):
+            self._live_hosts[(dc, rack)] = dc_hosts
+        for dc, dc_hosts in groupby(hosts, lambda host: self._dc(host)):
+            self._dc_live_hosts[dc] = dc_hosts
+
+        # as in other policies choose random position for better distributing queries across hosts
+        self._position = randint(0, len(hosts) - 1) if hosts else 0
+
+    def distance(self, host):
+        rack = self._rack(host)
+        dc = self._dc(host)
+        if rack == self.local_rack and dc == self.local_dc:
+            return HostDistance.LOCAL_RACK
+
+        if dc == self.local_dc:
+            return HostDistance.LOCAL
+
+        if not self.used_hosts_per_remote_dc:
+            return HostDistance.IGNORED
+        else:
+            dc_hosts = self._dc_live_hosts.get(dc, ())
+            if not dc_hosts:
+                return HostDistance.IGNORED
+
+            if host in dc_hosts[:self.used_hosts_per_remote_dc]:
+
+                return HostDistance.REMOTE
+            else:
+                return HostDistance.IGNORED
+
+    def make_query_plan(self, working_keyspace=None, query=None):
+        pos = self._position
+        self._position += 1
+
+        local_rack_live = self._live_hosts.get((self.local_dc, self.local_rack), ())
+        pos = (pos % len(local_rack_live)) if local_rack_live else 0
+        # Slice the cyclic iterator to start from pos and include the next len(local_live) elements
+        # This ensures we get exactly one full cycle starting from pos
+        for host in islice(cycle(local_rack_live), pos, pos + len(local_rack_live)):
+            yield host
+
+        local_live = [host for host in self._dc_live_hosts.get(self.local_dc, ()) if host.rack != self.local_rack]
+        pos = (pos % len(local_live)) if local_live else 0
+        for host in islice(cycle(local_live), pos, pos + len(local_live)):
+            yield host
+
+        # the dict can change, so get candidate DCs iterating over keys of a copy
+        other_dcs = [dc for dc in self._dc_live_hosts.copy().keys() if dc != self.local_dc]
+        for dc in other_dcs:
+            remote_live = self._dc_live_hosts.get(dc, ())
+            for host in remote_live[:self.used_hosts_per_remote_dc]:
+                yield host
+
+    def on_up(self, host):
+        dc = self._dc(host)
+        rack = self._rack(host)
+        with self._hosts_lock:
+            self._live_hosts[(dc, rack)].append(host)
+            self._dc_live_hosts[dc].append(host)
+
+    def on_down(self, host):
+        dc = self._dc(host)
+        rack = self._rack(host)
+        with self._hosts_lock:
+            self._live_hosts[(dc, rack)].remove(host)
+            self._dc_live_hosts[dc].remove(host)
+
+    def on_add(self, host):
+        self.on_up(host)
+
+    def on_remove(self, host):
+        self.on_down(host)
 
 class TokenAwarePolicy(LoadBalancingPolicy):
     """
@@ -396,7 +519,7 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                     shuffle(replicas)
                 for replica in replicas:
                     if replica.is_up and \
-                            child.distance(replica) == HostDistance.LOCAL:
+                            (child.distance(replica) == HostDistance.LOCAL or child.distance(replica) == HostDistance.LOCAL_RACK):
                         yield replica
 
                 for host in child.make_query_plan(keyspace, query):
