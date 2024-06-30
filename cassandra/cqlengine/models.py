@@ -14,6 +14,7 @@
 
 import logging
 import re
+from typing import Any, Type, TypeVar
 import six
 from warnings import warn
 
@@ -86,7 +87,7 @@ class QuerySetDescriptor(object):
     it's declared on everytime it's accessed
     """
 
-    def __get__(self, obj, model):
+    def __get__(self, obj: Any, model: "BaseModel"):
         """ :rtype: ModelQuerySet """
         if model.__abstract__:
             raise CQLEngineException('cannot execute queries against abstract models')
@@ -329,6 +330,7 @@ class ColumnDescriptor(object):
             else:
                 raise AttributeError('cannot delete {0} columns'.format(self.column.column_name))
 
+M = TypeVar('M', bound='BaseModel')
 
 class BaseModel(object):
     """
@@ -341,7 +343,7 @@ class BaseModel(object):
     class MultipleObjectsReturned(_MultipleObjectsReturned):
         pass
 
-    objects = QuerySetDescriptor()
+    objects: query.ModelQuerySet = QuerySetDescriptor()
     ttl = TTLDescriptor()
     consistency = ConsistencyDescriptor()
     iff = ConditionalDescriptor()
@@ -421,6 +423,7 @@ class BaseModel(object):
         """
         return '{0} <{1}>'.format(self.__class__.__name__,
                                 ', '.join('{0}={1}'.format(k, getattr(self, k)) for k in self._primary_keys.keys()))
+
 
     @classmethod
     def _routing_key_from_values(cls, pk_values, protocol_version):
@@ -658,7 +661,7 @@ class BaseModel(object):
         return values
 
     @classmethod
-    def create(cls, **kwargs):
+    def create(cls: Type[M], **kwargs) -> M:
         """
         Create an instance of this model in the database.
 
@@ -673,7 +676,7 @@ class BaseModel(object):
         return cls.objects.create(**kwargs)
 
     @classmethod
-    def all(cls):
+    def all(cls: Type[M]) -> list[M]:
         """
         Returns a queryset representing all stored objects
 
@@ -682,7 +685,7 @@ class BaseModel(object):
         return cls.objects.all()
 
     @classmethod
-    def filter(cls, *args, **kwargs):
+    def filter(cls: Type[M], *args, **kwargs):
         """
         Returns a queryset based on filter parameters.
 
@@ -691,7 +694,7 @@ class BaseModel(object):
         return cls.objects.filter(*args, **kwargs)
 
     @classmethod
-    def get(cls, *args, **kwargs):
+    def get(cls: Type[M], *args, **kwargs) -> M:
         """
         Returns a single object based on the passed filter constraints.
 
@@ -699,7 +702,7 @@ class BaseModel(object):
         """
         return cls.objects.get(*args, **kwargs)
 
-    def timeout(self, timeout):
+    def timeout(self: M, timeout: float | None) -> M:
         """
         Sets a timeout for use in :meth:`~.save`, :meth:`~.update`, and :meth:`~.delete`
         operations
@@ -708,7 +711,7 @@ class BaseModel(object):
         self._timeout = timeout
         return self
 
-    def save(self):
+    def save(self: M) -> M:
         """
         Saves an object to the database.
 
@@ -744,7 +747,7 @@ class BaseModel(object):
 
         return self
 
-    def update(self, **values):
+    def update(self: M, **values) -> M:
         """
         Performs an update on the model instance. You can pass in values to set on the model
         for updating, or you can call without values to execute an update against any modified
@@ -835,7 +838,11 @@ class BaseModel(object):
     def _inst_get_connection(self):
         return self._connection or self.__connection__
 
+    def __getitem__(self, s: slice | int) -> M | list[M]:
+        return self.objects.__getitem__(s)
+
     _get_connection = hybrid_classmethod(_class_get_connection, _inst_get_connection)
+
 
 
 class ModelMetaClass(type):
