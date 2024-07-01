@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import unittest
+import pytest
 
 from itertools import islice, cycle
 from mock import Mock, patch, call
@@ -1134,6 +1135,7 @@ class FallthroughRetryPolicyTest(unittest.TestCase):
         self.assertEqual(consistency, None)
 
 
+@pytest.mark.filterwarnings("ignore:DowngradingConsistencyRetryPolicy:DeprecationWarning")
 class DowngradingConsistencyRetryPolicyTest(unittest.TestCase):
 
     def test_read_timeout(self):
