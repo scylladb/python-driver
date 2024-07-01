@@ -41,7 +41,7 @@ from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, exec
                                greaterthancass21, assert_startswith, greaterthanorequalcass40,
                                greaterthanorequaldse67, lessthancass40,
                                TestCluster, DSE_VERSION, requires_java_udf, requires_composite_type,
-                               requires_collection_indexes, xfail_scylla)
+                               requires_collection_indexes, xfail_scylla, lessthanscylla55)
 
 from tests.util import wait_until
 
@@ -956,6 +956,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.assertEqual(index_2.keyspace_name, "schemametadatatests")
 
     @greaterthanorequalcass30
+    @lessthanscylla55 # New Scylla versions enable some extensions by default
     def test_table_extensions(self):
         s = self.session
         ks = self.keyspace_name
