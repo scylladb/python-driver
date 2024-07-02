@@ -40,7 +40,7 @@ from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, exec
                                greaterthancass21, assert_startswith, greaterthanorequalcass40,
                                greaterthanorequaldse67, lessthancass40,
                                TestCluster, DSE_VERSION, requires_java_udf, requires_composite_type,
-                               requires_collection_indexes, SCYLLA_VERSION)
+                               requires_collection_indexes, SCYLLA_VERSION, xfail_scylla_version_lt)
 
 from tests.util import wait_until
 
@@ -501,7 +501,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.assertIn('CREATE INDEX e_index', statement)
 
     @greaterthancass21
-    @requires_collection_indexes
+    @xfail_scylla_version_lt('scylladb/scylladb#19278 - index functions are not included to DESCRIBE',
+                             oss_scylla_version='6.0.3', ent_scylla_version='2025.1')
     def test_collection_indexes(self):
 
         self.session.execute("CREATE TABLE %s.%s (a int PRIMARY KEY, b map<text, text>)"
@@ -1204,7 +1205,8 @@ CREATE TABLE export_udts.users (
         cluster.shutdown()
 
     @greaterthancass21
-    @pytest.mark.xfail(reason='Column name in CREATE INDEX is not quoted. It\'s a bug in driver or in Scylla')
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#10707 - Column name in CREATE INDEX is not quoted',
+                             oss_scylla_version="5.2", ent_scylla_version="2023.1")
     def test_case_sensitivity(self):
         """
         Test that names that need to be escaped in CREATE statements are

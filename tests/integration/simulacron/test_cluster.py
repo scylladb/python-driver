@@ -14,7 +14,7 @@
 import unittest
 
 import logging
-from packaging.version import Version
+from packaging.version import Version, VersionComparisonMethod
 
 import cassandra
 from tests.integration.simulacron import SimulacronCluster, SimulacronBase

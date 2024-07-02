@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import os
+from distutils.log import fatal
+
 from cassandra.cluster import Cluster
 
 from tests import connection_class, EVENT_LOOP_MANAGER
@@ -299,6 +301,8 @@ def get_unsupported_lower_protocol():
     This is used to determine the lowest protocol version that is NOT
     supported by the version of C* running
     """
+    if SCYLLA_VERSION is not None:
+        return 2
     if CASSANDRA_VERSION >= Version('3.0'):
         return 2
     else:
@@ -310,7 +314,8 @@ def get_unsupported_upper_protocol():
     This is used to determine the highest protocol version that is NOT
     supported by the version of C* running
     """
-
+    if SCYLLA_VERSION is not None:
+        return 5
     if CASSANDRA_VERSION >= Version('4.0-a'):
         if DSE_VERSION:
             return None
@@ -389,6 +394,51 @@ requires_composite_type = pytest.mark.skipif(SCYLLA_VERSION is not None,
 requires_custom_payload = pytest.mark.skipif(SCYLLA_VERSION is not None or PROTOCOL_VERSION < 4,
                                             reason='Scylla does not support custom payloads. Cassandra requires native protocol v4.0+')
 xfail_scylla = lambda reason, *args, **kwargs: pytest.mark.xfail(SCYLLA_VERSION is not None, reason=reason, *args, **kwargs)
+
+
+def xfail_scylla_version_lt(reason, oss_scylla_version, ent_scylla_version, *args, **kwargs):
+    """
+    It is used to mark tests that are going to fail on certain scylla versions.
+
+    ent_scylla_version should contain at least first major: `x.1.1` or `x.1` or `x`
+    """
+    if not reason.startswith("scylladb/scylladb#"):
+        raise ValueError('reason should start with scylladb/scylladb#<issue-id> to reference issue in scylla repo')
+
+    if not isinstance(ent_scylla_version, (tuple, list)):
+        ent_scylla_version = (ent_scylla_version,)
+    first_major = None
+    ent_scylla_version = [Version(v) for v in ent_scylla_version]
+
+    # Enterprise releases are tricky, here are the rules:
+    # 1. If something is fixed in `a.b.c` it is also fixed in `a.b.d` where c < d
+    # 2. If something is fixed in `a.1.1` it is also fixed in `c.d.f` where Version(a.b.1) < Version(`c.d.f`)
+    # To make version matching work properly of enterprise we need to have a first major version (`x.1.1`) where it was fixed, in addition to exact version.
+    for ent_v in ent_scylla_version:
+        if ent_v.minor in (1,0) and ent_v.micro in (1,0):
+            first_major = ent_v
+
+    if not first_major:
+        raise ValueError("ent_scylla_version should contain not only exact version where issue has been fixed, but also first major: `x.1.1`")
+
+    if SCYLLA_VERSION is None:
+        return pytest.mark.skipif(False, reason="It is just a NoOP Decor, should not skip anything")
+
+    current_version = Version(get_scylla_version(SCYLLA_VERSION) if SCYLLA_VERSION is not None else '0.0.0')
+    is_enterprise = current_version > Version("2018.1")
+    if not is_enterprise:
+        return pytest.mark.xfail(current_version < Version(oss_scylla_version),
+                                 reason=reason, *args, **kwargs)
+
+    if first_major <= current_version:
+        return pytest.mark.xfail(False, reason=reason, *args, **kwargs)
+
+    for ent_v in ent_scylla_version:
+        if ent_v.major == current_version.major and ent_v.minor == current_version.minor:
+            return pytest.mark.xfail(current_version < ent_v, reason=reason, *args, **kwargs)
+    return pytest.mark.xfail(True, reason=reason, *args, **kwargs)
+
+
 incorrect_test = lambda reason='This test seems to be incorrect and should be fixed', *args, **kwargs: pytest.mark.xfail(reason=reason, *args, **kwargs)
 
 pypy = unittest.skipUnless(platform.python_implementation() == "PyPy", "Test is skipped unless it's on PyPy")
