@@ -154,9 +154,10 @@ def _get_index_name_by_column(table, column_name):
     Find the index name for a given table and column.
     """
     protected_name = metadata.protect_name(column_name)
-    possible_index_values = [protected_name, "values(%s)" % protected_name]
+    possible_index_values = [protected_name, "values(%s)" % protected_name, "keys(%s)" % protected_name]
     for index_metadata in table.indexes.values():
         options = dict(index_metadata.index_options)
+
         if options.get('target') in possible_index_values:
             return index_metadata.name
 
