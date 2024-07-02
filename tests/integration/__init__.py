@@ -390,6 +390,17 @@ requires_composite_type = pytest.mark.skipif(SCYLLA_VERSION is not None,
 requires_custom_payload = pytest.mark.skipif(SCYLLA_VERSION is not None or PROTOCOL_VERSION < 4,
                                             reason='Scylla does not support custom payloads. Cassandra requires native protocol v4.0+')
 xfail_scylla = lambda reason, *args, **kwargs: pytest.mark.xfail(SCYLLA_VERSION is not None, reason=reason, *args, **kwargs)
+
+
+def xfail_scylla_version(reason, oss_scylla_version, ent_scylla_version, *args, **kwargs):
+    current_version = Version(get_scylla_version(SCYLLA_VERSION) if SCYLLA_VERSION is not None else '0.0.0')
+    if current_version > Version("2018.1"):
+        lt_scylla_version = Version(ent_scylla_version)
+    else:
+        lt_scylla_version = Version(oss_scylla_version)
+    return pytest.mark.xfail(current_version < lt_scylla_version,
+                             reason=reason, *args, **kwargs)
+
 incorrect_test = lambda reason='This test seems to be incorrect and should be fixed', *args, **kwargs: pytest.mark.xfail(reason=reason, *args, **kwargs)
 
 pypy = unittest.skipUnless(platform.python_implementation() == "PyPy", "Test is skipped unless it's on PyPy")

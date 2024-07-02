@@ -42,7 +42,7 @@ from tests import notwindows, notasyncio
 from tests.integration import use_cluster, get_server_versions, CASSANDRA_VERSION, \
     execute_until_pass, execute_with_long_wait_retry, get_node, MockLoggingHandler, get_unsupported_lower_protocol, \
     get_unsupported_upper_protocol, lessthanprotocolv3, protocolv6, local, CASSANDRA_IP, greaterthanorequalcass30, \
-    lessthanorequalcass40, DSE_VERSION, TestCluster, PROTOCOL_VERSION, xfail_scylla, incorrect_test
+    lessthanorequalcass40, DSE_VERSION, TestCluster, PROTOCOL_VERSION, xfail_scylla_version, incorrect_test
 from tests.integration.util import assert_quiescent_pool_state
 import sys
 
@@ -288,7 +288,8 @@ class ClusterTests(unittest.TestCase):
 
         cluster.shutdown()
 
-    @xfail_scylla("Failing with scylla because there is option to create a cluster with 'lower bound' protocol")
+    @xfail_scylla_version("Failing with scylla because there is option to create a cluster with 'lower bound' protocol",
+                          oss_scylla_version="5.2", ent_scylla_version="2023.1")
     def test_invalid_protocol_negotation(self):
         """
         Test for protocol negotiation when explicit versions are set
