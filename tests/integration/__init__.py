@@ -394,12 +394,13 @@ requires_custom_payload = pytest.mark.skipif(SCYLLA_VERSION is not None or PROTO
                                             reason='Scylla does not support custom payloads. Cassandra requires native protocol v4.0+')
 xfail_scylla = lambda reason, *args, **kwargs: pytest.mark.xfail(SCYLLA_VERSION is not None, reason=reason, *args, **kwargs)
 incorrect_test = lambda reason='This test seems to be incorrect and should be fixed', *args, **kwargs: pytest.mark.xfail(reason=reason, *args, **kwargs)
+scylla_only = pytest.mark.skipif(SCYLLA_VERSION is None, reason='Scylla only test')
 
 pypy = unittest.skipUnless(platform.python_implementation() == "PyPy", "Test is skipped unless it's on PyPy")
 requiresmallclockgranularity = unittest.skipIf("Windows" in platform.system() or "asyncore" in EVENT_LOOP_MANAGER,
                                                "This test is not suitible for environments with large clock granularity")
 requiressimulacron = unittest.skipIf(SIMULACRON_JAR is None or CASSANDRA_VERSION < Version("2.1"), "Simulacron jar hasn't been specified or C* version is 2.0")
-requirecassandra = unittest.skipIf(DSE_VERSION, "Cassandra required")
+requirecassandra = unittest.skipIf(DSE_VERSION or SCYLLA_VERSION, "Cassandra required")
 notdse = unittest.skipIf(DSE_VERSION, "DSE not supported")
 requiredse = unittest.skipUnless(DSE_VERSION, "DSE required")
 requirescloudproxy = unittest.skipIf(CLOUD_PROXY_PATH is None, "Cloud Proxy path hasn't been specified")
