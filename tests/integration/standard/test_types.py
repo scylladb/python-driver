@@ -31,7 +31,7 @@ from tests.unit.cython.utils import cythontest
 
 from tests.integration import use_singledc, execute_until_pass, notprotocolv1, \
     BasicSharedKeyspaceUnitTestCase, greaterthancass21, lessthancass30, greaterthanorequaldse51, \
-    DSE_VERSION, greaterthanorequalcass3_10, requiredse, TestCluster, requires_composite_type
+    DSE_VERSION, greaterthanorequalcass3_10, requiredse, TestCluster, requires_composite_type, scylla_only
 from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES, COLLECTION_TYPES, PRIMITIVE_DATATYPES_KEYS, \
     get_sample, get_all_samples, get_collection_sample
 
@@ -723,6 +723,7 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         self.assertEqual(('', None, None, b''), result[0].t)
         self.assertEqual(('', None, None, b''), s.execute(read)[0].t)
 
+    @scylla_only
     def test_insert_collection_with_null_fails(self):
         """
         NULLs in list / sets / maps are forbidden.
