@@ -5,7 +5,7 @@ import unittest
 from cassandra.cluster import ExecutionProfile
 from cassandra.policies import WhiteListRoundRobinPolicy
 
-from tests.integration import use_cluster, get_node, get_cluster, local, TestCluster
+from tests.integration import use_cluster, get_node, get_cluster, local, TestCluster, scylla_only
 from tests.util import wait_until_not_raised
 
 LOGGER = logging.getLogger(__name__)
@@ -16,6 +16,7 @@ def setup_module():
     use_cluster('test_ip_change', [3], start=True)
 
 @local
+@scylla_only
 class TestIpAddressChange(unittest.TestCase):
     @classmethod
     def setup_class(cls):

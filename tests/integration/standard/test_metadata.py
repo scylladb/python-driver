@@ -25,7 +25,7 @@ from mock import Mock, patch
 import pytest
 
 from cassandra import AlreadyExists, SignatureDescriptor, UserFunctionDescriptor, UserAggregateDescriptor
-
+from ccmlib.scylla_cluster import ScyllaCluster
 from cassandra.encoder import Encoder
 from cassandra.metadata import (IndexMetadata, Token, murmur3, Function, Aggregate, protect_name, protect_names,
                                 RegisteredTableExtension, _RegisteredExtensionType, get_schema_parser,
@@ -1204,7 +1204,7 @@ CREATE TABLE export_udts.users (
         cluster.shutdown()
 
     @greaterthancass21
-    @pytest.mark.xfail(reason='Column name in CREATE INDEX is not quoted. It\'s a bug in driver or in Scylla')
+    @xfail_scylla(reason='Column name in CREATE INDEX is not quoted. It\'s a bug in driver or in Scylla')
     def test_case_sensitivity(self):
         """
         Test that names that need to be escaped in CREATE statements are
@@ -1274,13 +1274,13 @@ CREATE TABLE export_udts.users (
         cluster.shutdown()
 
     @local
-    @pytest.mark.xfail(reason='AssertionError: \'RAC1\' != \'r1\' - probably a bug in driver or in Scylla')
     def test_replicas(self):
         """
         Ensure cluster.metadata.get_replicas return correctly when not attached to keyspace
         """
         if murmur3 is None:
             raise unittest.SkipTest('the murmur3 extension is not available')
+        is_scylla = isinstance(get_cluster(), ScyllaCluster)
 
         cluster = TestCluster()
         self.assertEqual(cluster.metadata.get_replicas('test3rf', 'key'), [])
@@ -1290,7 +1290,7 @@ CREATE TABLE export_udts.users (
         self.assertNotEqual(list(cluster.metadata.get_replicas('test3rf', b'key')), [])
         host = list(cluster.metadata.get_replicas('test3rf', b'key'))[0]
         self.assertEqual(host.datacenter, 'dc1')
-        self.assertEqual(host.rack, 'r1')
+        self.assertEqual(host.rack, 'RAC1' if is_scylla else 'r1')
         cluster.shutdown()
 
     def test_token_map(self):
