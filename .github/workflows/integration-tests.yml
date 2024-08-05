@@ -24,19 +24,37 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+
     - name: setup pyenv ${{ matrix.python-version }}
       uses: "gabrielfalcao/pyenv-action@v16"
       with:
         default: 2.7.14
         versions: ${{ matrix.python-version }}
-    - name: Test with pytest
+
+    - name: Integration tests
+      id: integration-tests
       run: |
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
         export SCYLLA_VERSION='release:5.1'
-        ./ci/run_integration_test.sh tests/integration/standard/ tests/integration/cqlengine/
-    
-    - name: Test tablets
+        DEBUG_LOG_FILE=integration-tests.log ./ci/run_integration_test.sh tests/integration/standard/ tests/integration/cqlengine/
+
+    - name: Store debug logs for integration tests
+      if: failure() && steps.integration-tests.outcome == 'failure'
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-tests
+        path: integration-tests.log
+
+    - name: Integration tablets tests
+      id: integration-tablets-tests
       run: |
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
-        export SCYLLA_VERSION='unstable/master:2024-01-17T17:56:00Z'
-        ./ci/run_integration_test.sh tests/integration/experiments/
+        export SCYLLA_VERSION='release:6.0.2'
+        DEBUG_LOG_FILE=integration-tablets-tests.log ./ci/run_integration_test.sh tests/integration/experiments/
+
+    - name: Store debug logs for integration tablets tests
+      if: failure() && steps.integration-tablets-tests.outcome == 'failure'
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-tablets-tests
+        path: integration-tablets-tests.log

@@ -43,4 +43,4 @@ tests/unit/cython/bytesio_testhelper.c
 
 #iPython
 *.ipynb
-
+debug.log

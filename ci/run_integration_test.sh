@@ -37,5 +37,8 @@ ccm remove
 # run test
 
 export MAPPED_SCYLLA_VERSION=3.11.4
-PROTOCOL_VERSION=4  pytest -rf --import-mode append $*
+
+DEBUG_LOG_FILE=""
+[[ -n "${LOG_FILE}" ]] && DEBUG_LOG_FILE="--log-file-level=debug --log-file=${LOG_FILE}"
+PROTOCOL_VERSION=4  pytest -vv -s ${DEBUG_LOG_FILE} --log-cli-level=info -rf --import-mode append $*
 
