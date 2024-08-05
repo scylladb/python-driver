@@ -39,7 +39,7 @@ from cassandra.cqlengine import operators
 from cassandra.util import uuid_from_time
 from cassandra.cqlengine.connection import get_session
 from tests.integration import PROTOCOL_VERSION, CASSANDRA_VERSION, greaterthancass20, greaterthancass21, \
-    greaterthanorequalcass30, TestCluster, requires_collection_indexes
+    greaterthanorequalcass30, TestCluster, requires_collection_indexes, xfail_scylla
 from tests.integration.cqlengine import execute_count, DEFAULT_KEYSPACE
 
 
@@ -599,6 +599,7 @@ class TestQuerySetDistinct(BaseQuerySetUsage):
 
 @requires_collection_indexes
 class TestQuerySetOrdering(BaseQuerySetUsage):
+    @xfail_scylla(reason="Scylla does not support ordering on non-primary key columns: https://github.com/scylladb/python-driver/issues/343")
     @execute_count(2)
     def test_order_by_success_case(self):
         q = TestModel.objects(test_id=0).order_by('attempt_id')
