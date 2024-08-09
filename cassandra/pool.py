@@ -435,7 +435,7 @@ class HostConnection(object):
         self._keyspace = session.keyspace
 
         if self._keyspace:
-            first_connection.set_keyspace_blocking(self._keyspace)
+            first_connection.set_keyspace_blocking(self._keyspace, session.cluster.control_connection_timeout)
         if first_connection.features.sharding_info and not self._session.cluster.shard_aware_options.disable:
             self.host.sharding_info = first_connection.features.sharding_info
             self._open_connections_for_all_shards(first_connection.features.shard_id)
@@ -615,7 +615,7 @@ class HostConnection(object):
                     connection = self._session.cluster.connection_factory(self.host.endpoint,
                                                                           on_orphaned_stream_released=self.on_orphaned_stream_released)
                     if self._keyspace:
-                        connection.set_keyspace_blocking(self._keyspace)
+                        connection.set_keyspace_blocking(self._keyspace, self._session.cluster.control_connection_timeout)
                     self._connections[connection.features.shard_id] = connection
             except Exception:
                 log.warning("Failed reconnecting %s. Retrying." % (self.host.endpoint,))
@@ -766,7 +766,7 @@ class HostConnection(object):
                         self.host
                     )
                 if self._keyspace:
-                    conn.set_keyspace_blocking(self._keyspace)
+                    conn.set_keyspace_blocking(self._keyspace, self._session.cluster.control_connection_timeout)
 
                 self._connections[conn.features.shard_id] = conn
             if old_conn is not None:
@@ -953,7 +953,7 @@ class HostConnectionPool(object):
         self._keyspace = session.keyspace
         if self._keyspace:
             for conn in self._connections:
-                conn.set_keyspace_blocking(self._keyspace)
+                conn.set_keyspace_blocking(self._keyspace, self._session.cluster.control_connection_timeout)
 
         self._trash = set()
         self._next_trash_allowed_at = time.time()
@@ -1053,7 +1053,7 @@ class HostConnectionPool(object):
         try:
             conn = self._session.cluster.connection_factory(self.host.endpoint, on_orphaned_stream_released=self.on_orphaned_stream_released)
             if self._keyspace:
-                conn.set_keyspace_blocking(self._session.keyspace)
+                conn.set_keyspace_blocking(self._session.keyspace, self._session.cluster.control_connection_timeout)
             self._next_trash_allowed_at = time.time() + _MIN_TRASH_INTERVAL
             with self._lock:
                 new_connections = self._connections[:] + [conn]

@@ -1498,14 +1498,14 @@ class Connection(object):
             log.error(msg, self.endpoint, auth_response)
             raise ProtocolError(msg % (self.endpoint, auth_response))
 
-    def set_keyspace_blocking(self, keyspace):
+    def set_keyspace_blocking(self, keyspace, timeout=None):
         if not keyspace or keyspace == self.keyspace:
             return
 
         query = QueryMessage(query='USE "%s"' % (keyspace,),
                              consistency_level=ConsistencyLevel.ONE)
         try:
-            result = self.wait_for_response(query)
+            result = self.wait_for_response(query, timeout=timeout)
         except InvalidRequestException as ire:
             # the keyspace probably doesn't exist
             raise ire.to_exception()

@@ -56,7 +56,7 @@ class _PoolTests(unittest.TestCase):
         c, request_id = pool.borrow_connection(timeout=0.01)
         self.assertIs(c, conn)
         self.assertEqual(1, conn.in_flight)
-        conn.set_keyspace_blocking.assert_called_once_with('foobarkeyspace')
+        conn.set_keyspace_blocking.assert_called_once_with('foobarkeyspace', session.cluster.control_connection_timeout)
 
         pool.return_connection(conn)
         self.assertEqual(0, conn.in_flight)
@@ -256,7 +256,7 @@ class HostConnectionPoolTests(_PoolTests):
             c, request_id = pool.borrow_connection(1.0)
             self.assertIs(conn, c)
             self.assertEqual(1, conn.in_flight)
-            conn.set_keyspace_blocking.assert_called_once_with('foobarkeyspace')
+            conn.set_keyspace_blocking.assert_called_once_with('foobarkeyspace', session.cluster.control_connection_timeout)
             pool.return_connection(c)
 
         t = Thread(target=get_conn)
