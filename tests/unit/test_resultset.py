@@ -14,6 +14,7 @@
 from cassandra.query import named_tuple_factory, dict_factory, tuple_factory
 
 import unittest
+import pytest
 
 from mock import Mock, PropertyMock, patch
 
@@ -51,6 +52,7 @@ class ResultSetTests(unittest.TestCase):
         itr = iter(rs)
         self.assertListEqual(list(itr), expected)
 
+    @pytest.mark.filterwarnings("ignore:ResultSet indexing support will be removed in 4.0:DeprecationWarning")
     def test_list_non_paged(self):
         # list access on RS for backwards-compatibility
         expected = list(range(10))
@@ -78,6 +80,7 @@ class ResultSetTests(unittest.TestCase):
         self.assertTrue(rs.has_more_pages)
         self.assertFalse(rs.has_more_pages)
 
+    @pytest.mark.filterwarnings("ignore:ResultSet indexing support will be removed in 4.0:DeprecationWarning")
     def test_iterate_then_index(self):
         # RuntimeError if indexing with no pages
         expected = list(range(10))
@@ -113,6 +116,7 @@ class ResultSetTests(unittest.TestCase):
         self.assertFalse(rs)
         self.assertFalse(list(rs))
 
+    @pytest.mark.filterwarnings("ignore:ResultSet indexing support will be removed in 4.0:DeprecationWarning")
     def test_index_list_mode(self):
         # no pages
         expected = list(range(10))
@@ -152,7 +156,7 @@ class ResultSetTests(unittest.TestCase):
 
         # results can be iterated or indexed once we're materialized
         self.assertListEqual(list(rs), expected)
-        self.assertEqual(rs[9], expected[9])
+        self.assertEqual(list(rs)[9], expected[9])
         self.assertTrue(rs)
 
         # pages
@@ -165,7 +169,7 @@ class ResultSetTests(unittest.TestCase):
 
         # results can be iterated or indexed once we're materialized
         self.assertListEqual(list(rs), expected)
-        self.assertEqual(rs[9], expected[9])
+        self.assertEqual(list(rs)[9], expected[9])
         self.assertTrue(rs)
 
     def test_bool(self):

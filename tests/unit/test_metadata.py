@@ -848,9 +848,9 @@ class MetadataHelpersTest(unittest.TestCase):
         argument_to_expected_results = [
             ('int', 'int'),
             ('tuple<text>', 'tuple<text>'),
-            (r'map<"!@#$%^&*()[]\ frozen >>>", int>', r'map<"!@#$%^&*()[]\ frozen >>>", int>'),  # A valid UDT name
+            (r'map<"!@#$%^&*()[]\\ frozen >>>", int>', r'map<"!@#$%^&*()[]\ frozen >>>", int>'),  # A valid UDT name
             ('frozen<tuple<text>>', 'tuple<text>'),
-            (r'frozen<map<"!@#$%^&*()[]\ frozen >>>", int>>', r'map<"!@#$%^&*()[]\ frozen >>>", int>'),
+            (r'frozen<map<"!@#$%^&*()[]\\ frozen >>>", int>>', r'map<"!@#$%^&*()[]\ frozen >>>", int>'),
             ('frozen<map<frozen<tuple<int, frozen<list<text>>, int>>, frozen<map<int, frozen<tuple<int>>>>>>',
              'map<tuple<int, list<text>, int>, map<int, tuple<int>>>'),
         ]

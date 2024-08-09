@@ -122,7 +122,7 @@ def submit_and_wait_for_completion(unit_test, create_timer, start, end, incremen
         pending_callbacks.append(callback)
 
     # wait for all the callbacks associated with the timers to be invoked
-    while len(pending_callbacks) is not 0:
+    while len(pending_callbacks) != 0:
         for callback in pending_callbacks:
             if callback.was_invoked():
                 pending_callbacks.remove(callback)
@@ -232,7 +232,7 @@ class ReactorTestMixin(object):
     def make_msg(self, header, body=bytes()):
         return header + uint32_pack(len(body)) + body
 
-    def test_successful_connection(self):
+    def _test_successful_connection(self):
         c = self.make_connection()
 
         # let it write the OptionsMessage
@@ -254,6 +254,9 @@ class ReactorTestMixin(object):
         self.assertTrue(c.connected_event.is_set())
         return c
 
+    def test_successful_connection(self):
+        self._test_successful_connection()
+
     def test_eagain_on_buffer_size(self):
         self._check_error_recovery_on_buffer_size(errno.EAGAIN)
 
@@ -271,7 +274,7 @@ class ReactorTestMixin(object):
             error_class=ssl.SSLError)
 
     def _check_error_recovery_on_buffer_size(self, error_code, error_class=socket_error):
-        c = self.test_successful_connection()
+        c = self._test_successful_connection()
 
         # current data, used by the recv side_effect
         message_chunks = None
