@@ -16,7 +16,7 @@ import unittest
 
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.policies import HostFilterPolicy, RoundRobinPolicy,  SimpleConvictionPolicy, \
-    WhiteListRoundRobinPolicy, ExponentialBackoffRetryPolicy
+    WhiteListRoundRobinPolicy, ExponentialBackoffRetryPolicy, ColDesc
 from cassandra.pool import Host
 from cassandra.connection import DefaultEndPoint
 
@@ -24,10 +24,8 @@ from tests.integration import local, use_singledc, TestCluster
 
 from concurrent.futures import wait as wait_futures
 
-
 def setup_module():
     use_singledc()
-
 
 class HostFilterPolicyTests(unittest.TestCase):
 
