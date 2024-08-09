@@ -1801,3 +1801,15 @@ class Version(object):
                 (is_major_ge and is_minor_ge and is_patch_ge and is_build_gt) or
                 (is_major_ge and is_minor_ge and is_patch_ge and is_build_ge and is_prerelease_gt)
                 )
+
+
+_query_timeout_regexp = re.compile('USING[ \t]+TIMEOUT[ \t]+[0-9]+[a-z]+[ \t]*;?$')
+
+
+def add_timeout_to_query(stmt: str, metadata_request_timeout: datetime.timedelta) -> str:
+    if metadata_request_timeout is None:
+        return stmt
+    ms = int(metadata_request_timeout / datetime.timedelta(milliseconds=1))
+    if ms == 0 or _query_timeout_regexp.search(stmt) is not None:
+        return stmt
+    return f"{stmt} USING TIMEOUT {ms}ms"
