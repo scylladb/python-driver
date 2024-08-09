@@ -56,7 +56,7 @@ Contents
 :doc:`scylla-cloud-serverless`
     Connect to ScyllaDB Cloud Serverless
 
-:doc:`column_encryption`
+:doc:`column-encryption`
     Transparent client-side per-column encryption and decryption
 
 :doc:`faq`
