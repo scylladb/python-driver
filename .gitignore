@@ -44,3 +44,16 @@ tests/unit/cython/bytesio_testhelper.c
 #iPython
 *.ipynb
 
+# Files that exist on the upstream, but we want to explicitly drop from scylladb/python-driver
+tox.ini
+Jenkinsfile
+Jenkinsfile.bak
+.travis.yml
+build.yaml.bak
+docs/core_graph.rst
+docs/classic_graph.rst
+docs/geo_types.rst
+docs/graph.rst
+docs/graph_fluent.rst
+docs/api/cassandra/graph.rst
+docs/api/cassandra/datastax/graph/
