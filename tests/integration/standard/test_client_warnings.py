@@ -15,7 +15,6 @@
 
 import unittest
 
-import six
 from cassandra.query import BatchStatement
 
 from tests.integration import (use_singledc, PROTOCOL_VERSION, local, TestCluster,
@@ -25,10 +24,7 @@ from tests.integration import (use_singledc, PROTOCOL_VERSION, local, TestCluste
 def setup_module():
     use_singledc()
 
-
-# Failing with scylla because there is no warning message when changing the value of 'batch_size_warn_threshold_in_kb'
-# config")
-@xfail_scylla('Empty warnings: TypeError: object of type \'NoneType\' has no len()')
+@xfail_scylla('scylladb/scylladb#10196 - scylla does not report warnings')
 class ClientWarningTests(unittest.TestCase):
 
     @classmethod

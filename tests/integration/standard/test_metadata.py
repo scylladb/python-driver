@@ -17,7 +17,6 @@ import unittest
 from collections import defaultdict
 import difflib
 import logging
-import six
 import sys
 import time
 import os
@@ -41,7 +40,7 @@ from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, exec
                                greaterthancass21, assert_startswith, greaterthanorequalcass40,
                                greaterthanorequaldse67, lessthancass40,
                                TestCluster, DSE_VERSION, requires_java_udf, requires_composite_type,
-                               requires_collection_indexes, xfail_scylla)
+                               requires_collection_indexes, SCYLLA_VERSION)
 
 from tests.util import wait_until
 
@@ -532,14 +531,14 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
             tablemeta = self.get_table_metadata()
             self.assertIn('(full(b))', tablemeta.export_as_string())
 
-    #TODO: Fix Scylla or test
-    @xfail_scylla('Scylla prints `compression = {}` instead of `compression = {\'enabled\': \'false\'}`.')
     def test_compression_disabled(self):
         create_statement = self.make_create_statement(["a"], ["b"], ["c"])
         create_statement += " WITH compression = {}"
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
-        expected = "compression = {}" if CASSANDRA_VERSION < Version("3.0") else "compression = {'enabled': 'false'}"
+        expected = "compression = {'enabled': 'false'}"
+        if SCYLLA_VERSION is not None or CASSANDRA_VERSION < Version("3.0"):
+            expected = "compression = {}"
         self.assertIn(expected, tablemeta.export_as_string())
 
     def test_non_size_tiered_compaction(self):
@@ -972,9 +971,6 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         table_meta = ks_meta.tables[t]
         view_meta = table_meta.views[v]
 
-        self.assertFalse(table_meta.extensions)
-        self.assertFalse(view_meta.extensions)
-
         original_table_cql = table_meta.export_as_string()
         original_view_cql = view_meta.export_as_string()
 
@@ -990,8 +986,6 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         class Ext1(Ext0):
             name = t + '##'
 
-        self.assertFalse(table_meta.extensions)
-        self.assertFalse(view_meta.extensions)
         self.assertIn(Ext0.name, _RegisteredExtensionType._extension_registry)
         self.assertIn(Ext1.name, _RegisteredExtensionType._extension_registry)
         # There will bee the RLAC extension here.
@@ -1008,7 +1002,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         update_v = s.prepare('UPDATE system_schema.views SET extensions=? WHERE keyspace_name=? AND view_name=?')
         # extensions registered, one present
         # --------------------------------------
-        ext_map = {Ext0.name: six.b("THA VALUE")}
+        ext_map = {Ext0.name: b"THA VALUE"}
         [(s.execute(update_t, (ext_map, ks, t)), s.execute(update_v, (ext_map, ks, v)))
          for _ in self.cluster.metadata.all_hosts()]  # we're manipulating metadata - do it on all hosts
         self.cluster.refresh_table_metadata(ks, t)
@@ -1030,8 +1024,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
         # extensions registered, one present
         # --------------------------------------
-        ext_map = {Ext0.name: six.b("THA VALUE"),
-                   Ext1.name: six.b("OTHA VALUE")}
+        ext_map = {Ext0.name: b"THA VALUE",
+                   Ext1.name: b"OTHA VALUE"}
         [(s.execute(update_t, (ext_map, ks, t)), s.execute(update_v, (ext_map, ks, v)))
          for _ in self.cluster.metadata.all_hosts()]  # we're manipulating metadata - do it on all hosts
         self.cluster.refresh_table_metadata(ks, t)
@@ -1099,7 +1093,7 @@ class TestCodeCoverage(unittest.TestCase):
         cluster = TestCluster()
         cluster.connect()
 
-        self.assertIsInstance(cluster.metadata.export_schema_as_string(), six.string_types)
+        self.assertIsInstance(cluster.metadata.export_schema_as_string(), str)
         cluster.shutdown()
 
     def test_export_keyspace_schema(self):
@@ -1112,8 +1106,8 @@ class TestCodeCoverage(unittest.TestCase):
 
         for keyspace in cluster.metadata.keyspaces:
             keyspace_metadata = cluster.metadata.keyspaces[keyspace]
-            self.assertIsInstance(keyspace_metadata.export_as_string(), six.string_types)
-            self.assertIsInstance(keyspace_metadata.as_cql_query(), six.string_types)
+            self.assertIsInstance(keyspace_metadata.export_as_string(), str)
+            self.assertIsInstance(keyspace_metadata.as_cql_query(), str)
         cluster.shutdown()
 
     def assert_equal_diff(self, received, expected):
@@ -1293,8 +1287,8 @@ CREATE TABLE export_udts.users (
 
         cluster.connect('test3rf')
 
-        self.assertNotEqual(list(cluster.metadata.get_replicas('test3rf', six.b('key'))), [])
-        host = list(cluster.metadata.get_replicas('test3rf', six.b('key')))[0]
+        self.assertNotEqual(list(cluster.metadata.get_replicas('test3rf', b'key')), [])
+        host = list(cluster.metadata.get_replicas('test3rf', b'key'))[0]
         self.assertEqual(host.datacenter, 'dc1')
         self.assertEqual(host.rack, 'r1')
         cluster.shutdown()

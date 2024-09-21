@@ -32,7 +32,6 @@ import platform
 from threading import Event
 from subprocess import call
 from itertools import groupby
-import six
 import shutil
 import pytest
 
@@ -186,10 +185,10 @@ if os.getenv('DSE_VERSION', None):  # we are testing against DSE
     DSE_CRED = os.getenv('DSE_CREDS', None)
     CASSANDRA_VERSION = _get_cass_version_from_dse(DSE_VERSION.base_version)
     CCM_VERSION = DSE_VERSION.base_version
-else:  # we are testing against Cassandra or DDAC
+else:  # we are testing against Cassandra,DDAC or Scylla
     if SCYLLA_VERSION:
         cv_string = SCYLLA_VERSION
-        mcv_string = os.getenv('MAPPED_SCYLLA_VERSION', None)
+        mcv_string = os.getenv('MAPPED_SCYLLA_VERSION', '3.11.4') # Assume that scylla matches cassandra `3.11.4` behavior
     else:
         cv_string = os.getenv('CASSANDRA_VERSION', None)
         mcv_string = os.getenv('MAPPED_CASSANDRA_VERSION', None)
@@ -393,7 +392,6 @@ xfail_scylla = lambda reason, *args, **kwargs: pytest.mark.xfail(SCYLLA_VERSION 
 incorrect_test = lambda reason='This test seems to be incorrect and should be fixed', *args, **kwargs: pytest.mark.xfail(reason=reason, *args, **kwargs)
 
 pypy = unittest.skipUnless(platform.python_implementation() == "PyPy", "Test is skipped unless it's on PyPy")
-notpy3 = unittest.skipIf(sys.version_info >= (3, 0), "Test not applicable for Python 3.x runtime")
 requiresmallclockgranularity = unittest.skipIf("Windows" in platform.system() or "asyncore" in EVENT_LOOP_MANAGER,
                                                "This test is not suitible for environments with large clock granularity")
 requiressimulacron = unittest.skipIf(SIMULACRON_JAR is None or CASSANDRA_VERSION < Version("2.1"), "Simulacron jar hasn't been specified or C* version is 2.0")
@@ -499,7 +497,7 @@ def is_current_cluster(cluster_name, node_counts, workloads):
 
 
 def start_cluster_wait_for_up(cluster):
-    cluster.start(wait_for_binary_proto=True)
+    cluster.start(wait_for_binary_proto=True, wait_other_notice=True)
     # Added to wait for slow nodes to start up
     log.debug("Cluster started waiting for binary ports")
     for node in CCM_CLUSTER.nodes.values():
@@ -623,6 +621,7 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
                     else:
                         CCM_CLUSTER.set_configuration_options({'experimental_features': ['lwt', 'udf'], 'start_native_transport': True})
 
+                    CCM_CLUSTER.set_configuration_options({'skip_wait_for_gossip_to_settle': 0})
                     # Permit IS NOT NULL restriction on non-primary key columns of a materialized view
                     # This allows `test_metadata_with_quoted_identifiers` to run
                     CCM_CLUSTER.set_configuration_options({'strict_is_not_null_in_views': False})
@@ -659,7 +658,7 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
                 node.set_workloads(workloads)
         if start:
             log.debug("Starting CCM cluster: {0}".format(cluster_name))
-            CCM_CLUSTER.start(jvm_args=jvm_args, wait_for_binary_proto=True)
+            CCM_CLUSTER.start(jvm_args=jvm_args, wait_for_binary_proto=True, wait_other_notice=True)
             # Added to wait for slow nodes to start up
             log.debug("Cluster started waiting for binary ports")
             for node in CCM_CLUSTER.nodes.values():
@@ -675,7 +674,7 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
 
         if os.name == "nt":
             if CCM_CLUSTER:
-                for node in six.itervalues(CCM_CLUSTER.nodes):
+                for node in CCM_CLUSTER.nodes.items():
                     os.system("taskkill /F /PID " + str(node.pid))
         else:
             call(["pkill", "-9", "-f", ".ccm"])
