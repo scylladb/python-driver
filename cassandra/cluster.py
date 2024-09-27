@@ -1014,7 +1014,7 @@ class Cluster(object):
     cloud = None
     """
     A dict of the cloud configuration. Example::
-        
+
         {
             # path to the secure connect bundle
             'secure_connect_bundle': '/path/to/secure-connect-dbname.zip',
@@ -1031,6 +1031,12 @@ class Cluster(object):
     """
     Can be set with :class:`ShardAwareOptions` or with a dict, to disable the automatic shardaware,
     or to disable the shardaware port (advanced shardaware)
+    """
+
+    column_encryption_policy = None
+    """
+    An instance of :class:`cassandra.policies.ColumnEncryptionPolicy` specifying encryption materials to be
+    used for columns in this cluster.
     """
 
     @property
@@ -1148,7 +1154,9 @@ class Cluster(object):
                  client_id=None,
                  cloud=None,
                  scylla_cloud=None,
-                 shard_aware_options=None):
+                 shard_aware_options=None,
+                 column_encryption_policy=None,
+                 ):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
         extablishing connection pools or refreshing metadata.
@@ -1224,6 +1232,9 @@ class Cluster(object):
             self.contact_points = contact_points
 
         self.port = port
+
+        if column_encryption_policy is not None:
+            self.column_encryption_policy = column_encryption_policy
 
         self.endpoint_factory = endpoint_factory or DefaultEndPointFactory(port=self.port)
         self.endpoint_factory.configure(self)
@@ -1522,7 +1533,7 @@ class Cluster(object):
             # results will include Address instances
             results = session.execute("SELECT * FROM users")
             row = results[0]
-            print row.id, row.location.street, row.location.zipcode
+            print(row.id, row.location.street, row.location.zipcode)
 
         """
         if self.protocol_version < 3:
@@ -2667,6 +2678,17 @@ class Session(object):
         self.session_id = uuid.uuid4()
         self._graph_paging_available = self._check_graph_paging_available()
 
+        if self.cluster.column_encryption_policy is not None:
+            try:
+                self.client_protocol_handler = type(
+                    str(self.session_id) + "-ProtocolHandler",
+                    (ProtocolHandler,),
+                    {"column_encryption_policy": self.cluster.column_encryption_policy})
+            except AttributeError:
+                log.info("Unable to set column encryption policy for session")
+            raise Exception(
+                "column_encryption_policy is temporary disabled, until https://github.com/scylladb/python-driver/issues/365 is sorted out")
+
         if self.cluster.monitor_reporting_enabled:
             cc_host = self.cluster.get_control_connection_host()
             valid_insights_version = (cc_host and version_supports_insights(cc_host.dse_version))
@@ -3186,7 +3208,7 @@ class Session(object):
         prepared_keyspace = keyspace if keyspace else None
         prepared_statement = PreparedStatement.from_message(
             response.query_id, response.bind_metadata, response.pk_indexes, self.cluster.metadata, query, prepared_keyspace,
-            self._protocol_version, response.column_metadata, response.result_metadata_id)
+            self._protocol_version, response.column_metadata, response.result_metadata_id, self.cluster.column_encryption_policy)
         prepared_statement.custom_payload = future.custom_payload
 
         self.cluster.add_prepared(response.query_id, prepared_statement)
