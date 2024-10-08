@@ -1015,7 +1015,7 @@ class Cluster(object):
     cloud = None
     """
     A dict of the cloud configuration. Example::
-        
+
         {
             # path to the secure connect bundle
             'secure_connect_bundle': '/path/to/secure-connect-dbname.zip',
@@ -1779,7 +1779,7 @@ class Cluster(object):
                           self.contact_points, self.protocol_version)
                 self.connection_class.initialize_reactor()
                 _register_cluster_shutdown(self)
-                
+
                 self._add_resolved_hosts()
 
                 try:
@@ -1991,7 +1991,7 @@ class Cluster(object):
             futures_results = []
             callback = partial(self._on_up_future_completed, host, futures, futures_results, futures_lock)
             for session in tuple(self.sessions):
-                future = session.add_or_renew_pool(host, is_host_addition=False)
+                future = session.add_or_renew_pool(host, is_host_addition=False, require_previous_shutdown_or_none=False)
                 if future is not None:
                     have_future = True
                     future.add_done_callback(callback)
@@ -2130,7 +2130,7 @@ class Cluster(object):
 
         have_future = False
         for session in tuple(self.sessions):
-            future = session.add_or_renew_pool(host, is_host_addition=True)
+            future = session.add_or_renew_pool(host, is_host_addition=True, require_previous_shutdown_or_none=False)
             if future is not None:
                 have_future = True
                 futures.add(future)
@@ -2661,7 +2661,7 @@ class Session(object):
         # create connection pools in parallel
         self._initial_connect_futures = set()
         for host in hosts:
-            future = self.add_or_renew_pool(host, is_host_addition=False)
+            future = self.add_or_renew_pool(host, is_host_addition=False, require_previous_shutdown_or_none=False)
             if future:
                 self._initial_connect_futures.add(future)
 
@@ -3284,7 +3284,7 @@ class Session(object):
             # when cluster.shutdown() is called explicitly.
             pass
 
-    def add_or_renew_pool(self, host, is_host_addition):
+    def add_or_renew_pool(self, host, is_host_addition, require_previous_shutdown_or_none):
         """
         For internal use only.
         """
@@ -3332,7 +3332,11 @@ class Session(object):
                         self._lock.acquire()
                         return False
                     self._lock.acquire()
-                self._pools[host] = new_pool
+                if require_previous_shutdown_or_none and (previous and not previous.is_shutdown):
+                    new_pool.shutdown()
+                    return True
+                else:
+                    self._pools[host] = new_pool
 
             log.debug("Added pool for host %s to session", host)
             if previous:
@@ -3372,7 +3376,7 @@ class Session(object):
                 # to allow us to attempt connections to hosts that have gone from ignored to something
                 # else.
                 if distance != HostDistance.IGNORED and host.is_up in (True, None):
-                    future = self.add_or_renew_pool(host, False)
+                    future = self.add_or_renew_pool(host, False, require_previous_shutdown_or_none=True)
             elif distance != pool.host_distance:
                 # the distance has changed
                 if distance == HostDistance.IGNORED:
@@ -3624,7 +3628,7 @@ class ControlConnection(object):
         if old:
             log.debug("[control connection] Closing old connection %r, replacing with %r", old, conn)
             old.close()
-    
+
     def _connect_host_in_lbp(self):
         errors = {}
         lbp = (
@@ -3645,7 +3649,7 @@ class ControlConnection(object):
                 log.warning("[control connection] Error connecting to %s:", host, exc_info=True)
             if self._is_shutdown:
                 raise DriverException("[control connection] Reconnection in progress during shutdown")
-        
+
         return (None, errors)
 
     def _reconnect_internal(self):
@@ -3669,7 +3673,7 @@ class ControlConnection(object):
         (conn, errors) = self._connect_host_in_lbp()
         if conn is not None:
             return conn
-        
+
         raise NoHostAvailable("Unable to connect to any servers", errors)
 
     def _try_connect(self, host):
