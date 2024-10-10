@@ -1,3 +1,4 @@
+
 # Copyright DataStax, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -150,7 +151,7 @@ class ClusterTests(unittest.TestCase):
         get_node(1).pause()
         cluster = TestCluster(contact_points=['127.0.0.1'], connect_timeout=1)
 
-        with self.assertRaisesRegex(NoHostAvailable, "OperationTimedOut\('errors=Timed out creating connection \(1 seconds\)"):
+        with self.assertRaisesRegex(NoHostAvailable, r"OperationTimedOut\('errors=Timed out creating connection \(1 seconds\)"):
             cluster.connect()
         cluster.shutdown()
 

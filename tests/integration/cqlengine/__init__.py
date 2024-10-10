@@ -77,7 +77,7 @@ def execute_count(expected):
             # DeMonkey Patch our code
             cassandra.cqlengine.connection.execute = original_function
             # Check to see if we have a pre-existing test case to work from.
-            if len(args) is 0:
+            if len(args) == 0:
                 test_case = unittest.TestCase("__init__")
             else:
                 test_case = args[0]
