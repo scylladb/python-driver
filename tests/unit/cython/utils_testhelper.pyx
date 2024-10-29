@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# cython: language_level=3
+
 import datetime
 
 from cassandra.cython_utils cimport datetime_from_timestamp
