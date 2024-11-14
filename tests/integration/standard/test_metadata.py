@@ -56,7 +56,7 @@ def setup_module():
 
 class HostMetaDataTests(BasicExistingKeyspaceUnitTestCase):
     # TODO: enable after https://github.com/scylladb/python-driver/issues/121 is fixed
-    @unittest.skip('Fails on scylla due to the broadcast_rpc_port is None')
+    @pytest.mark.skip('Fails on scylla due to the broadcast_rpc_port is None')
     @local
     def test_host_addresses(self):
         """
