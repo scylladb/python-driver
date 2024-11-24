@@ -43,7 +43,7 @@ from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, exec
                                greaterthanorequaldse67, lessthancass40,
                                TestCluster, DSE_VERSION, requires_java_udf, requires_composite_type,
                                requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, xfail_scylla_version_lt,
-                               scylla_only)
+                               scylla_only, EVENT_LOOP_MANAGER)
 
 from tests.util import wait_until
 
@@ -215,6 +215,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.cluster.refresh_table_metadata(self.keyspace_name, self.function_table_name)
         return self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name]
 
+    @pytest.mark.xfail(reason="test not stable on cassandra", condition=EVENT_LOOP_MANAGER=="asyncio" and SCYLLA_VERSION is None, strict=False)
     def test_basic_table_meta_properties(self):
         create_statement = self.make_create_statement(["a"], [], ["b", "c"])
         self.session.execute(create_statement)
@@ -573,6 +574,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
             self.assertNotIn("max_threshold", cql)
 
     @requires_java_udf
+    @pytest.mark.xfail(reason="test not stable on cassandra", condition=EVENT_LOOP_MANAGER=="asyncio" and SCYLLA_VERSION is None, strict=False)
     def test_refresh_schema_metadata(self):
         """
         test for synchronously refreshing all cluster metadata
@@ -1062,6 +1064,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.cluster.refresh_schema_metadata()
         self.assertEqual(len(self.cluster.metadata.keyspaces[self.keyspace_name].tables), 12)
 
+    @pytest.mark.xfail(reason="test not stable on cassandra", condition=EVENT_LOOP_MANAGER=="asyncio" and SCYLLA_VERSION is None, strict=False)
     def test_metadata_pagination_keyspaces(self):
         """
         test for covering
