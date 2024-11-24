@@ -255,6 +255,7 @@ class GraphOptionTests(unittest.TestCase):
 
     def test_init_unknown_kwargs(self):
         with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
             GraphOptions(unknown_param=42)
         self.assertEqual(len(w), 1)
         self.assertRegex(str(w[0].message), r"^Unknown keyword.*GraphOptions.*")
