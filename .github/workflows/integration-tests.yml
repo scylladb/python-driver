@@ -29,14 +29,20 @@ jobs:
       with:
         default: 2.7.14
         versions: ${{ matrix.python-version }}
-    - name: Test with pytest
+    - name: Test with scylla
       run: |
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
         export SCYLLA_VERSION='release:5.1'
         ./scripts/run_integration_test.sh tests/integration/standard/ tests/integration/cqlengine/
     
-    - name: Test tablets
+    - name: Test with scylla - tablets
       run: |
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
         export SCYLLA_VERSION='release:6.0.2'
         ./scripts/run_integration_test.sh tests/integration/experiments/
+
+    - name: Test with cassandra
+      run: |
+        export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
+        export CASSANDRA_VERSION='4.1.5'
+        ./scripts/run_integration_test.sh tests/integration/standard/
