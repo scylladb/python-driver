@@ -24,6 +24,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+    - uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '11'
     - name: setup pyenv ${{ matrix.python-version }}
       uses: "gabrielfalcao/pyenv-action@v16"
       with:
@@ -32,7 +36,7 @@ jobs:
     - name: Test with pytest
       run: |
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
-        export SCYLLA_VERSION='release:5.1'
+        export SCYLLA_VERSION='release:5.4'
         ./scripts/run_integration_test.sh tests/integration/standard/ tests/integration/cqlengine/
     
     - name: Test tablets
