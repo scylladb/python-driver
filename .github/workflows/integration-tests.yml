@@ -35,12 +35,14 @@ jobs:
         versions: ${{ matrix.python-version }}
     - name: Test with pytest
       run: |
+        pyenv global ${{ matrix.python-version }}
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
         export SCYLLA_VERSION='release:5.4'
         ./scripts/run_integration_test.sh tests/integration/standard/ tests/integration/cqlengine/
     
     - name: Test tablets
       run: |
+        pyenv global ${{ matrix.python-version }}
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
         export SCYLLA_VERSION='release:6.0.2'
         ./scripts/run_integration_test.sh tests/integration/experiments/
