@@ -12,7 +12,7 @@ jobs:
   tests:
     name: test ${{ matrix.event_loop_manager }} (${{ matrix.python-version }})
     if: "!contains(github.event.pull_request.labels.*.name, 'disable-integration-tests')"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -24,6 +24,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+    - uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '11'
     - name: setup pyenv ${{ matrix.python-version }}
       uses: "gabrielfalcao/pyenv-action@v16"
       with:
@@ -31,12 +35,14 @@ jobs:
         versions: ${{ matrix.python-version }}
     - name: Test with pytest
       run: |
+        pyenv global ${{ matrix.python-version }}
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
-        export SCYLLA_VERSION='release:5.1'
+        export SCYLLA_VERSION='release:5.4'
         ./scripts/run_integration_test.sh tests/integration/standard/ tests/integration/cqlengine/
     
     - name: Test tablets
       run: |
+        pyenv global ${{ matrix.python-version }}
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
         export SCYLLA_VERSION='release:6.0.2'
         ./scripts/run_integration_test.sh tests/integration/experiments/

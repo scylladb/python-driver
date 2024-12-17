@@ -133,7 +133,7 @@ class MetaDataRemovalTest(unittest.TestCase):
 
         # verify the un-existing host was filtered
         for host in self.cluster.metadata.all_hosts():
-            self.assertNotEquals(host.endpoint.address, '126.0.0.186')
+            self.assertNotEqual(host.endpoint.address, '126.0.0.186')
 
 
 class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
@@ -163,8 +163,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         query = "SELECT * FROM system.local"
         no_schema_rs = no_schema_session.execute(query)
         no_token_rs = no_token_session.execute(query)
-        self.assertIsNotNone(no_schema_rs[0])
-        self.assertIsNotNone(no_token_rs[0])
+        self.assertIsNotNone(no_schema_rs.one())
+        self.assertIsNotNone(no_token_rs.one())
         no_schema.shutdown()
         no_token.shutdown()
 
@@ -1675,7 +1675,7 @@ class FunctionMetadata(FunctionTest):
 
         with self.VerifiedFunction(self, **kwargs) as vf:
             fn_meta = self.keyspace_function_meta[vf.signature]
-            self.assertRegex(fn_meta.as_cql_query(), "CREATE FUNCTION.*%s\(\) .*" % kwargs['name'])
+            self.assertRegex(fn_meta.as_cql_query(), r"CREATE FUNCTION.*%s\(\) .*" % kwargs['name'])
 
     def test_functions_follow_keyspace_alter(self):
         """
@@ -1723,12 +1723,12 @@ class FunctionMetadata(FunctionTest):
         kwargs['called_on_null_input'] = True
         with self.VerifiedFunction(self, **kwargs) as vf:
             fn_meta = self.keyspace_function_meta[vf.signature]
-            self.assertRegex(fn_meta.as_cql_query(), "CREATE FUNCTION.*\) CALLED ON NULL INPUT RETURNS .*")
+            self.assertRegex(fn_meta.as_cql_query(), r"CREATE FUNCTION.*\) CALLED ON NULL INPUT RETURNS .*")
 
         kwargs['called_on_null_input'] = False
         with self.VerifiedFunction(self, **kwargs) as vf:
             fn_meta = self.keyspace_function_meta[vf.signature]
-            self.assertRegex(fn_meta.as_cql_query(), "CREATE FUNCTION.*\) RETURNS NULL ON NULL INPUT RETURNS .*")
+            self.assertRegex(fn_meta.as_cql_query(), r"CREATE FUNCTION.*\) RETURNS NULL ON NULL INPUT RETURNS .*")
 
 
 @requires_java_udf
@@ -1838,9 +1838,9 @@ class AggregateMetadata(FunctionTest):
             cql_init = encoder.cql_encode_all_types(init_cond)
             with self.VerifiedAggregate(self, **self.make_aggregate_kwargs('update_map', 'map<int, int>', init_cond=cql_init)) as va:
                 map_res = s.execute("SELECT %s(v) AS map_res FROM t" % va.function_kwargs['name'])[0].map_res
-                self.assertDictContainsSubset(expected_map_values, map_res)
+                self.assertLessEqual(expected_map_values.items(), map_res.items())
                 init_not_updated = dict((k, init_cond[k]) for k in set(init_cond) - expected_key_set)
-                self.assertDictContainsSubset(init_not_updated, map_res)
+                self.assertLessEqual(init_not_updated.items(), map_res.items())
         c.shutdown()
 
     def test_aggregates_after_functions(self):

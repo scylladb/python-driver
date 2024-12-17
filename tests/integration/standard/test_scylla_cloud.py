@@ -1,4 +1,5 @@
 import logging
+import warnings
 import os.path
 from unittest import TestCase
 from ccmlib.utils.ssl_utils import generate_ssl_stores
@@ -11,7 +12,9 @@ from cassandra.cluster import Cluster, TwistedConnection
 from cassandra.io.libevreactor import LibevConnection
 supported_connection_classes = [LibevConnection, TwistedConnection]
 try:
-    from cassandra.io.asyncorereactor import AsyncoreConnection
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=DeprecationWarning, message="The asyncore module is deprecated")
+        from cassandra.io.asyncorereactor import AsyncoreConnection
     supported_connection_classes += [AsyncoreConnection]
 except ImportError:
     pass

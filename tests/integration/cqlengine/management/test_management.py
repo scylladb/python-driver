@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import unittest
+import pytest
 
 import mock
 import logging
@@ -254,7 +255,7 @@ class TablePropertiesTests(BaseCassEngTestCase):
 
         table_options = management._get_table_metadata(ModelWithTableProperties).options
 
-        self.assertDictContainsSubset(ModelWithTableProperties.__options__, table_options)
+        self.assertLessEqual(ModelWithTableProperties.__options__.items(), table_options.items())
 
     def test_bogus_option_update(self):
         sync_table(ModelWithTableProperties)
@@ -379,6 +380,7 @@ class TestIndexSetModel(Model):
     mixed_tuple = columns.Tuple(columns.Text, columns.Integer, columns.Text, index=True)
 
 
+@pytest.mark.filterwarnings("ignore:Model __table_name_case_sensitive__ will be removed")
 class IndexTests(BaseCassEngTestCase):
 
     def setUp(self):
