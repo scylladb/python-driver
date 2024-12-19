@@ -41,12 +41,14 @@ jobs:
 
     - name: Test with pytest
       run: |
+        python3 --version 
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
         export SCYLLA_VERSION='release:6.2'
         ./scripts/run_integration_test.sh tests/integration/standard/ tests/integration/cqlengine/
     
     - name: Test tablets
       run: |
+        python3 --version 
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
         export SCYLLA_VERSION='release:6.2'
         ./scripts/run_integration_test.sh tests/integration/experiments/
