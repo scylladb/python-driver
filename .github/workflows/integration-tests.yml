@@ -7,15 +7,17 @@ on:
   push:
     branches:
       - master
+  workflow_dispatch:
 
 jobs:
   tests:
     name: test ${{ matrix.event_loop_manager }} (${{ matrix.python-version }})
     if: "!contains(github.event.pull_request.labels.*.name, 'disable-integration-tests')"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     strategy:
       fail-fast: false
       matrix:
+        java-version: [8]
         python-version: ["3.8.17", "3.11.4", "3.12.0b4"]
         event_loop_manager: ["libev", "asyncio", "asyncore"]
         exclude:
@@ -23,20 +25,30 @@ jobs:
             event_loop_manager: "asyncore"
 
     steps:
-    - uses: actions/checkout@v3
-    - name: setup pyenv ${{ matrix.python-version }}
-      uses: "gabrielfalcao/pyenv-action@v16"
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      name: Install Python ${{ matrix.python-version }}
       with:
-        default: 2.7.14
-        versions: ${{ matrix.python-version }}
+        python-version: ${{ matrix.python-version }}
+        allow-prereleases: true
+
+    - name: Set up JDK ${{ matrix.java-version }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ matrix.java-version }}
+        distribution: 'adopt'
+
     - name: Test with pytest
       run: |
+        python3 --version 
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
-        export SCYLLA_VERSION='release:5.1'
+        export SCYLLA_VERSION='release:6.2'
         ./scripts/run_integration_test.sh tests/integration/standard/ tests/integration/cqlengine/
     
     - name: Test tablets
       run: |
+        python3 --version 
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
-        export SCYLLA_VERSION='release:6.0.2'
+        export SCYLLA_VERSION='release:6.2'
         ./scripts/run_integration_test.sh tests/integration/experiments/
