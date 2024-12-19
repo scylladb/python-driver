@@ -26,11 +26,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: setup pyenv ${{ matrix.python-version }}
-      uses: "gabrielfalcao/pyenv-action@v16"
+
+    - uses: actions/setup-python@v5
+      name: Install Python ${{ matrix.python-version }}
       with:
-        default: 2.7.14
-        versions: ${{ matrix.python-version }}
+        python-version: "${{ matrix.python_version }}"
+        allow-prereleases: true
 
     - name: Set up JDK ${{ matrix.java-version }}
       uses: actions/setup-java@v4
