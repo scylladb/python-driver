@@ -208,13 +208,18 @@ def run_in_executor(f):
         try:
             future = self.executor.submit(f, self, *args, **kwargs)
             future.add_done_callback(_future_completed)
-        except Exception:
-            log.exception("Failed to submit task to executor")
+        except Exception as e:
+            if not _is_executor_shutdown_exception(e):
+                log.exception("Failed to submit task to executor")
 
     return new_f
 
 
 _clusters_for_shutdown = set()
+
+
+def _is_executor_shutdown_exception(e: Exception) -> bool:
+    return 'cannot schedule new futures after shutdown' in str(e)
 
 
 def _register_cluster_shutdown(cluster):
@@ -3482,7 +3487,12 @@ class Session(object):
     def submit(self, fn, *args, **kwargs):
         """ Internal """
         if not self.is_shutdown:
-            return self.cluster.executor.submit(fn, *args, **kwargs)
+            try:
+                return self.cluster.executor.submit(fn, *args, **kwargs)
+            except RuntimeError as e:
+                if _is_executor_shutdown_exception(e):
+                    return None
+                raise
 
     def get_pool_state(self):
         return dict((host, pool.get_state()) for host, pool in tuple(self._pools.items()))
@@ -3820,7 +3830,11 @@ class ControlConnection(object):
     def _submit(self, *args, **kwargs):
         try:
             if not self._cluster.is_shutdown:
-                return self._cluster.executor.submit(*args, **kwargs)
+                try:
+                    return self._cluster.executor.submit(*args, **kwargs)
+                except RuntimeError as e:
+                    if _is_executor_shutdown_exception(e):
+                        return None
         except ReferenceError:
             pass
         return None
@@ -4426,7 +4440,12 @@ class _Scheduler(Thread):
                         self._scheduled_tasks.discard(task)
                         fn, args, kwargs = task
                         kwargs = dict(kwargs)
-                        future = self._executor.submit(fn, *args, **kwargs)
+                        try:
+                            future = self._executor.submit(fn, *args, **kwargs)
+                        except RuntimeError as e:
+                            if _is_executor_shutdown_exception(e):
+                                return
+                            raise
                         future.add_done_callback(self._log_if_failed)
                     else:
                         self._queue.put_nowait((run_at, i, task))
