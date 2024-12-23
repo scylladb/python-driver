@@ -41,7 +41,7 @@ except:
 from cassandra import DriverException
 
 DATETIME_EPOC = datetime.datetime(1970, 1, 1)
-UTC_DATETIME_EPOC = datetime.datetime.utcfromtimestamp(0)
+UTC_DATETIME_EPOC = datetime.datetime.fromtimestamp(0,  tz=datetime.timezone.utc)
 
 _nan = float('nan')
 

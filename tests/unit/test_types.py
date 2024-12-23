@@ -200,7 +200,7 @@ class TypeTests(unittest.TestCase):
 
     def test_datetype(self):
         now_time_seconds = time.time()
-        now_datetime = datetime.datetime.utcfromtimestamp(now_time_seconds)
+        now_datetime = datetime.datetime.fromtimestamp(now_time_seconds, tz=utc_timezone)
 
         # Cassandra timestamps in millis
         now_timestamp = now_time_seconds * 1e3
@@ -211,7 +211,7 @@ class TypeTests(unittest.TestCase):
         # deserialize
         # epoc
         expected = 0
-        self.assertEqual(DateType.deserialize(int64_pack(1000 * expected), 0), datetime.datetime.utcfromtimestamp(expected))
+        self.assertEqual(DateType.deserialize(int64_pack(1000 * expected), 0), datetime.datetime.fromtimestamp(expected, tz=utc_timezone).replace(tzinfo=None))
 
         # beyond 32b
         expected = 2 ** 33
@@ -353,7 +353,7 @@ class DateRangeTypeTests(unittest.TestCase):
         @jira_ticket PYTHON-912
         """
         feb_stamp = ms_timestamp_from_datetime(
-            datetime.datetime(2018, 2, 25, 18, 59, 59, 0)
+            datetime.datetime(2018, 2, 25, 18, 59, 59, 0, tzinfo=utc_timezone)
         )
         dr = DateRange(OPEN_BOUND,
                   DateRangeBound(feb_stamp, DateRangePrecision.MONTH))
@@ -362,7 +362,7 @@ class DateRangeTypeTests(unittest.TestCase):
 
         # Leap year
         feb_stamp_leap_year = ms_timestamp_from_datetime(
-            datetime.datetime(2016, 2, 25, 18, 59, 59, 0)
+            datetime.datetime(2016, 2, 25, 18, 59, 59, 0, tzinfo=utc_timezone)
         )
         dr = DateRange(OPEN_BOUND,
                        DateRangeBound(feb_stamp_leap_year, DateRangePrecision.MONTH))
@@ -390,7 +390,7 @@ class DateRangeTypeTests(unittest.TestCase):
         self.assertEqual(
             DateRangeType.deserialize(serialized, 5),
             util.DateRange(value=util.DateRangeBound(
-                value=datetime.datetime(2017, 2, 1, 15, 42, 12, 404000),
+                value=datetime.datetime(2017, 2, 1, 15, 42, 12, 404000, tzinfo=utc_timezone),
                 precision='HOUR')
             )
         )
@@ -405,11 +405,11 @@ class DateRangeTypeTests(unittest.TestCase):
             DateRangeType.deserialize(serialized, 5),
             util.DateRange(
                 lower_bound=util.DateRangeBound(
-                    value=datetime.datetime(2017, 2, 1, 0, 0),
+                    value=datetime.datetime(2017, 2, 1, 0, 0, tzinfo=utc_timezone),
                     precision='DAY'
                 ),
                 upper_bound=util.DateRangeBound(
-                    value=datetime.datetime(2017, 2, 1, 15, 42, 12, 404000),
+                    value=datetime.datetime(2017, 2, 1, 15, 42, 12, 404000, tzinfo=utc_timezone),
                     precision='MILLISECOND'
                 )
             )
@@ -424,7 +424,7 @@ class DateRangeTypeTests(unittest.TestCase):
             deserialized,
             util.DateRange(
                 lower_bound=util.DateRangeBound(
-                    value=datetime.datetime(2017, 2, 1, 15, 0),
+                    value=datetime.datetime(2017, 2, 1, 15, 0, tzinfo=utc_timezone),
                     precision='HOUR'
                 ),
                 upper_bound=util.OPEN_BOUND
@@ -441,7 +441,7 @@ class DateRangeTypeTests(unittest.TestCase):
             util.DateRange(
                 lower_bound=util.OPEN_BOUND,
                 upper_bound=util.DateRangeBound(
-                    value=datetime.datetime(2017, 2, 1, 15, 42, 20, 1000),
+                    value=datetime.datetime(2017, 2, 1, 15, 42, 20, 1000, tzinfo=utc_timezone),
                     precision='MINUTE'
                 )
             )
@@ -462,7 +462,7 @@ class DateRangeTypeTests(unittest.TestCase):
             deserialized,
             util.DateRange(
                 value=util.DateRangeBound(
-                    value=datetime.datetime(2017, 2, 1, 15, 42, 12),
+                    value=datetime.datetime(2017, 2, 1, 15, 42, 12, tzinfo=utc_timezone),
                     precision='SECOND'
                 )
             )
@@ -479,11 +479,11 @@ class DateRangeTypeTests(unittest.TestCase):
             deserialized,
             util.DateRange(
                 lower_bound=util.DateRangeBound(
-                    value=datetime.datetime(2017, 2, 1, 15, 42, 12),
+                    value=datetime.datetime(2017, 2, 1, 15, 42, 12, tzinfo=utc_timezone),
                     precision='SECOND'
                 ),
                 upper_bound=util.DateRangeBound(
-                    value=datetime.datetime(2017, 12, 31),
+                    value=datetime.datetime(2017, 12, 31, tzinfo=utc_timezone),
                     precision='YEAR'
                 )
             )
@@ -498,7 +498,7 @@ class DateRangeTypeTests(unittest.TestCase):
             deserialized,
             util.DateRange(
                 lower_bound=util.DateRangeBound(
-                    value=datetime.datetime(2017, 2, 1),
+                    value=datetime.datetime(2017, 2, 1, tzinfo=utc_timezone),
                     precision='DAY'
                 ),
                 upper_bound=util.OPEN_BOUND
@@ -514,7 +514,7 @@ class DateRangeTypeTests(unittest.TestCase):
             deserialized,
             util.DateRange(
                 lower_bound=util.DateRangeBound(
-                    value=datetime.datetime(2017, 2, 1, 15),
+                    value=datetime.datetime(2017, 2, 1, 15, tzinfo=utc_timezone),
                     precision='HOUR'
                 ),
                 upper_bound=util.OPEN_BOUND
@@ -575,8 +575,8 @@ class DateRangeTypeTests(unittest.TestCase):
         @test_category data_types
         """
         DateRangeType.serialize(util.DateRange(
-            lower_bound=(datetime.datetime(1970, 1, 1), 'YEAR'),
-            upper_bound=(datetime.datetime(1970, 1, 1), 'YEAR')
+            lower_bound=(datetime.datetime(1970, 1, 1, tzinfo=utc_timezone), 'YEAR'),
+            upper_bound=(datetime.datetime(1970, 1, 1, tzinfo=utc_timezone), 'YEAR')
         ), 5)
 
     def test_deserialize_zero_datetime(self):

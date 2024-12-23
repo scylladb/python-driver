@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import unittest
+import pytest
 
 from mock import patch
 
@@ -125,6 +126,7 @@ class TestModel(unittest.TestCase):
             # .. but we can still get the bare CF name
             self.assertEqual(TestModel.column_family_name(include_keyspace=False), "test_model")
 
+    @pytest.mark.filterwarnings("ignore:__table_name_case_sensitive__ will be removed")
     def test_column_family_case_sensitive(self):
         """
         Test to ensure case sensitivity is honored when __table_name_case_sensitive__ flag is set
