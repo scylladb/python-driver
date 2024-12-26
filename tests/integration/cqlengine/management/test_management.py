@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import unittest
+import pytest
 
 import mock
 import logging
@@ -382,6 +383,7 @@ class TestIndexSetModel(Model):
     mixed_tuple = columns.Tuple(columns.Text, columns.Integer, columns.Text, index=True)
 
 
+@pytest.mark.filterwarnings("ignore:Model __table_name_case_sensitive__ will be removed")
 class IndexTests(BaseCassEngTestCase):
 
     def setUp(self):

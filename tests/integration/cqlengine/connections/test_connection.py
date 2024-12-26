@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import unittest
+import pytest
 
 
 from cassandra import ConsistencyLevel
@@ -130,7 +131,8 @@ class ConnectionModel(Model):
     key = columns.Integer(primary_key=True)
     some_data = columns.Text()
 
-
+@pytest.mark.filterwarnings("ignore:Setting the consistency level at the session level will be removed")
+@pytest.mark.filterwarnings("ignore:Legacy execution parameters will be removed")
 class ConnectionInitTest(unittest.TestCase):
     def test_default_connection_uses_legacy(self):
         connection.default()
