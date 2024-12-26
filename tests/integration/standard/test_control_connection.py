@@ -17,7 +17,7 @@
 from cassandra import InvalidRequest
 
 import unittest
-
+import pytest
 
 from cassandra.protocol import ConfigurationException
 from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster, greaterthanorequalcass40, notdse
@@ -101,7 +101,7 @@ class ControlConnectionTests(unittest.TestCase):
         self.assertNotEqual(host, new_host)
 
     # TODO: enable after https://github.com/scylladb/python-driver/issues/121 is fixed
-    @unittest.skip('Fails on scylla due to the broadcast_rpc_port is None')
+    @pytest.mark.skip('Fails on scylla due to the broadcast_rpc_port is None')
     @notdse
     @greaterthanorequalcass40
     def test_control_connection_port_discovery(self):

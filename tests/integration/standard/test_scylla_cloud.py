@@ -4,7 +4,7 @@ from unittest import TestCase
 from ccmlib.utils.ssl_utils import generate_ssl_stores
 from ccmlib.utils.sni_proxy import refresh_certs, get_cluster_info, start_sni_proxy, create_cloud_config
 
-from tests.integration import use_cluster
+from tests.integration import use_cluster, scylla_only
 from cassandra.cluster import Cluster, TwistedConnection
 
 
@@ -23,7 +23,7 @@ except ImportError:
 # need to run them with specific configuration like `gevent.monkey.patch_all()` or under async functions
 # unsupported_connection_classes = [GeventConnection, AsyncioConnection, EventletConnection]
 
-
+@scylla_only
 class ScyllaCloudConfigTests(TestCase):
     def start_cluster_with_proxy(self):
         ccm_cluster = self.ccm_cluster

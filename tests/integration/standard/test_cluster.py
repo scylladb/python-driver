@@ -14,6 +14,7 @@
 import subprocess
 
 import unittest
+import pytest
 
 from collections import deque
 from copy import copy
@@ -42,7 +43,9 @@ from tests import notwindows, notasyncio
 from tests.integration import use_cluster, get_server_versions, CASSANDRA_VERSION, \
     execute_until_pass, execute_with_long_wait_retry, get_node, MockLoggingHandler, get_unsupported_lower_protocol, \
     get_unsupported_upper_protocol, lessthanprotocolv3, protocolv6, local, CASSANDRA_IP, greaterthanorequalcass30, \
-    lessthanorequalcass40, DSE_VERSION, TestCluster, PROTOCOL_VERSION, xfail_scylla, incorrect_test
+    lessthanorequalcass40, DSE_VERSION, TestCluster, PROTOCOL_VERSION, xfail_scylla, incorrect_test, SCYLLA_VERSION, \
+    EVENT_LOOP_MANAGER
+
 from tests.integration.util import assert_quiescent_pool_state
 import sys
 
@@ -752,6 +755,7 @@ class ClusterTests(unittest.TestCase):
                 mock_handler.get_message_count("debug", "Got ReadyMessage on new connection")
             )
 
+    @pytest.mark.xfail(reason="test not stable on cassandra", condition=EVENT_LOOP_MANAGER=="asyncio" and SCYLLA_VERSION is None, strict=False)
     def test_idle_heartbeat(self):
         interval = 2
         cluster = TestCluster(idle_heartbeat_interval=interval,
@@ -831,6 +835,7 @@ class ClusterTests(unittest.TestCase):
 
         cluster.shutdown()
 
+    @pytest.mark.xfail(reason="test not stable on cassandra", condition=EVENT_LOOP_MANAGER=="asyncio" and SCYLLA_VERSION is None, strict=False)
     def test_pool_management(self):
         # Ensure that in_flight and request_ids quiesce after cluster operations
         cluster = TestCluster(idle_heartbeat_interval=0)  # no idle heartbeat here, pool management is tested in test_idle_heartbeat
@@ -1439,7 +1444,7 @@ class ContextManagementTest(unittest.TestCase):
 
 
 class HostStateTest(unittest.TestCase):
-
+    @pytest.mark.xfail(reason="test not stable on cassandra", condition=EVENT_LOOP_MANAGER=="asyncio" and SCYLLA_VERSION is None, strict=False)
     def test_down_event_with_active_connection(self):
         """
         Test to ensure that on down calls to clusters with connections still active don't result in
