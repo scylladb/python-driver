@@ -21,7 +21,7 @@ from cassandra import util
 from cassandra.cqltypes import SimpleDateType, _cqltypes, UserType
 from cassandra.cqlengine import ValidationError
 from cassandra.cqlengine.functions import get_total_seconds
-from cassandra.util import Duration as _Duration
+from cassandra.util import Duration as _Duration, utcfromtimestamp
 
 log = logging.getLogger(__name__)
 
@@ -551,7 +551,7 @@ class DateTime(Column):
         elif isinstance(value, date):
             return datetime(*(value.timetuple()[:6]))
 
-        return datetime.utcfromtimestamp(value)
+        return utcfromtimestamp(value)
 
     def to_database(self, value):
         value = super(DateTime, self).to_database(value)
