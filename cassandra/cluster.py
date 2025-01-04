@@ -3641,6 +3641,7 @@ class ControlConnection(object):
         with self._lock:
             old = self._connection
             self._connection = conn
+            self.refresh_schema()
 
         if old:
             log.debug("[control connection] Closing old connection %r, replacing with %r", old, conn)
