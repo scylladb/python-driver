@@ -41,7 +41,7 @@ from cassandra.query import named_tuple_factory
 from cassandra.util import (
     OPEN_BOUND, Date, DateRange, DateRangeBound,
     DateRangePrecision, Time, ms_timestamp_from_datetime,
-    datetime_from_timestamp
+    datetime_from_timestamp, utcfromtimestamp
 )
 from tests.unit.util import check_sequence_consistency
 
@@ -200,7 +200,7 @@ class TypeTests(unittest.TestCase):
 
     def test_datetype(self):
         now_time_seconds = time.time()
-        now_datetime = datetime.datetime.utcfromtimestamp(now_time_seconds)
+        now_datetime = utcfromtimestamp(now_time_seconds)
 
         # Cassandra timestamps in millis
         now_timestamp = now_time_seconds * 1e3
@@ -211,7 +211,7 @@ class TypeTests(unittest.TestCase):
         # deserialize
         # epoc
         expected = 0
-        self.assertEqual(DateType.deserialize(int64_pack(1000 * expected), 0), datetime.datetime.utcfromtimestamp(expected))
+        self.assertEqual(DateType.deserialize(int64_pack(1000 * expected), 0), utcfromtimestamp(expected))
 
         # beyond 32b
         expected = 2 ** 33
