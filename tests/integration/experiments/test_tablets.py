@@ -18,7 +18,7 @@ class TestTabletsIntegration(unittest.TestCase):
                               load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy()),
                               reconnection_policy=ConstantReconnectionPolicy(1))
         cls.session = cls.cluster.connect()
-        cls.create_ks_and_cf(cls)
+        cls.create_ks_and_cf(cls.session)
         cls.create_data(cls.session)
 
     @classmethod
@@ -47,6 +47,10 @@ class TestTabletsIntegration(unittest.TestCase):
         self.assertEqual(len(host_set), 1)
         self.assertIn('locally', "\n".join([event.activity for event in events]))
 
+    def get_tablet_record(self, query):
+        metadata = self.session.cluster.metadata
+        return metadata._tablets.get_tablet_for_key(query.keyspace, query.table, metadata.token_map.token_class.from_key(query.routing_key))
+
     def verify_same_shard_in_tracing(self, results):
         traces = results.get_query_trace()
         events = traces.events
@@ -69,13 +73,14 @@ class TestTabletsIntegration(unittest.TestCase):
         self.assertEqual(len(shard_set), 1)
         self.assertIn('locally', "\n".join([event.activity for event in events]))
 
-    def create_ks_and_cf(self):
-        self.session.execute(
+    @classmethod
+    def create_ks_and_cf(cls, session):
+        session.execute(
             """
             DROP KEYSPACE IF EXISTS test1
             """
         )
-        self.session.execute(
+        session.execute(
             """
             CREATE KEYSPACE test1
             WITH replication = {
@@ -86,7 +91,7 @@ class TestTabletsIntegration(unittest.TestCase):
             }
             """)
 
-        self.session.execute(
+        session.execute(
             """
             CREATE TABLE test1.table1 (pk int, ck int, v int, PRIMARY KEY (pk, ck));
             """)
@@ -109,6 +114,8 @@ class TestTabletsIntegration(unittest.TestCase):
             """)
 
         bound = prepared.bind([(2)])
+        assert self.get_tablet_record(bound) is not None
+
         results = session.execute(bound, trace=True)
         self.assertEqual(results, [(2, 2, 0)])
         if verify_in_tracing:
@@ -121,6 +128,8 @@ class TestTabletsIntegration(unittest.TestCase):
             """)
 
         bound = prepared.bind([(2)])
+        assert self.get_tablet_record(bound) is not None
+
         results = session.execute(bound, trace=True)
         self.assertEqual(results, [(2, 2, 0)])
         if verify_in_tracing:
@@ -133,6 +142,8 @@ class TestTabletsIntegration(unittest.TestCase):
             """)
 
         bound = prepared.bind([(51), (1), (2)])
+        assert self.get_tablet_record(bound) is not None
+
         results = session.execute(bound, trace=True)
         if verify_in_tracing:
             self.verify_same_shard_in_tracing(results)
@@ -144,6 +155,8 @@ class TestTabletsIntegration(unittest.TestCase):
             """)
 
         bound = prepared.bind([(52), (1), (2)])
+        assert self.get_tablet_record(bound) is not None
+
         results = session.execute(bound, trace=True)
         if verify_in_tracing:
             self.verify_same_host_in_tracing(results)
@@ -155,3 +168,33 @@ class TestTabletsIntegration(unittest.TestCase):
     def test_tablets_shard_awareness(self):
         self.query_data_shard_select(self.session)
         self.query_data_shard_insert(self.session)
+
+    def test_tablets_invalidation_on_ks_deleted(self):
+        self.run_tablets_invalidation_on_ks_deleted(False)
+        self.run_tablets_invalidation_on_ks_deleted(True)
+
+    def run_tablets_invalidation_on_ks_deleted(self, while_reconnecting: bool):
+        # Make sure driver holds tablet info
+        bound = self.session.prepare(
+            """
+            SELECT pk, ck, v FROM test1.table1 WHERE pk = ?
+            """).bind([(2)])
+        self.session.execute(bound)
+        assert self.get_tablet_record(bound) is not None
+
+        if while_reconnecting:
+            conn = self.session.cluster.control_connection._connection
+            self.session.cluster.control_connection._connection = None
+            conn.close()
+
+        # Drop and recreate ks and table to trigger tablets invalidation
+        self.create_ks_and_cf(self.cluster.connect())
+
+        if while_reconnecting:
+            self.session.cluster.control_connection._reconnect()
+        else:
+            # Wait till driver pick up event and process it
+            time.sleep(3)
+
+        # Check if tablets information was purged
+        assert self.get_tablet_record(bound) is None

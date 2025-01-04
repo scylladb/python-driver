@@ -1,4 +1,6 @@
+from audioop import reverse
 from threading import Lock
+from uuid import UUID
 
 
 class Tablet(object):
@@ -32,6 +34,12 @@ class Tablet(object):
             return tablet
         return None
 
+    def replica_contains_host_id(self, uuid: UUID) -> bool:
+        for replica in self.replicas:
+            if replica.uuid == uuid:
+                return True
+        return False
+
 
 class Tablets(object):
     _lock = None
@@ -50,6 +58,37 @@ class Tablets(object):
         if id < len(tablet) and t.value > tablet[id].first_token:
             return tablet[id]
         return None
+
+    def drop_tablet(self, keyspace: str, table: str = None):
+        with self._lock:
+            if table is not None:
+                self._tablets.pop((keyspace, table), None)
+                return
+
+            to_be_deleted = []
+            for key in self._tablets.keys():
+                if key[0] == keyspace:
+                    to_be_deleted.append(key)
+
+            for key in to_be_deleted:
+                del self._tablets[key]
+
+    def drop_tablet_by_host_id(self, host_id: UUID):
+        if host_id is None:
+            return
+        with self._lock:
+            for key, tablets in self._tablets.keys():
+                to_be_deleted = []
+                for tablet_id, tablet in enumerate(tablets):
+                    if tablet.replica_contains_host_id(host_id):
+                        to_be_deleted.append(tablet_id)
+
+                if len(to_be_deleted) == 0:
+                    continue
+
+                for tablet_id in reverse(to_be_deleted):
+                    tablets.pop(tablet_id)
+                self._tablets[key] = tablets
 
     def add_tablet(self, keyspace, table, tablet):
         with self._lock:
