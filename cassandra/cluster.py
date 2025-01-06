@@ -192,8 +192,29 @@ def _connection_reduce_fn(val,import_fn):
 
 log = logging.getLogger(__name__)
 
-conn_fns = (_try_gevent_import, _try_eventlet_import, _try_libev_import, _try_asyncore_import, _try_twisted_import)
-(conn_class, excs) = reduce(_connection_reduce_fn, conn_fns, (None,[]))
+def get_all_supported_connections_classes():
+    classes = []
+    excs = []
+    for try_fn in (_try_gevent_import, _try_eventlet_import, _try_libev_import, _try_asyncore_import, _try_twisted_import):
+        conn, exc = try_fn()
+        if conn is not None:
+            classes.append(conn)
+        else:
+            excs.append(exc)
+    return tuple(classes), tuple(excs)
+
+def get_default_connection_class():
+    excs = []
+    for try_fn in (_try_gevent_import, _try_eventlet_import, _try_libev_import, _try_asyncore_import, _try_twisted_import):
+        conn, exc = try_fn()
+        if conn is not None:
+            return conn, None
+        else:
+            excs.append(exc)
+    return None, tuple(excs)
+
+
+(conn_class, excs) = get_default_connection_class()
 if not conn_class:
     raise DependencyException("Unable to load a default connection class", excs)
 DefaultConnection = conn_class
