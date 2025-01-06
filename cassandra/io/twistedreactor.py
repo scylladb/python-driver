@@ -22,11 +22,19 @@ from functools import partial
 from threading import Thread, Lock
 import weakref
 
-from twisted.internet import reactor, protocol
-from twisted.internet.endpoints import connectProtocol, TCP4ClientEndpoint, SSL4ClientEndpoint
-from twisted.internet.interfaces import IOpenSSLClientConnectionCreator
-from twisted.python.failure import Failure
-from zope.interface import implementer
+from cassandra import DependencyException
+try:
+    from twisted.internet import reactor, protocol
+    from twisted.internet.endpoints import connectProtocol, TCP4ClientEndpoint, SSL4ClientEndpoint
+    from twisted.internet.interfaces import IOpenSSLClientConnectionCreator
+    from twisted.python.failure import Failure
+except (ModuleNotFoundError, ImportError):
+    raise DependencyException("Unable to import twisted module. Try to install it via `pip install twisted[tls]`")
+
+try:
+    from zope.interface import implementer
+except (ModuleNotFoundError, ImportError):
+    raise DependencyException("Unable to import zope module. Try to install it via `pip install zope`")
 
 from cassandra.connection import Connection, ConnectionShutdown, Timer, TimerManager, ConnectionException
 

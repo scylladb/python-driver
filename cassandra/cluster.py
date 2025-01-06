@@ -98,7 +98,7 @@ from cassandra.scylla.cloud import CloudConfiguration
 
 try:
     from cassandra.io.twistedreactor import TwistedConnection
-except ImportError:
+except DependencyException:
     TwistedConnection = None
 
 try:
@@ -173,6 +173,13 @@ def _try_asyncore_import():
     except DependencyException as e:
         return (None, e)
 
+def _try_twisted_import():
+    try:
+        from cassandra.io.twistedreactor import TwistedConnection
+        return TwistedConnection, None
+    except DependencyException as e:
+        return None, e
+
 def _connection_reduce_fn(val,import_fn):
     (rv, excs) = val
     # If we've already found a workable Connection class return immediately
@@ -185,7 +192,7 @@ def _connection_reduce_fn(val,import_fn):
 
 log = logging.getLogger(__name__)
 
-conn_fns = (_try_gevent_import, _try_eventlet_import, _try_libev_import, _try_asyncore_import)
+conn_fns = (_try_gevent_import, _try_eventlet_import, _try_libev_import, _try_asyncore_import, _try_twisted_import)
 (conn_class, excs) = reduce(_connection_reduce_fn, conn_fns, (None,[]))
 if not conn_class:
     raise DependencyException("Unable to load a default connection class", excs)
