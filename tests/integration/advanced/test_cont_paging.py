@@ -25,7 +25,7 @@ from packaging.version import Version
 import time
 
 from cassandra.cluster import ExecutionProfile, ContinuousPagingOptions
-from cassandra.concurrent import execute_concurrent
+from cassandra.concurrent_executor import execute_concurrent
 from cassandra.query import SimpleStatement
 
 

@@ -26,7 +26,7 @@ from cassandra import (
     FunctionFailure, ProtocolVersion,
 )
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
-from cassandra.concurrent import execute_concurrent_with_args
+from cassandra.concurrent_executor import execute_concurrent_with_args
 from cassandra.query import SimpleStatement
 from tests.integration import (
     use_singledc, PROTOCOL_VERSION, get_cluster, setup_keyspace, remove_cluster,
