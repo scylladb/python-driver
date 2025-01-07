@@ -23,7 +23,7 @@ import cassandra
 from cassandra import InvalidRequest
 from cassandra import util
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
-from cassandra.concurrent import execute_concurrent_with_args
+from cassandra.concurrent_executor import execute_concurrent_with_args
 from cassandra.cqltypes import Int32Type, EMPTY
 from cassandra.query import dict_factory, ordered_dict_factory
 from cassandra.util import sortedset, Duration, OrderedMap

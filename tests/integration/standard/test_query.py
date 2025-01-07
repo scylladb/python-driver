@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
-from cassandra.concurrent import execute_concurrent
+from cassandra.concurrent_executor import execute_concurrent
 from cassandra import DriverException
 
 import unittest

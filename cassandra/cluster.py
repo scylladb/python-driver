@@ -103,7 +103,7 @@ except DependencyException:
 
 try:
     from cassandra.io.eventletreactor import EventletConnection
-except (ImportError, AttributeError):
+except DependencyException:
     # AttributeError was add for handling python 3.12 https://github.com/eventlet/eventlet/issues/812
     # TODO: remove it when eventlet issue would be fixed
     EventletConnection = None
@@ -153,11 +153,13 @@ def _is_gevent_monkey_patched():
 
 
 def _try_eventlet_import():
-    if _is_eventlet_monkey_patched():
+    try:
         from cassandra.io.eventletreactor import EventletConnection
-        return (EventletConnection,None)
-    else:
-        return (None,None)
+    except DependencyException as e:
+        return None, e
+    if _is_eventlet_monkey_patched():
+        return EventletConnection, None
+    return None, DependencyException("eventlet is not patched")
 
 def _try_libev_import():
     try:
@@ -209,7 +211,7 @@ def get_default_connection_class():
         conn, exc = try_fn()
         if conn is not None:
             return conn, None
-        else:
+        if exc:
             excs.append(exc)
     return None, tuple(excs)
 

@@ -7,7 +7,7 @@ import unittest
 from itertools import count
 
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
-from cassandra.concurrent import execute_concurrent_with_args
+from cassandra.concurrent_executor import execute_concurrent_with_args
 from cassandra.cython_deps import HAVE_CYTHON, HAVE_NUMPY
 from cassandra.protocol import ProtocolHandler, LazyProtocolHandler, NumpyProtocolHandler
 from cassandra.query import tuple_factory
