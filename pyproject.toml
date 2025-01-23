@@ -79,3 +79,41 @@ requires = [
 ]
 
 build-backend = "setuptools.build_meta"
+
+#### CI BUILDWHEEL CONFIG ####
+
+[tool.cibuildwheel]
+
+build-frontend = "build[uv]"
+environment = { CASS_DRIVER_BUILD_CONCURRENCY = "2", CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "yes", CFLAGS = "-g0 -O3" }
+skip = ["cp36*", "cp37*", "pp37*", "pp*i686", "*musllinux*"]
+
+before-test = "pip install -r {project}/test-requirements.txt"
+
+[tool.cibuildwheel.linux]
+build = ["cp3*_x86_64"]
+
+before-build = "rm -rf ~/.pyxbld && rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux && yum install -y libffi-devel libev libev-devel openssl openssl-devel"
+test-command = [
+  "pytest {package}/tests/unit",
+  "EVENT_LOOP_MANAGER=gevent pytest {package}/tests/unit/io/test_geventreactor.py",
+]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+
+[tool.cibuildwheel.macos]
+build = ["cp39*", "cp310*", "cp311*", "cp312*", "cp313*"]
+
+[tool.cibuildwheel.windows]
+build = ["cp3*_amd64"]
+build-frontend = "build" # build[uv] seems to be broken on Windows
+
+[[tool.cibuildwheel.overrides]]
+select = "pp*-manylinux*"
+test-command = []
+manylinux-pypy_x86_64-image = "manylinux_2_28"
+manylinux-pypy_aarch64-image = "manylinux_2_28"
+
+[[tool.cibuildwheel.overrides]]
+select = 'pp*win_amd64'
+test-command = []
