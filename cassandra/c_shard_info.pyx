@@ -15,6 +15,15 @@
 from libc.stdint cimport INT64_MIN, UINT32_MAX, uint64_t, int64_t
 
 cdef extern from *:
+    """
+    #include <stdint.h>
+
+    // windows doesn't have __uint128_t, do we need to define ourself
+    #if defined(_WIN32) || defined(MS_WINDOWS) || defined(_MSC_VER)
+        #define __uint128_t unsigned long long
+    #endif
+
+    """
     ctypedef unsigned int __uint128_t
 
 cdef class ShardingInfo():
