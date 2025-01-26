@@ -25,7 +25,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait as wait_futures
 from copy import copy
-from functools import partial, wraps
+from functools import partial, reduce, wraps
 from itertools import groupby, count, chain
 import json
 import logging
@@ -45,7 +45,7 @@ from weakref import WeakValueDictionary
 from cassandra import (ConsistencyLevel, AuthenticationFailed, InvalidRequest,
                        OperationTimedOut, UnsupportedOperation,
                        SchemaTargetType, DriverException, ProtocolVersion,
-                       UnresolvableContactPoints)
+                       UnresolvableContactPoints, DependencyException)
 from cassandra.auth import _proxy_execute_key, PlainTextAuthProvider
 from cassandra.connection import (ConnectionException, ConnectionShutdown,
                                   ConnectionHeartbeat, ProtocolVersionUnsupported,
@@ -98,12 +98,12 @@ from cassandra.scylla.cloud import CloudConfiguration
 
 try:
     from cassandra.io.twistedreactor import TwistedConnection
-except ImportError:
+except DependencyException:
     TwistedConnection = None
 
 try:
     from cassandra.io.eventletreactor import EventletConnection
-except (ImportError, AttributeError):
+except DependencyException:
     # AttributeError was add for handling python 3.12 https://github.com/eventlet/eventlet/issues/812
     # TODO: remove it when eventlet issue would be fixed
     EventletConnection = None
@@ -112,6 +112,22 @@ try:
     from weakref import WeakSet
 except ImportError:
     from cassandra.util import WeakSet  # NOQA
+
+
+def _is_gevent_monkey_patched():
+    if 'gevent.monkey' not in sys.modules:
+        return False
+    import gevent.socket
+    return socket.socket is gevent.socket.socket
+
+
+def _try_gevent_import():
+    if _is_gevent_monkey_patched():
+        from cassandra.io.geventreactor import GeventConnection
+        return (GeventConnection,None)
+    else:
+        return (None,None)
+
 
 def _is_eventlet_monkey_patched():
     if 'eventlet.patcher' not in sys.modules:
@@ -124,36 +140,92 @@ def _is_eventlet_monkey_patched():
         # TODO: remove it when eventlet issue would be fixed
         return False
 
+
 def _is_gevent_monkey_patched():
     if 'gevent.monkey' not in sys.modules:
         return False
-    import gevent.socket
-    return socket.socket is gevent.socket.socket
-
-
-# default to gevent when we are monkey patched with gevent, eventlet when
-# monkey patched with eventlet, otherwise if libev is available, use that as
-# the default because it's fastest. Otherwise, use asyncore.
-if _is_gevent_monkey_patched():
-    from cassandra.io.geventreactor import GeventConnection as DefaultConnection
-elif _is_eventlet_monkey_patched():
-    from cassandra.io.eventletreactor import EventletConnection as DefaultConnection
-else:
     try:
-        from cassandra.io.libevreactor import LibevConnection as DefaultConnection  # NOQA
-    except ImportError:
-        try:
-            from cassandra.io.asyncorereactor import AsyncoreConnection as DefaultConnection # NOQA
-        except ImportError:
-            from cassandra.io.asyncioreactor import AsyncioConnection as DefaultConnection  # NOQA
+        import eventlet.patcher
+        return eventlet.patcher.is_monkey_patched('socket')
+    # Another case related to PYTHON-1364
+    except AttributeError:
+        return False
+
+
+def _try_eventlet_import():
+    try:
+        from cassandra.io.eventletreactor import EventletConnection
+    except DependencyException as e:
+        return None, e
+    if _is_eventlet_monkey_patched():
+        return EventletConnection, None
+    return None, DependencyException("eventlet is not patched")
+
+def _try_libev_import():
+    try:
+        from cassandra.io.libevreactor import LibevConnection
+        return (LibevConnection,None)
+    except DependencyException as e:
+        return (None, e)
+
+def _try_asyncore_import():
+    try:
+        from cassandra.io.asyncorereactor import AsyncoreConnection
+        return (AsyncoreConnection,None)
+    except DependencyException as e:
+        return (None, e)
+
+def _try_twisted_import():
+    try:
+        from cassandra.io.twistedreactor import TwistedConnection
+        return TwistedConnection, None
+    except DependencyException as e:
+        return None, e
+
+def _connection_reduce_fn(val,import_fn):
+    (rv, excs) = val
+    # If we've already found a workable Connection class return immediately
+    if rv:
+        return val
+    (import_result, exc) = import_fn()
+    if exc:
+        excs.append(exc)
+    return (rv or import_result, excs)
+
+log = logging.getLogger(__name__)
+
+def get_all_supported_connections_classes():
+    classes = []
+    excs = []
+    for try_fn in (_try_gevent_import, _try_eventlet_import, _try_libev_import, _try_asyncore_import, _try_twisted_import):
+        conn, exc = try_fn()
+        if conn is not None:
+            classes.append(conn)
+        else:
+            excs.append(exc)
+    return tuple(classes), tuple(excs)
+
+def get_default_connection_class():
+    excs = []
+    for try_fn in (_try_gevent_import, _try_eventlet_import, _try_libev_import, _try_asyncore_import, _try_twisted_import):
+        conn, exc = try_fn()
+        if conn is not None:
+            return conn, None
+        if exc:
+            excs.append(exc)
+    return None, tuple(excs)
+
+
+(conn_class, excs) = get_default_connection_class()
+if not conn_class:
+    raise DependencyException("Unable to load a default connection class", excs)
+DefaultConnection = conn_class
 
 # Forces load of utf8 encoding module to avoid deadlock that occurs
 # if code that is being imported tries to import the module in a seperate
 # thread.
 # See http://bugs.python.org/issue10923
 "".encode('utf8')
-
-log = logging.getLogger(__name__)
 
 
 DEFAULT_MIN_REQUESTS = 5
@@ -802,9 +874,9 @@ class Cluster(object):
     Using ssl_options without ssl_context is deprecated and will be removed in the
     next major release.
 
-    An optional dict which will be used as kwargs for ``ssl.SSLContext.wrap_socket`` (or
-    ``ssl.wrap_socket()`` if used without ssl_context) when new sockets are created.
-    This should be used when client encryption is enabled in Cassandra.
+    An optional dict which will be used as kwargs for ``ssl.SSLContext.wrap_socket`` 
+    when new sockets are created. This should be used when client encryption is enabled 
+    in Cassandra.
 
     The following documentation only applies when ssl_options is used without ssl_context.
 
@@ -820,6 +892,12 @@ class Cluster(object):
     should almost always require the option ``'cert_reqs': ssl.CERT_REQUIRED``. Note also that this functionality was not built into
     Python standard library until (2.7.9, 3.2). To enable this mechanism in earlier versions, patch ``ssl.match_hostname``
     with a custom or `back-ported function <https://pypi.org/project/backports.ssl_match_hostname/>`_.
+
+    .. versionchanged:: 3.29.0
+
+    ``ssl.match_hostname`` has been deprecated since Python 3.7 (and removed in Python 3.12).  This functionality is now implemented
+    via ``ssl.SSLContext.check_hostname``.  All options specified above (including ``check_hostname``) should continue to behave in a
+    way that is consistent with prior implementations.
     """
 
     ssl_context = None

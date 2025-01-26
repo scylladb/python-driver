@@ -19,7 +19,7 @@ from cassandra.cqlengine import operators
 from cassandra.cqlengine.named import NamedKeyspace
 from cassandra.cqlengine.operators import EqualsOperator, GreaterThanOrEqualOperator
 from cassandra.cqlengine.query import ResultObject
-from cassandra.concurrent import execute_concurrent_with_args
+from cassandra.concurrent_executor import execute_concurrent_with_args
 from cassandra.cqlengine import models
 
 from tests.integration.cqlengine import setup_connection, execute_count

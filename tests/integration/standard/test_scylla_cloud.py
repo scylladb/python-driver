@@ -5,16 +5,9 @@ from ccmlib.utils.ssl_utils import generate_ssl_stores
 from ccmlib.utils.sni_proxy import refresh_certs, get_cluster_info, start_sni_proxy, create_cloud_config
 
 from tests.integration import use_cluster
-from cassandra.cluster import Cluster, TwistedConnection
+from cassandra.cluster import Cluster, get_all_supported_connections_classes
 
-
-from cassandra.io.libevreactor import LibevConnection
-supported_connection_classes = [LibevConnection, TwistedConnection]
-try:
-    from cassandra.io.asyncorereactor import AsyncoreConnection
-    supported_connection_classes += [AsyncoreConnection]
-except ImportError:
-    pass
+supported_connection_classes, _ = get_all_supported_connections_classes()
 
 #from cassandra.io.geventreactor import GeventConnection
 #from cassandra.io.eventletreactor import EventletConnection

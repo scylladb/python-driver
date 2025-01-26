@@ -21,7 +21,7 @@ from cassandra import cqltypes
 from cassandra import ConsistencyLevel, Unavailable, OperationTimedOut, ReadTimeout, ReadFailure, \
     WriteTimeout, WriteFailure
 from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DEFAULT
-from cassandra.concurrent import execute_concurrent_with_args
+from cassandra.concurrent_executor import execute_concurrent_with_args
 from cassandra.metadata import murmur3
 from cassandra.policies import (
     RoundRobinPolicy, DCAwareRoundRobinPolicy,

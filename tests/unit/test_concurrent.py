@@ -24,7 +24,7 @@ import sys
 import platform
 
 from cassandra.cluster import Cluster, Session
-from cassandra.concurrent import execute_concurrent, execute_concurrent_with_args
+from cassandra.concurrent_executor import execute_concurrent, execute_concurrent_with_args
 from cassandra.pool import Host
 from cassandra.policies import SimpleConvictionPolicy
 from tests.unit.utils import mock_session_pools
