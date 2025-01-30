@@ -74,11 +74,16 @@ readme = {file = "README.rst", content-type = "text/x-rst"}
 
 [build-system]
 requires = [
-    "setuptools>=42",
+    "setuptools>=64",
     "Cython",
+    "setuptools_scm>=8"
 ]
 
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+version_file = "cassandra/_version.py"
+tag_regex = '(?P<version>\d*?\.\d*?\.\d*?)-scylla'
 
 #### CI BUILDWHEEL CONFIG ####
 

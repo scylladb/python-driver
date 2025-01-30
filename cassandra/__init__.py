@@ -14,7 +14,7 @@
 
 from enum import Enum
 import logging
-
+from cassandra._version import __version__, __version_tuple__ as __version_info__
 
 class NullHandler(logging.Handler):
 
@@ -22,9 +22,6 @@ class NullHandler(logging.Handler):
         pass
 
 logging.getLogger('cassandra').addHandler(NullHandler())
-
-__version_info__ = (3, 28, 2)
-__version__ = '.'.join(map(str, __version_info__))
 
 
 class ConsistencyLevel(object):
