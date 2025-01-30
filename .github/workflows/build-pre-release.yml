@@ -1,6 +1,30 @@
 name: Build pre release python versions
 
-on: [push, pull_request]
+on:
+  workflow_dispatch:
+    inputs:
+      python-version:
+        description: 'Python version to run against'
+        required: true
+        type: string
+
+      cibw-skip:
+        type: string
+        description: 'CIBUILDWHEEL builds pattern to skip, goes to CIBW_SKIP env'
+        required: false
+        default: 'cp35* cp36* *musllinux*'
+
+      cibw-build:
+        type: string
+        description: 'CIBUILDWHEEL builds pattern to build, goes to CIBW_BUILD env'
+        required: false
+        default: '*_x86_64'
+
+      matrix:
+        type: string
+        description: 'job matrix json definition'
+        required: false
+        default: '[{"os":"ubuntu-20.04","platform":"x86_64"},{"os":"ubuntu-20.04","platform":"PyPy"},{"os":"windows-latest","platform":"win64"},{"os":"windows-latest","platform":"PyPy"},{"os":"macos-latest","platform":"all"},{"os":"macos-13","platform":"all"},{"os":"macos-latest","platform":"PyPy"}]'
 
 env:
  CIBW_TEST_COMMAND_LINUX: "pytest {project}/tests/unit"
@@ -8,20 +32,18 @@ env:
  CIBW_BEFORE_BUILD_LINUX: "rm -rf ~/.pyxbld && rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux && yum install -y libffi-devel libev libev-devel openssl openssl-devel"
  CIBW_ENVIRONMENT: "CASS_DRIVER_BUILD_CONCURRENCY=2 CFLAGS='-g0 -O3'"
  CIBW_PRERELEASE_PYTHONS: True
- CIBW_SKIP: cp35* cp36* *musllinux*
+ CIBW_SKIP: ${{ inputs.cibw-skip }}
  CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+ CIBW_BUILD: ${{ inputs.cibw-build }}
 
 jobs:
   build_wheels:
     name: Build wheels ${{ matrix.os }} (${{ matrix.platform }})
-    if: "(!contains(github.event.pull_request.labels.*.name, 'disable-test-build')) || github.event_name == 'push' && endsWith(github.event.ref, 'scylla')"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-20.04
-            platform: x86_64
+        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -29,21 +51,71 @@ jobs:
         name: Install Python
         with:
           python-version: '3.13'
+      - name: Enable pip installing globally
+        if: runner.os == 'MacOs' || runner.os == 'Windows'
+        run: |
+          echo "PIP_BREAK_SYSTEM_PACKAGES=1" >> $GITHUB_ENV
 
       - name: Install cibuildwheel
         run: |
           python3 -m pip install cibuildwheel==2.22.0
 
+      - name: Install OpenSSL for Windows
+        if: runner.os == 'Windows'
+        run: |
+          choco install openssl --version=3.3.2 -f -y
+
+      - name: Install Conan
+        if: runner.os == 'Windows'
+        uses: turtlebrowser/get-conan@main
+
+      - name: configure libev for Windows
+        if: runner.os == 'Windows'
+        run: |
+          conan profile detect
+          conan install conanfile.py
+
+      - name: Install OpenSSL for MacOS
+        if: runner.os == 'MacOs'
+        run: |
+          brew install libev
+
       - name: Overwrite for Linux 64
         if: runner.os == 'Linux' && matrix.platform == 'x86_64'
         run: |
-          echo "CIBW_BUILD=cp313*_x86_64" >> $GITHUB_ENV
+          echo "CIBW_BUILD=cp3*_x86_64" >> $GITHUB_ENV
+
+      - name: Overwrite for Linux PyPy
+        if: runner.os == 'Linux' && matrix.platform == 'PyPy'
+        run: |
+          echo "CIBW_BUILD=pp*" >> $GITHUB_ENV
+          echo "CIBW_TEST_COMMAND_LINUX=" >> $GITHUB_ENV
+
+      - name: Overwrite for Windows 64
+        if: runner.os == 'Windows' && matrix.platform == 'win64'
+        run: |
+          echo "CIBW_BUILD=cp*win_amd64" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
+
+      - name: Overwrite for Windows PyPY
+        if: runner.os == 'Windows' && matrix.platform == 'PyPy'
+        run: |
+          echo "CIBW_BUILD=pp*" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
+          echo "CIBW_TEST_COMMAND_WINDOWS=" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
+
+      - name: Overwrite for MacOs
+        if: runner.os == 'MacOs' && matrix.platform == 'all'
+        run: |
+          echo "CIBW_BUILD=cp39* cp310* cp311* cp312* cp313*" >> $GITHUB_ENV
+          echo "CIBW_BEFORE_TEST_MACOS=pip install -r {project}/test-requirements.txt pytest" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV
+
+      - name: Overwrite for MacOs PyPy
+        if: runner.os == 'MacOs' && matrix.platform == 'PyPy'
+        run: |
+          echo "CIBW_BUILD=pp*" >> $GITHUB_ENV
+          echo "CIBW_BEFORE_TEST_MACOS=pip install -r {project}/test-requirements.txt pytest" >> $GITHUB_ENV
+          echo "CIBW_TEST_COMMAND_MACOS=" >> $GITHUB_ENV
 
       - name: Build wheels
         run: |
           python3 -m cibuildwheel --output-dir wheelhouse
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-${{ matrix.os }}-${{ matrix.platform }}
-          path: ./wheelhouse/*.whl
