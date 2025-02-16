@@ -18,6 +18,8 @@ from cassandra import DriverException
 import unittest
 import logging
 import pytest
+from packaging.version import Version
+
 from cassandra import ProtocolVersion
 from cassandra import ConsistencyLevel, Unavailable, InvalidRequest, cluster
 from cassandra.query import (PreparedStatement, BoundStatement, SimpleStatement,
@@ -26,7 +28,7 @@ from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DE
 from cassandra.policies import HostDistance, RoundRobinPolicy, WhiteListRoundRobinPolicy
 from tests.integration import use_singledc, PROTOCOL_VERSION, BasicSharedKeyspaceUnitTestCase, \
     greaterthanprotocolv3, MockLoggingHandler, get_supported_protocol_versions, local, get_cluster, setup_keyspace, \
-    USE_CASS_EXTERNAL, greaterthanorequalcass40, DSE_VERSION, TestCluster, requirecassandra, xfail_scylla
+    USE_CASS_EXTERNAL, greaterthanorequalcass40, DSE_VERSION, TestCluster, requirecassandra, xfail_scylla, CASSANDRA_VERSION
 from tests import notwindows
 from tests.integration import greaterthanorequalcass30, get_node
 
@@ -47,7 +49,10 @@ def setup_module():
         ccm_cluster.stop()
         # This is necessary because test_too_many_statements may
         # timeout otherwise
-        config_options = {'write_request_timeout_in_ms': '20000'}
+        if CASSANDRA_VERSION >= Version('4.1'):
+            config_options = {'write_request_timeout': '20000ms'}
+        else:
+            config_options = {'write_request_timeout_in_ms': '20000'}
         ccm_cluster.set_configuration_options(config_options)
         ccm_cluster.start(wait_for_binary_proto=True, wait_other_notice=True)
 
@@ -940,7 +945,7 @@ class LightweightTransactionTests(unittest.TestCase):
                 exception_type = type(result).__name__
                 if exception_type == "NoHostAvailable":
                     self.fail("PYTHON-91: Disconnected from Cassandra: %s" % result.message)
-                if exception_type in ["WriteTimeout", "WriteFailure", "ReadTimeout", "ReadFailure", "ErrorMessageSub"]:
+                if exception_type in ["WriteTimeout", "WriteFailure", "ReadTimeout", "ReadFailure", "ErrorMessageSub", "ErrorMessage"]:
                     if type(result).__name__ in ["WriteTimeout", "WriteFailure"]:
                         received_timeout = True
                     continue

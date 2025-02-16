@@ -120,7 +120,6 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         self.assertEqual(len(CustomResultMessageTracked.checked_rev_row_set), len(PRIMITIVE_DATATYPES)-1)
         cluster.shutdown()
 
-    @unittest.expectedFailure
     @requirecassandra
     @greaterthanorequalcass40
     def test_protocol_divergence_v5_fail_by_continuous_paging(self):
@@ -168,7 +167,6 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         self._protocol_divergence_fail_by_flag_uses_int(ProtocolVersion.V4, uses_int_query_flag=False,
                                                         int_flag=True)
 
-    @unittest.expectedFailure
     @requirecassandra
     @greaterthanorequalcass40
     def test_protocol_v5_uses_flag_int(self):
@@ -196,7 +194,6 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         self._protocol_divergence_fail_by_flag_uses_int(ProtocolVersion.DSE_V1, uses_int_query_flag=True,
                                                         int_flag=True)
 
-    @unittest.expectedFailure
     @requirecassandra
     @greaterthanorequalcass40
     def test_protocol_divergence_v5_fail_by_flag_uses_int(self):

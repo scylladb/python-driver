@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import unittest
+import pytest
 
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -45,7 +46,7 @@ class SingleInterfaceTest(unittest.TestCase):
             self.cluster.shutdown()
 
     # TODO: enable after https://github.com/scylladb/python-driver/issues/121 is fixed
-    @unittest.skip('Fails on scylla due to the broadcast_rpc_port is None')
+    @pytest.mark.skip('Fails on scylla due to the broadcast_rpc_port is None')
     def test_single_interface(self):
         """
         Test that we can connect to a multiple hosts bound to a single interface.

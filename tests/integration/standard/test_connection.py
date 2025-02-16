@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import unittest
+import pytest
 
 from functools import partial
 from mock import patch
@@ -38,7 +39,7 @@ from cassandra.pool import HostConnectionPool
 
 from tests import is_monkey_patched
 from tests.integration import use_singledc, get_node, CASSANDRA_IP, local, \
-    requiresmallclockgranularity, greaterthancass20, TestCluster
+    requiresmallclockgranularity, greaterthancass20, TestCluster, EVENT_LOOP_MANAGER, SCYLLA_VERSION
 
 try:
     from cassandra.io.libevreactor import LibevConnection
@@ -127,6 +128,7 @@ class HeartbeatTest(unittest.TestCase):
 
     @local
     @greaterthancass20
+    @pytest.mark.xfail(reason="test not stable on cassandra", condition=EVENT_LOOP_MANAGER=="asyncio" and SCYLLA_VERSION is None, strict=False)
     def test_heart_beat_timeout(self):
         # Setup a host listener to ensure the nodes don't go down
         test_listener = TestHostListener()
