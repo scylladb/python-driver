@@ -46,6 +46,7 @@ env:
  CIBW_MANYLINUX_PYPY_X86_64_IMAGE: manylinux_2_28
  CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
  CIBW_MANYLINUX_PYPY_AARCH64_IMAGE: manylinux_2_28
+ CIBW_ENVIRONMENT_WINDOWS: "CC=clang CXX=clang++"
 
 jobs:
   prepare-matrix:
@@ -193,11 +194,6 @@ jobs:
         if: runner.os == 'Linux' && matrix.platform == 'PyPy'
         run: |
           echo "CIBW_TEST_COMMAND_LINUX=" >> $GITHUB_ENV
-
-      - name: Overwrite for Windows 64
-        if: runner.os == 'Windows' && matrix.platform == 'win64'
-        run: |
-          echo "CIBW_ENVIRONMENT_WINDOWS= CC=clang CXX=clang++" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
 
       - name: Overwrite for Windows PyPY
         if: runner.os == 'Windows' && matrix.platform == 'PyPy'
