@@ -27,7 +27,7 @@ import os
 
 import cassandra
 from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DEFAULT, ControlConnection, Cluster
-from cassandra.concurrent import execute_concurrent
+from cassandra.concurrent_executor import execute_concurrent
 from cassandra.policies import (RoundRobinPolicy, ExponentialReconnectionPolicy,
                                 RetryPolicy, SimpleConvictionPolicy, HostDistance,
                                 AddressTranslator, TokenAwarePolicy, HostFilterPolicy)

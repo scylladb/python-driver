@@ -15,10 +15,20 @@
 
 # Originally derived from MagnetoDB source:
 #   https://github.com/stackforge/magnetodb/blob/2015.1.0b1/magnetodb/common/cassandra/io/eventletreactor.py
-import eventlet
-from eventlet.green import socket
-from eventlet.queue import Queue
-from greenlet import GreenletExit
+from cassandra import DependencyException
+
+try:
+    import eventlet
+    from eventlet.green import socket
+    from eventlet.queue import Queue
+except (ModuleNotFoundError, ImportError, AttributeError):
+    raise DependencyException("Unable to import eventlet module. Try to install it via `pip install eventlet`")
+
+try:
+    from greenlet import GreenletExit
+except (ModuleNotFoundError, ImportError, AttributeError):
+    raise DependencyException("Unable to import greenlet module. Try to install it via `pip install greenlet`")
+
 import logging
 from threading import Event
 import time

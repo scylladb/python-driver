@@ -16,13 +16,14 @@
 import unittest
 from mock import patch
 
+from cassandra import DependencyException
 from tests.unit.io.utils import TimerTestMixin
 from tests import notpypy, EVENT_LOOP_MANAGER
 
 try:
     from eventlet import monkey_patch
     from cassandra.io.eventletreactor import EventletConnection
-except (ImportError, AttributeError):
+except (ImportError, AttributeError, DependencyException):
     EventletConnection = None  # noqa
 
 skip_condition = EventletConnection is None or EVENT_LOOP_MANAGER != "eventlet"
