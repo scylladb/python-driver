@@ -61,7 +61,7 @@ jobs:
              was_added=1
            elif [[ "${os}" == "windows" ]]; then
              [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n  '{"os":"windows-latest","platform":"win64"},{"os":"windows-latest","platform":"PyPy"}' >> /tmp/matrix.json
+             echo -n  '{"os":"windows-2022","platform":"win64"},{"os":"windows-2022","platform":"PyPy"}' >> /tmp/matrix.json
              was_added=1
            elif [[ "${os}" == "macos" ]]; then
              [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
