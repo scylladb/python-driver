@@ -9,10 +9,10 @@ on:
         default: false
 
       python-version:
-        description: 'Python version to run against'
+        description: 'Python version to run on'
         required: true
         type: string
-        default: "1.13"
+        default: "3.13"
 
       target:
         type: string
@@ -176,6 +176,7 @@ jobs:
           else
             echo "Unknown macos version" && false;
           fi
+
       - name: Overwrite for MacOs PyPy
         if: runner.os == 'MacOs' && matrix.platform == 'PyPy'
         run: |
