@@ -164,11 +164,11 @@ jobs:
           done
           echo "Resulted CIBW_BUILD: $CIBW_BUILD"
           echo "CIBW_BUILD=$CIBW_BUILD" >> $GITHUB_ENV
-          
 
-      - name: Prepare CIBW_BUILD for Windows
+      - name: Overwrite for Windows
         if: runner.os == 'Windows'
         run: |
+          ##### Set CIBW_BUILD
           if ("${{ matrix.platform }}" -match "PyPy") {
             # Convert `inputs.target-wheels-python-versions` (3.11 3.12 3.13) into `pp311* pp312* pp313*`
             $cibw_build_patterns = (("${{ inputs.target-wheels-python-versions }}" -replace '\.') -split " " | ForEach-Object { "pp${_}*" }) -join " "
@@ -178,16 +178,16 @@ jobs:
             $cibw_build_patterns = (("${{ inputs.target-wheels-python-versions }}" -replace '\.') -split " " | ForEach-Object { "cp${_}*amd64" }) -join " "
             echo "CIBW_BUILD=$cibw_build_patterns"  | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append            
           }
+          
+          ##### Set CIBW_TEST_COMMAND_WINDOWS
+          if ("${{ matrix.platform }}" -match "PyPy") {
+            echo "CIBW_TEST_COMMAND_WINDOWS=" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append          
+          }
 
       - name: Overwrite for Linux PyPy
         if: runner.os == 'Linux' && matrix.platform == 'PyPy'
         run: |
           echo "CIBW_TEST_COMMAND_LINUX=" >> $GITHUB_ENV
-
-      - name: Overwrite for Windows PyPY
-        if: runner.os == 'Windows' && matrix.platform == 'PyPy'
-        run: |
-          echo "CIBW_TEST_COMMAND_WINDOWS=" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
 
       - name: Overwrite for MacOs
         if: runner.os == 'MacOs'
