@@ -31,6 +31,11 @@ on:
         required: false
         default: 3.8 3.9 3.10 3.11 3.12 3.13
 
+      cibw-manylinux-default-image:
+        type: string
+        description: "An manylinux image to be used by cibuildwheel"
+        default: "manylinux_2_28"
+
 env:
  CIBW_TEST_COMMAND_LINUX: > 
     pytest {project}/tests/unit && 
@@ -42,10 +47,10 @@ env:
  CIBW_BEFORE_BUILD_LINUX: "rm -rf ~/.pyxbld && rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux && yum install -y libffi-devel libev libev-devel openssl openssl-devel"
  CIBW_ENVIRONMENT: "CASS_DRIVER_BUILD_CONCURRENCY=2 CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST=yes CFLAGS='-g0 -O3'"
  CIBW_SKIP: ${{ inputs.cibw-skip }}
- CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
- CIBW_MANYLINUX_PYPY_X86_64_IMAGE: manylinux_2_28
- CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
- CIBW_MANYLINUX_PYPY_AARCH64_IMAGE: manylinux_2_28
+ CIBW_MANYLINUX_X86_64_IMAGE: ${{ inputs.cibw-manylinux-default-image }}
+ CIBW_MANYLINUX_PYPY_X86_64_IMAGE: ${{ inputs.cibw-manylinux-default-image }}
+ CIBW_MANYLINUX_AARCH64_IMAGE: ${{ inputs.cibw-manylinux-default-image }}
+ CIBW_MANYLINUX_PYPY_AARCH64_IMAGE: ${{ inputs.cibw-manylinux-default-image }}
  CIBW_ENVIRONMENT_WINDOWS: "CC=clang CXX=clang++"
 
 jobs:
