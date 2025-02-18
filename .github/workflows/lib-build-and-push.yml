@@ -135,9 +135,11 @@ jobs:
         run: |
           brew install libev
 
-      - name: Prepare CIBW_BUILD for Linux and MacOS
+      - name: Overwrite for Linux and MacOS
         if: runner.os == 'Linux' || runner.os == 'MacOS'
         run: |
+          
+          ##### Set CIBW_BUILD
           pre=""
           post=""
 
@@ -165,6 +167,21 @@ jobs:
           echo "Resulted CIBW_BUILD: $CIBW_BUILD"
           echo "CIBW_BUILD=$CIBW_BUILD" >> $GITHUB_ENV
 
+          ##### Set MACOSX_DEPLOYMENT_TARGET
+          if [ "${{ matrix.os }}" == "macos-13" ]; then
+            echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV;
+            echo "Enforcing target deployment for 13.0"
+          elif [ "${{ matrix.os }}" == "macos-14" ]; then
+            echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> $GITHUB_ENV;
+            echo "Enforcing target deployment for 14.0"
+          fi
+          
+          ##### Set CIBW_TEST_COMMAND_MACOS and CIBW_TEST_COMMAND_LINUX
+          if [[ "${{ matrix.platform }}" == "PyPy" ]]; then
+            echo "CIBW_TEST_COMMAND_MACOS=" >> $GITHUB_ENV
+            echo "CIBW_TEST_COMMAND_LINUX=" >> $GITHUB_ENV
+          fi
+
       - name: Overwrite for Windows
         if: runner.os == 'Windows'
         run: |
@@ -183,28 +200,6 @@ jobs:
           if ("${{ matrix.platform }}" -match "PyPy") {
             echo "CIBW_TEST_COMMAND_WINDOWS=" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append          
           }
-
-      - name: Overwrite for Linux PyPy
-        if: runner.os == 'Linux' && matrix.platform == 'PyPy'
-        run: |
-          echo "CIBW_TEST_COMMAND_LINUX=" >> $GITHUB_ENV
-
-      - name: Overwrite for MacOs
-        if: runner.os == 'MacOs'
-        run: |
-          if [ "${{ matrix.os }}" == "macos-13" ]; then
-            echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV;
-            echo "Enforcing target deployment for 13.0"
-          elif [ "${{ matrix.os }}" == "macos-14" ]; then
-            echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> $GITHUB_ENV;
-            echo "Enforcing target deployment for 14.0"
-          else
-            echo "Unknown macos version" && false;
-          fi
-          
-          if [[ "${{ matrix.platform }}" == "PyPy" ]]; then
-            echo "CIBW_TEST_COMMAND_MACOS=" >> $GITHUB_ENV
-          fi
 
       - name: Build wheels
         run: |
