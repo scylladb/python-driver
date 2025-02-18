@@ -236,6 +236,7 @@ jobs:
         name: Install Python
         with:
           python-version: ${{ inputs.python-version }}
+          allow-prereleases: 'true'
 
       - name: Install cibuildwheel
         run: |
