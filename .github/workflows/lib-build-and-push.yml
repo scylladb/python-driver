@@ -189,7 +189,6 @@ jobs:
       - name: Overwrite for MacOs
         if: runner.os == 'MacOs' && matrix.platform == 'all'
         run: |
-          echo "CIBW_BEFORE_TEST_MACOS=pip install -r {project}/test-requirements.txt pytest" >> $GITHUB_ENV
           if [ "${{ matrix.os }}" == "macos-13" ]; then
             echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV;
             echo "Enforcing target deployment for 13.0"
@@ -203,7 +202,6 @@ jobs:
       - name: Overwrite for MacOs PyPy
         if: runner.os == 'MacOs' && matrix.platform == 'PyPy'
         run: |
-          echo "CIBW_BEFORE_TEST_MACOS=pip install -r {project}/test-requirements.txt pytest" >> $GITHUB_ENV
           echo "CIBW_TEST_COMMAND_MACOS=" >> $GITHUB_ENV
 
       - name: Build wheels
