@@ -96,8 +96,8 @@ before-test = "pip install -r {project}/test-requirements.txt"
 
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
-manylinux-pypy-x86_64-image = "manylinux_2_28"
-manylinux-pypy-aarch64-image = "manylinux_2_28"
+manylinux-pypy_x86_64-image = "manylinux_2_28"
+manylinux-pypy_aarch64-image = "manylinux_2_28"
 
 [tool.cibuildwheel.linux]
 build = ["cp3*_x86_64"]
