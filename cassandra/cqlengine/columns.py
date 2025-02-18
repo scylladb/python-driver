@@ -972,7 +972,7 @@ class Map(BaseContainerColumn):
     def to_database(self, value):
         if value is None:
             return None
-        return dict((self.key_col.to_database(k), self.value_col.to_database(v)) for k, v in value.items())
+        return dict((self.key_col.to_database(k), v and self.value_col.to_database(v)) for k, v in value.items())
 
 
 class UDTValueManager(BaseValueManager):
