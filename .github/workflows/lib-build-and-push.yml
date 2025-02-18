@@ -190,7 +190,7 @@ jobs:
           echo "CIBW_TEST_COMMAND_WINDOWS=" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
 
       - name: Overwrite for MacOs
-        if: runner.os == 'MacOs' && matrix.platform == 'all'
+        if: runner.os == 'MacOs'
         run: |
           if [ "${{ matrix.os }}" == "macos-13" ]; then
             echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV;
@@ -201,11 +201,10 @@ jobs:
           else
             echo "Unknown macos version" && false;
           fi
-
-      - name: Overwrite for MacOs PyPy
-        if: runner.os == 'MacOs' && matrix.platform == 'PyPy'
-        run: |
-          echo "CIBW_TEST_COMMAND_MACOS=" >> $GITHUB_ENV
+          
+          if [[ "${{ matrix.platform }}" == "PyPy" ]]; then
+            echo "CIBW_TEST_COMMAND_MACOS=" >> $GITHUB_ENV
+          fi
 
       - name: Build wheels
         run: |
