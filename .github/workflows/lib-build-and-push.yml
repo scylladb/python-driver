@@ -76,30 +76,11 @@ jobs:
   build-wheels:
     name: Build wheels ${{ matrix.os }} (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
+    needs: prepare-matrix
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            platform: x86_64
-
-          - os: ubuntu-24.04
-            platform: PyPy
-
-          - os: windows-2022
-            platform: win64
-
-          - os: windows-latest
-            platform: PyPy
-
-          - os: macos-14
-            platform: all
-
-          - os: macos-13
-            platform: all
-
-          - os: macos-latest
-            platform: PyPy
+        include: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v4
