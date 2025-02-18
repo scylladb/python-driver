@@ -65,7 +65,7 @@ jobs:
              was_added=1
            elif [[ "${os}" == "macos" ]]; then
              [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n  '{"os":"macos-latest","platform":"all"},{"os":"macos-13","platform":"all"},{"os":"macos-latest","platform":"PyPy"}' >> /tmp/matrix.json
+             echo -n  '{"os":"macos-14","platform":"all"},{"os":"macos-13","platform":"all"},{"os":"macos-14","platform":"PyPy"}' >> /tmp/matrix.json
              was_added=1
            fi
           done
