@@ -87,9 +87,10 @@ tag_regex = '(?P<version>\d*?\.\d*?\.\d*?)-scylla'
 #### CI BUILDWHEEL CONFIG ####
 
 [tool.cibuildwheel]
-
 build-frontend = "build[uv]"
+
 environment = { CASS_DRIVER_BUILD_CONCURRENCY = "2", CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "yes", CFLAGS = "-g0 -O3" }
+
 skip = ["cp2*", "cp36*", "pp36*", "cp37*", "pp37*", "*i686", "*musllinux*"]
 
 before-test = "pip install -r {project}/test-requirements.txt"
@@ -110,13 +111,14 @@ test-command = [
 
 [tool.cibuildwheel.macos]
 build = ["cp3*"]
+build-frontend = "build"
 test-command = [
     "pytest {project}/tests/unit -k 'not (test_multi_timer_validation or test_empty_connections or test_timer_cancellation)'"
 ]
 
 [tool.cibuildwheel.windows]
-build = ["cp3*"]
-build-frontend = "build" # build[uv] seems to be broken on Windows
+build = ["cp3*amd64"]
+build-frontend = "build[uv]" # build[uv] seems to be broken on Windows
 test-command = [
     "pytest {project}/tests/unit  -k 'not (test_deserialize_date_range_year or test_datetype or test_libevreactor)'"
 ]
