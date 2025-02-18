@@ -6,34 +6,37 @@ on:
       upload:
         description: 'Upload to PyPI'
         type: boolean
+        required: false
         default: false
 
       python-version:
         description: 'Python version to run on'
-        required: true
         type: string
+        required: true
         default: "3.13"
 
       target:
-        type: string
         description: "target os to build for: linux,macos,windows"
+        type: string
+        required: false
         default: "linux,macos,windows"
 
       cibw-skip:
-        type: string
         description: 'CIBUILDWHEEL builds pattern to skip, goes to CIBW_SKIP env'
+        type: string
         required: false
         default: 'cp2* cp35* cp36* cp37* *i686 *musllinux*'
 
       target-wheels-python-versions:
-        type: string
         description: "List of python version to build wheels for, to be translated to CIBW_BUILD env"
+        type: string
         required: false
         default: 3.8 3.9 3.10 3.11 3.12 3.13
 
       cibw-manylinux-default-image:
+        description: "A manylinux image to be used by cibuildwheel"
         type: string
-        description: "An manylinux image to be used by cibuildwheel"
+        required: false
         default: "manylinux_2_28"
 
 env:
