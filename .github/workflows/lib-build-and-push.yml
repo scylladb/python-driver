@@ -19,7 +19,7 @@ on:
         description: "target os to build for: linux,macos,windows"
         type: string
         required: false
-        default: "windows"
+        default: "linux,macos,windows"
 
 jobs:
   prepare-matrix:
