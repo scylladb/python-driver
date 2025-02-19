@@ -3,9 +3,12 @@ name: Integration tests
 on:
   push:
     branches:
-      - master1
+      - master
       - 'branch-**'
   pull_request:
+    branches:
+      - master1
+      - 'branch-**'
     paths-ignore:
      - docs/*
      - examples/*
