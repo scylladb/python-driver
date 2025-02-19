@@ -133,6 +133,15 @@ jobs:
           echo "[build]" >> $HOME/.pydistutils.cfg
           echo "compiler=clang" >> $HOME/.pydistutils.cfg
 
+      - name: Ensure cl.exe is Removed
+        shell: bash
+        run: |
+          if command -v cl.exe; then
+            echo "ERROR: cl.exe is still present!" && exit 1
+          else
+            echo "cl.exe successfully removed!"
+          fi
+
       - name: Build wheels for windows
         if: runner.os == 'Windows'
         run: |
