@@ -3,7 +3,7 @@ name: Integration tests
 on:
   push:
     branches:
-      - master
+      - master1
       - 'branch-**'
   pull_request:
     paths-ignore:
