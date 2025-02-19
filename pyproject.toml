@@ -119,7 +119,7 @@ test-command = [
 [tool.cibuildwheel.windows]
 build-frontend = "build[uv]" # build[uv] seems to be broken on Windows
 test-command = [
-    "pytest {project}/tests/unit  -k 'not (test_deserialize_date_range_year or test_datetype or test_libevreactor)'"
+    "pytest {project}/tests/unit  -k \"not (test_deserialize_date_range_year or test_datetype or test_libevreactor)\""
 ]
 
 environment = { CC = "clang", CXX = "clang++" }
