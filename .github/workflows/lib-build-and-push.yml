@@ -142,6 +142,7 @@ jobs:
           $filteredPaths = $pathArray | Where-Object { $_ -notmatch "Microsoft Visual Studio" }
           $newPath = ($filteredPaths -join ";").TrimEnd(";")
           echo $newPath
+          $env:Path = $newPath
           [System.Environment]::SetEnvironmentVariable("Path", $newPath, "User")
           python3 -m cibuildwheel --output-dir wheelhouse
 
