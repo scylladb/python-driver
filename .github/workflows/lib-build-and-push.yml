@@ -112,6 +112,11 @@ jobs:
             echo "Enforcing target deployment for 14.0"
           fi
 
+      - name: Add clang path to $PATH env
+        shell: bash
+        if: runner.os == 'Windows'
+        run: echo "PATH=$PATH:C:\msys64\mingw64\bin" >> $GITHUB_ENV
+
       - name: Build wheels
         run: |
           python3 -m cibuildwheel --output-dir wheelhouse
