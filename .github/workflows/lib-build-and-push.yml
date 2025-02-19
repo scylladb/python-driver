@@ -136,7 +136,7 @@ jobs:
       - name: Build wheels for windows
         if: runner.os == 'Windows'
         run: |
-          $envPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+          $envPath = $env:Path
           echo $envPath
           $pathArray = $envPath -split ";"
           $filteredPaths = $pathArray | Where-Object { $_ -notmatch "Microsoft Visual Studio" }
