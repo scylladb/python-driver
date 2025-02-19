@@ -21,6 +21,9 @@ on:
         required: false
         default: "linux,macos,windows"
 
+env:
+  CIBW_ARCHS_WINDOWS: "AMD64"
+
 jobs:
   prepare-matrix:
     name: "Prepare matrix to run for ${{ inputs.python-version }} on `${{ inputs.target }}`"
