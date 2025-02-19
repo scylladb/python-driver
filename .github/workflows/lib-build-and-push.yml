@@ -6,40 +6,23 @@ on:
       upload:
         description: 'Upload to PyPI'
         type: boolean
+        required: false
         default: false
 
       python-version:
-        description: 'Python version to run against'
-        required: true
+        description: 'Python version to run on'
         type: string
-        default: "1.13"
+        required: true
+        default: "3.13"
 
       target:
-        type: string
         description: "target os to build for: linux,macos,windows"
+        type: string
+        required: false
         default: "linux,macos,windows"
 
-      cibw-skip:
-        type: string
-        description: 'CIBUILDWHEEL builds pattern to skip, goes to CIBW_SKIP env'
-        required: false
-        default: 'cp36* cp37* pp*i686 *musllinux*'
-
 env:
- CIBW_TEST_COMMAND_LINUX: > 
-    pytest {project}/tests/unit && 
-    EVENT_LOOP_MANAGER=gevent pytest {project}/tests/unit/io/test_geventreactor.py
-   
- CIBW_TEST_COMMAND_MACOS: "pytest {project}/tests/unit -k 'not (test_multi_timer_validation or test_empty_connections or test_timer_cancellation)' "
- CIBW_TEST_COMMAND_WINDOWS: "pytest {project}/tests/unit  -k \"not (test_deserialize_date_range_year or test_datetype or test_libevreactor)\" "
- CIBW_BEFORE_TEST: "pip install -r {project}/test-requirements.txt"
- CIBW_BEFORE_BUILD_LINUX: "rm -rf ~/.pyxbld && rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux && yum install -y libffi-devel libev libev-devel openssl openssl-devel"
- CIBW_ENVIRONMENT: "CASS_DRIVER_BUILD_CONCURRENCY=2 CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST=yes CFLAGS='-g0 -O3'"
- CIBW_SKIP: cp36* cp37* pp*i686 *musllinux*
- CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
- CIBW_MANYLINUX_PYPY_X86_64_IMAGE: manylinux_2_28
- CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
- CIBW_MANYLINUX_PYPY_AARCH64_IMAGE: manylinux_2_28
+  CIBW_ARCHS_WINDOWS: "AMD64"
 
 jobs:
   prepare-matrix:
@@ -61,11 +44,11 @@ jobs:
              was_added=1
            elif [[ "${os}" == "windows" ]]; then
              [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n  '{"os":"windows-latest","platform":"win64"},{"os":"windows-latest","platform":"PyPy"}' >> /tmp/matrix.json
+             echo -n  '{"os":"windows-2022","platform":"win64"},{"os":"windows-2022","platform":"PyPy"}' >> /tmp/matrix.json
              was_added=1
            elif [[ "${os}" == "macos" ]]; then
              [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n  '{"os":"macos-latest","platform":"all"},{"os":"macos-13","platform":"all"},{"os":"macos-latest","platform":"PyPy"}' >> /tmp/matrix.json
+             echo -n  '{"os":"macos-14","platform":"all"},{"os":"macos-13","platform":"all"},{"os":"macos-14","platform":"PyPy"}' >> /tmp/matrix.json
              was_added=1
            fi
           done
@@ -76,30 +59,11 @@ jobs:
   build-wheels:
     name: Build wheels ${{ matrix.os }} (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
+    needs: prepare-matrix
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            platform: x86_64
-
-          - os: ubuntu-24.04
-            platform: PyPy
-
-          - os: windows-2022
-            platform: win64
-
-          - os: windows-latest
-            platform: PyPy
-
-          - os: macos-14
-            platform: all
-
-          - os: macos-13
-            platform: all
-
-          - os: macos-latest
-            platform: PyPy
+        include: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -117,7 +81,7 @@ jobs:
 
       - name: Install cibuildwheel
         run: |
-          python3 -m pip install cibuildwheel==2.22.0
+          python3 -m pip install cibuildwheel[uv]==2.22.0
 
       - name: Install OpenSSL for Windows
         if: runner.os == 'Windows'
@@ -139,51 +103,55 @@ jobs:
         run: |
           brew install libev
 
-      - name: Overwrite for Linux 64
-        if: runner.os == 'Linux' && matrix.platform == 'x86_64'
+      - name: Overwrite for Linux and MacOS
+        if: runner.os == 'Linux' || runner.os == 'MacOS'
         run: |
-          echo "CIBW_BUILD=cp3*_x86_64" >> $GITHUB_ENV
-
-      - name: Overwrite for Linux PyPy
-        if: runner.os == 'Linux' && matrix.platform == 'PyPy'
-        run: |
-          echo "CIBW_BUILD=pp*" >> $GITHUB_ENV
-          echo "CIBW_TEST_COMMAND_LINUX=" >> $GITHUB_ENV
-
-      - name: Overwrite for Windows 64
-        if: runner.os == 'Windows' && matrix.platform == 'win64'
-        run: |
-          echo "CIBW_BUILD=cp*win_amd64" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
-          echo "CIBW_ENVIRONMENT_WINDOWS= CC=clang CXX=clang++" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
-
-      - name: Overwrite for Windows PyPY
-        if: runner.os == 'Windows' && matrix.platform == 'PyPy'
-        run: |
-          echo "CIBW_BUILD=pp*" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
-          echo "CIBW_TEST_COMMAND_WINDOWS=" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
-
-      - name: Overwrite for MacOs
-        if: runner.os == 'MacOs' && matrix.platform == 'all'
-        run: |
-          echo "CIBW_BUILD=cp39* cp310* cp311* cp312* cp313*" >> $GITHUB_ENV
-          echo "CIBW_BEFORE_TEST_MACOS=pip install -r {project}/test-requirements.txt pytest" >> $GITHUB_ENV
+          ##### Set MACOSX_DEPLOYMENT_TARGET
           if [ "${{ matrix.os }}" == "macos-13" ]; then
             echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV;
             echo "Enforcing target deployment for 13.0"
           elif [ "${{ matrix.os }}" == "macos-14" ]; then
             echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> $GITHUB_ENV;
             echo "Enforcing target deployment for 14.0"
-          else
-            echo "Unknown macos version" && false;
           fi
-      - name: Overwrite for MacOs PyPy
-        if: runner.os == 'MacOs' && matrix.platform == 'PyPy'
+
+#      - name: Add clang path to $PATH env
+#        if: runner.os == 'Windows'
+#        run: echo "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Add clang path to $PATH env
+        if: runner.os == 'Windows'
         run: |
-          echo "CIBW_BUILD=pp*" >> $GITHUB_ENV
-          echo "CIBW_BEFORE_TEST_MACOS=pip install -r {project}/test-requirements.txt pytest" >> $GITHUB_ENV
-          echo "CIBW_TEST_COMMAND_MACOS=" >> $GITHUB_ENV
+          echo "CC=clang" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "CXX=clang++" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Check Clang Version
+        run: clang --version
+
+      - name: Force Clang for Compilation
+        run: |
+          echo "[build]" >> $HOME/.pydistutils.cfg
+          echo "compiler=clang" >> $HOME/.pydistutils.cfg
+
+      - name: Ensure cl.exe is Removed
+        run: |
+          cl.exe --version
+
+      - name: Build wheels for windows
+        if: runner.os == 'Windows'
+        run: |
+          $envPath = $env:Path
+          echo $envPath
+          $pathArray = $envPath -split ";"
+          $filteredPaths = $pathArray | Where-Object { $_ -notmatch "Microsoft Visual Studio" }
+          $newPath = ($filteredPaths -join ";").TrimEnd(";")
+          echo $newPath
+          $env:Path = $newPath
+          [System.Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+          python3 -m cibuildwheel --output-dir wheelhouse
 
       - name: Build wheels
+        if: runner.os != 'Windows'
         run: |
           python3 -m cibuildwheel --output-dir wheelhouse
 
@@ -235,10 +203,11 @@ jobs:
         name: Install Python
         with:
           python-version: ${{ inputs.python-version }}
+          allow-prereleases: 'true'
 
       - name: Install cibuildwheel
         run: |
-          python -m pip install cibuildwheel==2.22.0
+          python -m pip install cibuildwheel[uv]==2.22.0
 
       - name: Build wheels
         env:

@@ -453,9 +453,7 @@ def run_setup(extensions):
         else:
             sys.stderr.write("Bypassing Cython setup requirement\n")
 
-    setup(
-        tests_require=['nose', 'mock>=2.0.0', 'PyYAML', 'pytz', 'sure'],
-        **kw)
+    setup(**kw)
 
 
 run_setup(None)
