@@ -124,13 +124,6 @@ jobs:
         run: |
           echo "CC=clang" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "CXX=clang++" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $envPath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
-          echo $envPath
-          $pathArray = $envPath -split ";"
-          $filteredPaths = $pathArray | Where-Object { $_ -notmatch "Microsoft Visual Studio" }
-          $newPath = ($filteredPaths -join ";").TrimEnd(";")
-          echo $newPath
-          Set-Content -Path $env:GITHUB_PATH -Value $newPath
 
       - name: Check Clang Version
         run: clang --version
@@ -140,7 +133,20 @@ jobs:
           echo "[build]" >> $HOME/.pydistutils.cfg
           echo "compiler=clang" >> $HOME/.pydistutils.cfg
 
+      - name: Build wheels for windows
+        if: runner.os == 'Windows'
+        run: |
+          $envPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+          echo $envPath
+          $pathArray = $envPath -split ";"
+          $filteredPaths = $pathArray | Where-Object { $_ -notmatch "Microsoft Visual Studio" }
+          $newPath = ($filteredPaths -join ";").TrimEnd(";")
+          echo $newPath
+          [System.Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+          python3 -m cibuildwheel --output-dir wheelhouse
+
       - name: Build wheels
+        if: runner.os != 'Windows'
         run: |
           python3 -m cibuildwheel --output-dir wheelhouse
 
