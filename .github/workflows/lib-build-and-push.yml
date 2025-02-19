@@ -128,6 +128,11 @@ jobs:
       - name: Check Clang Version
         run: clang --version
 
+      - name: Force Clang for Compilation
+        run: |
+          echo "[build]" >> $HOME/.pydistutils.cfg
+          echo "compiler=clang" >> $HOME/.pydistutils.cfg
+
       - name: Build wheels
         run: |
           python3 -m cibuildwheel --output-dir wheelhouse
