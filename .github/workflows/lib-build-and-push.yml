@@ -124,6 +124,7 @@ jobs:
         run: |
           echo "CC=clang" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "CXX=clang++" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $env:GITHUB_PATH -split ';' | Where-Object { $_ -notmatch 'Microsoft Visual Studio' } -join ';' | Set-Item -Path Env:GITHUB_PATH
 
       - name: Check Clang Version
         run: clang --version
