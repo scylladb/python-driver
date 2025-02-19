@@ -92,6 +92,7 @@ build-frontend = "build[uv]"
 environment = { CASS_DRIVER_BUILD_CONCURRENCY = "2", CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "yes", CFLAGS = "-g0 -O3" }
 
 skip = ["cp2*", "cp36*", "pp36*", "cp37*", "pp37*", "*i686", "*musllinux*"]
+build = ["cp3*"]
 
 before-test = "pip install -r {project}/test-requirements.txt"
 
@@ -101,7 +102,6 @@ manylinux-pypy_x86_64-image = "manylinux_2_28"
 manylinux-pypy_aarch64-image = "manylinux_2_28"
 
 [tool.cibuildwheel.linux]
-build = ["cp3*_x86_64"]
 
 before-build = "rm -rf ~/.pyxbld && rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux && yum install -y libffi-devel libev libev-devel openssl openssl-devel"
 test-command = [
@@ -117,7 +117,6 @@ test-command = [
 ]
 
 [tool.cibuildwheel.windows]
-build = ["cp3*amd64"]
 build-frontend = "build[uv]" # build[uv] seems to be broken on Windows
 test-command = [
     "pytest {project}/tests/unit  -k 'not (test_deserialize_date_range_year or test_datetype or test_libevreactor)'"
