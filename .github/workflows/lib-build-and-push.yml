@@ -37,7 +37,7 @@ jobs:
           do
            if [[ "${os}" == "linux" ]]; then
              [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n '{"os":"ubuntu-20.04","platform":"x86_64"},{"os":"ubuntu-20.04","platform":"PyPy"}' >> /tmp/matrix.json
+             echo -n '{"os":"ubuntu-20.04","platform":"x86_64"},{"os":"ubuntu-20.04","platform":"PyPy"},{"os":"ubuntu-24.04","platform":"aarch64"}' >> /tmp/matrix.json
              was_added=1
            elif [[ "${os}" == "windows" ]]; then
              [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
@@ -85,6 +85,13 @@ jobs:
         run: |
           choco install openssl --version=3.4.1 -f -y --no-progress
 
+      - name: Set up QEMU
+        if: runner.os == 'Linux' && matrix.platform == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+          image: 'docker.io/tonistiigi/binfmt:desktop-v8.1.5'
+
       - name: Install Conan
         if: runner.os == 'Windows'
         uses: turtlebrowser/get-conan@main
@@ -122,8 +129,14 @@ jobs:
           fi
 
       - name: Build wheels
+        if: runner.os != 'Linux' || matrix.platform != 'aarch64'
         run: |
           python3 -m cibuildwheel --output-dir wheelhouse
+
+      - name: Build wheels
+        if: runner.os == 'Linux' && matrix.platform == 'aarch64'
+        run: |
+          python -m cibuildwheel --archs aarch64 --output-dir wheelhouse
 
       - uses: actions/upload-artifact@v4
         with:
@@ -149,50 +162,9 @@ jobs:
           name: source-dist
           path: dist/*.tar.gz
 
-  build-wheels-extra-arch:
-    # The host should always be linux
-    runs-on: ubuntu-24.04
-    name: Build extra arch ${{ matrix.archs }} wheels
-    strategy:
-      fail-fast: false
-      matrix:
-        archs: [ aarch64,]  # ppc64le ]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        id: qemu
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: all
-          image: 'docker.io/tonistiigi/binfmt:desktop-v8.1.5'
-        if: runner.os == 'Linux'
-
-      - uses: actions/setup-python@v5
-        name: Install Python
-        with:
-          python-version: ${{ inputs.python-version }}
-          allow-prereleases: 'true'
-
-      - name: Install cibuildwheel
-        run: |
-          python -m pip install cibuildwheel==2.22.0
-
-      - name: Build wheels
-        env:
-          CIBW_BUILD: "cp39* cp310* cp311* cp312* cp313*" # limit to specific version since it take much more time than jobs limit
-        run: |
-          python -m cibuildwheel --archs  ${{ matrix.archs }} --output-dir wheelhouse
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-${{ matrix.archs }}
-          path: ./wheelhouse/*.whl
-
   upload_pypi:
     if: inputs.upload
-    needs: [build-wheels, build-wheels-extra-arch, build-sdist]
+    needs: [build-wheels, build-sdist]
     runs-on: ubuntu-24.04
     permissions:
       id-token: write
