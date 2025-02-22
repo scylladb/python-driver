@@ -122,7 +122,7 @@ jobs:
       - name: Install OpenSSL for Windows
         if: runner.os == 'Windows'
         run: |
-          choco install openssl --version=3.4.1 -f -y
+          choco install openssl --version=3.4.1 -f -y --no-progress
 
       - name: Install Conan
         if: runner.os == 'Windows'
