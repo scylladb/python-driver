@@ -10,8 +10,8 @@ on:
 
       target:
         type: string
-        description: "target os to build for: linux,macos,windows"
-        default: "linux,macos,windows"
+        description: "target os to build for: linux,macos-x86,macos-arm,windows,linux-aarch64"
+        default: "linux,macos-x86,macos-arm,windows,linux-aarch64"
 
 jobs:
   build-and-publish:

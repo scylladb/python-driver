@@ -90,7 +90,7 @@ tag_regex = '(?P<version>\d*?\.\d*?\.\d*?)-scylla'
 build-frontend = "build[uv]"
 environment = { CASS_DRIVER_BUILD_CONCURRENCY = "2", CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "yes", CFLAGS = "-g0 -O3" }
 skip = ["cp2*", "cp36*", "pp36*", "cp37*", "pp37*", "*i686", "*musllinux*"]
-build = ["cp3*"]
+build = ["cp3*", "pp3*"]
 
 before-test = "pip install -r {project}/test-requirements.txt"
 
@@ -109,7 +109,6 @@ test-command = [
 
 [tool.cibuildwheel.macos]
 build-frontend = "build"
-build = ["cp3*"]
 test-command = [
     "pytest {project}/tests/unit -k 'not (test_multi_timer_validation or test_empty_connections or test_timer_cancellation)'"
 ]
