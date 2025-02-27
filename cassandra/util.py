@@ -40,8 +40,17 @@ except:
 
 from cassandra import DriverException
 
+
+def utcfromtimestamp(timestamp):
+    """
+    It replicates behavior of datetime.utcfromtimestamp
+    """
+    dt = datetime.datetime.fromtimestamp(timestamp, datetime.timezone.utc)
+    return datetime.datetime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, dt.microsecond, fold=dt.fold)
+
+
 DATETIME_EPOC = datetime.datetime(1970, 1, 1)
-UTC_DATETIME_EPOC = datetime.datetime.utcfromtimestamp(0)
+UTC_DATETIME_EPOC = utcfromtimestamp(0)
 
 _nan = float('nan')
 
