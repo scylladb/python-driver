@@ -23,7 +23,7 @@ jobs:
     if: "(!contains(github.event.pull_request.labels.*.name, 'disable-test-build')) || github.event_name == 'push' && endsWith(github.event.ref, 'scylla')"
     uses: ./.github/workflows/lib-build-and-push.yml
     with:
-      upload: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch'  ) && endsWith(github.event.ref, 'scylla') }}
+      upload: true
       python-version: '3.13'
       ignore_tests: true
       target_tag: '3.29.0-scylla'

@@ -95,9 +95,9 @@ jobs:
         if: inputs.ignore_tests
         shell: bash
         run: |
-          echo "CIBW_TEST_COMMAND=''" >> $GITHUB_ENV;
-          echo "CIBW_TEST_SKIP='*'" >> $GITHUB_ENV;
-          echo "CIBW_BEFORE_TEST=''" >> $GITHUB_ENV;
+          echo "CIBW_TEST_COMMAND=\"\"" >> $GITHUB_ENV;
+          echo "CIBW_TEST_SKIP=*" >> $GITHUB_ENV;
+          echo "CIBW_BEFORE_TEST=\"\"" >> $GITHUB_ENV;
 
       - uses: actions/setup-python@v5
         name: Install Python
