@@ -1,0 +1,1142 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             cassandra.metadata - Schema and Ring Topology | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://python-driver.docs.scylladb.com/stable/api/cassandra/metadata.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/css/main.css?v=9446d426" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+            
+        
+    
+        
+        
+            
+        <script type="text/javascript" src="../../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../../_static/documentation_options.js?v=e12ea8a4"></script>
+            
+        
+            
+                <script src="../../_static/doctools.js?v=9a2dae69"></script>
+            
+        
+            
+                <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+    </head>
+
+    <body class="brand-product">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        
+        <div class="promo-banner__title">ScyllaDB University Live | Free Virtual Training Event</div>
+        <a class="promo-banner__button button button--reverse" href="#"
+           target="_blank" rel="noopener noreferrer">Learn more</a>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Server
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://opensource.docs.scylladb.com/">
+                            <i class="icon-docs-open-source"></i>
+                            ScyllaDB Open Source
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://enterprise.docs.scylladb.com/">
+                            <i class="icon-docs-enterprise"></i>ScyllaDB Enterprise
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://scylla.docs.scylladb.com/stable/alternator/alternator.html">
+                            <i class="icon-docs-alternator"></i>
+                            ScyllaDB Alternator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="https://docs.scylladb.com/scylla-cloud/" class="scylla-dropdown__title">Cloud</a>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/using-scylla/drivers/cql-drivers/">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/using-scylla/drivers/dynamo-drivers/">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://www.scylladb.com/download/" class="button"><i class="icon-download me-2"></i> Download</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../../index.html"
+           class="bread__highlight">
+            Scylla Python Driver
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="../index.html" class="bread__highlight">
+                API Documentation
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last"><code class="docutils literal notranslate"><span class="pre">cassandra.metadata</span></code> - Schema and Ring Topology</span>
+</div>
+                    </div>
+                
+                
+                <div class="sidebar-right-layout">
+                    <div class="body-container">
+                
+
+                    <div class="content-body">
+                        
+                            
+    <div class="admonition caution">
+        <p class="admonition-title">Caution</p>
+        <p>
+            
+                You're viewing documentation for a deprecated version of Scylla Python Driver.
+            
+            <a href="../../../stable/api/cassandra/metadata.html">Switch to the latest stable version.</a>
+        </p>
+    </div>
+
+                        
+                        
+                        <section id="module-cassandra.metadata">
+<span id="cassandra-metadata-schema-and-ring-topology"></span><h1><code class="docutils literal notranslate"><span class="pre">cassandra.metadata</span></code> - Schema and Ring Topology<a class="headerlink" href="#module-cassandra.metadata" title="Link to this heading">¶</a></h1>
+<dl class="py data">
+<dt class="sig sig-object py" id="cassandra.metadata.cql_keywords">
+<span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">cql_keywords</span></span><a class="headerlink" href="#cassandra.metadata.cql_keywords" title="Link to this definition">¶</a></dt>
+<dd><p>set() -&gt; new empty set object
+set(iterable) -&gt; new set object</p>
+<p>Build an unordered collection of unique elements.</p>
+</dd></dl>
+
+<dl class="py data">
+<dt class="sig sig-object py" id="cassandra.metadata.cql_keywords_unreserved">
+<span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">cql_keywords_unreserved</span></span><a class="headerlink" href="#cassandra.metadata.cql_keywords_unreserved" title="Link to this definition">¶</a></dt>
+<dd><p>set() -&gt; new empty set object
+set(iterable) -&gt; new set object</p>
+<p>Build an unordered collection of unique elements.</p>
+</dd></dl>
+
+<dl class="py data">
+<dt class="sig sig-object py" id="cassandra.metadata.cql_keywords_reserved">
+<span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">cql_keywords_reserved</span></span><a class="headerlink" href="#cassandra.metadata.cql_keywords_reserved" title="Link to this definition">¶</a></dt>
+<dd><p>set() -&gt; new empty set object
+set(iterable) -&gt; new set object</p>
+<p>Build an unordered collection of unique elements.</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.Metadata">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">Metadata</span></span><a class="headerlink" href="#cassandra.metadata.Metadata" title="Link to this definition">¶</a></dt>
+<dd><p>Holds a representation of the cluster schema and topology.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.Metadata.add_or_return_host">
+<span class="sig-name descname"><span class="pre">add_or_return_host</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.Metadata.add_or_return_host" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a tuple (host, new), where <code class="docutils literal notranslate"><span class="pre">host</span></code> is a Host
+instance, and <code class="docutils literal notranslate"><span class="pre">new</span></code> is a bool indicating whether
+the host was newly added.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.Metadata.all_hosts">
+<span class="sig-name descname"><span class="pre">all_hosts</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.Metadata.all_hosts" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a list of all known <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances in the cluster.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.Metadata.export_schema_as_string">
+<span class="sig-name descname"><span class="pre">export_schema_as_string</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.Metadata.export_schema_as_string" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a string that can be executed as a query in order to recreate
+the entire schema.  The string is formatted to be human readable.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.Metadata.get_host">
+<span class="sig-name descname"><span class="pre">get_host</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">endpoint_or_address</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">port</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.Metadata.get_host" title="Link to this definition">¶</a></dt>
+<dd><p>Find a host in the metadata for a specific endpoint. If a string inet address and port are passed,
+iterate all hosts to match the <code class="xref py py-attr docutils literal notranslate"><span class="pre">broadcast_rpc_address</span></code> and
+<code class="xref py py-attr docutils literal notranslate"><span class="pre">broadcast_rpc_port</span></code> attributes.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.Metadata.get_host_by_host_id">
+<span class="sig-name descname"><span class="pre">get_host_by_host_id</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host_id</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.Metadata.get_host_by_host_id" title="Link to this definition">¶</a></dt>
+<dd><p>Same as get_host() but use host_id for lookup.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.Metadata.get_replicas">
+<span class="sig-name descname"><span class="pre">get_replicas</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keyspace</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">key</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.Metadata.get_replicas" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a list of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances that are replicas for a given
+partition key.</p>
+</dd></dl>
+
+</dd></dl>
+
+<section id="schemas">
+<h2>Schemas<a class="headerlink" href="#schemas" title="Link to this heading">¶</a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.KeyspaceMetadata">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">KeyspaceMetadata</span></span><a class="headerlink" href="#cassandra.metadata.KeyspaceMetadata" title="Link to this definition">¶</a></dt>
+<dd><p>A representation of the schema for a single keyspace.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.KeyspaceMetadata.as_cql_query">
+<span class="sig-name descname"><span class="pre">as_cql_query</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.KeyspaceMetadata.as_cql_query" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a CQL query string that can be used to recreate just this keyspace,
+not including user-defined types and tables.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.KeyspaceMetadata.export_as_string">
+<span class="sig-name descname"><span class="pre">export_as_string</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.KeyspaceMetadata.export_as_string" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a CQL query string that can be used to recreate the entire keyspace,
+including user-defined types and tables.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.UserType">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">UserType</span></span><a class="headerlink" href="#cassandra.metadata.UserType" title="Link to this definition">¶</a></dt>
+<dd><p>A user defined type, as created by <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TYPE</span></code> statements.</p>
+<p>User-defined types were introduced in Cassandra 2.1.</p>
+<div class="versionadded">
+<p><span class="versionmodified added">Added in version 2.1.0.</span></p>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.UserType.as_cql_query">
+<span class="sig-name descname"><span class="pre">as_cql_query</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">formatted</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.UserType.as_cql_query" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a CQL query that can be used to recreate this type.
+If <cite>formatted</cite> is set to <code class="xref py py-const docutils literal notranslate"><span class="pre">True</span></code>, extra whitespace will
+be added to make the query more readable.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.Function">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">Function</span></span><a class="headerlink" href="#cassandra.metadata.Function" title="Link to this definition">¶</a></dt>
+<dd><p>A user defined function, as created by <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">FUNCTION</span></code> statements.</p>
+<p>User-defined functions were introduced in Cassandra 2.2</p>
+<div class="versionadded">
+<p><span class="versionmodified added">Added in version 2.6.0.</span></p>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.Function.as_cql_query">
+<span class="sig-name descname"><span class="pre">as_cql_query</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">formatted</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.Function.as_cql_query" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a CQL query that can be used to recreate this function.
+If <cite>formatted</cite> is set to <code class="xref py py-const docutils literal notranslate"><span class="pre">True</span></code>, extra whitespace will
+be added to make the query more readable.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.Aggregate">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">Aggregate</span></span><a class="headerlink" href="#cassandra.metadata.Aggregate" title="Link to this definition">¶</a></dt>
+<dd><p>A user defined aggregate function, as created by <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">AGGREGATE</span></code> statements.</p>
+<p>Aggregate functions were introduced in Cassandra 2.2</p>
+<div class="versionadded">
+<p><span class="versionmodified added">Added in version 2.6.0.</span></p>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.Aggregate.as_cql_query">
+<span class="sig-name descname"><span class="pre">as_cql_query</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">formatted</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.Aggregate.as_cql_query" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a CQL query that can be used to recreate this aggregate.
+If <cite>formatted</cite> is set to <code class="xref py py-const docutils literal notranslate"><span class="pre">True</span></code>, extra whitespace will
+be added to make the query more readable.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.TableMetadata">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">TableMetadata</span></span><a class="headerlink" href="#cassandra.metadata.TableMetadata" title="Link to this definition">¶</a></dt>
+<dd><p>A representation of the schema for a single table.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.TableMetadata.as_cql_query">
+<span class="sig-name descname"><span class="pre">as_cql_query</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">formatted</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.TableMetadata.as_cql_query" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a CQL query that can be used to recreate this table (index
+creations are not included).  If <cite>formatted</cite> is set to <code class="xref py py-const docutils literal notranslate"><span class="pre">True</span></code>,
+extra whitespace will be added to make the query human readable.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.TableMetadata.export_as_string">
+<span class="sig-name descname"><span class="pre">export_as_string</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.TableMetadata.export_as_string" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a string of CQL queries that can be used to recreate this table
+along with all indexes on it.  The returned string is formatted to
+be human readable.</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="cassandra.metadata.TableMetadata.is_cql_compatible">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">is_cql_compatible</span></span><a class="headerlink" href="#cassandra.metadata.TableMetadata.is_cql_compatible" title="Link to this definition">¶</a></dt>
+<dd><p>A boolean indicating if this table can be represented as CQL in export</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="cassandra.metadata.TableMetadata.primary_key">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">primary_key</span></span><a class="headerlink" href="#cassandra.metadata.TableMetadata.primary_key" title="Link to this definition">¶</a></dt>
+<dd><p>A list of <a class="reference internal" href="#cassandra.metadata.ColumnMetadata" title="cassandra.metadata.ColumnMetadata"><code class="xref py py-class docutils literal notranslate"><span class="pre">ColumnMetadata</span></code></a> representing the components of
+the primary key for this table.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.TableMetadataV3">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">TableMetadataV3</span></span><a class="headerlink" href="#cassandra.metadata.TableMetadataV3" title="Link to this definition">¶</a></dt>
+<dd><p>For C* 3.0+. <cite>option_maps</cite> take a superset of map names, so if  nothing
+changes structurally, new option maps can just be appended to the list.</p>
+<dl class="py property">
+<dt class="sig sig-object py" id="cassandra.metadata.TableMetadataV3.is_cql_compatible">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">is_cql_compatible</span></span><a class="headerlink" href="#cassandra.metadata.TableMetadataV3.is_cql_compatible" title="Link to this definition">¶</a></dt>
+<dd><p>A boolean indicating if this table can be represented as CQL in export</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.TableMetadataDSE68">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">TableMetadataDSE68</span></span><a class="headerlink" href="#cassandra.metadata.TableMetadataDSE68" title="Link to this definition">¶</a></dt>
+<dd><dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.TableMetadataDSE68.as_cql_query">
+<span class="sig-name descname"><span class="pre">as_cql_query</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">formatted</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.TableMetadataDSE68.as_cql_query" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a CQL query that can be used to recreate this table (index
+creations are not included).  If <cite>formatted</cite> is set to <code class="xref py py-const docutils literal notranslate"><span class="pre">True</span></code>,
+extra whitespace will be added to make the query human readable.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.ColumnMetadata">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">ColumnMetadata</span></span><a class="headerlink" href="#cassandra.metadata.ColumnMetadata" title="Link to this definition">¶</a></dt>
+<dd><p>A representation of a single column in a table.</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.IndexMetadata">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">IndexMetadata</span></span><a class="headerlink" href="#cassandra.metadata.IndexMetadata" title="Link to this definition">¶</a></dt>
+<dd><p>A representation of a secondary index on a column.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.IndexMetadata.as_cql_query">
+<span class="sig-name descname"><span class="pre">as_cql_query</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.IndexMetadata.as_cql_query" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a CQL query that can be used to recreate this index.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.IndexMetadata.export_as_string">
+<span class="sig-name descname"><span class="pre">export_as_string</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.IndexMetadata.export_as_string" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a CQL query string that can be used to recreate this index.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.MaterializedViewMetadata">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">MaterializedViewMetadata</span></span><a class="headerlink" href="#cassandra.metadata.MaterializedViewMetadata" title="Link to this definition">¶</a></dt>
+<dd><p>A representation of a materialized view on a table</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.MaterializedViewMetadata.as_cql_query">
+<span class="sig-name descname"><span class="pre">as_cql_query</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">formatted</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.MaterializedViewMetadata.as_cql_query" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a CQL query that can be used to recreate this function.
+If <cite>formatted</cite> is set to <code class="xref py py-const docutils literal notranslate"><span class="pre">True</span></code>, extra whitespace will
+be added to make the query more readable.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.VertexMetadata">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">VertexMetadata</span></span><a class="headerlink" href="#cassandra.metadata.VertexMetadata" title="Link to this definition">¶</a></dt>
+<dd><p>A representation of a vertex on a table</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.EdgeMetadata">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">EdgeMetadata</span></span><a class="headerlink" href="#cassandra.metadata.EdgeMetadata" title="Link to this definition">¶</a></dt>
+<dd><p>A representation of an edge on a table</p>
+</dd></dl>
+
+</section>
+<section id="tokens-and-ring-topology">
+<h2>Tokens and Ring Topology<a class="headerlink" href="#tokens-and-ring-topology" title="Link to this heading">¶</a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.TokenMap">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">TokenMap</span></span><a class="headerlink" href="#cassandra.metadata.TokenMap" title="Link to this definition">¶</a></dt>
+<dd><p>Information about the layout of the ring.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.TokenMap.get_replicas">
+<span class="sig-name descname"><span class="pre">get_replicas</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keyspace</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">token</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.TokenMap.get_replicas" title="Link to this definition">¶</a></dt>
+<dd><p>Get  a set of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances representing all of the
+replica nodes for a given <a class="reference internal" href="#cassandra.metadata.Token" title="cassandra.metadata.Token"><code class="xref py py-class docutils literal notranslate"><span class="pre">Token</span></code></a>.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.Token">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">Token</span></span><a class="headerlink" href="#cassandra.metadata.Token" title="Link to this definition">¶</a></dt>
+<dd><p>Abstract class representing a token.</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.Murmur3Token">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">Murmur3Token</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">token</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.Murmur3Token" title="Link to this definition">¶</a></dt>
+<dd><p>A token for <code class="docutils literal notranslate"><span class="pre">Murmur3Partitioner</span></code>.</p>
+<p><cite>token</cite> is an int or string representing the token.</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.MD5Token">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">MD5Token</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">token</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.MD5Token" title="Link to this definition">¶</a></dt>
+<dd><p>A token for <code class="docutils literal notranslate"><span class="pre">RandomPartitioner</span></code>.</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.BytesToken">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">BytesToken</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">token</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.BytesToken" title="Link to this definition">¶</a></dt>
+<dd><p>A token for <code class="docutils literal notranslate"><span class="pre">ByteOrderedPartitioner</span></code>.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.BytesToken.from_string">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_string</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">token_string</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.BytesToken.from_string" title="Link to this definition">¶</a></dt>
+<dd><p><cite>token_string</cite> should be the string representation from the server.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.metadata.ReplicationStrategy">
+<span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">ReplicationStrategy</span></span><a class="headerlink" href="#cassandra.metadata.ReplicationStrategy" title="Link to this definition">¶</a></dt>
+<dd><p>alias of <code class="xref py py-class docutils literal notranslate"><span class="pre">_ReplicationStrategy</span></code></p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.ReplicationFactor">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">ReplicationFactor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">all_replicas</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">transient_replicas</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.ReplicationFactor" title="Link to this definition">¶</a></dt>
+<dd><p>Represent the replication factor of a keyspace.</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.SimpleStrategy">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">SimpleStrategy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">options_map</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.SimpleStrategy" title="Link to this definition">¶</a></dt>
+<dd><dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.SimpleStrategy.export_for_schema">
+<span class="sig-name descname"><span class="pre">export_for_schema</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.SimpleStrategy.export_for_schema" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a string version of these replication options which are
+suitable for use in a CREATE KEYSPACE statement.</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="cassandra.metadata.SimpleStrategy.replication_factor">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">replication_factor</span></span><a class="headerlink" href="#cassandra.metadata.SimpleStrategy.replication_factor" title="Link to this definition">¶</a></dt>
+<dd><p>The replication factor for this keyspace.</p>
+<p>For backward compatibility, this returns the
+<code class="xref py py-attr docutils literal notranslate"><span class="pre">cassandra.metadata.ReplicationFactor.full_replicas</span></code> value of
+<code class="xref py py-attr docutils literal notranslate"><span class="pre">cassandra.metadata.SimpleStrategy.replication_factor_info</span></code>.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.NetworkTopologyStrategy">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">NetworkTopologyStrategy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dc_replication_factors</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.NetworkTopologyStrategy" title="Link to this definition">¶</a></dt>
+<dd><dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.NetworkTopologyStrategy.export_for_schema">
+<span class="sig-name descname"><span class="pre">export_for_schema</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.NetworkTopologyStrategy.export_for_schema" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a string version of these replication options which are
+suitable for use in a CREATE KEYSPACE statement.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.metadata.LocalStrategy">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">LocalStrategy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">options_map</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.LocalStrategy" title="Link to this definition">¶</a></dt>
+<dd><dl class="py method">
+<dt class="sig sig-object py" id="cassandra.metadata.LocalStrategy.export_for_schema">
+<span class="sig-name descname"><span class="pre">export_for_schema</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.LocalStrategy.export_for_schema" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a string version of these replication options which are
+suitable for use in a CREATE KEYSPACE statement.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="cassandra.metadata.group_keys_by_replica">
+<span class="sig-prename descclassname"><span class="pre">cassandra.metadata.</span></span><span class="sig-name descname"><span class="pre">group_keys_by_replica</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">session</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keyspace</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">table</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keys</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.metadata.group_keys_by_replica" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a <code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code> with the keys grouped per host. This can be
+used to more accurately group by IN clause or to batch the keys per host.</p>
+<p>If a valid replica is not found for a particular key it will be grouped under
+<code class="xref py py-class docutils literal notranslate"><span class="pre">NO_VALID_REPLICA</span></code></p>
+<p>Example usage:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">result</span> <span class="o">=</span> <span class="n">group_keys_by_replica</span><span class="p">(</span>
+<span class="gp">... </span>    <span class="n">session</span><span class="p">,</span> <span class="s2">&quot;system&quot;</span><span class="p">,</span> <span class="s2">&quot;peers&quot;</span><span class="p">,</span>
+<span class="gp">... </span>    <span class="p">((</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="p">),</span> <span class="p">(</span><span class="s2">&quot;127.0.0.2&quot;</span><span class="p">,</span> <span class="p">)))</span>
+</pre></div>
+</div>
+</dd></dl>
+
+</section>
+</section>
+
+                    </div>
+                    
+                        <div class="post-content">
+                            
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page cassandra.metadata - Schema and Ring Topology&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.25.11-scylla/api/cassandra/metadata%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                            <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="graph.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br /><code class="docutils literal notranslate"><span class="pre">cassandra.graph</span></code> - Graph Statements, Options, and Row Factories
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="metrics.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br /><code class="docutils literal notranslate"><span class="pre">cassandra.metrics</span></code> - Performance Metrics
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                            <div class="notice">
+<p>
+ScyllaDB Python Driver is available under the <a href="https://www.apache.org/licenses/LICENSE-2.0.html">Apache v2 License</a>.
+ScyllaDB Python Driver is a fork of <a href="https://github.com/datastax/python-driver">DataStax Python Driver</a>.
+See Copyright <a href="https://python-driver.docs.scylladb.com/stable/#copyright">here</a>.</p>
+</div>
+                        </div>
+                    
+                
+                
+                    </div>
+                        <div class="sidebar-right large-order-3">
+                            <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page cassandra.metadata - Schema and Ring Topology&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.25.11-scylla/api/cassandra/metadata%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/python-driver/edit/master/docs/api/cassandra/metadata.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#"><code class="docutils literal notranslate"><span class="pre">cassandra.metadata</span></code> - Schema and Ring Topology</a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.cql_keywords"><code class="docutils literal notranslate"><span class="pre">cql_keywords</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.cql_keywords_unreserved"><code class="docutils literal notranslate"><span class="pre">cql_keywords_unreserved</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.cql_keywords_reserved"><code class="docutils literal notranslate"><span class="pre">cql_keywords_reserved</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.Metadata"><code class="docutils literal notranslate"><span class="pre">Metadata</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.Metadata.add_or_return_host"><code class="docutils literal notranslate"><span class="pre">Metadata.add_or_return_host()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.Metadata.all_hosts"><code class="docutils literal notranslate"><span class="pre">Metadata.all_hosts()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.Metadata.export_schema_as_string"><code class="docutils literal notranslate"><span class="pre">Metadata.export_schema_as_string()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.Metadata.get_host"><code class="docutils literal notranslate"><span class="pre">Metadata.get_host()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.Metadata.get_host_by_host_id"><code class="docutils literal notranslate"><span class="pre">Metadata.get_host_by_host_id()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.Metadata.get_replicas"><code class="docutils literal notranslate"><span class="pre">Metadata.get_replicas()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#schemas">Schemas</a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.KeyspaceMetadata"><code class="docutils literal notranslate"><span class="pre">KeyspaceMetadata</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.KeyspaceMetadata.as_cql_query"><code class="docutils literal notranslate"><span class="pre">KeyspaceMetadata.as_cql_query()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.KeyspaceMetadata.export_as_string"><code class="docutils literal notranslate"><span class="pre">KeyspaceMetadata.export_as_string()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.UserType"><code class="docutils literal notranslate"><span class="pre">UserType</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.UserType.as_cql_query"><code class="docutils literal notranslate"><span class="pre">UserType.as_cql_query()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.Function"><code class="docutils literal notranslate"><span class="pre">Function</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.Function.as_cql_query"><code class="docutils literal notranslate"><span class="pre">Function.as_cql_query()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.Aggregate"><code class="docutils literal notranslate"><span class="pre">Aggregate</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.Aggregate.as_cql_query"><code class="docutils literal notranslate"><span class="pre">Aggregate.as_cql_query()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.TableMetadata"><code class="docutils literal notranslate"><span class="pre">TableMetadata</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.TableMetadata.as_cql_query"><code class="docutils literal notranslate"><span class="pre">TableMetadata.as_cql_query()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.TableMetadata.export_as_string"><code class="docutils literal notranslate"><span class="pre">TableMetadata.export_as_string()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.TableMetadata.is_cql_compatible"><code class="docutils literal notranslate"><span class="pre">TableMetadata.is_cql_compatible</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.TableMetadata.primary_key"><code class="docutils literal notranslate"><span class="pre">TableMetadata.primary_key</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.TableMetadataV3"><code class="docutils literal notranslate"><span class="pre">TableMetadataV3</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.TableMetadataV3.is_cql_compatible"><code class="docutils literal notranslate"><span class="pre">TableMetadataV3.is_cql_compatible</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.TableMetadataDSE68"><code class="docutils literal notranslate"><span class="pre">TableMetadataDSE68</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.TableMetadataDSE68.as_cql_query"><code class="docutils literal notranslate"><span class="pre">TableMetadataDSE68.as_cql_query()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.ColumnMetadata"><code class="docutils literal notranslate"><span class="pre">ColumnMetadata</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.IndexMetadata"><code class="docutils literal notranslate"><span class="pre">IndexMetadata</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.IndexMetadata.as_cql_query"><code class="docutils literal notranslate"><span class="pre">IndexMetadata.as_cql_query()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.IndexMetadata.export_as_string"><code class="docutils literal notranslate"><span class="pre">IndexMetadata.export_as_string()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.MaterializedViewMetadata"><code class="docutils literal notranslate"><span class="pre">MaterializedViewMetadata</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.MaterializedViewMetadata.as_cql_query"><code class="docutils literal notranslate"><span class="pre">MaterializedViewMetadata.as_cql_query()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.VertexMetadata"><code class="docutils literal notranslate"><span class="pre">VertexMetadata</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.EdgeMetadata"><code class="docutils literal notranslate"><span class="pre">EdgeMetadata</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#tokens-and-ring-topology">Tokens and Ring Topology</a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.TokenMap"><code class="docutils literal notranslate"><span class="pre">TokenMap</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.TokenMap.get_replicas"><code class="docutils literal notranslate"><span class="pre">TokenMap.get_replicas()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.Token"><code class="docutils literal notranslate"><span class="pre">Token</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.Murmur3Token"><code class="docutils literal notranslate"><span class="pre">Murmur3Token</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.MD5Token"><code class="docutils literal notranslate"><span class="pre">MD5Token</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.BytesToken"><code class="docutils literal notranslate"><span class="pre">BytesToken</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.BytesToken.from_string"><code class="docutils literal notranslate"><span class="pre">BytesToken.from_string()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.ReplicationStrategy"><code class="docutils literal notranslate"><span class="pre">ReplicationStrategy</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.ReplicationFactor"><code class="docutils literal notranslate"><span class="pre">ReplicationFactor</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.SimpleStrategy"><code class="docutils literal notranslate"><span class="pre">SimpleStrategy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.SimpleStrategy.export_for_schema"><code class="docutils literal notranslate"><span class="pre">SimpleStrategy.export_for_schema()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.metadata.SimpleStrategy.replication_factor"><code class="docutils literal notranslate"><span class="pre">SimpleStrategy.replication_factor</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.NetworkTopologyStrategy"><code class="docutils literal notranslate"><span class="pre">NetworkTopologyStrategy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.NetworkTopologyStrategy.export_for_schema"><code class="docutils literal notranslate"><span class="pre">NetworkTopologyStrategy.export_for_schema()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.LocalStrategy"><code class="docutils literal notranslate"><span class="pre">LocalStrategy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.metadata.LocalStrategy.export_for_schema"><code class="docutils literal notranslate"><span class="pre">LocalStrategy.export_for_schema()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.metadata.group_keys_by_replica"><code class="docutils literal notranslate"><span class="pre">group_keys_by_replica()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                        </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../../index.html">Scylla Python Driver</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                3.25.11
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+            
+            
+                
+                    <li>
+                        <a href="../../../stable/api/cassandra/metadata.html">
+                            3.28.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.28.1-scylla/api/cassandra/metadata.html">
+                            3.28.1
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.28.0-scylla/api/cassandra/metadata.html">
+                            3.28.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.26.9-scylla/api/cassandra/metadata.html">
+                            3.26.9
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="metadata.html">
+                            3.25.11
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.25.4-scylla/api/cassandra/metadata.html">
+                            3.25.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.24.8-scylla/api/cassandra/metadata.html">
+                            3.24.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.22.3-scylla/api/cassandra/metadata.html">
+                            3.22.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.21.0-scylla/api/cassandra/metadata.html">
+                            3.21.0
+                        </a>
+                    </li>
+                
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../index.html">API Documentation</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../cassandra.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra</span></code> - Exceptions and Enums</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cluster.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cluster</span></code> - Clusters and Sessions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="policies.html"><code class="docutils literal notranslate"><span class="pre">cassandra.policies</span></code> - Load balancing and Failure Handling Policies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="auth.html"><code class="docutils literal notranslate"><span class="pre">cassandra.auth</span></code> - Authentication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="graph.html"><code class="docutils literal notranslate"><span class="pre">cassandra.graph</span></code> - Graph Statements, Options, and Row Factories</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#"><code class="docutils literal notranslate"><span class="pre">cassandra.metadata</span></code> - Schema and Ring Topology</a></li>
+<li class="toctree-l2"><a class="reference internal" href="metrics.html"><code class="docutils literal notranslate"><span class="pre">cassandra.metrics</span></code> - Performance Metrics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="query.html"><code class="docutils literal notranslate"><span class="pre">cassandra.query</span></code> - Prepared Statements, Batch Statements, Tracing, and Row Factories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="pool.html"><code class="docutils literal notranslate"><span class="pre">cassandra.pool</span></code> - Hosts and Connection Pools</a></li>
+<li class="toctree-l2"><a class="reference internal" href="protocol.html"><code class="docutils literal notranslate"><span class="pre">cassandra.protocol</span></code> - Protocol Features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="encoder.html"><code class="docutils literal notranslate"><span class="pre">cassandra.encoder</span></code> - Encoders for non-prepared Statements</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decoder.html"><code class="docutils literal notranslate"><span class="pre">cassandra.decoder</span></code> - Data Return Formats</a></li>
+<li class="toctree-l2"><a class="reference internal" href="concurrent.html"><code class="docutils literal notranslate"><span class="pre">cassandra.concurrent</span></code> - Utilities for Concurrent Statement Execution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="connection.html"><code class="docutils literal notranslate"><span class="pre">cassandra.connection</span></code> - Low Level Connection Info</a></li>
+<li class="toctree-l2"><a class="reference internal" href="util.html"><code class="docutils literal notranslate"><span class="pre">cassandra.util</span></code> - Utilities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="timestamps.html"><code class="docutils literal notranslate"><span class="pre">cassandra.timestamps</span></code> - Timestamp Generation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/asyncioreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.asyncioreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">asyncio</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/asyncorereactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.asyncorereactor</span></code> - <code class="docutils literal notranslate"><span class="pre">asyncore</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/eventletreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.eventletreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">eventlet</span></code>-compatible Connection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/libevreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.libevreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">libev</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/geventreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.geventreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">gevent</span></code>-compatible Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/twistedreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.twistedreactor</span></code> - Twisted Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/models.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.models</span></code> - Table models for object mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/columns.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.columns</span></code> - Column types for object mapping models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/query.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.query</span></code> - Query and filter model objects</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/connection.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.connection</span></code> - Connection management for cqlengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/management.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.management</span></code> - Schema management for cqlengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/usertype.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.usertype</span></code> - Model classes for User Defined Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="datastax/graph/index.html"><code class="docutils literal notranslate"><span class="pre">cassandra.datastax.graph</span></code> - Graph Statements, Options, and Row Factories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="datastax/graph/fluent/index.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="datastax/graph/fluent/query.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent.query</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="datastax/graph/fluent/predicates.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent.predicates</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../scylla_specific.html">Scylla Specific Features</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../upgrading.html">Upgrading</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="simple">
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../object_mapper.html">Object Mapper</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/upgrade_guide.html">Upgrade Guide</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/models.html">Models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/queryset.html">Making Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/batches.html">Batch Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/connections.html">Connections</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/third_party.html">Third party integrations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/faq.html">Frequently Asked Questions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../scylla_cloud.html">Scylla Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+            
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                    target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        <div class="footer-bottom">
+            
+                <div class="footer-bottom__copyright">
+                    
+                        
+                            &#169; ScyllaDB 2021 and © DataStax 2013-2017
+                        
+                    
+                </div>
+            
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a href="http://sphinx-doc.org/">Sphinx 7.4.7</a> &amp;
+                <a href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.5</a>
+            </div>
+        </div>
+    </div>
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>
