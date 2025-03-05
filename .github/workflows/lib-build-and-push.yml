@@ -201,3 +201,5 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
+        env:
+          GITHUB_WORKFLOW_REF: "scylladb/python-driver/.github/workflows/lib-build-and-push.yml@refs/heads/master"
