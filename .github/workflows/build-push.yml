@@ -5,22 +5,10 @@ on:
     branches:
       - master
       - 'branch-**'
-  pull_request:
-    branches:
-      - master
-    paths-ignore:
-     - docs/*
-     - examples/*
-     - .gitignore
-     - '*.rst'
-     - '*.ini'
-     - LICENSE
-     - .github/dependabot.yml
-     - .github/pull_request_template.md
+  workflow_dispatch:
 
 jobs:
   build-and-publish:
-    if: "(!contains(github.event.pull_request.labels.*.name, 'disable-test-build')) || github.event_name == 'push' && endsWith(github.event.ref, 'scylla')"
     uses: ./.github/workflows/lib-build-and-push.yml
     with:
-      upload: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch'  ) && endsWith(github.event.ref, 'scylla') }}
+      upload: ${{ endsWith(github.event.ref, 'scylla') }}
