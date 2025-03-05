@@ -188,7 +188,7 @@ jobs:
 
   upload_pypi:
     if: inputs.upload
-    needs: [build-wheels, build-sdist]
+    needs: [build-sdist]
     runs-on: ubuntu-24.04
     permissions:
       id-token: write

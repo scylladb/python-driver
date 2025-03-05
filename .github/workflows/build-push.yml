@@ -20,7 +20,7 @@ on:
 
 jobs:
   build-and-publish:
-    if: "(!contains(github.event.pull_request.labels.*.name, 'disable-test-build')) || github.event_name == 'push' && endsWith(github.event.ref, 'scylla')"
+    if: !contains(github.event.pull_request.labels.*.name, 'disable-test-build')
     uses: ./.github/workflows/lib-build-and-push.yml
     with:
       upload: true
