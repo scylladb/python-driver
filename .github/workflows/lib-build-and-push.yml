@@ -74,6 +74,7 @@ jobs:
           echo "matrix=$(cat /tmp/matrix.json)" >> $GITHUB_OUTPUT
 
   build-wheels:
+    if: inputs.target != ''
     name: Build wheels for ${{ matrix.target }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     needs: prepare-matrix
