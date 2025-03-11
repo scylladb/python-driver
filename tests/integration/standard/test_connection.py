@@ -213,7 +213,7 @@ class ConnectionTests(object):
         automated testing edge-case.
         """
         conn = None
-        e = None
+        err = None
         for i in range(5):
             try:
                 contact_point = CASSANDRA_IP
@@ -225,12 +225,14 @@ class ConnectionTests(object):
                 )
                 break
             except (OperationTimedOut, NoHostAvailable, ConnectionShutdown) as e:
+                err = e
                 continue
 
         if conn:
             return conn
-        else:
-            raise e
+        if err:
+            raise err
+        raise RuntimeError("Unexpected state, nor conn neither err is populated, most likely self.klass.factory returned None")
 
     def test_single_connection(self):
         """
