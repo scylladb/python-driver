@@ -7,25 +7,29 @@ log = logging.getLogger(__name__)
 
 RATE_LIMIT_ERROR_EXTENSION = "SCYLLA_RATE_LIMIT_ERROR"
 TABLETS_ROUTING_V1 = "TABLETS_ROUTING_V1"
+USE_METADATA_ID = "SCYLLA_USE_METADATA_ID"
 
 class ProtocolFeatures(object):
     rate_limit_error = None
     shard_id = 0
     sharding_info = None
     tablets_routing_v1 = False
+    use_metadata_id = False
 
-    def __init__(self, rate_limit_error=None, shard_id=0, sharding_info=None, tablets_routing_v1=False):
+    def __init__(self, rate_limit_error=None, shard_id=0, sharding_info=None, tablets_routing_v1=False, use_metadata_id=False):
         self.rate_limit_error = rate_limit_error
         self.shard_id = shard_id
         self.sharding_info = sharding_info
         self.tablets_routing_v1 = tablets_routing_v1
+        self.use_metadata_id = use_metadata_id
 
     @staticmethod
     def parse_from_supported(supported):
         rate_limit_error = ProtocolFeatures.maybe_parse_rate_limit_error(supported)
         shard_id, sharding_info = ProtocolFeatures.parse_sharding_info(supported)
         tablets_routing_v1 = ProtocolFeatures.parse_tablets_info(supported)
-        return ProtocolFeatures(rate_limit_error, shard_id, sharding_info, tablets_routing_v1)
+        use_metadata_id = ProtocolFeatures.parse_metadata_id_info(supported)
+        return ProtocolFeatures(rate_limit_error, shard_id, sharding_info, tablets_routing_v1, use_metadata_id)
 
     @staticmethod
     def maybe_parse_rate_limit_error(supported):
@@ -49,6 +53,8 @@ class ProtocolFeatures(object):
             options[RATE_LIMIT_ERROR_EXTENSION] = ""
         if self.tablets_routing_v1:
             options[TABLETS_ROUTING_V1] = ""
+        if self.use_metadata_id:
+            options[USE_METADATA_ID] = ""
 
     @staticmethod
     def parse_sharding_info(options):
@@ -72,3 +78,7 @@ class ProtocolFeatures(object):
     @staticmethod
     def parse_tablets_info(options):
         return TABLETS_ROUTING_V1 in options
+
+    @staticmethod
+    def parse_metadata_id_info(options):
+        return USE_METADATA_ID in options

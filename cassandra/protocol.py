@@ -421,7 +421,7 @@ class StartupMessage(_MessageType):
         self.cqlversion = cqlversion
         self.options = options
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features):
         optmap = self.options.copy()
         optmap['CQL_VERSION'] = self.cqlversion
         write_stringmap(f, optmap)
@@ -456,7 +456,7 @@ class CredentialsMessage(_MessageType):
     def __init__(self, creds):
         self.creds = creds
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features):
         if protocol_version > 1:
             raise UnsupportedOperation(
                 "Credentials-based authentication is not supported with "
@@ -487,7 +487,7 @@ class AuthResponseMessage(_MessageType):
     def __init__(self, response):
         self.response = response
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features):
         write_longstring(f, self.response)
 
 
@@ -507,7 +507,7 @@ class OptionsMessage(_MessageType):
     opcode = 0x05
     name = 'OPTIONS'
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features):
         pass
 
 
@@ -645,7 +645,7 @@ class QueryMessage(_QueryMessage):
         super(QueryMessage, self).__init__(None, consistency_level, serial_consistency_level, fetch_size,
                                            paging_state, timestamp, False, continuous_paging_options, keyspace)
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features):
         write_longstring(f, self.query)
         self._write_query_params(f, protocol_version)
 
@@ -681,9 +681,9 @@ class ExecuteMessage(_QueryMessage):
         else:
             super(ExecuteMessage, self)._write_query_params(f, protocol_version)
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features):
         write_string(f, self.query_id)
-        if ProtocolVersion.uses_prepared_metadata(protocol_version):
+        if ProtocolVersion.uses_prepared_metadata(protocol_version) or protocol_features.use_metadata_id:
             write_string(f, self.result_metadata_id)
         self._write_query_params(f, protocol_version)
 
@@ -734,7 +734,7 @@ class ResultMessage(_MessageType):
     def __init__(self, kind):
         self.kind = kind
 
-    def recv(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
+    def recv(self, f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy):
         if self.kind == RESULT_KIND_VOID:
             return
         elif self.kind == RESULT_KIND_ROWS:
@@ -742,7 +742,7 @@ class ResultMessage(_MessageType):
         elif self.kind == RESULT_KIND_SET_KEYSPACE:
             self.new_keyspace = read_string(f)
         elif self.kind == RESULT_KIND_PREPARED:
-            self.recv_results_prepared(f, protocol_version, user_type_map)
+            self.recv_results_prepared(f, protocol_version, protocol_features, user_type_map)
         elif self.kind == RESULT_KIND_SCHEMA_CHANGE:
             self.recv_results_schema_change(f, protocol_version)
         else:
@@ -752,7 +752,7 @@ class ResultMessage(_MessageType):
     def recv_body(cls, f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy):
         kind = read_int(f)
         msg = cls(kind)
-        msg.recv(f, protocol_version, user_type_map, result_metadata, column_encryption_policy)
+        msg.recv(f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy)
         return msg
 
     def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
@@ -785,9 +785,9 @@ class ResultMessage(_MessageType):
                                                                                                      col_md[3].cql_parameterized_type(),
                                                                                                      str(e)))
 
-    def recv_results_prepared(self, f, protocol_version, user_type_map):
+    def recv_results_prepared(self, f, protocol_version, protocol_features, user_type_map):
         self.query_id = read_binary_string(f)
-        if ProtocolVersion.uses_prepared_metadata(protocol_version):
+        if ProtocolVersion.uses_prepared_metadata(protocol_version) or protocol_features.use_metadata_id:
             self.result_metadata_id = read_binary_string(f)
         else:
             self.result_metadata_id = None
@@ -909,7 +909,7 @@ class PrepareMessage(_MessageType):
         self.query = query
         self.keyspace = keyspace
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features):
         write_longstring(f, self.query)
 
         flags = 0x00
@@ -953,7 +953,7 @@ class BatchMessage(_MessageType):
         self.timestamp = timestamp
         self.keyspace = keyspace
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features):
         write_byte(f, self.batch_type.value)
         write_short(f, len(self.queries))
         for prepared, string_or_query_id, params in self.queries:
@@ -1012,7 +1012,7 @@ class RegisterMessage(_MessageType):
     def __init__(self, event_list):
         self.event_list = event_list
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features):
         write_stringlist(f, self.event_list)
 
 
@@ -1086,7 +1086,7 @@ class ReviseRequestMessage(_MessageType):
         self.op_id = op_id
         self.next_pages = next_pages
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features):
         write_int(f, self.op_type)
         write_int(f, self.op_id)
         if self.op_type == ReviseRequestMessage.RevisionType.PAGING_BACKPRESSURE:
@@ -1122,7 +1122,7 @@ class _ProtocolHandler(object):
     """Instance of :class:`cassandra.policies.ColumnEncryptionPolicy` in use by this handler"""
 
     @classmethod
-    def encode_message(cls, msg, stream_id, protocol_version, compressor, allow_beta_protocol_version):
+    def encode_message(cls, msg, stream_id, protocol_version, protocol_features, compressor, allow_beta_protocol_version):
         """
         Encodes a message using the specified frame parameters, and compressor
 
@@ -1138,7 +1138,7 @@ class _ProtocolHandler(object):
                 raise UnsupportedOperation("Custom key/value payloads can only be used with protocol version 4 or higher")
             flags |= CUSTOM_PAYLOAD_FLAG
             write_bytesmap(body, msg.custom_payload)
-        msg.send_body(body, protocol_version)
+        msg.send_body(body, protocol_version, protocol_features)
         body = body.getvalue()
 
         # With checksumming, the compression is done at the segment frame encoding
