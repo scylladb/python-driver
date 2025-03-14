@@ -606,6 +606,9 @@ class _QueryMessage(_MessageType):
                     "Keyspaces may only be set on queries with protocol version "
                     "5 or DSE_V2 or higher. Consider setting Cluster.protocol_version.")
 
+        if self.skip_meta is not None and self.skip_meta:
+            flags |= _SKIP_METADATA_FLAG
+
         if ProtocolVersion.uses_int_query_flags(protocol_version):
             write_uint(f, flags)
         else:
