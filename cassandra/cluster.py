@@ -3546,30 +3546,6 @@ class UserTypeDoesNotExist(Exception):
     pass
 
 
-class _ControlReconnectionHandler(_ReconnectionHandler):
-    """
-    Internal
-    """
-
-    def __init__(self, control_connection, *args, **kwargs):
-        _ReconnectionHandler.__init__(self, *args, **kwargs)
-        self.control_connection = weakref.proxy(control_connection)
-
-    def try_reconnect(self):
-        return self.control_connection._reconnect_internal()
-
-    def on_reconnection(self, connection):
-        self.control_connection._set_new_connection(connection)
-
-    def on_exception(self, exc, next_delay):
-        # TODO only overridden to add logging, so add logging
-        if isinstance(exc, AuthenticationFailed):
-            return False
-        else:
-            log.debug("Error trying to reconnect control connection: %r", exc)
-            return True
-
-
 def _watch_callback(obj_weakref, method_name, *args, **kwargs):
     """
     A callback handler for the ControlConnection that tolerates
@@ -3662,6 +3638,7 @@ class ControlConnection(object):
 
         self._reconnection_handler = None
         self._reconnection_lock = RLock()
+        self._reconnection_pending = False
 
         self._event_schedule_times = {}
 
@@ -3695,6 +3672,8 @@ class ControlConnection(object):
         )
 
         for host in lbp.make_query_plan():
+            if self._is_shutdown:
+                break
             try:
                 return (self._try_connect(host), None)
             except ConnectionException as exc:
@@ -3818,44 +3797,47 @@ class ControlConnection(object):
         if self._is_shutdown:
             return
 
+        with self._reconnection_lock:
+            if self._reconnection_pending:
+                return
+            self._reconnection_pending = True
+
         self._submit(self._reconnect)
 
-    def _reconnect(self):
+    def _reconnect(self, schedule = None):
         log.debug("[control connection] Attempting to reconnect")
+        if self._is_shutdown:
+            return
+
         try:
             self._set_new_connection(self._reconnect_internal())
+            self._reconnection_pending = False
+            return
         except NoHostAvailable:
-            # make a retry schedule (which includes backoff)
+            log.debug("[control connection] Reconnection plan is exhausted, scheduling new reconnection attempt")
+        except Exception as ex:
+            log.debug("[control connection] Unexpected exception during reconnect, scheduling new reconnection attempt: %s", ex)
+
+        if schedule is None:
             schedule = self._cluster.reconnection_policy.new_schedule()
 
-            with self._reconnection_lock:
+        try:
+            next_delay = next(schedule)
+        except StopIteration:
+            # the schedule has been exhausted
+            schedule = self._cluster.reconnection_policy.new_schedule()
+            try:
+                next_delay = next(schedule)
+            except StopIteration:
+                next_delay = 0
 
-                # cancel existing reconnection attempts
-                if self._reconnection_handler:
-                    self._reconnection_handler.cancel()
+        if self._is_shutdown:
+            return
 
-                # when a connection is successfully made, _set_new_connection
-                # will be called with the new connection and then our
-                # _reconnection_handler will be cleared out
-                self._reconnection_handler = _ControlReconnectionHandler(
-                    self, self._cluster.scheduler, schedule,
-                    self._get_and_set_reconnection_handler,
-                    new_handler=None)
-                self._reconnection_handler.start()
-        except Exception:
-            log.debug("[control connection] error reconnecting", exc_info=True)
-            raise
-
-    def _get_and_set_reconnection_handler(self, new_handler):
-        """
-        Called by the _ControlReconnectionHandler when a new connection
-        is successfully created.  Clears out the _reconnection_handler on
-        this ControlConnection.
-        """
-        with self._reconnection_lock:
-            old = self._reconnection_handler
-            self._reconnection_handler = new_handler
-            return old
+        if next_delay == 0:
+            self._submit(self._reconnect)
+        else:
+            self._cluster.scheduler.schedule(next_delay, partial(self._reconnect, schedule))
 
     def _submit(self, *args, **kwargs):
         try:
@@ -3866,11 +3848,6 @@ class ControlConnection(object):
         return None
 
     def shutdown(self):
-        # stop trying to reconnect (if we are)
-        with self._reconnection_lock:
-            if self._reconnection_handler:
-                self._reconnection_handler.cancel()
-
         with self._lock:
             if self._is_shutdown:
                 return
