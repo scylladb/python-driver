@@ -293,6 +293,7 @@ class _ReconnectionHandler(object):
             # call on_exception for logging purposes even if next_delay is None
             if self.on_exception(exc, next_delay):
                 if next_delay is None:
+                    self.on_done(False)
                     log.warning(
                         "Will not continue to retry reconnection attempts "
                         "due to an exhausted retry schedule")
@@ -301,6 +302,7 @@ class _ReconnectionHandler(object):
         else:
             if not self._cancelled:
                 self.on_reconnection(conn)
+                self.on_done(False)
                 self.callback(*(self.callback_args), **(self.callback_kwargs))
         finally:
             if conn:
@@ -321,6 +323,13 @@ class _ReconnectionHandler(object):
         """
         Called when a new Connection is successfully opened.  Nothing is
         done by default.
+        """
+        pass
+
+    def on_done(self, success: bool):
+        """
+        Called when either new connection is successfully opened or
+        when failed to reconnect and no more reconnections scheduled.
         """
         pass
 
