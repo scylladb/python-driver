@@ -3561,6 +3561,9 @@ class _ControlReconnectionHandler(_ReconnectionHandler):
     def on_reconnection(self, connection):
         self.control_connection._set_new_connection(connection)
 
+    def on_done(self, success: bool):
+        self.control_connection._reconnection_pending = False
+
     def on_exception(self, exc, next_delay):
         # TODO only overridden to add logging, so add logging
         if isinstance(exc, AuthenticationFailed):
@@ -3662,6 +3665,7 @@ class ControlConnection(object):
 
         self._reconnection_handler = None
         self._reconnection_lock = RLock()
+        self._reconnection_pending = False
 
         self._event_schedule_times = {}
 
@@ -3681,6 +3685,7 @@ class ControlConnection(object):
         with self._lock:
             old = self._connection
             self._connection = conn
+            self._reconnection_pending = False
 
         if old:
             log.debug("[control connection] Closing old connection %r, replacing with %r", old, conn)
@@ -3818,6 +3823,10 @@ class ControlConnection(object):
         if self._is_shutdown:
             return
 
+        if self._reconnection_pending:
+            return
+        self._reconnection_pending = True
+
         self._submit(self._reconnect)
 
     def _reconnect(self):
@@ -3855,6 +3864,7 @@ class ControlConnection(object):
         with self._reconnection_lock:
             old = self._reconnection_handler
             self._reconnection_handler = new_handler
+            self._reconnection_pending = False
             return old
 
     def _submit(self, *args, **kwargs):
@@ -4216,6 +4226,9 @@ class ControlConnection(object):
         # from the response type and one from the pushed notification. Holding
         # a lock is just a simple way to cut down on the number of schema queries
         # we'll make.
+
+
+
         with self._schema_agreement_lock:
             if self._is_shutdown:
                 return

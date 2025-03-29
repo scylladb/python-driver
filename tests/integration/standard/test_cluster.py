@@ -326,6 +326,30 @@ class ClusterTests(unittest.TestCase):
                 cluster.connect()
             cluster.shutdown()
 
+    def test_control_connection_reconnect(self):
+        """
+        Ensure clusters that connect on a keyspace, do
+        """
+        cassandra.cluster.log.setLevel(logging.DEBUG)
+
+        cluster = TestCluster()
+        _ = cluster.connect()
+
+        cluster.control_connection._reconnect_internal = Mock(wraps=cluster.control_connection._reconnect_internal)
+
+        cluster.control_connection.reconnect()
+        cluster.control_connection.reconnect()
+        cluster.control_connection.reconnect()
+        cluster.control_connection.reconnect()
+
+        while cluster.control_connection._reconnection_pending:
+            time.sleep(0.1)
+
+        self.assertFalse(cluster.control_connection._connection.is_closed)
+        self.assertFalse(cluster.control_connection._connection.is_defunct)
+        self.assertTrue(cluster.control_connection.refresh_schema())
+        self.assertEqual(1, len(cluster.control_connection._reconnect_internal.mock_calls))
+
     def test_connect_on_keyspace(self):
         """
         Ensure clusters that connect on a keyspace, do
