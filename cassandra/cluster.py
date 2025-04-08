@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait as wait
 from copy import copy
 from functools import partial, reduce, wraps
 from itertools import groupby, count, chain
+import datetime
 import json
 import logging
 from warnings import warn
@@ -3630,6 +3631,7 @@ class ControlConnection(object):
     _schema_meta_enabled = True
     _token_meta_enabled = True
     _schema_meta_page_size = 1000
+    _metadata_refresh_window = 0 # seconds
 
     _uses_peers_v2 = True
     _tablets_routing_v1 = False
@@ -3643,7 +3645,8 @@ class ControlConnection(object):
                  status_event_refresh_window,
                  schema_meta_enabled=True,
                  token_meta_enabled=True,
-                 schema_meta_page_size=1000):
+                 schema_meta_page_size=1000,
+                 metadata_refresh_window=0):
         # use a weak reference to allow the Cluster instance to be GC'ed (and
         # shutdown) since implementing __del__ disables the cycle detector
         self._cluster = weakref.proxy(cluster)
@@ -3656,6 +3659,7 @@ class ControlConnection(object):
         self._schema_meta_enabled = schema_meta_enabled
         self._token_meta_enabled = token_meta_enabled
         self._schema_meta_page_size = schema_meta_page_size
+        self._metadata_refresh_window = metadata_refresh_window
 
         self._lock = RLock()
         self._schema_agreement_lock = Lock()
@@ -3909,12 +3913,26 @@ class ControlConnection(object):
             log.debug("Skipping schema refresh due to lack of schema agreement")
             return False
 
-        self._cluster.metadata.refresh(
-            connection,
-            self._timeout,
-            fetch_size=self._schema_meta_page_size,
-            metadata_request_timeout=self._metadata_request_timeout,
-            **kwargs)
+        # if we never updated cluster metadata or we wish to update it every time,
+        # (refresh window == 0), do so
+        metadata_last_update_time = self._cluster.metadata.last_update_time
+        if metadata_last_update_time is None or self._metadata_refresh_window == 0:
+            self._cluster.metadata.refresh(
+                connection,
+                self._timeout,
+                fetch_size=self._schema_meta_page_size,
+                metadata_request_timeout=self._metadata_request_timeout,
+                **kwargs)
+        # if the last update time is older than the refresh window, refresh
+        # the metadata
+        elif (metadata_last_update_time + datetime.timedelta(seconds=self._metadata_refresh_window) <
+              datetime.datetime.now()):
+            self._cluster.metadata.refresh(
+                connection,
+                self._timeout,
+                fetch_size=self._schema_meta_page_size,
+                metadata_request_timeout=self._metadata_request_timeout,
+                **kwargs)
 
         return True
 
@@ -4393,6 +4411,16 @@ class ControlConnection(object):
     def return_connection(self, connection):
         if connection is self._connection and (connection.is_defunct or connection.is_closed):
             self.reconnect()
+
+    @property
+    def metadata_refresh_window(self):
+        return self._metadata_refresh_window
+
+    @metadata_refresh_window.setter
+    def metadata_refresh_window(self, window):
+        if not isinstance(window, int) or window < 0:
+            raise ValueError("metadata_refresh_window must be an int and >= 0")
+        self._metadata_refresh_window = window
 
 
 def _stop_scheduler(scheduler, thread):

@@ -18,6 +18,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from functools import total_ordering
 from hashlib import md5
+import datetime
 import json
 import logging
 import re
@@ -121,9 +122,13 @@ class Metadata(object):
     dbaas = False
     """ A boolean indicating if connected to a DBaaS cluster """
 
+    _last_update_time = None
+    """ The time of the last metadata update. """
+
     def __init__(self):
         self.keyspaces = {}
         self.dbaas = False
+        self._last_update_time = None
         self._hosts = {}
         self._host_id_by_endpoint = {}
         self._hosts_lock = RLock()
@@ -145,6 +150,7 @@ class Metadata(object):
 
         if not target_type:
             self._rebuild_all(parser)
+            self._last_update_time = datetime.datetime.now()
             return
 
         tt_lower = target_type.lower()
@@ -162,6 +168,7 @@ class Metadata(object):
             else:
                 drop_method = getattr(self, '_drop_' + tt_lower)
                 drop_method(**kwargs)
+            self._last_update_time = datetime.datetime.now()
         except AttributeError:
             raise ValueError("Unknown schema target_type: '%s'" % target_type)
 
@@ -405,6 +412,13 @@ class Metadata(object):
     def all_hosts_items(self):
         with self._hosts_lock:
             return list(self._hosts.items())
+
+    @property
+    def last_update_time(self):
+        """
+        The time of the last metadata update.
+        """
+        return self._last_update_time
 
 
 REPLICATION_STRATEGY_CLASS_PREFIX = "org.apache.cassandra.locator."
