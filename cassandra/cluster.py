@@ -1082,6 +1082,8 @@ class Cluster(object):
 
     metadata_request_timeout = datetime.timedelta(seconds=2)
     """
+    Deprecated: use control_connection_timeout instead.
+
     Timeout for all queries used by driver it self.
     Supported only by Scylla clusters.
     """
@@ -1300,6 +1302,7 @@ class Cluster(object):
 
         self.auth_provider = auth_provider
         if metadata_request_timeout is not None:
+            warn("metadata_request_timeout is deprecated: use control_connection_timeout instead", DeprecationWarning)
             self.metadata_request_timeout = metadata_request_timeout
 
         if load_balancing_policy is not None:
