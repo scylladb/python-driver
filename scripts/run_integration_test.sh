@@ -28,7 +28,7 @@ pip install -e .
 pip install awscli
 
 # install scylla-ccm
-pip install https://github.com/scylladb/scylla-ccm/archive/master.zip
+pip install https://github.com/scylladb/scylla-ccm/archive/a0696fe532bf99ff8f7b7db0ed32672c34f103be.zip
 
 # download version
 
