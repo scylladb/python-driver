@@ -20,6 +20,7 @@ from __future__ import absolute_import
 
 import atexit
 import datetime
+import threading
 from binascii import hexlify
 from collections import defaultdict
 from collections.abc import Mapping
@@ -72,7 +73,8 @@ from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, Simpl
                                 ExponentialReconnectionPolicy, HostDistance,
                                 RetryPolicy, IdentityTranslator, NoSpeculativeExecutionPlan,
                                 NoSpeculativeExecutionPolicy, DefaultLoadBalancingPolicy,
-                                NeverRetryPolicy)
+                                NeverRetryPolicy, ConstantReconnectionPolicy, ReconnectionPolicy,
+                                ShardReconnectionScope, ShardReconnectionScopeHost, NoDelayReconnectionPolicy)
 from cassandra.pool import (Host, _ReconnectionHandler, _HostReconnectionHandler,
                             HostConnectionPool, HostConnection,
                             NoConnectionsAvailable)
@@ -742,6 +744,32 @@ class Cluster(object):
 
         self._auth_provider = value
 
+    _shard_reconnection_policy = None
+    @property
+    def shard_reconnection_policy(self):
+        return self._shard_reconnection_policy
+
+    @shard_reconnection_policy.setter
+    def shard_reconnection_policy(self, srp):
+        if self._config_mode == _ConfigMode.PROFILES:
+            raise ValueError(
+                "Cannot set Cluster.shard_reconnection_policy while using Configuration Profiles. Set this in a profile instead.")
+        self._shard_reconnection_policy = srp
+        self._config_mode = _ConfigMode.LEGACY
+
+    _shard_reconnection_scope = None
+    @property
+    def shard_reconnection_scope(self):
+        return self._shard_reconnection_scope
+
+    @shard_reconnection_scope.setter
+    def shard_reconnection_scope(self, scope):
+        if self._config_mode == _ConfigMode.PROFILES:
+            raise ValueError(
+                "Cannot set Cluster.shard_reconnection_scope while using Configuration Profiles. Set this in a profile instead.")
+        self._shard_reconnection_scope = scope
+        self._config_mode = _ConfigMode.LEGACY
+
     _load_balancing_policy = None
     @property
     def load_balancing_policy(self):
@@ -1204,6 +1232,8 @@ class Cluster(object):
                  shard_aware_options=None,
                  metadata_request_timeout=None,
                  column_encryption_policy=None,
+                 shard_reconnection_policy=None,
+                 shard_reconnection_scope=None,
                  ):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
@@ -1308,6 +1338,24 @@ class Cluster(object):
             self.load_balancing_policy = load_balancing_policy
         else:
             self._load_balancing_policy = default_lbp_factory()  # set internal attribute to avoid committing to legacy config mode
+
+        if shard_reconnection_scope is not None:
+            if isinstance(shard_reconnection_scope, type):
+                raise TypeError("shard_reconnection_scope should not be a class, it should be an instance of that class")
+            if not isinstance(shard_reconnection_policy, ShardReconnectionScope):
+                raise TypeError("load_balancing_policy should be an instance of class derived from ReconnectionPolicy")
+            self.shard_reconnection_scope = shard_reconnection_scope
+        else:
+            self._shard_reconnection_scope = ShardReconnectionScopeHost()  # set internal attribute to avoid committing to legacy config mode
+
+        if shard_reconnection_policy is not None:
+            if isinstance(shard_reconnection_policy, type):
+                raise TypeError("load_balancing_policy should not be a class, it should be an instance of that class")
+            if not isinstance(shard_reconnection_policy, ReconnectionPolicy):
+                raise TypeError("load_balancing_policy should be an instance of class derived from ReconnectionPolicy")
+            self.shard_reconnection_policy = shard_reconnection_policy
+        else:
+            self._shard_reconnection_policy = ConstantReconnectionPolicy(2, 0)  # set internal attribute to avoid committing to legacy config mode
 
         if reconnection_policy is not None:
             if isinstance(reconnection_policy, type):
@@ -2707,6 +2755,11 @@ class Session(object):
         self._protocol_version = self.cluster.protocol_version
 
         self.encoder = Encoder()
+        if isinstance(cluster.shard_reconnection_policy, NoDelayReconnectionPolicy):
+            self.shard_reconnection_scheduler = NoDelayShardReconnectionScheduler(self)
+        else:
+            self.shard_reconnection_scheduler = ShardReconnectionScheduler(
+                self, cluster, cluster.shard_reconnection_scope, cluster.shard_reconnection_policy)
 
         # create connection pools in parallel
         self._initial_connect_futures = set()
@@ -3544,6 +3597,141 @@ class UserTypeDoesNotExist(Exception):
     .. versionadded:: 2.1.0
     """
     pass
+
+
+class ScopeBucket(object):
+    def __init__(self, session, shard_reconnection_policy):
+        self._items = []
+        self.last_run = None
+        self.session = session
+        self.policy = shard_reconnection_policy
+        self.lock = threading.Lock()
+        self.running = False
+        self.schedule = self.policy.new_schedule()
+
+    def add(self, method, *args, **kwargs):
+        with self.lock:
+            self._items.append([method, args, kwargs])
+            if not self.running:
+                self.running = True
+                self._schedule()
+
+    def _get_delay(self):
+        try:
+            return next(self.schedule)
+        except StopIteration:
+            self.schedule = self.policy.new_schedule()
+            return next(self.schedule)
+
+    def _schedule(self):
+        if self.session.is_shutdown:
+            return
+        delay = self._get_delay()
+        if delay:
+            self.session.cluster.scheduler.schedule(delay, self.run)
+        else:
+            self.session.submit(self.run)
+
+    def run(self):
+        if self.session.is_shutdown:
+            return
+
+        with self.lock:
+            try:
+                item = self._items.pop()
+            except IndexError:
+                self.running = False
+                return
+
+        method, args, kwargs = item
+        try:
+            method(*args, **kwargs)
+        finally:
+            self._schedule()
+
+
+class ShardReconnectionSchedulerBase(object):
+    def schedule(self, host_id, shard_id, method, *args, **kwargs):
+        raise NotImplementedError()
+
+    def forced_schedule(self, host_id, shard_id, method, *args, **kwargs):
+        raise NotImplementedError()
+
+
+class NoDelayShardReconnectionScheduler(ShardReconnectionSchedulerBase):
+    def __init__(self, session):
+        self.session = weakref.proxy(session)
+        self.already_scheduled = {}
+
+    def _execute(self, scheduled_key, method, *args, **kwargs):
+        try:
+            method(*args, **kwargs)
+        finally:
+            self.already_scheduled[scheduled_key] = False
+
+    def forced_schedule(self, host_id, shard_id, method, *args, **kwargs):
+        scheduled_key = f'{host_id}-{shard_id}'
+        self.already_scheduled[scheduled_key] = True
+
+        if not self.session.is_shutdown:
+            self.session.submit(self._execute, scheduled_key, method, *args, **kwargs)
+
+    def schedule(self, host_id, shard_id, method, *args, **kwargs):
+        scheduled_key = f'{host_id}-{shard_id}'
+        if self.already_scheduled.get(scheduled_key):
+            return
+
+        self.already_scheduled[scheduled_key] = True
+        if not self.session.is_shutdown:
+            self.session.submit(self._execute, scheduled_key, method, *args, **kwargs)
+
+
+class ShardReconnectionScheduler(ShardReconnectionSchedulerBase):
+    def __init__(self, session, cluster, shard_reconnection_scope, shard_reconnection_policy):
+        self.already_scheduled = {}
+        self.scopes = {}
+        self.session = weakref.proxy(session)
+        self.cluster = weakref.proxy(cluster)
+        self.shard_reconnection_scope = shard_reconnection_scope
+        self.shard_reconnection_policy = shard_reconnection_policy
+        self.lock = threading.Lock()
+
+    def _execute(self, scheduled_key, method, *args, **kwargs):
+        try:
+            method(*args, **kwargs)
+        finally:
+            with self.lock:
+                self.already_scheduled[scheduled_key] = False
+
+    def forced_schedule(self, host_id, shard_id, method, *args, **kwargs):
+        scope_id = self.shard_reconnection_scope.get_hash(self.cluster, host_id, shard_id)
+        scheduled_key = f'{host_id}-{shard_id}'
+
+        with self.lock:
+            self.already_scheduled[scheduled_key] = True
+
+            scope_info = self.scopes.get(scope_id, 0)
+            if not scope_info:
+                scope_info = ScopeBucket(self.session, self.shard_reconnection_policy)
+                self.scopes[scope_id] = scope_info
+            scope_info.add(self._execute, scheduled_key, method,*args, **kwargs)
+            return True
+
+    def schedule(self, host_id, shard_id, method, *args, **kwargs):
+        scope_id = self.shard_reconnection_scope.get_hash(self.cluster, host_id, shard_id)
+        scheduled_key = f'{host_id}-{shard_id}'
+
+        with self.lock:
+            if self.already_scheduled.get(scheduled_key):
+                return False
+            self.already_scheduled[scheduled_key] = True
+
+            scope_info = self.scopes.get(scope_id, 0)
+            if not scope_info:
+                scope_info = ScopeBucket(self.session, self.shard_reconnection_policy)
+                self.scopes[scope_id] = scope_info
+            scope_info.add(self._execute, scheduled_key, method,*args, **kwargs)
+            return True
 
 
 class _ControlReconnectionHandler(_ReconnectionHandler):
@@ -4431,6 +4619,9 @@ class _Scheduler(Thread):
         self.is_shutdown = True
         self._queue.put_nowait((0, 0, None))
         self.join()
+
+    def empty(self):
+        return len(self._scheduled_tasks) == 0 and self._queue.empty()
 
     def schedule(self, delay, fn, *args, **kwargs):
         self._insert_task(delay, (fn, args, tuple(kwargs.items())))

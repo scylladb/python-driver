@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import random
+import threading
+import time
+import weakref
 
 from collections import namedtuple
 from functools import lru_cache
@@ -778,6 +781,14 @@ class ReconnectionPolicy(object):
         raise NotImplementedError()
 
 
+class NoDelayReconnectionPolicy(ReconnectionPolicy):
+    """
+    A :class:`.ReconnectionPolicy` subclass which does not sleep.
+    """
+    def new_schedule(self):
+        return repeat(0)
+
+
 class ConstantReconnectionPolicy(ReconnectionPolicy):
     """
     A :class:`.ReconnectionPolicy` subclass which sleeps for a fixed delay
@@ -862,6 +873,26 @@ class ExponentialReconnectionPolicy(ReconnectionPolicy):
         jitter = randint(85, 115)
         delay = (jitter * value) / 100
         return min(max(self.base_delay, delay), self.max_delay)
+
+
+class ShardReconnectionScope(object):
+    def get_hash(self, cluster, host_id, shard_id):
+        raise NotImplementedError()
+
+
+class ShardReconnectionScopeCluster(ShardReconnectionScope):
+    def get_hash(self, cluster, host_id, shard_id):
+        return id(cluster)
+
+
+class ShardReconnectionScopeHost(ShardReconnectionScope):
+    def get_hash(self, cluster, host_id, shard_id):
+        return hash(host_id)
+
+
+class ShardReconnectionScopeShard(ShardReconnectionScope):
+    def get_hash(self, cluster, host_id, shard_id):
+        return hash((host_id, shard_id))
 
 
 class RetryPolicy(object):
