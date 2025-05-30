@@ -610,7 +610,8 @@ class HostConnection(object):
                     del self._connections[connection.features.shard_id]
                 if self.host.sharding_info and not self._session.cluster.shard_aware_options.disable:
                     self._connecting.add(connection.features.shard_id)
-                    self._session.submit(self._open_connection_to_missing_shard, connection.features.shard_id)
+                    self._session.shard_reconnection_scheduler.schedule(
+                        self.host.host_id, connection.features.shard_id, self._open_connection_to_missing_shard, connection.features.shard_id)
                 else:
                     connection = self._session.cluster.connection_factory(self.host.endpoint,
                                                                           on_orphaned_stream_released=self.on_orphaned_stream_released)
