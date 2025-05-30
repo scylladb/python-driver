@@ -3603,37 +3603,42 @@ class ScopeBucket(object):
     def __init__(self, session, shard_reconnection_policy):
         self._items = []
         self.last_run = None
-        self.session = weakref.proxy(session)
+        self.session = session
         self.policy = shard_reconnection_policy
         self.lock = threading.Lock()
         self.running = False
         self.schedule = self.policy.new_schedule()
 
     def add(self, method, *args, **kwargs):
-        if self.session.is_shutdown:
-           return
-
         with self.lock:
             self._items.append([method, args, kwargs])
             if not self.running:
-                if not self.session.is_shutdown:
-                    self.session.submit(self.run)
+                self.running = True
+                self._schedule()
 
-    def get_delay(self):
+    def _get_delay(self):
         try:
             return next(self.schedule)
         except StopIteration:
             self.schedule = self.policy.new_schedule()
             return next(self.schedule)
 
+    def _schedule(self):
+        if self.session.is_shutdown:
+            return
+        delay = self._get_delay()
+        if delay:
+            self.session.cluster.scheduler.schedule(delay, self.run)
+        else:
+            self.session.submit(self.run)
+
     def run(self):
         if self.session.is_shutdown:
-           return
+            return
 
         with self.lock:
             try:
                 item = self._items.pop()
-                self.running = True
             except IndexError:
                 self.running = False
                 return
@@ -3642,26 +3647,43 @@ class ScopeBucket(object):
         try:
             method(*args, **kwargs)
         finally:
-            if not self.session.is_shutdown:
-                delay = self.get_delay()
-                if delay:
-                    self.session.cluster.scheduler.schedule(delay, self.run)
-                else:
-                    self.session.submit(self.run)
+            self._schedule()
 
 
 class ShardReconnectionSchedulerBase(object):
     def schedule(self, host_id, shard_id, method, *args, **kwargs):
         raise NotImplementedError()
 
+    def forced_schedule(self, host_id, shard_id, method, *args, **kwargs):
+        raise NotImplementedError()
+
 
 class NoDelayShardReconnectionScheduler(ShardReconnectionSchedulerBase):
     def __init__(self, session):
         self.session = weakref.proxy(session)
+        self.already_scheduled = {}
+
+    def _execute(self, scheduled_key, method, *args, **kwargs):
+        try:
+            method(*args, **kwargs)
+        finally:
+            self.already_scheduled[scheduled_key] = False
+
+    def forced_schedule(self, host_id, shard_id, method, *args, **kwargs):
+        scheduled_key = f'{host_id}-{shard_id}'
+        self.already_scheduled[scheduled_key] = True
+
+        if not self.session.is_shutdown:
+            self.session.submit(self._execute, scheduled_key, method, *args, **kwargs)
 
     def schedule(self, host_id, shard_id, method, *args, **kwargs):
+        scheduled_key = f'{host_id}-{shard_id}'
+        if self.already_scheduled.get(scheduled_key):
+            return
+
+        self.already_scheduled[scheduled_key] = True
         if not self.session.is_shutdown:
-            self.session.submit(method, *args, **kwargs)
+            self.session.submit(self._execute, scheduled_key, method, *args, **kwargs)
 
 
 class ShardReconnectionScheduler(ShardReconnectionSchedulerBase):
@@ -3680,6 +3702,20 @@ class ShardReconnectionScheduler(ShardReconnectionSchedulerBase):
         finally:
             with self.lock:
                 self.already_scheduled[scheduled_key] = False
+
+    def forced_schedule(self, host_id, shard_id, method, *args, **kwargs):
+        scope_id = self.shard_reconnection_scope.get_hash(self.cluster, host_id, shard_id)
+        scheduled_key = f'{host_id}-{shard_id}'
+
+        with self.lock:
+            self.already_scheduled[scheduled_key] = True
+
+            scope_info = self.scopes.get(scope_id, 0)
+            if not scope_info:
+                scope_info = ScopeBucket(self.session, self.shard_reconnection_policy)
+                self.scopes[scope_id] = scope_info
+            scope_info.add(self._execute, scheduled_key, method,*args, **kwargs)
+            return True
 
     def schedule(self, host_id, shard_id, method, *args, **kwargs):
         scope_id = self.shard_reconnection_scope.get_hash(self.cluster, host_id, shard_id)
@@ -4583,6 +4619,9 @@ class _Scheduler(Thread):
         self.is_shutdown = True
         self._queue.put_nowait((0, 0, None))
         self.join()
+
+    def empty(self):
+        return len(self._scheduled_tasks) == 0 and self._queue.empty()
 
     def schedule(self, delay, fn, *args, **kwargs):
         self._insert_task(delay, (fn, args, tuple(kwargs.items())))
