@@ -478,12 +478,12 @@ class TokenAwarePolicy(LoadBalancingPolicy):
     _child_policy = None
     _cluster_metadata = None
     _tablets_routing_v1 = False
-    shuffle_replicas = False
+    shuffle_replicas = True
     """
     Yield local replicas in a random order.
     """
 
-    def __init__(self, child_policy, shuffle_replicas=False):
+    def __init__(self, child_policy, shuffle_replicas=True):
         self._child_policy = child_policy
         self.shuffle_replicas = shuffle_replicas
 
