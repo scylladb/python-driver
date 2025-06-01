@@ -46,7 +46,8 @@ test = [
     "pure-sasl",
     "twisted[tls]; python_version >= '3.5'",
     "twisted[tls]==19.2.1; python_version < '3.5'",
-    "gevent>=1.0; python_version < '3.13' and platform_machine != 'i686' and platform_machine != 'win32'",
+    "gevent>=1.0; python_version < '3.13' and platform_machine != 'i686' and platform_machine != 'win32' and platform_machine != 'aarch64'",
+    "gevent==24.11.1; platform_machine == 'aarch64'", # fix for broken gevent build https://github.com/scylladb/python-driver/issues/479
     "gevent==23.9.0; python_version < '3.13' and (platform_machine == 'i686' or platform_machine == 'win32')",
     "eventlet>=0.33.3; python_version < '3.13'",
     "cython",
