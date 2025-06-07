@@ -11,9 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
 import random
+import threading
+import time
+import weakref
+from abc import ABC, abstractmethod
 
 from collections import namedtuple
+from enum import Enum
 from functools import lru_cache
 from itertools import islice, cycle, groupby, repeat
 import logging
@@ -21,11 +28,14 @@ from random import randint, shuffle
 from threading import Lock
 import socket
 import warnings
+from typing import TYPE_CHECKING, Callable, Any, List, Tuple, Iterator, Optional, Dict
 
 log = logging.getLogger(__name__)
 
 from cassandra import WriteType as WT
 
+if TYPE_CHECKING:
+    from cluster import Session
 
 # This is done this way because WriteType was originally
 # defined here and in order not to break the API.
@@ -862,6 +872,339 @@ class ExponentialReconnectionPolicy(ReconnectionPolicy):
         jitter = randint(85, 115)
         delay = (jitter * value) / 100
         return min(max(self.base_delay, delay), self.max_delay)
+
+
+class ShardConnectionScheduler(ABC):
+    """
+    A base class for a scheduler for a shard connection backoff policy.
+    ``ShardConnectionScheduler`` is a per Session instance that implements logic
+      described by ``ShardConnectionBackoffPolicy`` that instantiates it
+    """
+
+    @abstractmethod
+    def schedule(
+            self,
+            host_id: str,
+            shard_id: int,
+            method: Callable[..., None],
+            *args: List[Any],
+            **kwargs: dict[Any, Any]) -> None:
+        """
+        Schedule a create connection request for given host and shard according to policy or executes it right away.
+        It is non-blocking call, even if policy executes it right away, it is being executed in a separate thread.
+
+        ``host_id`` - an id of the host of the shard
+        ``shard_id`` - an id of the shard
+        ``method`` - a callable that creates connection and stores it in the connection pool.
+          Currently, it is `HostConnection._open_connection_to_missing_shard`
+        ``*args`` and ``**kwargs`` are passed to ``method`` when policy executes it
+        """
+        raise NotImplementedError()
+
+
+class ShardConnectionBackoffPolicy(ABC):
+    """
+    Base class for shard connection backoff policies.
+    These policies allow user to control pace of establishing new connections to shards
+
+    On `new_scheduler` instantiate a scheduler that behaves according to the policy
+    """
+
+    @abstractmethod
+    def new_scheduler(self, session: Session) -> ShardConnectionScheduler:
+        raise NotImplementedError()
+
+
+class NoDelayShardConnectionBackoffPolicy(ShardConnectionBackoffPolicy):
+    """
+    A shard connection backoff policy with no delay between attempts and no concurrency restrictions.
+    Ensures that at most one pending connection per (host, shard) pair.
+    If connection attempts for the same (host, shard) it is silently dropped.
+
+    On `new_scheduler` instantiate a scheduler that behaves according to the policy
+    """
+
+    def new_scheduler(self, session: Session) -> ShardConnectionScheduler:
+        return _NoDelayShardConnectionBackoffScheduler(session)
+
+
+class _NoDelayShardConnectionBackoffScheduler(ShardConnectionScheduler):
+    """
+    A shard connection backoff scheduler for ``cassandra.policies.NoDelayShardConnectionBackoffPolicy``.
+    It does not introduce any delay or concurrency restrictions.
+    It only ensures that there is only one pending or scheduled connection per host+shard.
+    """
+    session: Session
+    already_scheduled: dict[str, bool]
+    lock: threading.Lock
+
+    def __init__(self, session: Session):
+        self.session = weakref.proxy(session)
+        self.already_scheduled = {}
+        self.lock = threading.Lock()
+
+    def _execute(
+            self,
+            scheduled_key: str,
+            method: Callable[..., None],
+            *args: List[Any],
+            **kwargs: dict[Any, Any]) -> None:
+        try:
+            method(*args, **kwargs)
+        finally:
+            with self.lock:
+                self.already_scheduled[scheduled_key] = False
+
+    def schedule(
+            self,
+            host_id: str,
+            shard_id: int,
+            method: Callable[..., None],
+            *args: List[Any],
+            **kwargs: dict[Any, Any]) -> None:
+        scheduled_key = f'{host_id}-{shard_id}'
+
+        with self.lock:
+            if self.already_scheduled.get(scheduled_key):
+                return
+            self.already_scheduled[scheduled_key] = True
+
+        if not self.session.is_shutdown:
+            self.session.submit(self._execute, scheduled_key, method, *args, **kwargs)
+
+
+class ShardConnectionBackoffScope(Enum):
+    """
+    A scope for `ShardConnectionBackoffPolicy`, in particular ``LimitedConcurrencyShardConnectionBackoffPolicy``
+
+    Scope defines concurrency limitation scope, for instance :
+     ``LimitedConcurrencyShardConnectionBackoffPolicy`` - allows only one pending connection per scope, if you set it to Cluster,
+     only one connection per cluster will be allowed
+    """
+    Cluster = 0
+    Host = 1
+
+
+class ShardConnectionBackoffSchedule(ABC):
+    @abstractmethod
+    def new_schedule(self) -> Iterator[float]:
+        """
+        This should return a finite or infinite iterable of delays (each as a
+        floating point number of seconds).
+        Note that if the iterable is finite, schedule will be recreated right after iterable is exhausted.
+        """
+        raise NotImplementedError()
+
+
+class LimitedConcurrencyShardConnectionBackoffPolicy(ShardConnectionBackoffPolicy):
+    """
+    A shard connection backoff policy that allows only ``max_concurrent`` concurrent connection per scope.
+    Scope could be ``Host``or ``Cluster``
+    For backoff calculation ir needs ``ShardConnectionBackoffSchedule`` or ``ReconnectionPolicy``, since both share same API.
+    When there is no more scheduled connections schedule of the backoff is reset.
+
+    it also does not allow multiple pending or scheduled connections for same host+shard,
+      it silently drops attempts to schedule it.
+
+    On ``new_scheduler`` instantiate a scheduler that behaves according to the policy
+    """
+    scope: ShardConnectionBackoffScope
+    backoff_policy: ShardConnectionBackoffSchedule | ReconnectionPolicy
+
+    max_concurrent: int
+    """
+    Max concurrent connection creation requests per scope.
+    """
+
+    def __init__(
+            self,
+            scope: ShardConnectionBackoffScope,
+            backoff_policy: ShardConnectionBackoffSchedule | ReconnectionPolicy,
+            max_concurrent: int = 1,
+    ):
+        if not isinstance(scope, ShardConnectionBackoffScope):
+            raise ValueError("scope must be a ShardConnectionBackoffScope")
+        if not isinstance(backoff_policy, (ShardConnectionBackoffSchedule, ReconnectionPolicy)):
+            raise ValueError("backoff_policy must be a ShardConnectionBackoffSchedule or ReconnectionPolicy")
+        if max_concurrent < 1:
+            raise ValueError("max_concurrent must be a positive integer")
+        self.scope = scope
+        self.backoff_policy = backoff_policy
+        self.max_concurrent = max_concurrent
+
+    def new_scheduler(self, session: Session) -> ShardConnectionScheduler:
+        return _LimitedConcurrencyShardConnectionScheduler(session, self.scope, self.backoff_policy, self.max_concurrent)
+
+
+class CreateConnectionCallback:
+    method: Callable[..., None]
+    args: Tuple[Any, ...]
+    kwargs: Dict[str, Any]
+
+    def __init__(self, method: Callable[..., None], *args, **kwargs) -> None:
+        self.method = method
+        self.args = args
+        self.kwargs = kwargs
+
+
+class _ScopeBucket:
+    """
+    Holds information for a shard reconnection scope, schedules and executes reconnections.
+    """
+    session: Session
+    backoff_policy: ShardConnectionBackoffSchedule
+    lock: threading.Lock
+
+    schedule: Iterator[float]
+    """
+    Current schedule generated by ``backoff_policy``
+    """
+
+    max_concurrent: int
+    """
+    Max concurrent connection creation requests in the scope.
+    """
+
+    currently_pending: int
+    """
+    Currently pending connections
+    """
+
+    items: List[CreateConnectionCallback]
+    """
+    Scheduled create connections requests
+    """
+
+    def __init__(
+            self,
+            session: Session,
+            backoff_policy: ShardConnectionBackoffSchedule,
+            max_concurrent: int,
+    ):
+        self.items = []
+        self.session = session
+        self.backoff_policy = backoff_policy
+        self.lock = threading.Lock()
+        self.schedule = self.backoff_policy.new_schedule()
+        self.max_concurrent = max_concurrent
+        self.currently_pending = 0
+
+    def _get_delay(self) -> float:
+        try:
+            return next(self.schedule)
+        except StopIteration:
+            # A bit of trickery to avoid having lock around self.schedule
+            schedule = self.backoff_policy.new_schedule()
+            delay = next(schedule)
+            self.schedule = schedule
+            return delay
+
+    def _schedule(self):
+        if self.session.is_shutdown:
+            return
+        delay = self._get_delay()
+        if delay:
+            self.session.cluster.scheduler.schedule(delay, self._run)
+        else:
+            self.session.submit(self._run)
+
+    def _run(self):
+        if self.session.is_shutdown:
+            return
+
+        with self.lock:
+            try:
+                cb = self.items.pop()
+            except IndexError:
+                # Just in case
+                if self.currently_pending > 0:
+                    self.currently_pending -= 1
+                # When items are exhausted reset schedule to ensure that new items going to get another schedule
+                # It is important for exponential policy
+                self.schedule = self.backoff_policy.new_schedule()
+                return
+
+        try:
+            cb.method(*cb.args, **cb.kwargs)
+        finally:
+            self._schedule()
+
+    def schedule_new_connection(self, cb: CreateConnectionCallback):
+        with self.lock:
+            self.items.append(cb)
+            if self.currently_pending < self.max_concurrent:
+                self.currently_pending += 1
+                self._schedule()
+
+
+class _LimitedConcurrencyShardConnectionScheduler(ShardConnectionScheduler):
+    """
+    Dict of host+shard flags, flag is true if there is connection creation request scheduled or currently running for host+shard
+    """
+    already_scheduled: dict[str, bool]
+
+    scopes: dict[str, _ScopeBucket]
+    """
+    Scopes storage
+    """
+
+    scope: ShardConnectionBackoffScope
+    """
+    Scope type
+    """
+
+    backoff_policy: ShardConnectionBackoffSchedule
+    session: Session
+    lock: threading.Lock
+
+    max_concurrent: int
+    """
+    Max concurrent connection creation requests per scope.
+    """
+
+    def __init__(
+            self,
+            session: Session,
+            scope: ShardConnectionBackoffScope,
+            backoff_policy: ShardConnectionBackoffSchedule,
+            max_concurrent: int,
+    ):
+        self.already_scheduled = {}
+        self.scopes = {}
+        self.scope = scope
+        self.backoff_policy = backoff_policy
+        self.max_concurrent = max_concurrent
+        self.session = session
+        self.lock = threading.Lock()
+
+    def _execute(self, scheduled_key: str, method: Callable[..., None], *args, **kwargs):
+        try:
+            method(*args, **kwargs)
+        finally:
+            with self.lock:
+                self.already_scheduled[scheduled_key] = False
+
+    def schedule(self, host_id: str, shard_id: int, method: Callable[..., None], *args, **kwargs):
+        if self.scope == ShardConnectionBackoffScope.Cluster:
+            scope_hash = "global-cluster-scope"
+        elif self.scope == ShardConnectionBackoffScope.Host:
+            scope_hash = host_id
+        else:
+            raise ValueError("scope must be Cluster or Host")
+
+        scheduled_key = f'{host_id}-{shard_id}'
+
+        with self.lock:
+            if self.already_scheduled.get(scheduled_key):
+                return False
+            self.already_scheduled[scheduled_key] = True
+
+            scope_info = self.scopes.get(scope_hash)
+            if not scope_info:
+                scope_info = _ScopeBucket(self.session, self.backoff_policy, self.max_concurrent)
+                self.scopes[scope_hash] = scope_info
+            scope_info.schedule_new_connection(CreateConnectionCallback(self._execute, scheduled_key, method, *args, **kwargs))
+            return True
 
 
 class RetryPolicy(object):
