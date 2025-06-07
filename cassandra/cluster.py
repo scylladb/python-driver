@@ -29,6 +29,7 @@ from functools import partial, reduce, wraps
 from itertools import groupby, count, chain
 import json
 import logging
+from typing import Optional
 from warnings import warn
 from random import random
 import re
@@ -72,7 +73,8 @@ from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, Simpl
                                 ExponentialReconnectionPolicy, HostDistance,
                                 RetryPolicy, IdentityTranslator, NoSpeculativeExecutionPlan,
                                 NoSpeculativeExecutionPolicy, DefaultLoadBalancingPolicy,
-                                NeverRetryPolicy)
+                                NeverRetryPolicy, ShardReconnectionPolicy, NoDelayShardReconnectionPolicy,
+                                ShardReconnectionScheduler)
 from cassandra.pool import (Host, _ReconnectionHandler, _HostReconnectionHandler,
                             HostConnectionPool, HostConnection,
                             NoConnectionsAvailable)
@@ -742,6 +744,11 @@ class Cluster(object):
 
         self._auth_provider = value
 
+    _shard_reconnection_policy: ShardReconnectionPolicy
+    @property
+    def shard_reconnection_policy(self) -> ShardReconnectionPolicy:
+        return self._shard_reconnection_policy
+
     _load_balancing_policy = None
     @property
     def load_balancing_policy(self):
@@ -1204,6 +1211,7 @@ class Cluster(object):
                  shard_aware_options=None,
                  metadata_request_timeout=None,
                  column_encryption_policy=None,
+                 shard_reconnection_policy: Optional[ShardReconnectionPolicy] = None,
                  ):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
@@ -1308,6 +1316,13 @@ class Cluster(object):
             self.load_balancing_policy = load_balancing_policy
         else:
             self._load_balancing_policy = default_lbp_factory()  # set internal attribute to avoid committing to legacy config mode
+
+        if shard_reconnection_policy is not None:
+            if not isinstance(shard_reconnection_policy, ShardReconnectionPolicy):
+                raise TypeError("shard_reconnection_policy should be an instance of class derived from ShardReconnectionPolicy")
+            self._shard_reconnection_policy = shard_reconnection_policy
+        else:
+            self._shard_reconnection_policy = NoDelayShardReconnectionPolicy()
 
         if reconnection_policy is not None:
             if isinstance(reconnection_policy, type):
@@ -2693,6 +2708,7 @@ class Session(object):
     _metrics = None
     _request_init_callbacks = None
     _graph_paging_available = False
+    shard_reconnection_scheduler: ShardReconnectionScheduler
 
     def __init__(self, cluster, hosts, keyspace=None):
         self.cluster = cluster
@@ -2707,6 +2723,7 @@ class Session(object):
         self._protocol_version = self.cluster.protocol_version
 
         self.encoder = Encoder()
+        self.shard_reconnection_scheduler = cluster.shard_reconnection_policy.new_scheduler(self)
 
         # create connection pools in parallel
         self._initial_connect_futures = set()
@@ -4431,6 +4448,9 @@ class _Scheduler(Thread):
         self.is_shutdown = True
         self._queue.put_nowait((0, 0, None))
         self.join()
+
+    def empty(self):
+        return len(self._scheduled_tasks) == 0 and self._queue.empty()
 
     def schedule(self, delay, fn, *args, **kwargs):
         self._insert_task(delay, (fn, args, tuple(kwargs.items())))
