@@ -26,16 +26,31 @@ from threading import Thread
 from cassandra import ConsistencyLevel
 from cassandra.cluster import Cluster, ControlConnection
 from cassandra.metadata import Metadata
-from cassandra.policies import (RackAwareRoundRobinPolicy, RoundRobinPolicy, WhiteListRoundRobinPolicy, DCAwareRoundRobinPolicy,
+from cassandra.policies import (RackAwareRoundRobinPolicy, RoundRobinPolicy, WhiteListRoundRobinPolicy,
+                                DCAwareRoundRobinPolicy,
                                 TokenAwarePolicy, SimpleConvictionPolicy,
                                 HostDistance, ExponentialReconnectionPolicy,
                                 RetryPolicy, WriteType,
                                 DowngradingConsistencyRetryPolicy, ConstantReconnectionPolicy,
                                 LoadBalancingPolicy, ConvictionPolicy, ReconnectionPolicy, FallthroughRetryPolicy,
-                                IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy, ExponentialBackoffRetryPolicy)
+                                IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy,
+                                ExponentialBackoffRetryPolicy, _ScopeBucket, _NoConcurrentShardReconnectionScheduler,
+                                ShardReconnectionPolicyScope, _NoDelayShardReconnectionScheduler)
 from cassandra.connection import DefaultEndPoint, UnixSocketEndPoint
 from cassandra.pool import Host
 from cassandra.query import Statement
+
+
+class MockLock:
+    def __init__(self):
+        self.acquire_calls = 0
+        self.release_calls = 0
+
+    def __enter__(self):
+        self.acquire_calls += 1
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.release_calls += 1
 
 
 class LoadBalancingPolicyTest(unittest.TestCase):
@@ -1579,3 +1594,235 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
         # Only the filtered replicas should be allowed
         self.assertEqual(set(query_plan), {Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy),
                                            Host(DefaultEndPoint("127.0.0.4"), SimpleConvictionPolicy)})
+
+
+class ScopeBucketTests(unittest.TestCase):
+    def setUp(self):
+        self.mock_scheduler = Mock()
+        self.mock_cluster = Mock(scheduler=self.mock_scheduler)
+        self.mock_session = Mock()
+        self.mock_session.is_shutdown = False
+        self.mock_session.cluster = self.mock_cluster
+        self.mock_session.submit = Mock()
+
+        self.reconnection_policy = Mock()
+        self.reconnection_policy.new_schedule.side_effect = lambda: iter([0.1, 0.2, 0.3])
+
+        self.bucket = _ScopeBucket(self.mock_session, self.reconnection_policy)
+
+    def test_add_schedules_initial_task(self):
+        method = Mock()
+        self.bucket.add(method, 1, x=2)
+
+        self.assertTrue(self.bucket.running)
+        self.mock_scheduler.schedule.assert_called_once()
+        delay, func = self.mock_scheduler.schedule.call_args[0]
+        self.assertEqual(delay, 0.1)
+        self.assertTrue(callable(func))
+
+    def test_multiple_adds_only_schedule_once(self):
+        method1 = Mock()
+        method2 = Mock()
+
+        self.bucket.add(method1, "a")
+        self.bucket.add(method2, "b")
+
+        # Only one schedule should be triggered
+        self.mock_scheduler.schedule.assert_called_once()
+
+        # Both methods are enqueued
+        self.assertEqual(len(self.bucket.items), 2)
+
+    def test_run_executes_and_reschedules(self):
+        method = Mock()
+        self.bucket.add(method, "arg", kwarg=123)
+
+        _, run_func = self.mock_scheduler.schedule.call_args[0]
+        run_func()
+
+        method.assert_called_once_with("arg", kwarg=123)
+        self.mock_scheduler.schedule.assert_called_with(0.2, self.bucket._run)
+
+    def test_run_stops_on_empty_queue(self):
+        self.bucket.running = True
+        self.bucket.items = []
+
+        self.bucket._run()
+
+        self.assertFalse(self.bucket.running)
+        self.assertIsNone(self.bucket.schedule)
+
+    def test_does_not_schedule_if_shutdown(self):
+        self.mock_session.is_shutdown = True
+        method = Mock()
+        self.bucket.add(method)
+
+        self.mock_scheduler.schedule.assert_not_called()
+        self.mock_session.submit.assert_not_called()
+
+    def test_schedule_uses_submit_if_delay_is_zero(self):
+        self.reconnection_policy.new_schedule.side_effect = lambda: iter([0])
+        bucket = _ScopeBucket(self.mock_session, self.reconnection_policy)
+
+        method = Mock()
+        bucket.add(method)
+
+        self.mock_session.submit.assert_called_once_with(bucket._run)
+
+    def test_get_delay_resets_schedule_on_stopiteration(self):
+        empty_iter = iter([])
+        second_iter = iter([42.0])
+
+        self.bucket.schedule = empty_iter
+
+        self.reconnection_policy.new_schedule = Mock(side_effect=[second_iter])
+        self.bucket.reconnection_policy = self.reconnection_policy
+
+        delay = self.bucket._get_delay()
+        self.assertEqual(delay, 42.0)
+
+    def test_run_with_multiple_items(self):
+        m1 = Mock()
+        m2 = Mock()
+
+        self.bucket.add(m1)
+        self.bucket.add(m2)
+
+        # Simulate the first scheduled run
+        delay, run_func = self.mock_scheduler.schedule.call_args[0]
+        run_func()
+
+        # Because of LIFO order, m2 should be called first
+        m2.assert_called_once()
+        m1.assert_not_called()
+
+        # One item should remain in the queue
+        self.assertEqual(len(self.bucket.items), 1)
+        self.assertIs(self.bucket.items[0][0], m1)
+
+    def test_run_handles_index_error_gracefully(self):
+        self.bucket.items = []
+        self.bucket.running = True
+
+        try:
+            self.bucket._run()
+        except IndexError:
+            self.fail("_run raised IndexError unexpectedly")
+
+        self.assertFalse(self.bucket.running)
+        self.assertIsNone(self.bucket.schedule)
+
+
+class NoDelayShardReconnectionSchedulerTests(unittest.TestCase):
+    def setUp(self):
+        self.mock_session = Mock()
+        self.mock_session.is_shutdown = False
+        self.scheduler = _NoDelayShardReconnectionScheduler(self.mock_session)
+
+    def test_schedule_executes_method_immediately(self):
+        method = Mock()
+        self.scheduler.schedule('host1', 0, method, 1, 2, key='val')
+
+        self.mock_session.submit.assert_called_once()
+        submitted_fn = self.mock_session.submit.call_args[0][0]
+        submitted_args = self.mock_session.submit.call_args[0][1:]
+        submitted_kwargs = self.mock_session.submit.call_args[1]
+
+        submitted_fn(*submitted_args, **submitted_kwargs)
+
+        method.assert_called_once_with(1, 2, key='val')
+
+    def test_schedule_skips_if_already_scheduled(self):
+        method = Mock()
+        self.scheduler.already_scheduled['host1-0'] = True
+
+        self.scheduler.schedule('host1', 0, method)
+
+        self.mock_session.submit.assert_not_called()
+        method.assert_not_called()
+
+    def test_already_scheduled_resets_after_execution(self):
+        method = Mock()
+
+        self.scheduler.schedule('host1', 0, method)
+        submitted_fn = self.mock_session.submit.call_args[0][0]
+        submitted_args = self.mock_session.submit.call_args[0][1:]
+        submitted_fn(*submitted_args)
+
+        self.assertFalse(self.scheduler.already_scheduled['host1-0'])
+
+    def test_schedule_skips_if_session_shutdown(self):
+        self.mock_session.is_shutdown = True
+        method = Mock()
+
+        self.scheduler.schedule('host1', 0, method)
+
+        self.mock_session.submit.assert_not_called()
+        method.assert_not_called()
+
+
+class NoConcurrentShardReconnectionSchedulerTests(unittest.TestCase):
+    def setUp(self):
+        self.session = Mock()
+        self.session.is_shutdown = False
+        self.session.cluster.scheduler.schedule = Mock()
+        self.session.submit = Mock()
+
+        self.reconnection_policy = Mock()
+        self.reconnection_policy.new_schedule.return_value = cycle([0])
+
+        self.method = Mock()
+        self.host_id = 'host123'
+        self.shard_id = 0
+
+    def test_schedules_once_per_key(self):
+        scheduler = _NoConcurrentShardReconnectionScheduler(
+            self.session, ShardReconnectionPolicyScope.Cluster, self.reconnection_policy
+        )
+
+        scheduled = scheduler.schedule(self.host_id, self.shard_id, self.method)
+        self.assertTrue(scheduled)
+        # Try to schedule again for same key: should be rejected
+        scheduled2 = scheduler.schedule(self.host_id, self.shard_id, self.method)
+        self.assertFalse(scheduled2)
+
+        # _ScopeBucket should have been created for cluster scope
+        self.assertEqual(len(scheduler.scopes), 1)
+        scope = next(iter(scheduler.scopes.values()))
+        self.assertIsNotNone(scope)
+        self.assertEqual(len(scope.items), 1)
+
+    def test_schedule_separate_keys(self):
+        scheduler = _NoConcurrentShardReconnectionScheduler(
+            self.session, ShardReconnectionPolicyScope.Host, self.reconnection_policy
+        )
+
+        scheduled1 = scheduler.schedule('host1', 1, self.method)
+        scheduled2 = scheduler.schedule('host1', 2, self.method)
+        scheduled3 = scheduler.schedule('host2', 1, self.method)
+
+        self.assertTrue(scheduled1)
+        self.assertTrue(scheduled2)
+        self.assertTrue(scheduled3)
+
+        # Should create scopes for both hosts
+        self.assertIn('host1', scheduler.scopes)
+        self.assertIn('host2', scheduler.scopes)
+        self.assertEqual(len(scheduler.scopes['host1'].items), 2)
+        self.assertEqual(len(scheduler.scopes['host2'].items), 1)
+
+    def test_execute_resets_flag(self):
+        scheduler = _NoConcurrentShardReconnectionScheduler(
+            self.session, ShardReconnectionPolicyScope.Cluster, self.reconnection_policy
+        )
+
+        scheduler.schedule(self.host_id, self.shard_id, self.method)
+        key = f"{self.host_id}-{self.shard_id}"
+
+        # Simulate running the scheduled task manually
+        self.assertTrue(scheduler.already_scheduled[key])
+        scheduler._execute(key, self.method)
+
+        # Should now be marked not scheduled
+        self.assertFalse(scheduler.already_scheduled[key])
+        self.method.assert_called_once()

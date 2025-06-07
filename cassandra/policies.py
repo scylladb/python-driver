@@ -11,9 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
 import random
+import threading
+import time
+import weakref
+from abc import ABC, abstractmethod
 
 from collections import namedtuple
+from enum import Enum
 from functools import lru_cache
 from itertools import islice, cycle, groupby, repeat
 import logging
@@ -21,11 +28,14 @@ from random import randint, shuffle
 from threading import Lock
 import socket
 import warnings
+from typing import TYPE_CHECKING, Callable, Any, List, Tuple, Iterator, Optional
 
 log = logging.getLogger(__name__)
 
 from cassandra import WriteType as WT
 
+if TYPE_CHECKING:
+    from cluster import Session
 
 # This is done this way because WriteType was originally
 # defined here and in order not to break the API.
@@ -862,6 +872,228 @@ class ExponentialReconnectionPolicy(ReconnectionPolicy):
         jitter = randint(85, 115)
         delay = (jitter * value) / 100
         return min(max(self.base_delay, delay), self.max_delay)
+
+
+class ShardReconnectionScheduler(ABC):
+    @abstractmethod
+    def schedule(
+            self,
+            host_id: str,
+            shard_id: int,
+            method: Callable[..., None],
+            *args: List[Any],
+            **kwargs: dict[Any, Any]) -> None:
+        raise NotImplementedError()
+
+
+class ShardReconnectionPolicy(ABC):
+    """
+    Base class for shard reconnection policies.
+
+    On `new_scheduler` instantiate a scheduler that behaves according to the policy
+    """
+
+    @abstractmethod
+    def new_scheduler(self, session: Session) -> ShardReconnectionScheduler:
+        raise NotImplementedError()
+
+
+class NoDelayShardReconnectionPolicy(ShardReconnectionPolicy):
+    """
+    A shard reconnection policy with no delay between attempts and no concurrency restrictions.
+    Ensures at most one pending reconnection per (host, shard) pair — any additional
+     reconnection attempts for the same (host, shard) are silently ignored.
+
+    On `new_scheduler` instantiate a scheduler that behaves according to the policy
+    """
+
+    def new_scheduler(self, session: Session) -> ShardReconnectionScheduler:
+        return _NoDelayShardReconnectionScheduler(session)
+
+
+class _NoDelayShardReconnectionScheduler(ShardReconnectionScheduler):
+    session: Session
+    already_scheduled: dict[str, bool]
+
+    def __init__(self, session: Session):
+        self.session = weakref.proxy(session)
+        self.already_scheduled = {}
+
+    def _execute(
+            self,
+            scheduled_key: str,
+            method: Callable[..., None],
+            *args: List[Any],
+            **kwargs: dict[Any, Any]) -> None:
+        try:
+            method(*args, **kwargs)
+        finally:
+            self.already_scheduled[scheduled_key] = False
+
+    def schedule(
+            self,
+            host_id: str,
+            shard_id: int,
+            method: Callable[..., None],
+            *args: List[Any],
+            **kwargs: dict[Any, Any]) -> None:
+        scheduled_key = f'{host_id}-{shard_id}'
+        if self.already_scheduled.get(scheduled_key):
+            return
+
+        self.already_scheduled[scheduled_key] = True
+        if not self.session.is_shutdown:
+            self.session.submit(self._execute, scheduled_key, method, *args, **kwargs)
+
+
+class ShardReconnectionPolicyScope(Enum):
+    """
+    A scope for `ShardReconnectionPolicy`, in particular `NoConcurrentShardReconnectionPolicy`
+    """
+    Cluster = 0
+    Host = 1
+
+
+class NoConcurrentShardReconnectionPolicy(ShardReconnectionPolicy):
+    """
+    A shard reconnection policy that allows only one pending connection per scope, where scope could be `Host`, `Cluster`
+    For backoff it uses `ReconnectionPolicy`, when there is no more reconnections to scheduled backoff policy is reminded
+    For all scopes does not allow schedule multiple reconnections for same host+shard, it silently ignores attempts to do that.
+
+    On `new_scheduler` instantiate a scheduler that behaves according to the policy
+    """
+    shard_reconnection_scope: ShardReconnectionPolicyScope
+    reconnection_policy: ReconnectionPolicy
+
+    def __init__(
+            self,
+            shard_reconnection_scope: ShardReconnectionPolicyScope,
+            reconnection_policy: ReconnectionPolicy,
+    ):
+        if not isinstance(shard_reconnection_scope, ShardReconnectionPolicyScope):
+            raise ValueError("shard_reconnection_scope must be a ShardReconnectionPolicyScope")
+        if not isinstance(reconnection_policy, ReconnectionPolicy):
+            raise ValueError("reconnection_policy must be a ReconnectionPolicy")
+        self.shard_reconnection_scope = shard_reconnection_scope
+        self.reconnection_policy = reconnection_policy
+
+    def new_scheduler(self, session: Session) -> ShardReconnectionScheduler:
+        return _NoConcurrentShardReconnectionScheduler(session, self.shard_reconnection_scope, self.reconnection_policy)
+
+
+class _ScopeBucket:
+    """
+    Holds information for a shard reconnection scope, schedules and executes reconnections.
+    """
+    items: List[Tuple[Callable[..., None], Tuple[Any, ...], dict[str, Any]]]
+    session: Session
+    reconnection_policy: ReconnectionPolicy
+    lock = threading.Lock
+    schedule: Optional[Iterator[float]]
+
+    running: bool = False
+
+    def __init__(
+            self,
+            session: Session,
+            reconnection_policy: ReconnectionPolicy,
+    ):
+        self.items = []
+        self.session = session
+        self.reconnection_policy = reconnection_policy
+        self.lock = threading.Lock()
+        self.schedule = self.reconnection_policy.new_schedule()
+
+    def _get_delay(self) -> float:
+        if self.schedule is None:
+            self.schedule = self.reconnection_policy.new_schedule()
+        try:
+            return next(self.schedule)
+        except StopIteration:
+            self.schedule = self.reconnection_policy.new_schedule()
+            return next(self.schedule)
+
+    def _schedule(self):
+        if self.session.is_shutdown:
+            return
+        delay = self._get_delay()
+        if delay:
+            self.session.cluster.scheduler.schedule(delay, self._run)
+        else:
+            self.session.submit(self._run)
+
+    def _run(self):
+        if self.session.is_shutdown:
+            return
+
+        with self.lock:
+            try:
+                item = self.items.pop()
+            except IndexError:
+                self.running = False
+                self.schedule = None
+                return
+
+        method, args, kwargs = item
+        try:
+            method(*args, **kwargs)
+        finally:
+            self._schedule()
+
+    def add(self, method: Callable[..., None], *args, **kwargs):
+        with self.lock:
+            self.items.append((method, args, kwargs))
+            if not self.running:
+                self.running = True
+                self._schedule()
+
+
+class _NoConcurrentShardReconnectionScheduler(ShardReconnectionScheduler):
+    already_scheduled: dict[str, bool]
+    scopes: dict[str, _ScopeBucket]
+    shard_reconnection_scope: ShardReconnectionPolicyScope
+    reconnection_policy: ReconnectionPolicy
+    session: Session
+    lock: threading.Lock
+
+    def __init__(
+            self,
+            session: Session,
+            shard_reconnection_scope: ShardReconnectionPolicyScope,
+            reconnection_policy: ReconnectionPolicy,
+    ):
+        self.already_scheduled = {}
+        self.scopes = {}
+        self.shard_reconnection_scope = shard_reconnection_scope
+        self.reconnection_policy = reconnection_policy
+        self.session = session
+        self.lock = threading.Lock()
+
+    def _execute(self, scheduled_key: str, method: Callable[..., None], *args, **kwargs):
+        try:
+            method(*args, **kwargs)
+        finally:
+            with self.lock:
+                self.already_scheduled[scheduled_key] = False
+
+    def schedule(self, host_id: str, shard_id: int, method: Callable[..., None], *args, **kwargs):
+        if self.shard_reconnection_scope == ShardReconnectionPolicyScope.Cluster:
+            scope_hash = "global-cluster-scope"
+        else:
+            scope_hash = host_id
+        scheduled_key = f'{host_id}-{shard_id}'
+
+        with self.lock:
+            if self.already_scheduled.get(scheduled_key):
+                return False
+            self.already_scheduled[scheduled_key] = True
+
+            scope_info = self.scopes.get(scope_hash, 0)
+            if not scope_info:
+                scope_info = _ScopeBucket(self.session, self.reconnection_policy)
+                self.scopes[scope_hash] = scope_info
+            scope_info.add(self._execute, scheduled_key, method, *args, **kwargs)
+            return True
 
 
 class RetryPolicy(object):
