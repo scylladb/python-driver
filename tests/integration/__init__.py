@@ -396,6 +396,7 @@ requires_custom_payload = pytest.mark.skipif(SCYLLA_VERSION is not None or PROTO
                                             reason='Scylla does not support custom payloads. Cassandra requires native protocol v4.0+')
 xfail_scylla = lambda reason, *args, **kwargs: pytest.mark.xfail(SCYLLA_VERSION is not None, reason=reason, *args, **kwargs)
 incorrect_test = lambda reason='This test seems to be incorrect and should be fixed', *args, **kwargs: pytest.mark.xfail(reason=reason, *args, **kwargs)
+requires_scylla = pytest.mark.skipif(not SCYLLA_VERSION, reason='This test is designed for scylla only')
 
 pypy = unittest.skipUnless(platform.python_implementation() == "PyPy", "Test is skipped unless it's on PyPy")
 requiresmallclockgranularity = unittest.skipIf("Windows" in platform.system() or "asyncore" in EVENT_LOOP_MANAGER,
