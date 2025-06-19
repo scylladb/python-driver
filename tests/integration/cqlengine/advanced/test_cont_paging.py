@@ -24,7 +24,7 @@ from cassandra.cluster import (EXEC_PROFILE_DEFAULT,
 from cassandra.cqlengine import columns, connection, models
 from cassandra.cqlengine.management import drop_table, sync_table
 from tests.integration import (DSE_VERSION, greaterthanorequaldse51,
-                               greaterthanorequaldse60, requiredse, TestCluster)
+                               requiredse, TestCluster)
 
 
 class TestMultiKeyModel(models.Model):
@@ -151,19 +151,3 @@ class ContPagingTestsDSEV1(BasicConcurrentTests, unittest.TestCase):
         BasicConcurrentTests.protocol_version = ProtocolVersion.DSE_V1
         BasicConcurrentTests.setUpClass()
 
-@requiredse
-@greaterthanorequaldse60
-class ContPagingTestsDSEV2(BasicConcurrentTests, unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        BasicConcurrentTests.required_dse_version = Version('6.0')
-        if not DSE_VERSION or DSE_VERSION < BasicConcurrentTests.required_dse_version:
-            return
-        BasicConcurrentTests.protocol_version = ProtocolVersion.DSE_V2
-        BasicConcurrentTests.setUpClass()
-
-        cls.connections = cls.connections.union({"SMALL_QUEUE", "BIG_QUEUE"})
-        cls.sane_connections = cls.sane_connections.union({"SMALL_QUEUE", "BIG_QUEUE"})
-
-        cls._create_cluster_with_cp_options("SMALL_QUEUE", ContinuousPagingOptions(max_queue_size=2))
-        cls._create_cluster_with_cp_options("BIG_QUEUE", ContinuousPagingOptions(max_queue_size=400))

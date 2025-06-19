@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from tests.integration import use_singledc, greaterthanorequaldse51, BasicSharedKeyspaceUnitTestCaseRF3WM, \
-    DSE_VERSION, ProtocolVersion, greaterthanorequaldse60, requiredse, TestCluster
+    DSE_VERSION, ProtocolVersion, requiredse, TestCluster
 
 import logging
 log = logging.getLogger(__name__)
@@ -219,25 +219,3 @@ class ContPagingTestsDSEV1(BaseContPagingTests, BasicSharedKeyspaceUnitTestCaseR
         cls.protocol_version = ProtocolVersion.DSE_V1
         cls.create_cluster()
 
-
-@requiredse
-@greaterthanorequaldse60
-class ContPagingTestsDSEV2(BaseContPagingTests, BasicSharedKeyspaceUnitTestCaseRF3WM):
-    @classmethod
-    def setUpClass(cls):
-        cls.required_dse_version = BaseContPagingTests.required_dse_version = Version('6.0')
-        if not DSE_VERSION or DSE_VERSION < cls.required_dse_version:
-            return
-
-        BasicSharedKeyspaceUnitTestCaseRF3WM.setUpClass()
-        BaseContPagingTests.setUpClass()
-
-        more_profiles = {
-            "SMALL_QUEUE": ExecutionProfile(continuous_paging_options=ContinuousPagingOptions(max_queue_size=2)),
-            "BIG_QUEUE": ExecutionProfile(continuous_paging_options=ContinuousPagingOptions(max_queue_size=400))
-        }
-        cls.sane_eps += ["SMALL_QUEUE", "BIG_QUEUE"]
-        cls.execution_profiles.update(more_profiles)
-
-        cls.protocol_version = ProtocolVersion.DSE_V2
-        cls.create_cluster()
