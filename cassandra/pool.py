@@ -990,7 +990,6 @@ class HostConnectionPool(object):
             # note: it would be nice to push changes to these config settings
             # to pools instead of doing a new lookup on every
             # borrow_connection() call
-            max_reqs = self._session.cluster.get_max_requests_per_connection(self.host_distance)
             max_conns = self._session.cluster.get_max_connections_per_host(self.host_distance)
 
             least_busy = min(conns, key=lambda c: c.in_flight)
@@ -1012,10 +1011,9 @@ class HostConnectionPool(object):
                 # wait_for_conn will increment in_flight on the conn
                 least_busy, request_id = self._wait_for_conn(timeout)
 
-            # if we have too many requests on this connection but we still
-            # have space to open a new connection against this host, go ahead
+            # if we still have space to open a new connection against this host, go ahead
             # and schedule the creation of a new connection
-            if least_busy.in_flight >= max_reqs and len(self._connections) < max_conns:
+            if len(self._connections) < max_conns:
                 self._maybe_spawn_new_connection()
 
             return least_busy, request_id
@@ -1144,11 +1142,10 @@ class HostConnectionPool(object):
                 return
 
             core_conns = self._session.cluster.get_core_connections_per_host(self.host_distance)
-            min_reqs = self._session.cluster.get_min_requests_per_connection(self.host_distance)
             # we can use in_flight here without holding the connection lock
             # because the fact that in_flight dipped below the min at some
             # point is enough to start the trashing procedure
-            if len(self._connections) > core_conns and in_flight <= min_reqs and \
+            if len(self._connections) > core_conns and \
                     time.time() >= self._next_trash_allowed_at:
                 self._maybe_trash_connection(connection)
             else:

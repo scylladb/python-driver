@@ -39,7 +39,6 @@ class _PoolTests(unittest.TestCase):
     def make_session(self):
         session = NonCallableMagicMock(spec=Session, keyspace='foobarkeyspace')
         session.cluster.get_core_connections_per_host.return_value = 1
-        session.cluster.get_max_requests_per_connection.return_value = 1
         session.cluster.get_max_connections_per_host.return_value = 1
         return session
 

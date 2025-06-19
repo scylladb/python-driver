@@ -1452,18 +1452,6 @@ class Cluster(object):
 
         self._user_types = defaultdict(dict)
 
-        self._min_requests_per_connection = {
-            HostDistance.LOCAL_RACK: DEFAULT_MIN_REQUESTS,
-            HostDistance.LOCAL: DEFAULT_MIN_REQUESTS,
-            HostDistance.REMOTE: DEFAULT_MIN_REQUESTS
-        }
-
-        self._max_requests_per_connection = {
-            HostDistance.LOCAL_RACK: DEFAULT_MAX_REQUESTS,
-            HostDistance.LOCAL: DEFAULT_MAX_REQUESTS,
-            HostDistance.REMOTE: DEFAULT_MAX_REQUESTS
-        }
-
         self._core_connections_per_host = {
             HostDistance.LOCAL_RACK: DEFAULT_MIN_CONNECTIONS_PER_LOCAL_HOST,
             HostDistance.LOCAL: DEFAULT_MIN_CONNECTIONS_PER_LOCAL_HOST,
@@ -1665,48 +1653,6 @@ class Cluster(object):
         _, not_done = wait_futures(futures, pool_wait_timeout)
         if not_done:
             raise OperationTimedOut("Failed to create all new connection pools in the %ss timeout.")
-
-    def get_min_requests_per_connection(self, host_distance):
-        return self._min_requests_per_connection[host_distance]
-
-    def set_min_requests_per_connection(self, host_distance, min_requests):
-        """
-        Sets a threshold for concurrent requests per connection, below which
-        connections will be considered for disposal (down to core connections;
-        see :meth:`~Cluster.set_core_connections_per_host`).
-
-        Pertains to connection pool management in protocol versions {1,2}.
-        """
-        if self.protocol_version >= 3:
-            raise UnsupportedOperation(
-                "Cluster.set_min_requests_per_connection() only has an effect "
-                "when using protocol_version 1 or 2.")
-        if min_requests < 0 or min_requests > 126 or \
-           min_requests >= self._max_requests_per_connection[host_distance]:
-            raise ValueError("min_requests must be 0-126 and less than the max_requests for this host_distance (%d)" %
-                             (self._min_requests_per_connection[host_distance],))
-        self._min_requests_per_connection[host_distance] = min_requests
-
-    def get_max_requests_per_connection(self, host_distance):
-        return self._max_requests_per_connection[host_distance]
-
-    def set_max_requests_per_connection(self, host_distance, max_requests):
-        """
-        Sets a threshold for concurrent requests per connection, above which new
-        connections will be created to a host (up to max connections;
-        see :meth:`~Cluster.set_max_connections_per_host`).
-
-        Pertains to connection pool management in protocol versions {1,2}.
-        """
-        if self.protocol_version >= 3:
-            raise UnsupportedOperation(
-                "Cluster.set_max_requests_per_connection() only has an effect "
-                "when using protocol_version 1 or 2.")
-        if max_requests < 1 or max_requests > 127 or \
-           max_requests <= self._min_requests_per_connection[host_distance]:
-            raise ValueError("max_requests must be 1-127 and greater than the min_requests for this host_distance (%d)" %
-                             (self._min_requests_per_connection[host_distance],))
-        self._max_requests_per_connection[host_distance] = max_requests
 
     def get_core_connections_per_host(self, host_distance):
         """
