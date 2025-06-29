@@ -88,11 +88,7 @@
 
    .. automethod:: get_core_connections_per_host
 
-   .. automethod:: set_core_connections_per_host
-
    .. automethod:: get_max_connections_per_host
-
-   .. automethod:: set_max_connections_per_host
 
    .. automethod:: get_control_connection_host
 

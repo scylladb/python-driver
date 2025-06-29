@@ -53,5 +53,3 @@ def assert_quiescent_pool_state(test_case, cluster, wait=None):
             test_case.assertEqual(len(req_ids), len(set(req_ids)))
             test_case.assertEqual(connection.highest_request_id, len(req_ids) + len(orphan_ids) - 1)
             test_case.assertEqual(connection.highest_request_id, max(chain(req_ids, orphan_ids)))
-            if PROTOCOL_VERSION < 3:
-                test_case.assertEqual(connection.highest_request_id, connection.max_request_id)

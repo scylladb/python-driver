@@ -1234,17 +1234,6 @@ class HostConnectionPool(object):
         for conn in connections_to_close:
             conn.close()
 
-    def ensure_core_connections(self):
-        if self.is_shutdown:
-            return
-
-        core_conns = self._session.cluster.get_core_connections_per_host(self.host_distance)
-        with self._lock:
-            to_create = core_conns - (len(self._connections) + self._scheduled_for_creation)
-            for i in range(to_create):
-                self._scheduled_for_creation += 1
-                self._session.submit(self._create_new_connection)
-
     def _set_keyspace_for_all_conns(self, keyspace, callback):
         """
         Asynchronously sets the keyspace for all connections.  When all
