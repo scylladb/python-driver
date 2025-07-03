@@ -936,6 +936,69 @@ class ShardConnectionBackoffPolicy(ABC):
         raise NotImplementedError()
 
 
+class NoDelayShardConnectionBackoffPolicy(ShardConnectionBackoffPolicy):
+    """
+    A shard connection backoff policy with no delay between attempts.
+    Ensures that at most one pending request connection per (host, shard) pair.
+    If connection attempts for the same (host, shard) it is silently dropped.
+    """
+
+    def new_connection_scheduler(self, scheduler: _Scheduler) -> ShardConnectionScheduler:
+        return _NoDelayShardConnectionBackoffScheduler(scheduler)
+
+
+class _NoDelayShardConnectionBackoffScheduler(ShardConnectionScheduler):
+    """
+    A scheduler for ``cassandra.policies.NoDelayShardConnectionBackoffPolicy``.
+
+    A shard connection backoff policy with no delay between attempts.
+    Ensures that at most one pending request connection per (host, shard) pair.
+    If connection attempts for the same (host, shard) it is silently dropped.
+    """
+
+    scheduler: _Scheduler
+    already_scheduled: set[tuple[str, int]]
+    lock: Lock
+    is_shutdown: bool = False
+
+    def __init__(self, scheduler: _Scheduler):
+        self.scheduler = scheduler
+        self.already_scheduled = set()
+        self.lock = Lock()
+
+    def _execute(
+            self,
+            host_id: str,
+            shard_id: int,
+            method: Callable[[], None],
+    ) -> None:
+        if self.is_shutdown:
+            return
+        try:
+            method()
+        finally:
+            with self.lock:
+                self.already_scheduled.remove((host_id, shard_id))
+
+    def schedule(
+            self,
+            host_id: str,
+            shard_id: int,
+            method: Callable[[], None],
+    ) -> bool:
+        with self.lock:
+            if self.is_shutdown or (host_id, shard_id) in self.already_scheduled:
+                return False
+            self.already_scheduled.add((host_id, shard_id))
+
+        self.scheduler.schedule(0, self._execute, host_id, shard_id, method)
+        return True
+
+    def shutdown(self):
+        with self.lock:
+            self.is_shutdown = True
+
+
 class RetryPolicy(object):
     """
     A policy that describes whether to retry, rethrow, or ignore coordinator

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import unittest
+from functools import partial
 
 from itertools import islice, cycle
 from unittest.mock import Mock, patch, call
@@ -26,13 +27,15 @@ from threading import Thread
 from cassandra import ConsistencyLevel
 from cassandra.cluster import Cluster, ControlConnection
 from cassandra.metadata import Metadata
-from cassandra.policies import (RackAwareRoundRobinPolicy, RoundRobinPolicy, WhiteListRoundRobinPolicy, DCAwareRoundRobinPolicy,
+from cassandra.policies import (RackAwareRoundRobinPolicy, RoundRobinPolicy, WhiteListRoundRobinPolicy,
+                                DCAwareRoundRobinPolicy,
                                 TokenAwarePolicy, SimpleConvictionPolicy,
                                 HostDistance, ExponentialReconnectionPolicy,
                                 RetryPolicy, WriteType,
                                 DowngradingConsistencyRetryPolicy, ConstantReconnectionPolicy,
                                 LoadBalancingPolicy, ConvictionPolicy, ReconnectionPolicy, FallthroughRetryPolicy,
-                                IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy, ExponentialBackoffRetryPolicy)
+                                IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy,
+                                ExponentialBackoffRetryPolicy, _NoDelayShardConnectionBackoffScheduler)
 from cassandra.connection import DefaultEndPoint, UnixSocketEndPoint
 from cassandra.pool import Host
 from cassandra.query import Statement
@@ -1579,3 +1582,79 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
         # Only the filtered replicas should be allowed
         self.assertEqual(set(query_plan), {Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy),
                                            Host(DefaultEndPoint("127.0.0.4"), SimpleConvictionPolicy)})
+
+
+class MockScheduler:
+    def __init__(self):
+        self.requests = []
+
+    def schedule(self, delay, fn, *args, **kwargs):
+        self.requests.append((delay, fn, args, kwargs))
+
+    def execute(self):
+        for delay, fn, args, kwargs in self.requests:
+            fn(*args, **kwargs)
+        self.requests = []
+
+
+class NoDelayShardConnectionBackoffSchedulerTests(unittest.TestCase):
+    def test_schedule_executes_method_immediately(self):
+        method = Mock()
+        scheduler = MockScheduler()
+        policy = _NoDelayShardConnectionBackoffScheduler(scheduler)
+
+        self.assertTrue(policy.schedule('host1', 0, partial(method, 1, 2, key='val')))
+
+        self.assertEqual(scheduler.requests[0][0], 0)
+        scheduler.execute()
+
+        method.assert_called_once_with(1, 2, key='val')
+
+    def test_schedule_skips_if_host_shard_already_scheduled(self):
+        method = Mock()
+        scheduler = MockScheduler()
+        policy = _NoDelayShardConnectionBackoffScheduler(scheduler)
+
+        self.assertTrue(policy.schedule('host1', 0, method))
+        self.assertFalse(policy.schedule('host1', 0, method))
+
+        self.assertEqual(len(scheduler.requests), 1)
+        scheduler.execute()
+        method.assert_called_once()
+
+    def test_schedule_does_not_skip_if_shard_is_different(self):
+        method = Mock()
+        scheduler = MockScheduler()
+        policy = _NoDelayShardConnectionBackoffScheduler(scheduler)
+
+        self.assertTrue(policy.schedule('host1', 0, method))
+        self.assertTrue(policy.schedule('host1', 1, method))
+
+        self.assertEqual(len(scheduler.requests), 2)
+        scheduler.execute()
+
+        self.assertEqual(method.call_count, 2)
+
+    def test_already_scheduled_resets_after_execution(self):
+        method = Mock()
+        scheduler = MockScheduler()
+        policy = _NoDelayShardConnectionBackoffScheduler(scheduler)
+        self.assertTrue(policy.schedule('host1', 0, method))
+
+        scheduler.execute()
+
+        self.assertTrue(policy.schedule('host1', 0, method))
+
+        scheduler.execute()
+
+        self.assertEqual(method.call_count, 2)
+
+    def test_schedule_skips_if_shutdown(self):
+        method = Mock()
+        scheduler = MockScheduler()
+        policy = _NoDelayShardConnectionBackoffScheduler(scheduler)
+        policy.shutdown()
+
+        policy.schedule('host1', 0, method)
+
+        self.assertEqual(len(scheduler.requests), 0)
