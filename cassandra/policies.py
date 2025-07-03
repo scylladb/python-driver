@@ -11,21 +11,25 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
 import random
 
 from collections import namedtuple
-from functools import lru_cache
 from itertools import islice, cycle, groupby, repeat
 import logging
 from random import randint, shuffle
 from threading import Lock
 import socket
 import warnings
-
-log = logging.getLogger(__name__)
-
+from typing import Callable, TYPE_CHECKING
+from abc import ABC, abstractmethod
 from cassandra import WriteType as WT
 
+if TYPE_CHECKING:
+    from cluster import _Scheduler
+
+log = logging.getLogger(__name__)
 
 # This is done this way because WriteType was originally
 # defined here and in order not to break the API.
@@ -862,6 +866,74 @@ class ExponentialReconnectionPolicy(ReconnectionPolicy):
         jitter = randint(85, 115)
         delay = (jitter * value) / 100
         return min(max(self.base_delay, delay), self.max_delay)
+
+
+class ShardConnectionScheduler(ABC):
+    """
+    A base class for a scheduler for a shard connection backoff policy.
+    ``ShardConnectionScheduler`` is a per Session instance that schedules per shard connections according to
+       ``ShardConnectionBackoffPolicy`` that instantiates it.
+    """
+
+    @abstractmethod
+    def schedule(
+            self,
+            host_id: str,
+            shard_id: int,
+            method: Callable[[], None],
+    ) -> bool:
+        """
+        Schedules a request to create a connection to the given host and shard according to the scheduling policy.
+
+        The `schedule` method is called whenever `HostConnection` needs to establish a connection to the specified
+        (host_id, shard_id) pair.
+
+        The responsibilities of `schedule` are as follows:
+        1. Deduplicate requests for the same (host_id, shard_id), considering both queued and currently running requests.
+        2. Ensure that requests are executed at a pace consistent with the expected behavior of the
+           `ShardConnectionScheduler` implementation.
+
+        The `schedule` method must never execute `method` immediately; `method` should always be run in a separate thread.
+        Handling of failed `method` executions is managed by upper logic (`HostConnection`) and should not be performed by the
+        implementation of `schedule`.
+
+        Parameters:
+        ``host_id`` - an id of the host of the shard.
+        ``shard_id`` - an id of the shard.
+        ``method`` - a callable that creates connection and stores it in the connection pool, it handles closed session,
+          HostConnection and existence of the connection to the shard.
+          Currently, it is ``HostConnection._open_connection_to_missing_shard``.
+
+        :return: `bool` indicating whether request was scheduled or not.
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def shutdown(self):
+        """
+        Shutdown the scheduler.
+
+        It should stop the scheduler from execution any creation requests.
+        Ones that already scheduled should be canceled.
+        It is acceptable for currently running requests to complete.
+        """
+        raise NotImplementedError()
+
+
+class ShardConnectionBackoffPolicy(ABC):
+    """
+    Base class for shard connection backoff policies.
+    These policies allow user to control pace of establishing new connections.
+    """
+
+    @abstractmethod
+    def new_connection_scheduler(self, scheduler: _Scheduler) -> ShardConnectionScheduler:
+        """
+            Instantiate a connection scheduler that behaves according to the policy.
+
+            It is called on session initialization.
+        """
+        raise NotImplementedError()
 
 
 class RetryPolicy(object):
