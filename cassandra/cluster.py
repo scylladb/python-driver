@@ -73,7 +73,8 @@ from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, Simpl
                                 ExponentialReconnectionPolicy, HostDistance,
                                 RetryPolicy, IdentityTranslator, NoSpeculativeExecutionPlan,
                                 NoSpeculativeExecutionPolicy, DefaultLoadBalancingPolicy,
-                                NeverRetryPolicy)
+                                NeverRetryPolicy, ShardConnectionBackoffPolicy, NoDelayShardConnectionBackoffPolicy,
+                                ShardConnectionScheduler)
 from cassandra.pool import (Host, _ReconnectionHandler, _HostReconnectionHandler,
                             HostConnection,
                             NoConnectionsAvailable)
@@ -754,6 +755,11 @@ class Cluster(object):
 
         self._auth_provider = value
 
+    _shard_connection_backoff_policy: ShardConnectionBackoffPolicy
+    @property
+    def shard_connection_backoff_policy(self) -> ShardConnectionBackoffPolicy:
+        return self._shard_connection_backoff_policy
+
     _load_balancing_policy = None
     @property
     def load_balancing_policy(self):
@@ -1216,7 +1222,8 @@ class Cluster(object):
                  shard_aware_options=None,
                  metadata_request_timeout=None,
                  column_encryption_policy=None,
-                 application_info:Optional[ApplicationInfoBase]=None
+                 application_info: Optional[ApplicationInfoBase] = None,
+                 shard_connection_backoff_policy: Optional[ShardConnectionBackoffPolicy] = None,
                  ):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
@@ -1321,6 +1328,13 @@ class Cluster(object):
             self.load_balancing_policy = load_balancing_policy
         else:
             self._load_balancing_policy = default_lbp_factory()  # set internal attribute to avoid committing to legacy config mode
+
+        if shard_connection_backoff_policy is not None:
+            if not isinstance(shard_connection_backoff_policy, ShardConnectionBackoffPolicy):
+                raise TypeError("shard_connection_backoff_policy should be an instance of class derived from ShardConnectionBackoffPolicy")
+            self._shard_connection_backoff_policy = shard_connection_backoff_policy
+        else:
+            self._shard_connection_backoff_policy = NoDelayShardConnectionBackoffPolicy()
 
         if reconnection_policy is not None:
             if isinstance(reconnection_policy, type):
@@ -2659,6 +2673,7 @@ class Session(object):
     _metrics = None
     _request_init_callbacks = None
     _graph_paging_available = False
+    shard_connection_backoff_scheduler: ShardConnectionScheduler
 
     def __init__(self, cluster, hosts, keyspace=None):
         self.cluster = cluster
@@ -2673,6 +2688,7 @@ class Session(object):
         self._protocol_version = self.cluster.protocol_version
 
         self.encoder = Encoder()
+        self.shard_connection_backoff_scheduler = cluster.shard_connection_backoff_policy.new_connection_scheduler(self.cluster.scheduler)
 
         # create connection pools in parallel
         self._initial_connect_futures = set()
@@ -3281,6 +3297,7 @@ class Session(object):
             else:
                 self.is_shutdown = True
 
+        self.shard_connection_backoff_scheduler.shutdown()
         # PYTHON-673. If shutdown was called shortly after session init, avoid
         # a race by cancelling any initial connection attempts haven't started,
         # then blocking on any that have.

@@ -22,13 +22,21 @@ import unittest
 from threading import Thread, Event, Lock
 from unittest.mock import Mock, NonCallableMagicMock, MagicMock
 
-from cassandra.cluster import Session, ShardAwareOptions
+from cassandra.cluster import Session, ShardAwareOptions, _Scheduler
 from cassandra.connection import Connection
 from cassandra.pool import HostConnection
 from cassandra.pool import Host, NoConnectionsAvailable
-from cassandra.policies import HostDistance, SimpleConvictionPolicy
+from cassandra.policies import HostDistance, SimpleConvictionPolicy, _NoDelayShardConnectionBackoffScheduler
 
 LOGGER = logging.getLogger(__name__)
+
+
+class FakeScheduler(_Scheduler):
+    def __init__(self):
+        super(FakeScheduler, self).__init__(ThreadPoolExecutor())
+
+    def schedule(self, delay, fn, *args, **kwargs):
+        super().schedule(0, fn, *args, **kwargs)
 
 
 class _PoolTests(unittest.TestCase):
@@ -40,6 +48,9 @@ class _PoolTests(unittest.TestCase):
         session = NonCallableMagicMock(spec=Session, keyspace='foobarkeyspace')
         session.cluster.get_core_connections_per_host.return_value = 1
         session.cluster.get_max_connections_per_host.return_value = 1
+        session.shard_connection_backoff_scheduler = _NoDelayShardConnectionBackoffScheduler(FakeScheduler())
+        session.shard_connection_backoff_scheduler.schedule = Mock(wraps=session.shard_connection_backoff_scheduler.schedule)
+        session.is_shutdown = False
         return session
 
     def test_borrow_and_return(self):
@@ -173,9 +184,9 @@ class _PoolTests(unittest.TestCase):
         if self.PoolImpl is HostConnection:
             # on shard aware implementation we use submit function regardless
             self.assertTrue(host.signal_connection_failure.call_args)
-            self.assertTrue(session.submit.called)
+            self.assertTrue(session.shard_connection_backoff_scheduler.schedule.called)
         else:
-            self.assertFalse(session.submit.called)
+            self.assertFalse(session.shard_connection_backoff_scheduler.schedule.called)
             self.assertTrue(session.cluster.signal_connection_failure.call_args)
         self.assertTrue(pool.is_shutdown)
 
