@@ -4393,6 +4393,8 @@ class _Scheduler(Thread):
         self.join()
 
     def schedule(self, delay, fn, *args, **kwargs):
+        if self.is_shutdown:
+            return
         if delay:
             self._insert_task(delay, (fn, args, tuple(kwargs.items())))
         else:
