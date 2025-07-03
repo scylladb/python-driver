@@ -592,21 +592,6 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
         self.addCleanup(cluster.shutdown)
         self._test_updated_conditional(session, 10)
 
-    @greaterthanorequaldse50
-    def test_id_is_not_updated_conditional_dsev2(self):
-        """
-        Test that verifies that the result_metadata and the
-        result_metadata_id are udpated correctly in conditional statements
-        in protocol DSE V2
-
-        @since 3.13
-        @jira_ticket PYTHON-847
-        """
-        cluster = TestCluster(protocol_version=ProtocolVersion.DSE_V2)
-        session = cluster.connect()
-        self.addCleanup(cluster.shutdown)
-        self._test_updated_conditional(session, 10)
-
     def _test_updated_conditional(self, session, value):
         prepared_statement = session.prepare(
             "INSERT INTO {}(a, b, d) VALUES "

@@ -51,7 +51,7 @@ from cassandra.auth import _proxy_execute_key, PlainTextAuthProvider
 from cassandra.connection import (ConnectionException, ConnectionShutdown,
                                   ConnectionHeartbeat, ProtocolVersionUnsupported,
                                   EndPoint, DefaultEndPoint, DefaultEndPointFactory,
-                                  ContinuousPagingState, SniEndPointFactory, ConnectionBusy)
+                                  SniEndPointFactory, ConnectionBusy)
 from cassandra.cqltypes import UserType
 import cassandra.cqltypes as types
 from cassandra.encoder import Encoder
@@ -672,7 +672,7 @@ class Cluster(object):
     server will be automatically used.
     """
 
-    protocol_version = ProtocolVersion.DSE_V2
+    protocol_version = ProtocolVersion.V5
     """
     The maximum version of the native protocol to use.
 
@@ -2749,7 +2749,6 @@ class Session(object):
             raise NoHostAvailable(msg, [h.address for h in hosts])
 
         self.session_id = uuid.uuid4()
-        self._graph_paging_available = self._check_graph_paging_available()
 
         if self.cluster.column_encryption_policy is not None:
             try:
@@ -2946,25 +2945,9 @@ class Session(object):
     def _maybe_set_graph_paging(self, execution_profile):
         graph_paging = execution_profile.continuous_paging_options
         if execution_profile.continuous_paging_options is _NOT_SET:
-            graph_paging = ContinuousPagingOptions() if self._graph_paging_available else None
+            graph_paging = None
 
         execution_profile.continuous_paging_options = graph_paging
-
-    def _check_graph_paging_available(self):
-        """Verify if we can enable graph paging. This executed only once when the session is created."""
-
-        if not ProtocolVersion.has_continuous_paging_next_pages(self._protocol_version):
-            return False
-
-        for host in self.cluster.metadata.all_hosts():
-            if host.dse_version is None:
-                return False
-
-            version = Version(host.dse_version)
-            if version < _GRAPH_PAGING_MIN_DSE_VERSION:
-                return False
-
-        return True
 
     def _resolve_execution_profile_options(self, execution_profile):
         """
@@ -3112,13 +3095,7 @@ class Session(object):
         else:
             timestamp = None
 
-        supports_continuous_paging_state = (
-            ProtocolVersion.has_continuous_paging_next_pages(self._protocol_version)
-        )
-        if continuous_paging_options and supports_continuous_paging_state:
-            continuous_paging_state = ContinuousPagingState(continuous_paging_options.max_queue_size)
-        else:
-            continuous_paging_state = None
+        continuous_paging_state = None
 
         if isinstance(query, SimpleStatement):
             query_string = query.query_string

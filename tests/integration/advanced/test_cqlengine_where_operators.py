@@ -22,7 +22,7 @@ from cassandra.cqlengine.management import (CQLENG_ALLOW_SCHEMA_MANAGEMENT,
                                       create_keyspace_simple, drop_table,
                                       sync_table)
 from cassandra.cqlengine.statements import IsNotNull
-from tests.integration import DSE_VERSION, requiredse, CASSANDRA_IP, greaterthanorequaldse60, TestCluster
+from tests.integration import DSE_VERSION, requiredse, CASSANDRA_IP, TestCluster
 from tests.integration.advanced import use_single_node_with_graph_and_solr
 from tests.integration.cqlengine import DEFAULT_KEYSPACE
 
@@ -54,57 +54,3 @@ def teardown_module():
     if DSE_VERSION:
         drop_table(SimpleNullableModel)
 
-
-@requiredse
-class IsNotNullTests(unittest.TestCase):
-
-    @classmethod
-    def setUpClass(cls):
-        if DSE_VERSION:
-            cls.cluster = TestCluster()
-
-    @greaterthanorequaldse60
-    def test_is_not_null_execution(self):
-        """
-        Verify that CQL statements have correct syntax when executed
-        If we wanted them to return something meaningful and not a InvalidRequest
-        we'd have to create an index in search for the column we are using
-        IsNotNull
-
-        @since 3.20
-        @jira_ticket PYTHON-968
-        @expected_result InvalidRequest is arisen
-
-        @test_category cqlengine
-        """
-        cluster = TestCluster()
-        self.addCleanup(cluster.shutdown)
-        session = cluster.connect()
-
-        SimpleNullableModel.create(partition=1, nullable=2)
-        SimpleNullableModel.create(partition=2, nullable=None)
-
-        self.addCleanup(session.execute, "DROP SEARCH INDEX ON {}".format(
-            SimpleNullableModel.column_family_name()))
-        create_index_stmt = (
-            "CREATE SEARCH INDEX ON {} WITH COLUMNS nullable "
-            "".format(SimpleNullableModel.column_family_name()))
-        session.execute(create_index_stmt)
-
-        SimpleNullableModel.create(partition=1, nullable=1)
-        SimpleNullableModel.create(partition=2, nullable=None)
-
-        # TODO: block on indexing more precisely
-        time.sleep(5)
-
-        self.assertEqual(len(list(SimpleNullableModel.objects.all())), 2)
-        self.assertEqual(
-            len(list(
-                SimpleNullableModel.filter(IsNotNull("nullable"), partition__eq=2)
-            )),
-            0)
-        self.assertEqual(
-            len(list(
-                SimpleNullableModel.filter(IsNotNull("nullable"), partition__eq=1)
-            )),
-            1)

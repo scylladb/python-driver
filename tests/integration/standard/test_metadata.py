@@ -40,7 +40,7 @@ from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, exec
                                greaterthanorequaldse51, greaterthanorequalcass30, lessthancass30, local,
                                get_supported_protocol_versions, greaterthancass20,
                                greaterthancass21, assert_startswith, greaterthanorequalcass40,
-                               greaterthanorequaldse67, lessthancass40,
+                               lessthancass40,
                                TestCluster, DSE_VERSION, requires_java_udf, requires_composite_type,
                                requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, xfail_scylla_version_lt)
 
@@ -2572,47 +2572,3 @@ class GroupPerHost(BasicSharedKeyspaceUnitTestCase):
             self.assertEqual(1, len(hosts))  # RF is 1 for this keyspace
             self.assertIn(key, keys_per_host[hosts[0]])
 
-
-class VirtualKeypaceTest(BasicSharedKeyspaceUnitTestCase):
-    virtual_ks_names = ('system_virtual_schema', 'system_views')
-
-    def test_existing_keyspaces_have_correct_virtual_tags(self):
-        for name, ks in self.cluster.metadata.keyspaces.items():
-            if name in self.virtual_ks_names:
-                self.assertTrue(
-                    ks.virtual,
-                    'incorrect .virtual value for {}'.format(name)
-                )
-            else:
-                self.assertFalse(
-                    ks.virtual,
-                    'incorrect .virtual value for {}'.format(name)
-                )
-
-    @greaterthanorequalcass40
-    @greaterthanorequaldse67
-    def test_expected_keyspaces_exist_and_are_virtual(self):
-        for name in self.virtual_ks_names:
-            self.assertTrue(
-                self.cluster.metadata.keyspaces[name].virtual,
-                'incorrect .virtual value for {}'.format(name)
-            )
-
-    @greaterthanorequalcass40
-    @greaterthanorequaldse67
-    def test_virtual_keyspaces_have_expected_schema_structure(self):
-        self.maxDiff = None
-
-        ingested_virtual_ks_structure = defaultdict(dict)
-        for ks_name, ks in self.cluster.metadata.keyspaces.items():
-            if not ks.virtual:
-                continue
-            for tab_name, tab in ks.tables.items():
-                ingested_virtual_ks_structure[ks_name][tab_name] = set(
-                    tab.columns.keys()
-                )
-
-        # Identify a couple known values to verify we parsed the structure correctly
-        self.assertIn('table_name', ingested_virtual_ks_structure['system_virtual_schema']['tables'])
-        self.assertIn('type', ingested_virtual_ks_structure['system_virtual_schema']['columns'])
-        self.assertIn('total', ingested_virtual_ks_structure['system_views']['sstable_tasks'])

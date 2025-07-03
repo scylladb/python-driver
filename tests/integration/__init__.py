@@ -228,15 +228,9 @@ ALLOW_BETA_PROTOCOL = False
 
 def get_default_protocol():
     if CASSANDRA_VERSION >= Version('4.0-a'):
-        if DSE_VERSION:
-            return ProtocolVersion.DSE_V2
-        else:
-            return ProtocolVersion.V5
+        return ProtocolVersion.V5
     if CASSANDRA_VERSION >= Version('3.10'):
-        if DSE_VERSION:
-            return ProtocolVersion.DSE_V1
-        else:
-            return 4
+        return 4
     if CASSANDRA_VERSION >= Version('2.2'):
         return 4
     elif CASSANDRA_VERSION >= Version('2.1'):
@@ -274,15 +268,9 @@ def get_supported_protocol_versions():
         if not DSE_VERSION:
             return (3, 4, 5, 6)
     if CASSANDRA_VERSION >= Version('4.0-a'):
-        if DSE_VERSION:
-            return (3, 4, ProtocolVersion.DSE_V1, ProtocolVersion.DSE_V2)
-        else:
-            return (3, 4, 5)
+        return (3, 4, 5)
     elif CASSANDRA_VERSION >= Version('3.10'):
-        if DSE_VERSION:
-            return (3, 4, ProtocolVersion.DSE_V1)
-        else:
-            return (3, 4)
+        return (3, 4)
     elif CASSANDRA_VERSION >= Version('3.0'):
         return (3, 4)
     elif CASSANDRA_VERSION >= Version('2.2'):
@@ -322,10 +310,7 @@ def get_unsupported_upper_protocol():
         else:
             return ProtocolVersion.DSE_V1
     if CASSANDRA_VERSION >= Version('3.10'):
-        if DSE_VERSION:
-            return ProtocolVersion.DSE_V2
-        else:
-            return 5
+        return 5
     if CASSANDRA_VERSION >= Version('2.2'):
         return 5
     elif CASSANDRA_VERSION >= Version('2.1'):
@@ -357,7 +342,6 @@ notprotocolv1 = unittest.skipUnless(PROTOCOL_VERSION > 1, 'Protocol v1 not suppo
 lessthenprotocolv4 = unittest.skipUnless(PROTOCOL_VERSION < 4, 'Protocol versions 4 or greater not supported')
 lessthanprotocolv3 = unittest.skipUnless(PROTOCOL_VERSION < 3, 'Protocol versions 3 or greater not supported')
 greaterthanprotocolv3 = unittest.skipUnless(PROTOCOL_VERSION >= 4, 'Protocol versions less than 4 are not supported')
-protocolv6 = unittest.skipUnless(6 in get_supported_protocol_versions(), 'Protocol versions less than 6 are not supported')
 
 greaterthancass20 = unittest.skipUnless(CASSANDRA_VERSION >= Version('2.1'), 'Cassandra version 2.1 or greater required')
 greaterthancass21 = unittest.skipUnless(CASSANDRA_VERSION >= Version('2.2'), 'Cassandra version 2.2 or greater required')
@@ -372,9 +356,6 @@ lessthanorequalcass40 = unittest.skipUnless(CASSANDRA_VERSION <= Version('4.0'),
 lessthancass40 = unittest.skipUnless(CASSANDRA_VERSION < Version('4.0'), 'Cassandra version less than 4.0 required')
 lessthancass30 = unittest.skipUnless(CASSANDRA_VERSION < Version('3.0'), 'Cassandra version less then 3.0 required')
 
-greaterthanorequaldse68 = unittest.skipUnless(DSE_VERSION and DSE_VERSION >= Version('6.8'), "DSE 6.8 or greater required for this test")
-greaterthanorequaldse67 = unittest.skipUnless(DSE_VERSION and DSE_VERSION >= Version('6.7'), "DSE 6.7 or greater required for this test")
-greaterthanorequaldse60 = unittest.skipUnless(DSE_VERSION and DSE_VERSION >= Version('6.0'), "DSE 6.0 or greater required for this test")
 greaterthanorequaldse51 = unittest.skipUnless(DSE_VERSION and DSE_VERSION >= Version('5.1'), "DSE 5.1 or greater required for this test")
 greaterthanorequaldse50 = unittest.skipUnless(DSE_VERSION and DSE_VERSION >= Version('5.0'), "DSE 5.0 or greater required for this test")
 lessthandse51 = unittest.skipUnless(DSE_VERSION and DSE_VERSION < Version('5.1'), "DSE version less than 5.1 required")

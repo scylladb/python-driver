@@ -23,7 +23,7 @@ from cassandra.graph import single_object_row_factory, Vertex, graph_object_row_
     graph_graphson2_row_factory, graph_graphson3_row_factory
 from cassandra.util import SortedSet
 
-from tests.integration import DSE_VERSION, greaterthanorequaldse51, greaterthanorequaldse68, \
+from tests.integration import DSE_VERSION, greaterthanorequaldse51, \
     requiredse, TestCluster
 from tests.integration.advanced.graph import BasicGraphUnitTestCase, GraphUnitTestCase, \
     GraphProtocol, ClassicGraphSchema, CoreGraphSchema, use_single_node_with_graph
@@ -237,34 +237,3 @@ class GraphExecutionProfileOptionsResolveTest(GraphUnitTestCase):
         self.assertEqual(ep.graph_options.graph_protocol, obj)
         self.assertEqual(ep.row_factory, obj)
 
-    @greaterthanorequaldse68
-    def test_graph_protocol_default_for_core_is_graphson3(self):
-        """Test that graphson3 is automatically resolved for a core graph query"""
-        self.setup_graph(CoreGraphSchema)
-        ep = self.session.get_execution_profile(EXEC_PROFILE_GRAPH_DEFAULT)
-        self.assertEqual(ep.graph_options.graph_protocol, None)
-        self.assertEqual(ep.row_factory, None)
-        # Ensure we have the graph metadata
-        self.session.cluster.refresh_schema_metadata()
-        self.session._resolve_execution_profile_options(ep)
-        self.assertEqual(ep.graph_options.graph_protocol, GraphProtocol.GRAPHSON_3_0)
-        self.assertEqual(ep.row_factory, graph_graphson3_row_factory)
-
-        self.execute_graph_queries(CoreGraphSchema.fixtures.classic(), verify_graphson=GraphProtocol.GRAPHSON_3_0)
-
-    @greaterthanorequaldse68
-    def test_graph_protocol_default_for_core_fallback_to_graphson1_if_no_graph_name(self):
-        """Test that graphson1 is set when we cannot detect if it's a core graph"""
-        self.setup_graph(CoreGraphSchema)
-        default_ep = self.session.get_execution_profile(EXEC_PROFILE_GRAPH_DEFAULT)
-        graph_options = default_ep.graph_options.copy()
-        graph_options.graph_name = None
-        ep = self.session.execution_profile_clone_update(EXEC_PROFILE_GRAPH_DEFAULT, graph_options=graph_options)
-        self.session._resolve_execution_profile_options(ep)
-        self.assertEqual(ep.graph_options.graph_protocol, GraphProtocol.GRAPHSON_1_0)
-        self.assertEqual(ep.row_factory, graph_object_row_factory)
-
-        regex = re.compile(".*Variable.*is unknown.*", re.S)
-        with self.assertRaisesRegex(SyntaxException, regex):
-            self.execute_graph_queries(CoreGraphSchema.fixtures.classic(),
-                                       execution_profile=ep, verify_graphson=GraphProtocol.GRAPHSON_1_0)

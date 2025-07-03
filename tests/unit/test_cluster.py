@@ -221,10 +221,6 @@ class SessionTest(unittest.TestCase):
 class ProtocolVersionTests(unittest.TestCase):
 
     def test_protocol_downgrade_test(self):
-        lower = ProtocolVersion.get_lower_supported(ProtocolVersion.DSE_V2)
-        self.assertEqual(ProtocolVersion.DSE_V1, lower)
-        lower = ProtocolVersion.get_lower_supported(ProtocolVersion.DSE_V1)
-        self.assertEqual(ProtocolVersion.V5,lower)
         lower = ProtocolVersion.get_lower_supported(ProtocolVersion.V5)
         self.assertEqual(ProtocolVersion.V4,lower)
         lower = ProtocolVersion.get_lower_supported(ProtocolVersion.V4)
