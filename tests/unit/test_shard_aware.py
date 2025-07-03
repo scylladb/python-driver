@@ -14,8 +14,6 @@
 import uuid
 from unittest.mock import Mock
 
-from cassandra.policies import NoDelayShardConnectionBackoffPolicy, _NoDelayShardConnectionBackoffScheduler
-
 try:
     import unittest2 as unittest
 except ImportError:
@@ -26,6 +24,9 @@ from mock import MagicMock
 from concurrent.futures import ThreadPoolExecutor
 
 from cassandra.cluster import ShardAwareOptions, _Scheduler
+from cassandra.policies import ConstantReconnectionPolicy, \
+    NoDelayShardConnectionBackoffPolicy, LimitedConcurrencyShardConnectionBackoffPolicy, _ScopeBucket, \
+    _NoDelayShardConnectionBackoffScheduler
 from cassandra.pool import HostConnection, HostDistance
 from cassandra.connection import ShardingInfo, DefaultEndPoint
 from cassandra.metadata import Murmur3Token
@@ -60,6 +61,23 @@ class TestShardAware(unittest.TestCase):
     def test_shard_aware_reconnection_policy_no_delay(self):
         # with NoDelayReconnectionPolicy all the connections should be created right away
         self._test_shard_aware_reconnection_policy(4, NoDelayShardConnectionBackoffPolicy(), 4)
+
+    def test_shard_aware_reconnection_policy_delay(self):
+        # with ConstantReconnectionPolicy first connection is created right away, others are delayed
+        self._test_shard_aware_reconnection_policy(
+            4,
+            LimitedConcurrencyShardConnectionBackoffPolicy(
+                ConstantReconnectionPolicy(0.1),
+                1
+            ), 4)
+
+    def test_shard_aware_reconnection_policy_delay_non_scylla(self):
+        self._test_shard_aware_reconnection_policy(
+            0,
+            LimitedConcurrencyShardConnectionBackoffPolicy(
+                ConstantReconnectionPolicy(0.1),
+                1
+            ), 1)
 
     def _test_shard_aware_reconnection_policy(self, shard_count, shard_connection_backoff_policy, expected_connections):
         """
@@ -136,6 +154,10 @@ class TestShardAware(unittest.TestCase):
         host.host_id = uuid.uuid4()
         host.endpoint = DefaultEndPoint("1.2.3.4")
         session = None
+        backoff_policy = None
+        if isinstance(shard_connection_backoff_policy, LimitedConcurrencyShardConnectionBackoffPolicy):
+            backoff_policy = shard_connection_backoff_policy.backoff_policy
+
         try:
             for port, is_ssl in [(19042, False), (19045, True)]:
                 session = MockSession(is_ssl=is_ssl)
@@ -151,9 +173,12 @@ class TestShardAware(unittest.TestCase):
                         assert connection.endpoint == DefaultEndPoint("1.2.3.4", port=port)
 
                 sleep_time = 0
+                if backoff_policy:
+                    sleep_time = next(iter(backoff_policy.new_schedule()))
+
                 found_related_calls = 0
                 for delay, fn, args, kwargs in session.scheduler_calls:
-                    if fn.__self__.__class__ is _NoDelayShardConnectionBackoffScheduler:
+                    if fn.__self__.__class__ in (_ScopeBucket, _NoDelayShardConnectionBackoffScheduler):
                         found_related_calls += 1
                         self.assertEqual(delay, sleep_time)
                 self.assertLessEqual(shard_count - 1, found_related_calls)

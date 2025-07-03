@@ -14,15 +14,15 @@
 from __future__ import annotations
 
 import random
-
 from collections import namedtuple
+from functools import partial
 from itertools import islice, cycle, groupby, repeat
 import logging
 from random import randint, shuffle
 from threading import Lock
 import socket
 import warnings
-from typing import Callable, TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING, Iterator, List, Tuple
 from abc import ABC, abstractmethod
 from cassandra import WriteType as WT
 
@@ -997,6 +997,245 @@ class _NoDelayShardConnectionBackoffScheduler(ShardConnectionScheduler):
     def shutdown(self):
         with self.lock:
             self.is_shutdown = True
+
+
+class ShardConnectionBackoffSchedule(ABC):
+    @abstractmethod
+    def new_schedule(self) -> Iterator[float]:
+        """
+        This should return a finite or infinite iterable of delays (each as a
+        floating point number of seconds).
+        Note that if the iterable is finite, schedule will be recreated right after iterable is exhausted.
+        """
+        raise NotImplementedError()
+
+
+class ConstantShardConnectionBackoffSchedule(ShardConnectionBackoffSchedule):
+    """
+    A :class:`.ShardConnectionBackoffSchedule` subclass which introduce a constant delay with jitter
+     between shard connections.
+    """
+
+    def __init__(self, delay: float, jitter: float = 0.0):
+        """
+        `delay` should be a floating point number of seconds to wait in-between
+        each connection attempt.
+
+        `jitter` is a random jitter in seconds.
+        """
+        if delay < 0:
+            raise ValueError("delay must not be negative")
+        if jitter < 0:
+            raise ValueError("jitter must not be negative")
+
+        self.delay = delay
+        self.jitter = jitter
+
+    def new_schedule(self):
+        if self.jitter == 0:
+            yield from repeat(self.delay)
+        def iterator():
+            while True:
+                yield self.delay + random.uniform(0.0, self.jitter)
+        return iterator()
+
+
+class LimitedConcurrencyShardConnectionBackoffPolicy(ShardConnectionBackoffPolicy):
+    """
+    A shard connection backoff policy that allows only `max_concurrent` concurrent connections per `host_id`.
+
+    For backoff calculation, it requires either a `cassandra.policies.ShardConnectionBackoffSchedule` or
+    a `cassandra.policies.ReconnectionPolicy`, as both expose the same API.
+
+    It spawns a worker when there are pending requests, maximum number of workers is `max_concurrent` multiplied by nodes in the cluster.
+    When worker is spawn it initiates backoff schedule, which is local for this worker.
+    If there are no remaining requests for that `host_id`, worker is stopped.
+
+    This policy also prevents multiple pending or scheduled connections for the same (host, shard) pair;
+    any duplicate attempts to schedule a connection are silently ignored.
+    """
+    backoff_policy: ShardConnectionBackoffSchedule | ReconnectionPolicy
+
+    max_concurrent: int
+    """
+    Max concurrent connection creation requests per scope.
+    """
+
+    def __init__(
+            self,
+            backoff_policy: ShardConnectionBackoffSchedule | ReconnectionPolicy,
+            max_concurrent: int = 1,
+    ):
+        if not isinstance(backoff_policy, (ShardConnectionBackoffSchedule, ReconnectionPolicy)):
+            raise ValueError("backoff_policy must be a ShardConnectionBackoffSchedule or ReconnectionPolicy")
+        if max_concurrent < 1:
+            raise ValueError("max_concurrent must be a positive integer")
+        self.backoff_policy = backoff_policy
+        self.max_concurrent = max_concurrent
+
+    def new_connection_scheduler(self, scheduler: _Scheduler) -> ShardConnectionScheduler:
+        return _LimitedConcurrencyShardConnectionScheduler(scheduler, self.backoff_policy, self.max_concurrent)
+
+
+class _ScopeBucket:
+    """
+    Holds information for a shard connection backoff policy scope.
+    Responsible for scheduling and executing requests to create connections,
+     while ensuring that no more than `max_concurrent` requests run at the same time.
+
+    When `schedule_new_connection` is called, it adds an item to the queue. If `workers_count` is less than `max_concurrent`, it starts a new worker.
+
+    A worker is an instance of `_thread_body`.
+    Once `_thread_body` finishes processing the current item, it schedules the
+     next execution using the same schedule. If the queue is empty, the worker stops — it does not schedule another `_thread_body` execution and decrements `workers_count`.
+    """
+    session: _Scheduler
+    backoff_policy: ShardConnectionBackoffSchedule
+    lock: Lock
+    is_shutdown: bool = False
+
+    max_concurrent: int
+    """
+    Max concurrent connection creation requests in the scope.
+    """
+
+    workers_count: int
+    """
+    Number of currently pending workers.
+    """
+
+    items: List[Callable[[], None]]
+    """
+    List of scheduled create connections requests.
+    """
+
+    def __init__(
+            self,
+            scheduler: _Scheduler,
+            backoff_policy: ShardConnectionBackoffSchedule,
+            max_concurrent: int,
+    ):
+        self.items = []
+        self.scheduler = scheduler
+        self.backoff_policy = backoff_policy
+        self.lock = Lock()
+        self.max_concurrent = max_concurrent
+        self.workers_count = 0
+
+    def _get_delay(self, schedule: Iterator[float]) -> Tuple[Iterator[float], float]:
+        try:
+            return schedule, next(schedule)
+        except StopIteration:
+            schedule = self.backoff_policy.new_schedule()
+            return schedule, next(schedule)
+
+    def _worker_body(self, schedule: Iterator[float]):
+        if self.is_shutdown:
+            return
+
+        with self.lock:
+            try:
+                request = self.items.pop(0)
+            except IndexError:
+                # Just in case
+                if self.workers_count > 0:
+                    self.workers_count -= 1
+                # When items are exhausted reset schedule to ensure that new items going to get another schedule
+                # It is important for exponential policy
+                return
+
+        try:
+            request()
+        finally:
+            schedule, delay = self._get_delay(schedule)
+            self.scheduler.schedule(delay, self._worker_body, schedule)
+
+    def _start_new_worker(self):
+        self.workers_count += 1
+        schedule = self.backoff_policy.new_schedule()
+        delay = next(schedule)
+        self.scheduler.schedule(delay, self._worker_body, schedule)
+
+    def schedule_new_connection(self, cb: Callable[[], None]):
+        with self.lock:
+            if self.is_shutdown:
+                return
+            self.items.append(cb)
+            if self.workers_count < self.max_concurrent:
+                self._start_new_worker()
+
+    def shutdown(self):
+        with self.lock:
+            self.is_shutdown = True
+
+
+class _LimitedConcurrencyShardConnectionScheduler(ShardConnectionScheduler):
+    """
+    A scheduler for ``cassandra.policies.LimitedConcurrencyShardConnectionPolicy``.
+
+    Limits concurrency for connection creation requests to ``max_concurrent`` per host_id.
+    """
+
+    already_scheduled: set[tuple[str, int]]
+    """
+    Set of (host_id, shard_id) of scheduled or pending requests.
+    """
+
+    per_host_scope: dict[str, _ScopeBucket]
+    """
+    Scopes storage, key is host_id, value is an instance that holds scope data.
+    """
+
+    backoff_policy: ShardConnectionBackoffSchedule
+    scheduler: _Scheduler
+    lock: Lock
+    is_shutdown: bool = False
+
+    max_concurrent: int
+    """
+    Max concurrent connection creation requests per host_id.
+    """
+
+    def __init__(
+            self,
+            scheduler: _Scheduler,
+            backoff_policy: ShardConnectionBackoffSchedule,
+            max_concurrent: int,
+    ):
+        self.already_scheduled = set()
+        self.per_host_scope = {}
+        self.backoff_policy = backoff_policy
+        self.max_concurrent = max_concurrent
+        self.scheduler = scheduler
+        self.lock = Lock()
+
+    def _execute(self, host_id: str, shard_id: int, method: Callable[[], None]):
+        if self.is_shutdown:
+            return
+        try:
+            method()
+        finally:
+            with self.lock:
+                self.already_scheduled.remove((host_id, shard_id))
+
+    def schedule(self, host_id: str, shard_id: int, method: Callable[[], None]) -> bool:
+        with self.lock:
+            if self.is_shutdown or (host_id, shard_id) in self.already_scheduled:
+                return False
+            self.already_scheduled.add((host_id, shard_id))
+
+            scope_info = self.per_host_scope.get(host_id)
+            if not scope_info:
+                scope_info = _ScopeBucket(self.scheduler, self.backoff_policy, self.max_concurrent)
+                self.per_host_scope[host_id] = scope_info
+            scope_info.schedule_new_connection(partial(self._execute, host_id, shard_id, method))
+            return True
+
+    def shutdown(self):
+        with self.lock:
+            self.is_shutdown = True
+            for scope in self.per_host_scope.values():
+                scope.shutdown()
 
 
 class RetryPolicy(object):
