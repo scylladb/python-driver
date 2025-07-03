@@ -4456,7 +4456,10 @@ class _Scheduler(Thread):
         self.join()
 
     def schedule(self, delay, fn, *args, **kwargs):
-        self._insert_task(delay, (fn, args, tuple(kwargs.items())))
+        if delay:
+            self._insert_task(delay, (fn, args, tuple(kwargs.items())))
+        else:
+            self._executor.submit(fn, *args, **kwargs)
 
     def schedule_unique(self, delay, fn, *args, **kwargs):
         task = (fn, args, tuple(kwargs.items()))
