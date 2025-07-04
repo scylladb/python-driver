@@ -32,6 +32,7 @@ from cassandra.policies import (RoundRobinPolicy, ExponentialReconnectionPolicy,
                                 RetryPolicy, SimpleConvictionPolicy, HostDistance,
                                 AddressTranslator, TokenAwarePolicy, HostFilterPolicy)
 from cassandra import ConsistencyLevel
+from cassandra.protocol import ProtocolHandler, QueryMessage
 
 from cassandra.query import SimpleStatement, TraceUnavailable, tuple_factory
 from cassandra.auth import PlainTextAuthProvider, SaslAuthProvider
@@ -482,6 +483,47 @@ class ClusterTests(unittest.TestCase):
         self.assertIsNot(original_system_schema_meta, current_system_schema_meta)
         self.assertEqual(original_system_schema_meta.as_cql_query(), current_system_schema_meta.as_cql_query())
         cluster.shutdown()
+
+    def test_use_keyspace_blocking(self):
+        ks = "test_refresh_schema_type"
+
+        cluster = TestCluster()
+
+        class ConnectionWrapper(cluster.connection_class):
+            def __init__(self, *args, **kwargs):
+                super(ConnectionWrapper, self).__init__(*args, **kwargs)
+
+            def send_msg(self, msg, request_id, cb, encoder=ProtocolHandler.encode_message,
+                         decoder=ProtocolHandler.decode_message, result_metadata=None):
+                if isinstance(msg, QueryMessage) and f'USE "{ks}"' in msg.query:
+                    orig_decoder = decoder
+
+                    def decode_patched(protocol_version, protocol_features, user_type_map, stream_id, flags, opcode,
+                                       body,
+                                       decompressor, result_metadata):
+                        time.sleep(cluster.control_connection_timeout + 0.1)
+                        return orig_decoder(protocol_version, protocol_features, user_type_map, stream_id, flags,
+                                            opcode, body, decompressor, result_metadata)
+
+                    decoder = decode_patched
+
+                return super(ConnectionWrapper, self).send_msg(msg, request_id, cb, encoder, decoder, result_metadata)
+
+        cluster.connection_class = ConnectionWrapper
+
+        cluster.connect().execute("""
+            CREATE KEYSPACE IF NOT EXISTS %s
+            WITH replication = { 'class': 'SimpleStrategy', 'replication_factor': '2' }
+            """ % ks)
+
+        try:
+            cluster.connect(ks)
+        except NoHostAvailable:
+            pass
+        except Exception as e:
+            self.fail(f"got unexpected exception {e}")
+        else:
+            self.fail("connection should fail, but was not")
 
     def test_refresh_schema_type(self):
         if get_server_versions()[0] < (2, 1, 0):

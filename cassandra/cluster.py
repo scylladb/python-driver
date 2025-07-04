@@ -2472,7 +2472,7 @@ class Cluster(object):
             else:
                 for keyspace, ks_statements in groupby(statements, lambda s: s.keyspace):
                     if keyspace is not None:
-                        connection.set_keyspace_blocking(keyspace)
+                        connection.set_keyspace_blocking(keyspace, self.control_connection_timeout)
 
                     # prepare 10 statements at a time
                     ks_statements = list(ks_statements)
