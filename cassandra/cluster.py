@@ -1452,18 +1452,6 @@ class Cluster(object):
 
         self._user_types = defaultdict(dict)
 
-        self._min_requests_per_connection = {
-            HostDistance.LOCAL_RACK: DEFAULT_MIN_REQUESTS,
-            HostDistance.LOCAL: DEFAULT_MIN_REQUESTS,
-            HostDistance.REMOTE: DEFAULT_MIN_REQUESTS
-        }
-
-        self._max_requests_per_connection = {
-            HostDistance.LOCAL_RACK: DEFAULT_MAX_REQUESTS,
-            HostDistance.LOCAL: DEFAULT_MAX_REQUESTS,
-            HostDistance.REMOTE: DEFAULT_MAX_REQUESTS
-        }
-
         self._core_connections_per_host = {
             HostDistance.LOCAL_RACK: DEFAULT_MIN_CONNECTIONS_PER_LOCAL_HOST,
             HostDistance.LOCAL: DEFAULT_MIN_CONNECTIONS_PER_LOCAL_HOST,
@@ -1666,48 +1654,6 @@ class Cluster(object):
         if not_done:
             raise OperationTimedOut("Failed to create all new connection pools in the %ss timeout.")
 
-    def get_min_requests_per_connection(self, host_distance):
-        return self._min_requests_per_connection[host_distance]
-
-    def set_min_requests_per_connection(self, host_distance, min_requests):
-        """
-        Sets a threshold for concurrent requests per connection, below which
-        connections will be considered for disposal (down to core connections;
-        see :meth:`~Cluster.set_core_connections_per_host`).
-
-        Pertains to connection pool management in protocol versions {1,2}.
-        """
-        if self.protocol_version >= 3:
-            raise UnsupportedOperation(
-                "Cluster.set_min_requests_per_connection() only has an effect "
-                "when using protocol_version 1 or 2.")
-        if min_requests < 0 or min_requests > 126 or \
-           min_requests >= self._max_requests_per_connection[host_distance]:
-            raise ValueError("min_requests must be 0-126 and less than the max_requests for this host_distance (%d)" %
-                             (self._min_requests_per_connection[host_distance],))
-        self._min_requests_per_connection[host_distance] = min_requests
-
-    def get_max_requests_per_connection(self, host_distance):
-        return self._max_requests_per_connection[host_distance]
-
-    def set_max_requests_per_connection(self, host_distance, max_requests):
-        """
-        Sets a threshold for concurrent requests per connection, above which new
-        connections will be created to a host (up to max connections;
-        see :meth:`~Cluster.set_max_connections_per_host`).
-
-        Pertains to connection pool management in protocol versions {1,2}.
-        """
-        if self.protocol_version >= 3:
-            raise UnsupportedOperation(
-                "Cluster.set_max_requests_per_connection() only has an effect "
-                "when using protocol_version 1 or 2.")
-        if max_requests < 1 or max_requests > 127 or \
-           max_requests <= self._min_requests_per_connection[host_distance]:
-            raise ValueError("max_requests must be 1-127 and greater than the min_requests for this host_distance (%d)" %
-                             (self._min_requests_per_connection[host_distance],))
-        self._max_requests_per_connection[host_distance] = max_requests
-
     def get_core_connections_per_host(self, host_distance):
         """
         Gets the minimum number of connections per Session that will be opened
@@ -1720,31 +1666,6 @@ class Cluster(object):
         """
         return self._core_connections_per_host[host_distance]
 
-    def set_core_connections_per_host(self, host_distance, core_connections):
-        """
-        Sets the minimum number of connections per Session that will be opened
-        for each host with :class:`~.HostDistance` equal to `host_distance`.
-        The default is 2 for :attr:`~HostDistance.LOCAL` and 1 for
-        :attr:`~HostDistance.REMOTE`.
-
-        Protocol version 1 and 2 are limited in the number of concurrent
-        requests they can send per connection. The driver implements connection
-        pooling to support higher levels of concurrency.
-
-        If :attr:`~.Cluster.protocol_version` is set to 3 or higher, this
-        is not supported (there is always one connection per host, unless
-        the host is remote and :attr:`connect_to_remote_hosts` is :const:`False`)
-        and using this will result in an :exc:`~.UnsupportedOperation`.
-        """
-        if self.protocol_version >= 3:
-            raise UnsupportedOperation(
-                "Cluster.set_core_connections_per_host() only has an effect "
-                "when using protocol_version 1 or 2.")
-        old = self._core_connections_per_host[host_distance]
-        self._core_connections_per_host[host_distance] = core_connections
-        if old < core_connections:
-            self._ensure_core_connections()
-
     def get_max_connections_per_host(self, host_distance):
         """
         Gets the maximum number of connections per Session that will be opened
@@ -1756,24 +1677,6 @@ class Cluster(object):
         3 or higher.
         """
         return self._max_connections_per_host[host_distance]
-
-    def set_max_connections_per_host(self, host_distance, max_connections):
-        """
-        Sets the maximum number of connections per Session that will be opened
-        for each host with :class:`~.HostDistance` equal to `host_distance`.
-        The default is 2 for :attr:`~HostDistance.LOCAL` and 1 for
-        :attr:`~HostDistance.REMOTE`.
-
-        If :attr:`~.Cluster.protocol_version` is set to 3 or higher, this
-        is not supported (there is always one connection per host, unless
-        the host is remote and :attr:`connect_to_remote_hosts` is :const:`False`)
-        and using this will result in an :exc:`~.UnsupportedOperation`.
-        """
-        if self.protocol_version >= 3:
-            raise UnsupportedOperation(
-                "Cluster.set_max_connections_per_host() only has an effect "
-                "when using protocol_version 1 or 2.")
-        self._max_connections_per_host[host_distance] = max_connections
 
     def connection_factory(self, endpoint, host_conn = None, *args, **kwargs):
         """
@@ -2291,15 +2194,6 @@ class Cluster(object):
     def listeners(self):
         with self._listener_lock:
             return self._listeners.copy()
-
-    def _ensure_core_connections(self):
-        """
-        If any host has fewer than the configured number of core connections
-        open, attempt to open connections until that number is met.
-        """
-        for session in tuple(self.sessions):
-            for pool in tuple(session._pools.values()):
-                pool.ensure_core_connections()
 
     @staticmethod
     def _validate_refresh_schema(keyspace, table, usertype, function, aggregate):

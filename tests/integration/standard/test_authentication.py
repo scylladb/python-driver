@@ -62,18 +62,12 @@ class AuthenticationTests(unittest.TestCase):
     def get_authentication_provider(self, username, password):
         """
         Return correct authentication provider based on protocol version.
-        There is a difference in the semantics of authentication provider argument with protocol versions 1 and 2
         For protocol version 2 and higher it should be a PlainTextAuthProvider object.
-        For protocol version 1 it should be a function taking hostname as an argument and returning a dictionary
-        containing username and password.
         :param username: authentication username
         :param password: authentication password
         :return: authentication object suitable for Cluster.connect()
         """
-        if PROTOCOL_VERSION < 2:
-            return lambda hostname: dict(username=username, password=password)
-        else:
-            return PlainTextAuthProvider(username=username, password=password)
+        return PlainTextAuthProvider(username=username, password=password)
 
     def cluster_as(self, usr, pwd):
         # test we can connect at least once with creds
