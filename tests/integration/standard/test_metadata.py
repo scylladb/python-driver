@@ -133,7 +133,7 @@ class MetaDataRemovalTest(unittest.TestCase):
 
         # verify the un-existing host was filtered
         for host in self.cluster.metadata.all_hosts():
-            self.assertNotEqual(host.endpoint.address, '126.0.0.186')
+            assert host.endpoint.address != '126.0.0.186'
 
 
 class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
@@ -221,7 +221,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.cluster.refresh_schema_metadata()
 
         meta = self.cluster.metadata
-        self.assertNotEqual(meta.cluster_name, None)
+        assert meta.cluster_name != None
         self.assertTrue(self.keyspace_name in meta.keyspaces)
         ksmeta = meta.keyspaces[self.keyspace_name]
 
@@ -1014,13 +1014,13 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
         assert Ext0.name in table_meta.extensions
         new_cql = table_meta.export_as_string()
-        self.assertNotEqual(new_cql, original_table_cql)
+        assert new_cql != original_table_cql
         assert Ext0.after_table_cql(table_meta, Ext0.name, ext_map[Ext0.name]) in new_cql
         self.assertNotIn(Ext1.name, new_cql)
 
         assert Ext0.name in view_meta.extensions
         new_cql = view_meta.export_as_string()
-        self.assertNotEqual(new_cql, original_view_cql)
+        assert new_cql != original_view_cql
         assert Ext0.after_table_cql(view_meta, Ext0.name, ext_map[Ext0.name]) in new_cql
         self.assertNotIn(Ext1.name, new_cql)
 
@@ -1038,14 +1038,14 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         assert Ext0.name in table_meta.extensions
         assert Ext1.name in table_meta.extensions
         new_cql = table_meta.export_as_string()
-        self.assertNotEqual(new_cql, original_table_cql)
+        assert new_cql != original_table_cql
         assert Ext0.after_table_cql(table_meta, Ext0.name, ext_map[Ext0.name]) in new_cql
         assert Ext1.after_table_cql(table_meta, Ext1.name, ext_map[Ext1.name]) in new_cql
 
         assert Ext0.name in view_meta.extensions
         assert Ext1.name in view_meta.extensions
         new_cql = view_meta.export_as_string()
-        self.assertNotEqual(new_cql, original_view_cql)
+        assert new_cql != original_view_cql
         assert Ext0.after_table_cql(view_meta, Ext0.name, ext_map[Ext0.name]) in new_cql
         assert Ext1.after_table_cql(view_meta, Ext1.name, ext_map[Ext1.name]) in new_cql
 
@@ -1290,7 +1290,7 @@ CREATE TABLE export_udts.users (
 
         cluster.connect('test3rf')
 
-        self.assertNotEqual(list(cluster.metadata.get_replicas('test3rf', b'key')), [])
+        assert list(cluster.metadata.get_replicas('test3rf', b'key')) != []
         host = list(cluster.metadata.get_replicas('test3rf', b'key'))[0]
         assert host.datacenter == 'dc1'
         assert host.rack == 'r1'
@@ -1308,7 +1308,7 @@ CREATE TABLE export_udts.users (
         get_replicas = cluster.metadata.token_map.get_replicas
 
         for ksname in ('test1rf', 'test2rf', 'test3rf'):
-            self.assertNotEqual(list(get_replicas(ksname, ring[0])), [])
+            assert list(get_replicas(ksname, ring[0])) != []
 
         for i, token in enumerate(ring):
             assert set(get_replicas('test3rf', token)) == set(owners)
@@ -1401,7 +1401,7 @@ class KeyspaceAlterMetadata(unittest.TestCase):
 
         self.session.execute('ALTER KEYSPACE %s WITH durable_writes = false' % name)
         new_keyspace_meta = self.cluster.metadata.keyspaces[name]
-        self.assertNotEqual(original_keyspace_meta, new_keyspace_meta)
+        assert original_keyspace_meta != new_keyspace_meta
         assert new_keyspace_meta.durable_writes == False
 
 
@@ -1654,7 +1654,7 @@ class FunctionMetadata(FunctionTest):
             with self.VerifiedFunction(self, **kwargs):
                 functions = [f for f in self.keyspace_function_meta.values() if f.name == self.function_name]
                 assert len(functions) == 2
-                self.assertNotEqual(functions[0].argument_types, functions[1].argument_types)
+                assert functions[0].argument_types != functions[1].argument_types
 
     def test_function_no_parameters(self):
         """
@@ -1699,7 +1699,7 @@ class FunctionMetadata(FunctionTest):
             # After keyspace alter ensure that we maintain function equality.
             try:
                 new_keyspace_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
-                self.assertNotEqual(original_keyspace_meta, new_keyspace_meta)
+                assert original_keyspace_meta != new_keyspace_meta
                 self.assertIs(original_keyspace_meta.functions, new_keyspace_meta.functions)
             finally:
                 self.session.execute('ALTER KEYSPACE %s WITH durable_writes = true' % self.keyspace_name)
@@ -1884,7 +1884,7 @@ class AggregateMetadata(FunctionTest):
             with self.VerifiedAggregate(self, **kwargs):
                 aggregates = [a for a in self.keyspace_aggregate_meta.values() if a.name == kwargs['name']]
                 assert len(aggregates) == 2
-                self.assertNotEqual(aggregates[0].argument_types, aggregates[1].argument_types)
+                assert aggregates[0].argument_types != aggregates[1].argument_types
 
     def test_aggregates_follow_keyspace_alter(self):
         """
@@ -1905,7 +1905,7 @@ class AggregateMetadata(FunctionTest):
             self.session.execute('ALTER KEYSPACE %s WITH durable_writes = false' % self.keyspace_name)
             try:
                 new_keyspace_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
-                self.assertNotEqual(original_keyspace_meta, new_keyspace_meta)
+                assert original_keyspace_meta != new_keyspace_meta
                 self.assertIs(original_keyspace_meta.aggregates, new_keyspace_meta.aggregates)
             finally:
                 self.session.execute('ALTER KEYSPACE %s WITH durable_writes = true' % self.keyspace_name)
