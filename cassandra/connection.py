@@ -1113,7 +1113,7 @@ class Connection(object):
         # queue the decoder function with the request
         # this allows us to inject custom functions per request to encode, decode messages
         self._requests[request_id] = (cb, decoder, result_metadata)
-        msg = encoder(msg, request_id, self.protocol_version, compressor=self.compressor,
+        msg = encoder(msg, request_id, self.protocol_version, self.features, compressor=self.compressor,
                       allow_beta_protocol_version=self.allow_beta_protocol_version)
 
         if self._is_checksumming_enabled:
