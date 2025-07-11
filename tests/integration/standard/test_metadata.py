@@ -44,7 +44,7 @@ from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, exec
                                TestCluster, requires_java_udf, requires_composite_type,
                                requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, xfail_scylla_version_lt)
 
-from tests.util import wait_until, assertRegex, assertDictEqual, assertListEqual
+from tests.util import wait_until, assertRegex, assertDictEqual, assertListEqual, assert_startswith_diff
 
 log = logging.getLogger(__name__)
 
@@ -1120,15 +1120,6 @@ class TestCodeCoverage(unittest.TestCase):
                                                          lineterm=''))
             self.fail(diff_string)
 
-    def assert_startswith_diff(self, received, prefix):
-        if not received.startswith(prefix):
-            prefix_lines = prefix.split('\n')
-            diff_string = '\n'.join(difflib.unified_diff(prefix_lines,
-                                                         received.split('\n')[:len(prefix_lines)],
-                                                         'EXPECTED', 'RECEIVED',
-                                                         lineterm=''))
-            self.fail(diff_string)
-
     @greaterthancass20
     def test_export_keyspace_schema_udts(self):
         """
@@ -1193,7 +1184,7 @@ CREATE TABLE export_udts.users (
     user text PRIMARY KEY,
     addresses map<text, frozen<address>>"""
 
-        self.assert_startswith_diff(cluster.metadata.keyspaces['export_udts'].export_as_string(), expected_prefix)
+        assert_startswith_diff(cluster.metadata.keyspaces['export_udts'].export_as_string(), expected_prefix)
 
         table_meta = cluster.metadata.keyspaces['export_udts'].tables['users']
 
@@ -1201,7 +1192,7 @@ CREATE TABLE export_udts.users (
     user text PRIMARY KEY,
     addresses map<text, frozen<address>>"""
 
-        self.assert_startswith_diff(table_meta.export_as_string(), expected_prefix)
+        assert_startswith_diff(table_meta.export_as_string(), expected_prefix)
 
         cluster.shutdown()
 
