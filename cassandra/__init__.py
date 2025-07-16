@@ -170,9 +170,9 @@ class ProtocolVersion(object):
     DSE private protocol v2, supported in DSE 6.0+
     """
 
-    SUPPORTED_VERSIONS = (DSE_V2, DSE_V1, V6, V5, V4, V3)
+    SUPPORTED_VERSIONS = (V5, V4, V3)
     """
-    A tuple of all supported protocol versions
+    A tuple of all supported protocol versions for ScyllaDB, including future v5 version.
     """
 
     BETA_VERSIONS = (V6,)
@@ -222,14 +222,6 @@ class ProtocolVersion(object):
     @classmethod
     def uses_keyspace_flag(cls, version):
         return version >= cls.V5 and version != cls.DSE_V1
-
-    @classmethod
-    def has_continuous_paging_support(cls, version):
-        return version >= cls.DSE_V1
-
-    @classmethod
-    def has_continuous_paging_next_pages(cls, version):
-        return version >= cls.DSE_V2
 
     @classmethod
     def has_checksumming_support(cls, version):
