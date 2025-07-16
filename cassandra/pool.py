@@ -16,7 +16,7 @@
 Connection pooling and host management.
 """
 from concurrent.futures import Future
-from functools import total_ordering
+from functools import total_ordering, partial
 import logging
 import socket
 import time
@@ -401,7 +401,6 @@ class HostConnection(object):
         # this is used in conjunction with the connection streams. Not using the connection lock because the connection can be replaced in the lifetime of the pool.
         self._stream_available_condition = Condition(Lock())
         self._is_replacing = False
-        self._connecting = set()
         self._connections = {}
         self._pending_connections = []
         # A pool of additional connections which are not used but affect how Scylla
@@ -417,7 +416,6 @@ class HostConnection(object):
         # and are waiting until all requests time out or complete
         # so that we can dispose of them.
         self._trash = set()
-        self._shard_connections_futures = []
         self.advanced_shardaware_block_until = 0
 
         if host_distance == HostDistance.IGNORED:
@@ -482,25 +480,25 @@ class HostConnection(object):
                     self.host,
                     routing_key
                 )
-                if conn.orphaned_threshold_reached and shard_id not in self._connecting:
+                if conn.orphaned_threshold_reached:
                     # The connection has met its orphaned stream ID limit
                     # and needs to be replaced. Start opening a connection
                     # to the same shard and replace when it is opened.
-                    self._connecting.add(shard_id)
-                    self._session.submit(self._open_connection_to_missing_shard, shard_id)
+                    self._session.shard_connection_backoff_scheduler.schedule(
+                        self.host.host_id, shard_id, partial(self._open_connection_to_missing_shard, shard_id))
                     log.debug(
-                        "Connection to shard_id=%i reached orphaned stream limit, replacing on host %s (%s/%i)",
+                        "Scheduling Connection to shard_id=%i reached orphaned stream limit, replacing on host %s (%s/%i)",
                         shard_id,
                         self.host,
                         len(self._connections.keys()),
                         self.host.sharding_info.shards_count
                     )
-            elif shard_id not in self._connecting:
+            else:
                 # rate controlled optimistic attempt to connect to a missing shard
-                self._connecting.add(shard_id)
-                self._session.submit(self._open_connection_to_missing_shard, shard_id)
+                self._session.shard_connection_backoff_scheduler.schedule(
+                    self.host.host_id, shard_id, partial(self._open_connection_to_missing_shard, shard_id))
                 log.debug(
-                    "Trying to connect to missing shard_id=%i on host %s (%s/%i)",
+                    "Scheduling connection to missing shard_id=%i on host %s (%s/%i)",
                     shard_id,
                     self.host,
                     len(self._connections.keys()),
@@ -610,8 +608,8 @@ class HostConnection(object):
                 if connection.features.shard_id in self._connections.keys():
                     del self._connections[connection.features.shard_id]
                 if self.host.sharding_info and not self._session.cluster.shard_aware_options.disable:
-                    self._connecting.add(connection.features.shard_id)
-                    self._session.submit(self._open_connection_to_missing_shard, connection.features.shard_id)
+                    self._session.shard_connection_backoff_scheduler.schedule(
+                        self.host.host_id, connection.features.shard_id, partial(self._open_connection_to_missing_shard, connection.features.shard_id))
                 else:
                     connection = self._session.cluster.connection_factory(self.host.endpoint,
                                                                           on_orphaned_stream_released=self.on_orphaned_stream_released)
@@ -635,9 +633,6 @@ class HostConnection(object):
                 self.is_shutdown = True
             with self._stream_available_condition:
                 self._stream_available_condition.notify_all()
-
-            for future in self._shard_connections_futures:
-                future.cancel()
 
             connections_to_close = self._connections.copy()
             pending_connections_to_close = self._pending_connections.copy()
@@ -848,7 +843,6 @@ class HostConnection(object):
                     self._excess_connections.add(conn)
             if close_connection:
                 conn.close()
-        self._connecting.discard(shard_id)
 
     def _open_connections_for_all_shards(self, skip_shard_id=None):
         """
@@ -861,10 +855,8 @@ class HostConnection(object):
             for shard_id in range(self.host.sharding_info.shards_count):
                 if skip_shard_id is not None and skip_shard_id == shard_id:
                     continue
-                future = self._session.submit(self._open_connection_to_missing_shard, shard_id)
-                if isinstance(future, Future):
-                    self._connecting.add(shard_id)
-                    self._shard_connections_futures.append(future)
+                self._session.shard_connection_backoff_scheduler.schedule(
+                    self.host.host_id, shard_id, partial(self._open_connection_to_missing_shard, shard_id))
 
         trash_conns = None
         with self._lock:
