@@ -445,33 +445,6 @@ class ProtocolError(Exception):
 class CrcMismatchException(ConnectionException):
     pass
 
-
-class ContinuousPagingState(object):
-    """
-     A class for specifying continuous paging state, only supported starting with DSE_V2.
-    """
-
-    num_pages_requested = None
-    """
-    How many pages we have already requested
-    """
-
-    num_pages_received = None
-    """
-    How many pages we have already received
-    """
-
-    max_queue_size = None
-    """
-    The max queue size chosen by the user via the options
-    """
-
-    def __init__(self, max_queue_size):
-        self.num_pages_requested = max_queue_size  # the initial query requests max_queue_size
-        self.num_pages_received = 0
-        self.max_queue_size = max_queue_size
-
-
 class ContinuousPagingSession(object):
     def __init__(self, stream_id, decoder, row_factory, connection, state):
         self.stream_id = stream_id

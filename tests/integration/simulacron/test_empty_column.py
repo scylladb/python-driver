@@ -29,10 +29,6 @@ from tests.integration.simulacron import PROTOCOL_VERSION, SimulacronCluster
 from tests.integration.simulacron.utils import PrimeQuery, prime_request
 
 
-PROTOCOL_VERSION = 4 if PROTOCOL_VERSION in \
-    (ProtocolVersion.DSE_V1, ProtocolVersion.DSE_V2) else PROTOCOL_VERSION
-
-
 @requiressimulacron
 class EmptyColumnTests(SimulacronCluster):
     """
