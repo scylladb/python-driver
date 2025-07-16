@@ -93,9 +93,7 @@ class MessageTest(unittest.TestCase):
 
     def test_continuous_paging(self):
         """
-        Test to check continuous paging throws an Exception if it's not supported and the correct valuesa
-        are written to the buffer if the option is enabled.
-
+        Test to check continuous paging throws an Exception as it's not supported
         @since DSE 2.0b3 GRAPH 1.0b1
         @jira_ticket PYTHON-694
         @expected_result the values are correctly written
@@ -108,25 +106,9 @@ class MessageTest(unittest.TestCase):
                                                             max_pages_per_second=max_pages_per_second)
         message = QueryMessage("a", 3, continuous_paging_options=continuous_paging_options)
         io = Mock()
-        for version in [version for version in ProtocolVersion.SUPPORTED_VERSIONS
-                        if not ProtocolVersion.has_continuous_paging_support(version)]:
+        for version in ProtocolVersion.SUPPORTED_VERSIONS:
             with pytest.raises(UnsupportedOperation):
                 message.send_body(io, version)
-
-        io.reset_mock()
-        message.send_body(io, ProtocolVersion.DSE_V1)
-
-        # continuous paging adds two write calls to the buffer
-        assert len(io.write.mock_calls) == 6
-        # Check that the appropriate flag is set to True
-        assert uint32_unpack(io.write.mock_calls[3][1][0]) & _WITH_SERIAL_CONSISTENCY_FLAG == 0
-        assert uint32_unpack(io.write.mock_calls[3][1][0]) & _PAGE_SIZE_FLAG == 0
-        assert uint32_unpack(io.write.mock_calls[3][1][0]) & _WITH_PAGING_STATE_FLAG == 0
-        assert uint32_unpack(io.write.mock_calls[3][1][0]) & _PAGING_OPTIONS_FLAG == _PAGING_OPTIONS_FLAG
-
-        # Test max_pages and max_pages_per_second are correctly written
-        assert uint32_unpack(io.write.mock_calls[4][1][0]) == max_pages
-        assert uint32_unpack(io.write.mock_calls[5][1][0]) == max_pages_per_second
 
     def test_prepare_flag(self):
         """

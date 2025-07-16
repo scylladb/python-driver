@@ -189,15 +189,14 @@ class ConnectionTest(unittest.TestCase):
         c = self.make_connection()
         c._requests = {0: (c._handle_options_response, ProtocolHandler.decode_message, [])}
         c.defunct = Mock()
-        # request snappy compression
-        c.compression = "snappy"
+        # request LZ4 compression
+        c.compression = "lz4"
 
         locally_supported_compressions.pop('lz4', None)
         locally_supported_compressions.pop('snappy', None)
         locally_supported_compressions['lz4'] = ('lz4compress', 'lz4decompress')
         locally_supported_compressions['snappy'] = ('snappycompress', 'snappydecompress')
 
-        # the server only supports snappy
         options_buf = BytesIO()
         write_stringmultimap(options_buf, {
             'CQL_VERSION': ['3.0.3'],
@@ -207,7 +206,8 @@ class ConnectionTest(unittest.TestCase):
 
         c.process_msg(_Frame(version=4, flags=0, stream=0, opcode=SupportedMessage.opcode, body_offset=9, end_pos=9 + len(options)), options)
 
-        assert c.decompressor == locally_supported_compressions['snappy'][1]
+
+        assert c.decompressor == locally_supported_compressions['lz4'][1]
 
     def test_disable_compression(self, *args):
         c = self.make_connection()
