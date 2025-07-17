@@ -2556,20 +2556,3 @@ class GroupPerHost(BasicSharedKeyspaceUnitTestCase):
             hosts = self.cluster.metadata.get_replicas(self.ks_name, routing_key)
             self.assertEqual(1, len(hosts))  # RF is 1 for this keyspace
             self.assertIn(key, keys_per_host[hosts[0]])
-
-
-class VirtualKeypaceTest(BasicSharedKeyspaceUnitTestCase):
-    virtual_ks_names = ('system_virtual_schema', 'system_views')
-
-    def test_existing_keyspaces_have_correct_virtual_tags(self):
-        for name, ks in self.cluster.metadata.keyspaces.items():
-            if name in self.virtual_ks_names:
-                self.assertTrue(
-                    ks.virtual,
-                    'incorrect .virtual value for {}'.format(name)
-                )
-            else:
-                self.assertFalse(
-                    ks.virtual,
-                    'incorrect .virtual value for {}'.format(name)
-                )

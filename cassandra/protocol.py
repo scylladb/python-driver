@@ -553,7 +553,6 @@ class _QueryMessage(_MessageType):
         self.paging_state = paging_state
         self.timestamp = timestamp
         self.skip_meta = skip_meta
-        self.continuous_paging_options = continuous_paging_options
         self.keyspace = keyspace
 
     def _write_query_params(self, f, protocol_version):
@@ -573,14 +572,6 @@ class _QueryMessage(_MessageType):
 
         if self.timestamp is not None:
             flags |= _PROTOCOL_TIMESTAMP_FLAG
-
-        if self.continuous_paging_options:
-            if ProtocolVersion.has_continuous_paging_support(protocol_version):
-                flags |= _PAGING_OPTIONS_FLAG
-            else:
-                raise UnsupportedOperation(
-                    "Continuous paging may only be used with protocol version "
-                    "ProtocolVersion.DSE_V1 or higher. Consider setting Cluster.protocol_version to ProtocolVersion.DSE_V1.")
 
         if self.keyspace is not None:
             if ProtocolVersion.uses_keyspace_flag(protocol_version):
@@ -609,14 +600,10 @@ class _QueryMessage(_MessageType):
             write_long(f, self.timestamp)
         if self.keyspace is not None:
             write_string(f, self.keyspace)
-        if self.continuous_paging_options:
-            self._write_paging_options(f, self.continuous_paging_options, protocol_version)
 
     def _write_paging_options(self, f, paging_options, protocol_version):
         write_int(f, paging_options.max_pages)
         write_int(f, paging_options.max_pages_per_second)
-        if ProtocolVersion.has_continuous_paging_next_pages(protocol_version):
-            write_int(f, paging_options.max_queue_size)
 
 
 class QueryMessage(_QueryMessage):
@@ -1050,12 +1037,9 @@ class ReviseRequestMessage(_MessageType):
         if self.op_type == ReviseRequestMessage.RevisionType.PAGING_BACKPRESSURE:
             if self.next_pages <= 0:
                 raise UnsupportedOperation("Continuous paging backpressure requires next_pages > 0")
-            elif not ProtocolVersion.has_continuous_paging_next_pages(protocol_version):
-                raise UnsupportedOperation(
-                    "Continuous paging backpressure may only be used with protocol version "
-                    "ProtocolVersion.DSE_V2 or higher. Consider setting Cluster.protocol_version to ProtocolVersion.DSE_V2.")
             else:
-                write_int(f, self.next_pages)
+                raise UnsupportedOperation(
+                    "Continuous paging backpressure is not supported.")
 
 
 class _ProtocolHandler(object):
