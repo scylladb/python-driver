@@ -553,7 +553,6 @@ class _QueryMessage(_MessageType):
         self.paging_state = paging_state
         self.timestamp = timestamp
         self.skip_meta = skip_meta
-        self.continuous_paging_options = continuous_paging_options
         self.keyspace = keyspace
 
     def _write_query_params(self, f, protocol_version):
@@ -573,10 +572,6 @@ class _QueryMessage(_MessageType):
 
         if self.timestamp is not None:
             flags |= _PROTOCOL_TIMESTAMP_FLAG
-
-        if self.continuous_paging_options:
-            raise UnsupportedOperation(
-                "Continuous paging may only be used with future protocol versions")
 
         if self.keyspace is not None:
             if ProtocolVersion.uses_keyspace_flag(protocol_version):
@@ -605,8 +600,6 @@ class _QueryMessage(_MessageType):
             write_long(f, self.timestamp)
         if self.keyspace is not None:
             write_string(f, self.keyspace)
-        if self.continuous_paging_options:
-            self._write_paging_options(f, self.continuous_paging_options, protocol_version)
 
     def _write_paging_options(self, f, paging_options, protocol_version):
         write_int(f, paging_options.max_pages)

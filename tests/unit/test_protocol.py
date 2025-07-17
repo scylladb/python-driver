@@ -91,25 +91,6 @@ class MessageTest(unittest.TestCase):
     def _check_calls(self, io, expected):
         assert tuple(c[1] for c in io.write.mock_calls) == tuple(expected)
 
-    def test_continuous_paging(self):
-        """
-        Test to check continuous paging throws an Exception as it's not supported
-        @since DSE 2.0b3 GRAPH 1.0b1
-        @jira_ticket PYTHON-694
-        @expected_result the values are correctly written
-
-        @test_category connection
-        """
-        max_pages = 4
-        max_pages_per_second = 3
-        continuous_paging_options = ContinuousPagingOptions(max_pages=max_pages,
-                                                            max_pages_per_second=max_pages_per_second)
-        message = QueryMessage("a", 3, continuous_paging_options=continuous_paging_options)
-        io = Mock()
-        for version in ProtocolVersion.SUPPORTED_VERSIONS:
-            with pytest.raises(UnsupportedOperation):
-                message.send_body(io, version)
-
     def test_prepare_flag(self):
         """
         Test to check the prepare flag is properly set, This should only happen for V5 at the moment.

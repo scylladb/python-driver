@@ -4498,7 +4498,6 @@ class ResponseFuture(object):
     _timer = None
     _protocol_handler = ProtocolHandler
     _spec_execution_plan = NoSpeculativeExecutionPlan()
-    _continuous_paging_options = None
     _continuous_paging_session = None
     _host = None
 
