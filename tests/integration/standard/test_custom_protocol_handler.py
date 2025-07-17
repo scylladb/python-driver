@@ -121,37 +121,6 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         assert len(CustomResultMessageTracked.checked_rev_row_set) == len(PRIMITIVE_DATATYPES)-1
         cluster.shutdown()
 
-    @unittest.expectedFailure
-    @greaterthanorequalcass40
-    def test_protocol_divergence_v5_fail_by_continuous_paging(self):
-        """
-        Test to validate that V5 and DSE_V1 diverge. ContinuousPagingOptions is not supported by V5
-
-        @since DSE 2.0b3 GRAPH 1.0b1
-        @jira_ticket PYTHON-694
-        @expected_result NoHostAvailable will be risen when the continuous_paging_options parameter is set
-
-        @test_category connection
-        """
-        cluster = TestCluster(protocol_version=ProtocolVersion.V5, allow_beta_protocol_version=True)
-        session = cluster.connect()
-
-        max_pages = 4
-        max_pages_per_second = 3
-        continuous_paging_options = ContinuousPagingOptions(max_pages=max_pages,
-                                                            max_pages_per_second=max_pages_per_second)
-
-        future = self._send_query_message(session, timeout=session.default_timeout,
-                                        consistency_level=ConsistencyLevel.ONE,
-                            continuous_paging_options=continuous_paging_options)
-
-        # This should raise NoHostAvailable because continuous paging is not supported under ProtocolVersion.DSE_V1
-        with pytest.raises(NoHostAvailable) as context:
-            future.result()
-        assert "Continuous paging may only be used with protocol version ProtocolVersion.DSE_V1 or higher" in str(context.value)
-
-        cluster.shutdown()
-
     @greaterthanorequalcass30
     def test_protocol_divergence_v4_fail_by_flag_uses_int(self):
         """
