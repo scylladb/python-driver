@@ -165,6 +165,10 @@ class LibevLoop(object):
 
     def connection_destroyed(self, conn):
         with self._conn_set_lock:
+            new_conns = self._new_conns.copy()
+            new_conns.discard(conn)
+            self._new_conns = new_conns
+
             new_live_conns = self._live_conns.copy()
             new_live_conns.discard(conn)
             self._live_conns = new_live_conns
@@ -194,7 +198,8 @@ class LibevLoop(object):
                 self._new_conns = set()
 
             for conn in to_start:
-                conn._read_watcher.start()
+                if conn._read_watcher:
+                    conn._read_watcher.start()
 
             changed = True
 
