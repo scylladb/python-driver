@@ -193,7 +193,7 @@ def get_supported_protocol_versions():
     4.0(C*) -> 6(beta),5,4,3
 `   """
     if CASSANDRA_VERSION >= Version('4.0-beta5'):
-        return (3, 4, 5, 6)
+        return (3, 4, 5)
     if CASSANDRA_VERSION >= Version('4.0-a'):
        return (3, 4, 5)
     elif CASSANDRA_VERSION >= Version('3.10'):
@@ -269,7 +269,6 @@ def xfail_scylla_version(filter: Callable[[Version], bool], reason: str, *args, 
 local = local_decorator_creator()
 notprotocolv1 = unittest.skipUnless(PROTOCOL_VERSION > 1, 'Protocol v1 not supported')
 greaterthanprotocolv3 = unittest.skipUnless(PROTOCOL_VERSION >= 4, 'Protocol versions less than 4 are not supported')
-protocolv6 = unittest.skipUnless(6 in get_supported_protocol_versions(), 'Protocol versions less than 6 are not supported')
 
 greaterthancass20 = unittest.skipUnless(CASSANDRA_VERSION >= Version('2.1'), 'Cassandra version 2.1 or greater required')
 greaterthancass21 = unittest.skipUnless(CASSANDRA_VERSION >= Version('2.2'), 'Cassandra version 2.2 or greater required')
