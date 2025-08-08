@@ -32,6 +32,8 @@ requires-python = ">=3.9"
 [project.optional-dependencies]
 graph = ['gremlinpython==3.4.6']
 cle = ['cryptography>=35.0']
+compress-lz4 = ['lz4']
+compress-snappy = ['python-snappy']
 
 [dependency-groups]
 dev = [
