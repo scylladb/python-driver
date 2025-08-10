@@ -2072,7 +2072,6 @@ class SchemaParserV22(_SchemaParser):
         self.types_result = []
         self.functions_result = []
         self.aggregates_result = []
-        self.scylla_result = []
 
         self.keyspace_table_rows = defaultdict(list)
         self.keyspace_table_col_rows = defaultdict(lambda: defaultdict(list))
@@ -2080,7 +2079,6 @@ class SchemaParserV22(_SchemaParser):
         self.keyspace_func_rows = defaultdict(list)
         self.keyspace_agg_rows = defaultdict(list)
         self.keyspace_table_trigger_rows = defaultdict(lambda: defaultdict(list))
-        self.keyspace_scylla_rows = defaultdict(lambda: defaultdict(list))
 
     def get_all_keyspaces(self):
         self._query_all()
@@ -2526,23 +2524,9 @@ class SchemaParserV22(_SchemaParser):
         self._aggregate_results()
 
     def _aggregate_results(self):
-        m = self.keyspace_scylla_rows
-        for row in self.scylla_result:
-            ksname = row["keyspace_name"]
-            cfname = row[self._table_name_col]
-            m[ksname][cfname].append(row)
-
         m = self.keyspace_table_rows
         for row in self.tables_result:
             ksname = row["keyspace_name"]
-            cfname = row[self._table_name_col]
-            # in_memory property is stored in scylla private table
-            # add it to table properties if enabled
-            try:
-                if self.keyspace_scylla_rows[ksname][cfname][0]["in_memory"] == True:
-                    row["in_memory"] = True
-            except (IndexError, KeyError):
-                pass
             m[ksname].append(row)
 
         m = self.keyspace_table_col_rows
@@ -2588,7 +2572,6 @@ class SchemaParserV3(SchemaParserV22):
     _SELECT_FUNCTIONS = "SELECT * FROM system_schema.functions"
     _SELECT_AGGREGATES = "SELECT * FROM system_schema.aggregates"
     _SELECT_VIEWS = "SELECT * FROM system_schema.views"
-    _SELECT_SCYLLA = "SELECT * FROM system_schema.scylla_tables"
 
     _table_name_col = 'table_name'
 
@@ -2643,9 +2626,6 @@ class SchemaParserV3(SchemaParserV22):
         triggers_query = QueryMessage(
             query=maybe_add_timeout_to_query(self._SELECT_TRIGGERS + where_clause, self.metadata_request_timeout),
             consistency_level=cl, fetch_size=fetch_size)
-        scylla_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_SCYLLA + where_clause, self.metadata_request_timeout),
-            consistency_level=cl, fetch_size=fetch_size)
 
         # in protocol v4 we don't know if this event is a view or a table, so we look for both
         where_clause = bind_params(" WHERE keyspace_name = %s AND view_name = %s", (keyspace, table), _encoder)
@@ -2654,26 +2634,16 @@ class SchemaParserV3(SchemaParserV22):
             consistency_level=cl, fetch_size=fetch_size)
         ((cf_success, cf_result), (col_success, col_result),
          (indexes_sucess, indexes_result), (triggers_success, triggers_result),
-         (view_success, view_result),
-         (scylla_success, scylla_result)) = (
+         (view_success, view_result)) = (
              self.connection.wait_for_responses(
                  cf_query, col_query, indexes_query, triggers_query,
-                 view_query, scylla_query, timeout=self.timeout, fail_on_error=False)
+                 view_query, timeout=self.timeout, fail_on_error=False)
         )
         table_result = self._handle_results(cf_success, cf_result, query_msg=cf_query)
         col_result = self._handle_results(col_success, col_result, query_msg=col_query)
         if table_result:
             indexes_result = self._handle_results(indexes_sucess, indexes_result, query_msg=indexes_query)
             triggers_result = self._handle_results(triggers_success, triggers_result, query_msg=triggers_query)
-            # in_memory property is stored in scylla private table
-            # add it to table properties if enabled
-            scylla_result = self._handle_results(scylla_success, scylla_result, expected_failures=(InvalidRequest,),
-                                                 query_msg=scylla_query)
-            try:
-                if scylla_result[0]["in_memory"] == True:
-                    table_result[0]["in_memory"] = True
-            except (IndexError, KeyError):
-                pass
             return self._build_table_metadata(table_result[0], col_result, triggers_result, indexes_result)
 
         view_result = self._handle_results(view_success, view_result, query_msg=view_query)
@@ -2841,8 +2811,6 @@ class SchemaParserV3(SchemaParserV22):
                          fetch_size=fetch_size, consistency_level=cl),
             QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIEWS, self.metadata_request_timeout),
                          fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_SCYLLA, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
         ]
 
         ((ks_success, ks_result),
@@ -2853,8 +2821,7 @@ class SchemaParserV3(SchemaParserV22):
          (aggregates_success, aggregates_result),
          (triggers_success, triggers_result),
          (indexes_success, indexes_result),
-         (views_success, views_result),
-         (scylla_success, scylla_result)) = self.connection.wait_for_responses(
+         (views_success, views_result)) = self.connection.wait_for_responses(
              *queries, timeout=self.timeout, fail_on_error=False
         )
 
@@ -2867,7 +2834,6 @@ class SchemaParserV3(SchemaParserV22):
         self.aggregates_result = self._handle_results(aggregates_success, aggregates_result, query_msg=queries[5])
         self.indexes_result = self._handle_results(indexes_success, indexes_result, query_msg=queries[7])
         self.views_result = self._handle_results(views_success, views_result, query_msg=queries[8])
-        self.scylla_result = self._handle_results(scylla_success, scylla_result, expected_failures=(InvalidRequest,), query_msg=queries[9])
 
         self._aggregate_results()
 
