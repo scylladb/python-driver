@@ -23,6 +23,8 @@ jobs:
     name: test ${{ matrix.event_loop_manager }} (${{ matrix.python-version }})
     if: "!contains(github.event.pull_request.labels.*.name, 'disable-integration-tests')"
     runs-on: ubuntu-24.04
+    env:
+      SCYLLA_VERSION: release:2025.2
     strategy:
       fail-fast: false
       matrix:
@@ -61,13 +63,11 @@ jobs:
     # Not strictly necessary for running tests.
     - name: Download Scylla
       run: |
-        export SCYLLA_VERSION='release:6.2'
         uv run ccm create scylla-driver-temp -n 1 --scylla --version ${SCYLLA_VERSION}
         uv run ccm remove
 
     - name: Test with pytest
       run: |
         export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
-        export SCYLLA_VERSION='release:2025.2'
         export PROTOCOL_VERSION=4
         uv run pytest tests/integration/standard/ tests/integration/cqlengine/
