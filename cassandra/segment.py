@@ -116,10 +116,10 @@ class SegmentCodec(object):
     def compression(self):
         return self.compressor and self.decompressor
 
-    def compress(self, data):
+    def compress(self, data, length):
         # the uncompressed length is already encoded in the header, so
         # we remove it here
-        return self.compressor(data)[4:]
+        return self.compressor(data, length)[4:]
 
     def decompress(self, encoded_data, uncompressed_length):
         return self.decompressor(int32_pack(uncompressed_length) + encoded_data)
@@ -150,7 +150,7 @@ class SegmentCodec(object):
         uncompressed_payload_length = len(payload)
 
         if self.compression:
-            compressed_payload = self.compress(uncompressed_payload)
+            compressed_payload = self.compress(uncompressed_payload, uncompressed_payload_length)
             if len(compressed_payload) >= uncompressed_payload_length:
                 encoded_payload = uncompressed_payload
                 payload_length = uncompressed_payload_length

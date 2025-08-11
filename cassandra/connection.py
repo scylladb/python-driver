@@ -89,9 +89,9 @@ else:
     # but the lz4 lib requires little endian order, so we wrap these
     # functions to handle that
 
-    def lz4_compress(byts):
+    def lz4_compress(byts, len_bytes):
         # write length in big-endian instead of little-endian
-        return int32_pack(len(byts)) + lz4_block.compress(byts)[4:]
+        return int32_pack(len_bytes) + lz4_block.compress(byts)[4:]
 
     def lz4_decompress(byts):
         # flip from big-endian to little-endian
@@ -106,12 +106,16 @@ except ImportError:
     log.debug("snappy package could not be imported. Snappy Compression will not be available")
     pass
 else:
+    # unused length field, to be compatible with lz4_compress signature
+    def snappy_compress(byts, len_bytes):
+        return snappy.compress(byts)
+
     # work around apparently buggy snappy decompress
-    def decompress(byts):
+    def snappy_decompress(byts):
         if byts == '\x00':
             return ''
         return snappy.decompress(byts)
-    locally_supported_compressions['snappy'] = (snappy.compress, decompress)
+    locally_supported_compressions['snappy'] = (snappy_compress, snappy_decompress)
 
 DRIVER_NAME, DRIVER_VERSION = 'ScyllaDB Python Driver', sys.modules['cassandra'].__version__
 

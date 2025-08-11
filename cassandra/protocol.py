@@ -1098,11 +1098,12 @@ class _ProtocolHandler(object):
             write_bytesmap(body, msg.custom_payload)
         msg.send_body(body, protocol_version)
         body = body.getvalue()
-
+        body_length = len(body)
         # With checksumming, the compression is done at the segment frame encoding
         if (not ProtocolVersion.has_checksumming_support(protocol_version)
-                and compressor and len(body) > 0):
-            body = compressor(body)
+                and compressor and body_length > 0):
+            body = compressor(body, body_length)
+            body_length = len(body)
             flags |= COMPRESSED_FLAG
 
         if msg.tracing:
@@ -1112,7 +1113,7 @@ class _ProtocolHandler(object):
             flags |= USE_BETA_FLAG
 
         buff = io.BytesIO()
-        cls._write_header(buff, protocol_version, flags, stream_id, msg.opcode, len(body))
+        cls._write_header(buff, protocol_version, flags, stream_id, msg.opcode, body_length)
         buff.write(body)
 
         return buff.getvalue()
