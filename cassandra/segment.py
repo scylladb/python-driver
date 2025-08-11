@@ -153,13 +153,14 @@ class SegmentCodec(object):
             compressed_payload = self.compress(uncompressed_payload)
             if len(compressed_payload) >= uncompressed_payload_length:
                 encoded_payload = uncompressed_payload
+                payload_length = uncompressed_payload_length
                 uncompressed_payload_length = 0
             else:
                 encoded_payload = compressed_payload
+                payload_length = len(compressed_payload)
         else:
             encoded_payload = uncompressed_payload
-
-        payload_length = len(encoded_payload)
+            payload_length = uncompressed_payload_length
         self.encode_header(buffer, payload_length, uncompressed_payload_length, is_self_contained)
         payload_crc = compute_crc32(encoded_payload, CRC32_INITIAL)
         buffer.write(encoded_payload)
@@ -167,7 +168,7 @@ class SegmentCodec(object):
 
     def encode(self, buffer, msg):
         """
-        Encode a message to one of more segments.
+        Encode a message to one or more segments.
         """
         msg_length = len(msg)
 
@@ -175,10 +176,10 @@ class SegmentCodec(object):
             payloads = []
             for i in range(0, msg_length, Segment.MAX_PAYLOAD_LENGTH):
                 payloads.append(msg[i:i + Segment.MAX_PAYLOAD_LENGTH])
+            is_self_contained = False
         else:
             payloads = [msg]
-
-        is_self_contained = len(payloads) == 1
+            is_self_contained = True
         for payload in payloads:
             self._encode_segment(buffer, payload, is_self_contained)
 
