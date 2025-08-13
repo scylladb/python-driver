@@ -322,6 +322,61 @@ class ClusterTests(unittest.TestCase):
                 cluster.connect()
             cluster.shutdown()
 
+    def test_control_connection_reconnect(self):
+        """
+        Ensure clusters that connect on a keyspace, do
+        """
+        cassandra.cluster.log.setLevel(logging.DEBUG)
+
+        cluster = TestCluster()
+        _ = cluster.connect()
+
+        cluster.control_connection._reconnect_internal = Mock(wraps=cluster.control_connection._reconnect_internal)
+
+        cluster.control_connection.reconnect()
+        cluster.control_connection.reconnect()
+        cluster.control_connection.reconnect()
+        cluster.control_connection.reconnect()
+
+        while cluster.control_connection._reconnection_pending:
+            time.sleep(0.1)
+
+        self.assertFalse(cluster.control_connection._connection.is_closed)
+        self.assertFalse(cluster.control_connection._connection.is_defunct)
+        self.assertTrue(cluster.control_connection.refresh_schema())
+        cluster.control_connection._reconnect_internal.assert_called_once()
+
+    def test_control_connection_reconnect_rescheduled(self):
+        """
+        Ensure clusters that connect on a keyspace, do
+        """
+        cassandra.cluster.log.setLevel(logging.DEBUG)
+
+        cluster = TestCluster()
+        _ = cluster.connect()
+
+        original_reconnect_internal = cluster.control_connection._reconnect_internal
+        def _throw(*args):
+            cluster.control_connection._reconnect_internal = Mock(wraps=original_reconnect_internal)
+            raise NoHostAvailable("Unable to connect to any servers")
+
+        cluster.scheduler.schedule = Mock(wraps=cluster.scheduler.schedule)
+        cluster.control_connection._reconnect_internal = _throw
+
+        cluster.control_connection.reconnect()
+        cluster.control_connection.reconnect()
+        cluster.control_connection.reconnect()
+        cluster.control_connection.reconnect()
+
+        while cluster.control_connection._reconnection_pending:
+            time.sleep(0.1)
+
+        self.assertFalse(cluster.control_connection._connection.is_closed)
+        self.assertFalse(cluster.control_connection._connection.is_defunct)
+        self.assertTrue(cluster.control_connection.refresh_schema())
+        cluster.control_connection._reconnect_internal.assert_called_once()
+        cluster.scheduler.schedule.assert_called_once()
+
     def test_connect_on_keyspace(self):
         """
         Ensure clusters that connect on a keyspace, do
