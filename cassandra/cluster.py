@@ -1036,7 +1036,7 @@ class Cluster(object):
     documentation for :meth:`Session.timestamp_generator`.
     """
 
-    monitor_reporting_enabled = True
+    monitor_reporting_enabled = False
     """
     A boolean indicating if monitor reporting, which sends gathered data to
     Insights when running against DSE 6.8 and higher.
