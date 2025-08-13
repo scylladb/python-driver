@@ -39,8 +39,6 @@ class _PoolTests(unittest.TestCase):
 
     def make_session(self):
         session = NonCallableMagicMock(spec=Session, keyspace='foobarkeyspace')
-        session.cluster.get_core_connections_per_host.return_value = 1
-        session.cluster.get_max_connections_per_host.return_value = 1
         return session
 
     def test_borrow_and_return(self):
@@ -112,9 +110,6 @@ class _PoolTests(unittest.TestCase):
         conn = NonCallableMagicMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False, max_request_id=100)
         conn.max_request_id = 100
         session.cluster.connection_factory.return_value = conn
-
-        # core conns = 1, max conns = 2
-        session.cluster.get_max_connections_per_host.return_value = 2
 
         pool = self.PoolImpl(host, HostDistance.LOCAL, session)
         session.cluster.connection_factory.assert_called_once_with(host.endpoint, on_orphaned_stream_released=pool.on_orphaned_stream_released)

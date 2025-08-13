@@ -46,8 +46,6 @@ class QueryPagingTests(unittest.TestCase):
         self.cluster = TestCluster(
             execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(consistency_level=ConsistencyLevel.LOCAL_QUORUM)}
         )
-        if PROTOCOL_VERSION < 3:
-            self.cluster.set_core_connections_per_host(HostDistance.LOCAL, 1)
         self.session = self.cluster.connect(wait_for_all_pools=True)
         self.session.execute("TRUNCATE test3rf.test")
 

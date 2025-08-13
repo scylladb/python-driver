@@ -664,8 +664,6 @@ class BatchStatementTests(BasicSharedKeyspaceUnitTestCase):
                 % (PROTOCOL_VERSION,))
 
         self.cluster = TestCluster()
-        if PROTOCOL_VERSION < 3:
-            self.cluster.set_core_connections_per_host(HostDistance.LOCAL, 1)
         self.session = self.cluster.connect(wait_for_all_pools=True)
 
     def tearDown(self):
@@ -800,8 +798,6 @@ class SerialConsistencyTests(unittest.TestCase):
                 % (PROTOCOL_VERSION,))
 
         self.cluster = TestCluster()
-        if PROTOCOL_VERSION < 3:
-            self.cluster.set_core_connections_per_host(HostDistance.LOCAL, 1)
         self.session = self.cluster.connect()
 
     def tearDown(self):

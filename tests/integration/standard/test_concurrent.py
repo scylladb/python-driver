@@ -46,8 +46,6 @@ class ClusterTests(unittest.TestCase):
                 EXEC_PROFILE_DICT: ExecutionProfile(row_factory=dict_factory)
             }
         )
-        if PROTOCOL_VERSION < 3:
-            cls.cluster.set_core_connections_per_host(HostDistance.LOCAL, 1)
         cls.session = cls.cluster.connect()
 
     @classmethod

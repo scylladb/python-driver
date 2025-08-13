@@ -729,8 +729,6 @@ class ClusterTests(unittest.TestCase):
         interval = 2
         cluster = TestCluster(idle_heartbeat_interval=interval,
                               monitor_reporting_enabled=False)
-        if PROTOCOL_VERSION < 3:
-            cluster.set_core_connections_per_host(HostDistance.LOCAL, 1)
         session = cluster.connect(wait_for_all_pools=True)
 
         # This test relies on impl details of connection req id management to see if heartbeats
