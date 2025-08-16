@@ -1,3 +1,29 @@
+3.29.4
+======
+August 16, 2025
+
+Features
+--------
+* Add Cluster.application_info to report application information to server (#486)
+* Move to uv package manager (#496)
+
+Bug Fixes
+---------
+* Fix deadlocks on evicting connection in HostConnectionPool and ConnectionPool (#499)
+* Fix libevreactor crashing when connection added and closed right away (#508)
+
+Others
+------
+* Remove outdated protocols support (v1 and v2) (#493, #525)
+* Remove DSE integration tests (#502)
+* Optimise shard port allocator (#506)
+* Remove self.assert (#507)
+* Minor performance improvement for make_token_replica_map (#513)
+* Remove in-memory scylla tablets support (#518)
+* Add optional dependancies for SNAPPY and LZ4 compressors (#517)
+* Remove support for protocol versions not supported by scylla (#492)
+* Set monitor_reporting_enabled False by default (#523)
+
 3.29.3
 ======
 Mart 11, 2025

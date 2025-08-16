@@ -1013,7 +1013,7 @@ six = "*"
 
 [[package]]
 name = "scylla-driver"
-version = "3.29.3"
+version = "3.29.4"
 description = "Scylla Driver for Apache Cassandra"
 optional = false
 python-versions = ">=3.9"
