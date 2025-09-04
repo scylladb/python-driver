@@ -19,14 +19,14 @@ Others
 * Optimise shard port allocator (#506)
 * Remove self.assert (#507)
 * Minor performance improvement for make_token_replica_map (#513)
-* Remove in-memory scylla tablets support (#518)
-* Add optional dependancies for SNAPPY and LZ4 compressors (#517)
-* Remove support for protocol versions not supported by scylla (#492)
+* Remove in-memory Scylla tables support (#518)
+* Add optional dependencies for SNAPPY and LZ4 compressors (#517)
+* Remove support for protocol versions not supported by Scylla (#492)
 * Set monitor_reporting_enabled False by default (#523)
 
 3.29.3
 ======
-Mart 11, 2025
+March 11, 2025
 
 Bug Fixes
 ---------
