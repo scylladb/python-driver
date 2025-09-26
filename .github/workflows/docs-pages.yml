@@ -9,6 +9,7 @@ on:
       - 'branch-**'
     paths:
       - "docs/**"
+      - ".github/workflows/docs-pages.yml"
   workflow_dispatch:
 
 jobs:
