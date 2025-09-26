@@ -65,7 +65,16 @@ autoclass_content = 'both'
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
-exclude_patterns = ['_build']
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    ".venv",
+    ".venv/**",
+    "**/site-packages/**",
+    "**/*.dist-info/**",
+    "**/licenses/**",
+]
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
@@ -134,3 +143,9 @@ html_baseurl = 'https://python-driver.docs.scylladb.com'
 # Dictionary of values to pass into the template engine’s context for all pages
 html_context = {'html_baseurl': html_baseurl}
 
+autodoc_mock_imports = [
+    # Asyncore has been removed from python 3.12, we need to mock it until `cassandra/io/asyncorereactor.py` is dropped
+    "asyncore",
+    # Since driver is not built, binary modules also not built, so we need to mock them
+    "cassandra.io.libevwrapper"
+]
