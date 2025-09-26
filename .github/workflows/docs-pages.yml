@@ -9,6 +9,11 @@ on:
       - 'branch-**'
     paths:
       - "docs/**"
+      - ".github/workflows/docs-pages.yml"
+      - "cassandra/**"
+      - "pyproject.toml"
+      - "setup.py"
+      - "CHANGELOG.rst"
   workflow_dispatch:
 
 jobs:
