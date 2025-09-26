@@ -1083,10 +1083,19 @@ class Cluster(object):
     used for columns in this cluster.
     """
 
-    metadata_request_timeout = datetime.timedelta(seconds=2)
+    metadata_request_timeout: Optional[float] = None
     """
-    Timeout for all queries used by driver it self.
-    Supported only by Scylla clusters.
+    Specifies a server-side timeout (in seconds) for all internal driver queries,
+    such as schema metadata lookups and cluster topology requests.
+    
+    The timeout is enforced by appending `USING TIMEOUT <timeout>` to queries
+    executed by the driver.
+    
+    - A value of `0` disables explicit timeout enforcement. In this case,
+      the driver does not add `USING TIMEOUT`, and the timeout is determined
+      by the server's defaults.
+    - Only supported when connected to Scylla clusters.
+    - If not explicitly set, defaults to the value of `control_connection_timeout`.
     """
 
     @property
@@ -1303,8 +1312,6 @@ class Cluster(object):
         self.no_compact = no_compact
 
         self.auth_provider = auth_provider
-        if metadata_request_timeout is not None:
-            self.metadata_request_timeout = metadata_request_timeout
 
         if load_balancing_policy is not None:
             if isinstance(load_balancing_policy, type):
@@ -1415,6 +1422,7 @@ class Cluster(object):
         self.cql_version = cql_version
         self.max_schema_agreement_wait = max_schema_agreement_wait
         self.control_connection_timeout = control_connection_timeout
+        self.metadata_request_timeout = self.control_connection_timeout if metadata_request_timeout is None else metadata_request_timeout
         self.idle_heartbeat_interval = idle_heartbeat_interval
         self.idle_heartbeat_timeout = idle_heartbeat_timeout
         self.schema_event_refresh_window = schema_event_refresh_window
