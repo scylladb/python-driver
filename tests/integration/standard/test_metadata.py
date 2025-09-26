@@ -20,6 +20,8 @@ import logging
 import sys
 import time
 import os
+from typing import Optional
+
 from packaging.version import Version
 from unittest.mock import Mock, patch
 import pytest
@@ -1323,20 +1325,39 @@ class TokenMetadataTest(unittest.TestCase):
         cluster.shutdown()
 
 
-class MetadataTimeoutTest(unittest.TestCase):
+class TestMetadataTimeout:
     """
     Test of TokenMap creation and other behavior.
     """
-    def test_timeout(self):
-        cluster = TestCluster()
-        cluster.metadata_request_timeout = None
 
+    @pytest.mark.parametrize(
+        "opts, expected_query_chunk",
+        [
+            (
+                    {"metadata_request_timeout": None},
+                    # Should be borrowed from control_connection_timeout
+                    "USING TIMEOUT 2000ms"
+            ),
+            (
+                    {"metadata_request_timeout": 0.0},
+                    False
+            ),
+            (
+                    {"metadata_request_timeout": 4.0},
+                    "USING TIMEOUT 4000ms"
+            ),
+            (
+                    {"metadata_request_timeout": None, "control_connection_timeout": None},
+                    False,
+            )
+        ],
+        ids=["default", "zero", "4s", "both none"]
+    )
+    def test_timeout(self, opts, expected_query_chunk):
+        cluster = TestCluster(**opts)
         stmts = []
 
         class ConnectionWrapper(cluster.connection_class):
-            def __init__(self, *args, **kwargs):
-                super(ConnectionWrapper, self).__init__(*args, **kwargs)
-
             def send_msg(self, msg, request_id, cb, encoder=ProtocolHandler.encode_message,
                          decoder=ProtocolHandler.decode_message, result_metadata=None):
                 if isinstance(msg, QueryMessage):
@@ -1351,7 +1372,10 @@ class MetadataTimeoutTest(unittest.TestCase):
         for stmt in stmts:
             if "SELECT now() FROM system.local WHERE key='local'" in stmt:
                 continue
-            assert "USING TIMEOUT 2000ms" in stmt, f"query `{stmt}` does not contain `USING TIMEOUT 2000ms`"
+            if expected_query_chunk:
+                assert expected_query_chunk in stmt, f"query `{stmt}` does not contain `{expected_query_chunk}`"
+            else:
+                assert 'USING TIMEOUT' not in stmt, f"query `{stmt}` should not contain `USING TIMEOUT`"
 
 
 class KeyspaceAlterMetadata(unittest.TestCase):
