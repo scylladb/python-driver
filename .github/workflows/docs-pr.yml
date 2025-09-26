@@ -1,0 +1,46 @@
+name: "Docs / Build PR"
+# For more information,
+# see https://sphinx-theme.scylladb.com/stable/deployment/production.html#available-workflows
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs-pr.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs-pr.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/.cache/pypoetry
+          key: docs-cache-${{ runner.os }}-${{ hashFiles('docs/poetry.lock') }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            docs/pyproject.toml
+            docs/uv.lock
+
+      - name: Set up env
+        run: make -C docs setupenv
+
+      - name: Build docs
+        run: make -C docs test
