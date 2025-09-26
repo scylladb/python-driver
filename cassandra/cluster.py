@@ -1214,7 +1214,7 @@ class Cluster(object):
                  cloud=None,
                  scylla_cloud=None,
                  shard_aware_options=None,
-                 metadata_request_timeout=None,
+                 metadata_request_timeout: Optional[float] = None,
                  column_encryption_policy=None,
                  application_info:Optional[ApplicationInfoBase]=None
                  ):
@@ -3622,9 +3622,11 @@ class ControlConnection(object):
         if connection.features.sharding_info is not None:
             self._uses_peers_v2 = False
 
-        # Cassandra does not support "USING TIMEOUT"
-        self._metadata_request_timeout = None if connection.features.sharding_info is None \
-            else datetime.timedelta(seconds=self._cluster.control_connection_timeout)
+        # Only ScyllaDB supports "USING TIMEOUT"
+        # Sharding information signals it is ScyllaDB
+        self._metadata_request_timeout = None if connection.features.sharding_info is None or not self._cluster.metadata_request_timeout \
+            else datetime.timedelta(seconds=self._cluster.metadata_request_timeout)
+
         self._tablets_routing_v1 = connection.features.tablets_routing_v1
 
         # use weak references in both directions
