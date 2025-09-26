@@ -21,7 +21,7 @@ sphinx-multiversion-scylla = "^0.3.1"
 Sphinx = "^7.3.7"
 scales = "^1.0.9"
 six = ">=1.9"
-tornado = ">=4.0,<5.0"
+tornado = ">=6.5,<6.6"
 scylla-driver = { path = "../", develop = true }
 
 
