@@ -26,19 +26,18 @@ jobs:
           fetch-depth: 0
 
       - uses: actions/cache@v4
-        # actions/setup-python poetry cache feature requires poetry to be installed beforehand
-        # which makes use of it extremely awkward.
         with:
           path: |
-            /home/runner/.cache/pip
             /home/runner/.cache/pypoetry
-          # python and poetry version are in docs/pyproject.toml
-          key: docs-cache-${{ runner.os }}-${{ hashFiles('docs/pyproject.toml', 'docs/Makefile') }}
+          key: docs-cache-${{ runner.os }}-${{ hashFiles('docs/poetry.lock') }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
-          python-version-file: docs/pyproject.toml
+          enable-cache: true
+          cache-dependency-glob: |
+            docs/pyproject.toml
+            docs/uv.lock
 
       - name: Set up env
         run: make -C docs setupenv

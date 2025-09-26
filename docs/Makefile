@@ -1,5 +1,6 @@
 # Global variables
 # You can set these variables from the command line.
+SHELL         = bash
 POETRY        = poetry
 SPHINXOPTS    = -j auto
 SPHINXBUILD   = $(POETRY) run sphinx-build
@@ -19,8 +20,7 @@ all: dirhtml
 # Setup commands
 .PHONY: setupenv
 setupenv:
-	pip install -q poetry
-	sudo apt-get install gcc python3-dev libev4 libev-dev
+	uv pip install -r <(uv pip compile pyproject.toml)
 
 .PHONY: setup
 setup:
