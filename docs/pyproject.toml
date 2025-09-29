@@ -8,7 +8,7 @@ package-mode = false
 [tool.poetry.dependencies]
 eventlet = "^0.40.3"
 futures = "2.2.0"
-gevent = "^23.9.1"
+gevent = "^25.0.0"
 gremlinpython = "3.4.7"
 python = "^3.10"
 pygments = "^2.18.0"
