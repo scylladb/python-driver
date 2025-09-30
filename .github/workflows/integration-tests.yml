@@ -5,6 +5,18 @@ on:
     branches:
       - master
       - 'branch-**'
+    paths-ignore:
+      - docs/*
+      - examples/*
+      - scripts/*
+      - .gitignore
+      - '*.rst'
+      - '*.ini'
+      - LICENSE
+      - .github/dependabot.yml
+      - .github/pull_request_template.md
+        - "*.md"
+        - .github/workflows/docs-*
   pull_request:
     paths-ignore:
      - docs/*
@@ -16,6 +28,8 @@ on:
      - LICENSE
      - .github/dependabot.yml
      - .github/pull_request_template.md
+      - "*.md"
+      - .github/workflows/docs-*     -
   workflow_dispatch:
 
 jobs:
