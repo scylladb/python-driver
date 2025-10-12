@@ -3,8 +3,8 @@ Installation
 
 Supported Platforms
 -------------------
-Python versions 3.9-3.14 are supported. Both CPython (the standard Python
-implementation) and `PyPy <http://pypy.org>`_ are supported and tested.
+Python versions 3.9-3.14 are supported. The driver is built for CPython (the 
+standard Python implementation).
 
 Linux, OSX, and Windows are supported.
 
