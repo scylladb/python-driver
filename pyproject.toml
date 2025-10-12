@@ -9,7 +9,6 @@ classifiers = [
     'Natural Language :: English',
     'Operating System :: OS Independent',
     'Programming Language :: Python',
-    'Programming Language :: Python :: 3.9',
     'Programming Language :: Python :: 3.10',
     'Programming Language :: Python :: 3.11',
     'Programming Language :: Python :: 3.12',
@@ -137,6 +136,8 @@ skip = [
     "pp37*",
     "cp38*",
     "pp38*",
+    "cp39*",
+    "pp39*",
     "*i686",
     "*musllinux*",
 ]
