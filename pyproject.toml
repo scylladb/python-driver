@@ -129,19 +129,13 @@ tag_regex = '(?P<version>\d*?\.\d*?\.\d*?)-scylla'
 build-frontend = "build[uv]"
 environment = { CASS_DRIVER_BUILD_CONCURRENCY = "2", CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "yes", CFLAGS = "-g0 -O3" }
 skip = [
-    "cp2*",
-    "cp36*",
-    "pp36*",
-    "cp37*",
-    "pp37*",
     "cp38*",
-    "pp38*",
     "cp39*",
-    "pp39*",
+    "cp3*t-*",
     "*i686",
     "*musllinux*",
 ]
-build = ["cp3*", "pp3*"]
+build = ["cp3*"]
 test-groups = ["dev"]
 
 manylinux-x86_64-image = "manylinux_2_28"
@@ -171,7 +165,3 @@ test-command = [
 
 # TODO: set CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST to yes when https://github.com/scylladb/python-driver/issues/429 is fixed
 environment = { CASS_DRIVER_BUILD_CONCURRENCY = "2", CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "no" }
-
-[[tool.cibuildwheel.overrides]]
-select = "pp*"
-test-command = []

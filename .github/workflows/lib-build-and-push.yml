@@ -110,7 +110,7 @@ jobs:
 
       - name: Install cibuildwheel
         run: |
-          uv tool install 'cibuildwheel==2.22.0'
+          uv tool install 'cibuildwheel==3.2.1'
 
       - name: Install OpenSSL for Windows
         if: runner.os == 'Windows'
@@ -127,7 +127,7 @@ jobs:
           conan profile detect
           conan install conanfile.py
 
-      - name: Install OpenSSL for MacOS
+      - name: Install libev for MacOS
         if: runner.os == 'MacOs'
         run: |
           brew install libev
