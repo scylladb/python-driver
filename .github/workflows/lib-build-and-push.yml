@@ -110,7 +110,7 @@ jobs:
 
       - name: Install cibuildwheel
         run: |
-          uv tool install 'cibuildwheel==2.22.0'
+          uv tool install 'cibuildwheel==3.2.1'
 
       - name: Install OpenSSL for Windows
         if: runner.os == 'Windows'
