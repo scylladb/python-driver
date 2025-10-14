@@ -98,8 +98,6 @@ jobs:
           echo "CIBW_TEST_COMMAND=true" >> $GITHUB_ENV;
           echo "CIBW_TEST_COMMAND_WINDOWS=(exit 0)" >> $GITHUB_ENV;
           echo "CIBW_TEST_SKIP=*" >> $GITHUB_ENV;
-          echo "CIBW_SKIP=`scripts/get-pyproject-value.sh tool.cibuildwheel skip`" >> $GITHUB_ENV;
-          echo "CIBW_BUILD=`scripts/get-pyproject-value.sh tool.cibuildwheel build`" >> $GITHUB_ENV;
           echo "CIBW_BEFORE_TEST=true" >> $GITHUB_ENV;
           echo "CIBW_BEFORE_TEST_WINDOWS=(exit 0)" >> $GITHUB_ENV;
 
