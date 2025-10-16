@@ -43,12 +43,16 @@ jobs:
       fail-fast: false
       matrix:
         java-version: [8]
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.14t"]
         event_loop_manager: ["libev", "asyncio", "asyncore"]
         exclude:
           - python-version: "3.12"
             event_loop_manager: "asyncore"
           - python-version: "3.13"
+            event_loop_manager: "asyncore"
+          - python-version: "3.14"
+            event_loop_manager: "asyncore"
+          - python-version: "3.14t"
             event_loop_manager: "asyncore"
 
     steps:
@@ -81,7 +85,11 @@ jobs:
         uv run ccm remove
 
     - name: Test with pytest
+      env:
+        EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
+        PROTOCOL_VERSION: 4
       run: |
-        export EVENT_LOOP_MANAGER=${{ matrix.event_loop_manager }}
-        export PROTOCOL_VERSION=4
+        if [[ "${{ matrix.python-version }}" =~ t$ ]]; then
+          export PYTHON_GIL=0
+        fi
         uv run pytest tests/integration/standard/ tests/integration/cqlengine/
