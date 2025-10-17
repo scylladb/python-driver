@@ -61,7 +61,7 @@ jobs:
              was_added=1
            elif [[ "${target}" == "macos-x86" ]]; then
              [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n  '{"os":"macos-13", "target": "macos-x86"}' >> /tmp/matrix.json
+             echo -n  '{"os":"macos-15-intel", "target": "macos-x86"}' >> /tmp/matrix.json
              was_added=1
            elif [[ "${target}" == "macos-arm" ]]; then
              [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
@@ -134,9 +134,9 @@ jobs:
         if: runner.os == 'MacOS'
         run: |
           ##### Set MACOSX_DEPLOYMENT_TARGET
-          if [ "${{ matrix.os }}" == "macos-13" ]; then
-            echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV;
-            echo "Enforcing target deployment for 13.0"
+          if [ "${{ matrix.os }}" == "macos-15-intel" ]; then
+            echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> $GITHUB_ENV;
+            echo "Enforcing target deployment for 15.0"
           elif [ "${{ matrix.os }}" == "macos-14" ]; then
             echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> $GITHUB_ENV;
             echo "Enforcing target deployment for 14.0"
