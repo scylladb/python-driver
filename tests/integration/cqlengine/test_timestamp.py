@@ -47,7 +47,7 @@ class BatchTest(BaseTimestampTest):
             with BatchQuery(timestamp=timedelta(seconds=30)) as b:
                 TestTimestampModel.batch(b).create(count=1)
 
-        "USING TIMESTAMP".should.be.within(m.call_args[0][0].query_string)
+        m.call_args[0][0].query_string.should.match("USING TIMESTAMP")
 
 
 class CreateWithTimestampTest(BaseTimestampTest):
@@ -66,7 +66,7 @@ class CreateWithTimestampTest(BaseTimestampTest):
         with mock.patch.object(self.session, "execute") as m:
             TestTimestampModel.create(count=2)
 
-        "USING TIMESTAMP".shouldnt.be.within(m.call_args[0][0].query_string)
+        m.call_args[0][0].query_string.shouldnt.match("USING TIMESTAMP")
 
     def test_timestamp_is_set_on_model_queryset(self):
         delta = timedelta(seconds=30)
@@ -86,9 +86,7 @@ class CreateWithTimestampTest(BaseTimestampTest):
         with mock.patch.object(self.session, "execute") as m:
             TestTimestampModel.timestamp(timedelta(seconds=30)).create(count=1)
 
-        query = m.call_args[0][0].query_string
-
-        "USING TIMESTAMP".should.be.within(query)
+        m.call_args[0][0].query_string.should.match("USING TIMESTAMP")
 
     def test_non_batch_syntax_with_ttl_unit(self):
 
@@ -111,16 +109,14 @@ class UpdateWithTimestampTest(BaseTimestampTest):
 
         with mock.patch.object(self.session, "execute") as m:
             self.instance.timestamp(timedelta(seconds=30)).update(count=2)
-
-        "USING TIMESTAMP".should.be.within(m.call_args[0][0].query_string)
+        m.call_args[0][0].query_string.should.match("USING TIMESTAMP")
 
     def test_instance_update_in_batch(self):
         with mock.patch.object(self.session, "execute") as m:
             with BatchQuery() as b:
                 self.instance.batch(b).timestamp(timedelta(seconds=30)).update(count=2)
 
-        query = m.call_args[0][0].query_string
-        "USING TIMESTAMP".should.be.within(query)
+        m.call_args[0][0].query_string.should.match("USING TIMESTAMP")
 
 
 class DeleteWithTimestampTest(BaseTimestampTest):
