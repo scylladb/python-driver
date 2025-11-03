@@ -526,14 +526,16 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         if self.shuffle_replicas:
             shuffle(replicas)
 
-        for replica in replicas:
-            if replica.is_up and child.distance(replica) in [HostDistance.LOCAL, HostDistance.LOCAL_RACK]:
-                yield replica
+        def yield_in_order(hosts):
+            for distance in [HostDistance.LOCAL_RACK, HostDistance.LOCAL, HostDistance.REMOTE]:
+                for replica in hosts:
+                    if replica.is_up and child.distance(replica) == distance:
+                        yield replica
 
-        for host in child.make_query_plan(keyspace, query):
-            # skip if we've already listed this host
-            if host not in replicas or child.distance(host) == HostDistance.REMOTE:
-                yield host
+        # yield replicas: local_rack, local, remote
+        yield from yield_in_order(replicas)
+        # yield rest of the cluster: local_rack, local, remote
+        yield from yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas])
 
     def on_up(self, *args, **kwargs):
         return self._child_policy.on_up(*args, **kwargs)

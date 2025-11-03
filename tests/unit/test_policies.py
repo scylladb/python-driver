@@ -636,7 +636,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         cluster.metadata.get_replicas.side_effect = get_replicas
 
-        policy = TokenAwarePolicy(DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=1))
+        policy = TokenAwarePolicy(DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=2))
         policy.populate(cluster, hosts)
 
         for i in range(4):
@@ -648,14 +648,75 @@ class TokenAwarePolicyTest(unittest.TestCase):
             assert qplan[0] in replicas
             assert qplan[0].datacenter == "dc1"
 
-            # then the local non-replica
-            assert qplan[1] not in replicas
-            assert qplan[1].datacenter == "dc1"
+            # then the replica from remote DC
+            assert qplan[1] in replicas
+            assert qplan[1].datacenter == "dc2"
 
-            # then one of the remotes (used_hosts_per_remote_dc is 1, so we
-            # shouldn't see two remotes)
+            # then non-replica from local DC
+            assert qplan[2] not in replicas
+            assert qplan[2].datacenter == "dc1"
+
+            # and only then non-replica from remote DC
+            assert qplan[3] not in replicas
+            assert qplan[3].datacenter == "dc2"
+
+            assert 4 == len(qplan)
+
+    def test_wrap_rack_aware(self):
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.table_has_tablets.return_value = []
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(8)]
+        for host in hosts:
+            host.set_up()
+        hosts[0].set_location_info("dc1", "rack1")
+        hosts[1].set_location_info("dc1", "rack2")
+        hosts[2].set_location_info("dc2", "rack1")
+        hosts[3].set_location_info("dc2", "rack2")
+        hosts[4].set_location_info("dc1", "rack1")
+        hosts[5].set_location_info("dc1", "rack2")
+        hosts[6].set_location_info("dc2", "rack1")
+        hosts[7].set_location_info("dc2", "rack2")
+
+        def get_replicas(keyspace, packed_key):
+            index = struct.unpack('>i', packed_key)[0]
+            # return one node from each DC
+            if index % 2 == 0:
+                return [hosts[0], hosts[1], hosts[2], hosts[3]]
+            else:
+                return [hosts[4], hosts[5], hosts[6], hosts[7]]
+
+        cluster.metadata.get_replicas.side_effect = get_replicas
+
+        policy = TokenAwarePolicy(RackAwareRoundRobinPolicy("dc1", "rack1", used_hosts_per_remote_dc=4))
+        policy.populate(cluster, hosts)
+
+        for i in range(4):
+            query = Statement(routing_key=struct.pack('>i', i), keyspace='keyspace_name')
+            qplan = list(policy.make_query_plan(None, query))
+            replicas = get_replicas(None, struct.pack('>i', i))
+
+            print(qplan)
+            print(replicas)
+
+            # first should be replica from local rack local dc
+            assert qplan[0] in replicas
+            assert qplan[0].datacenter == "dc1"
+            assert qplan[0].rack == "rack1"
+
+            # second should be replica from remote rack local dc
+            assert qplan[1] in replicas
+            assert qplan[1].datacenter == "dc1"
+            assert qplan[1].rack == "rack2"
+
+            # third and forth should be replica from the remote dcs
+            assert qplan[2] in replicas
             assert qplan[2].datacenter == "dc2"
-            assert 3 == len(qplan)
+            assert qplan[3] in replicas
+            assert qplan[3].datacenter == "dc2"
+
+            assert 8 == len(qplan)
 
     class FakeCluster:
         def __init__(self):
