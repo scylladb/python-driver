@@ -15,7 +15,7 @@ import random
 
 from collections import namedtuple, defaultdict
 from functools import lru_cache
-from itertools import islice, cycle, groupby, repeat
+from itertools import islice, cycle, repeat
 import logging
 from random import randint, shuffle
 from threading import Lock
