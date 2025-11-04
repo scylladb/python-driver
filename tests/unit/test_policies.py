@@ -531,7 +531,6 @@ class TestRackOrDCAwareRoundRobinPolicy:
         qplan = list(policy.make_query_plan())
         assert len(qplan) == 0
 
-
 class DCAwareRoundRobinPolicyTest(unittest.TestCase):
 
     def test_default_dc(self):
