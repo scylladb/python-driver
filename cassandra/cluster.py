@@ -1734,14 +1734,6 @@ class Cluster(object):
                     self.shutdown()
                     raise
 
-                # Update the information about tablet support after connection handshake.
-                self.load_balancing_policy._tablets_routing_v1 = self.control_connection._tablets_routing_v1
-                child_policy = self.load_balancing_policy.child_policy if hasattr(self.load_balancing_policy, 'child_policy') else None
-                while child_policy is not None:
-                    if hasattr(child_policy, '_tablet_routing_v1'):
-                        child_policy._tablet_routing_v1 = self.control_connection._tablets_routing_v1
-                    child_policy = child_policy.child_policy if hasattr(child_policy, 'child_policy') else None
-
                 self.profile_manager.check_supported()  # todo: rename this method
 
                 if self.idle_heartbeat_interval:

@@ -49,6 +49,9 @@ class Tablets(object):
         self._tablets = tablets
         self._lock = Lock()
 
+    def table_has_tablets(self, keyspace, table) -> bool:
+        return bool(self._tablets.get((keyspace, table), []))
+
     def get_tablet_for_key(self, keyspace, table, t):
         tablet = self._tablets.get((keyspace, table), [])
         if not tablet:

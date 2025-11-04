@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from cassandra.cluster import Cluster
+from cassandra.cluster import Cluster, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.policies import ConstantReconnectionPolicy, RoundRobinPolicy, TokenAwarePolicy
 
 from tests.integration import PROTOCOL_VERSION, use_cluster, get_cluster
@@ -162,6 +162,36 @@ class TestTabletsIntegration:
     def test_tablets_shard_awareness(self):
         self.query_data_shard_select(self.session)
         self.query_data_shard_insert(self.session)
+
+    def test_tablets_lbp_in_profile(self):
+        cluster = Cluster(contact_points=["127.0.0.1", "127.0.0.2", "127.0.0.3"], protocol_version=PROTOCOL_VERSION,
+                          execution_profiles={
+                              EXEC_PROFILE_DEFAULT: ExecutionProfile(
+                                  load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy()),
+                              )},
+                          reconnection_policy=ConstantReconnectionPolicy(1))
+        session = cluster.connect()
+        try:
+            self.query_data_host_select(self.session)
+            self.query_data_host_insert(self.session)
+        finally:
+            session.shutdown()
+            cluster.shutdown()
+
+    def test_tablets_shard_awareness_lbp_in_profile(self):
+        cluster = Cluster(contact_points=["127.0.0.1", "127.0.0.2", "127.0.0.3"], protocol_version=PROTOCOL_VERSION,
+                          execution_profiles={
+                              EXEC_PROFILE_DEFAULT: ExecutionProfile(
+                                  load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy()),
+                              )},
+                          reconnection_policy=ConstantReconnectionPolicy(1))
+        session = cluster.connect()
+        try:
+            self.query_data_shard_select(self.session)
+            self.query_data_shard_insert(self.session)
+        finally:
+            session.shutdown()
+            cluster.shutdown()
 
     def test_tablets_invalidation_drop_ks_while_reconnecting(self):
         def recreate_while_reconnecting(_):

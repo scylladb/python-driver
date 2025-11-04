@@ -36,6 +36,7 @@ from cassandra.policies import (RackAwareRoundRobinPolicy, RoundRobinPolicy, Whi
 from cassandra.connection import DefaultEndPoint, UnixSocketEndPoint
 from cassandra.pool import Host
 from cassandra.query import Statement
+from cassandra.tablets import Tablets, Tablet
 
 
 class LoadBalancingPolicyTest(unittest.TestCase):
@@ -582,7 +583,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
     def test_wrap_round_robin(self):
         cluster = Mock(spec=Cluster)
         cluster.metadata = Mock(spec=Metadata)
-        cluster.control_connection._tablets_routing_v1 = False
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.table_has_tablets.return_value = []
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(4)]
         for host in hosts:
             host.set_up()
@@ -614,7 +616,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
     def test_wrap_dc_aware(self):
         cluster = Mock(spec=Cluster)
         cluster.metadata = Mock(spec=Metadata)
-        cluster.control_connection._tablets_routing_v1 = False
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.table_has_tablets.return_value = []
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(4)]
         for host in hosts:
             host.set_up()
@@ -744,9 +747,10 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         cluster = Mock(spec=Cluster)
         cluster.metadata = Mock(spec=Metadata)
-        cluster.control_connection._tablets_routing_v1 = False
+        cluster.metadata._tablets = Mock(spec=Tablets)
         replicas = hosts[2:]
         cluster.metadata.get_replicas.return_value = replicas
+        cluster.metadata._tablets.table_has_tablets.return_value = []
 
         child_policy = Mock()
         child_policy.make_query_plan.return_value = hosts
@@ -803,7 +807,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         @test_category policy
         """
-        self._assert_shuffle(keyspace='keyspace', routing_key='routing_key')
+        self._assert_shuffle(cluster=self._prepare_cluster_with_vnodes(), keyspace='keyspace', routing_key='routing_key')
+        self._assert_shuffle(cluster=self._prepare_cluster_with_tablets(), keyspace='keyspace', routing_key='routing_key')
 
     def test_no_shuffle_if_given_no_keyspace(self):
         """
@@ -814,7 +819,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         @test_category policy
         """
-        self._assert_shuffle(keyspace=None, routing_key='routing_key')
+        self._assert_shuffle(cluster=self._prepare_cluster_with_vnodes(), keyspace=None, routing_key='routing_key')
+        self._assert_shuffle(cluster=self._prepare_cluster_with_tablets(), keyspace=None, routing_key='routing_key')
 
     def test_no_shuffle_if_given_no_routing_key(self):
         """
@@ -825,26 +831,46 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         @test_category policy
         """
-        self._assert_shuffle(keyspace='keyspace', routing_key=None)
+        self._assert_shuffle(cluster=self._prepare_cluster_with_vnodes(), keyspace='keyspace', routing_key=None)
+        self._assert_shuffle(cluster=self._prepare_cluster_with_tablets(), keyspace='keyspace', routing_key=None)
 
-    @patch('cassandra.policies.shuffle')
-    def _assert_shuffle(self, patched_shuffle, keyspace, routing_key):
+    def _prepare_cluster_with_vnodes(self):
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(4)]
         for host in hosts:
             host.set_up()
-
         cluster = Mock(spec=Cluster)
         cluster.metadata = Mock(spec=Metadata)
-        cluster.control_connection._tablets_routing_v1 = False
-        replicas = hosts[2:]
-        cluster.metadata.get_replicas.return_value = replicas
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata.all_hosts.return_value = hosts
+        cluster.metadata.get_replicas.return_value = hosts[2:]
+        cluster.metadata._tablets.table_has_tablets.return_value = False
+        return cluster
 
+    def _prepare_cluster_with_tablets(self):
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(4)]
+        for host in hosts:
+            host.set_up()
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata.all_hosts.return_value = hosts
+        cluster.metadata.get_replicas.return_value = hosts[2:]
+        cluster.metadata._tablets.table_has_tablets.return_value = True
+        cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(replicas=[(h.host_id, 0) for h in hosts[2:]])
+        return cluster
+
+    @patch('cassandra.policies.shuffle')
+    def _assert_shuffle(self, patched_shuffle, cluster, keyspace, routing_key):
+        hosts = cluster.metadata.all_hosts()
+        replicas = cluster.metadata.get_replicas()
         child_policy = Mock()
         child_policy.make_query_plan.return_value = hosts
         child_policy.distance.return_value = HostDistance.LOCAL
 
         policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
         policy.populate(cluster, hosts)
+
+        is_tablets = cluster.metadata._tablets.table_has_tablets()
 
         cluster.metadata.get_replicas.reset_mock()
         child_policy.make_query_plan.reset_mock()
@@ -858,7 +884,11 @@ class TokenAwarePolicyTest(unittest.TestCase):
         else:
             assert set(replicas) == set(qplan[:2])
             assert hosts[:2] == qplan[2:]
-            child_policy.make_query_plan.assert_called_once_with(keyspace, query)
+            if is_tablets:
+                child_policy.make_query_plan.assert_called_with(keyspace, query)
+                assert child_policy.make_query_plan.call_count == 2
+            else:
+                child_policy.make_query_plan.assert_called_once_with(keyspace, query)
             assert patched_shuffle.call_count == 1
 
 
@@ -1538,7 +1568,6 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
 
     def test_wrap_token_aware(self):
         cluster = Mock(spec=Cluster)
-        cluster.control_connection._tablets_routing_v1 = False
         hosts = [Host(DefaultEndPoint("127.0.0.{}".format(i)), SimpleConvictionPolicy) for i in range(1, 6)]
         for host in hosts:
             host.set_up()
@@ -1547,6 +1576,8 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
             return hosts[:2]
 
         cluster.metadata.get_replicas.side_effect = get_replicas
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.table_has_tablets.return_value = []
 
         child_policy = TokenAwarePolicy(RoundRobinPolicy())
 
