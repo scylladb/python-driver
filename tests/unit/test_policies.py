@@ -531,6 +531,7 @@ class TestRackOrDCAwareRoundRobinPolicy:
         qplan = list(policy.make_query_plan())
         assert len(qplan) == 0
 
+
 class DCAwareRoundRobinPolicyTest(unittest.TestCase):
 
     def test_default_dc(self):
@@ -572,6 +573,116 @@ class DCAwareRoundRobinPolicyTest(unittest.TestCase):
         assert not policy.local_dc
         policy.on_add(host_remote)
         assert not policy.local_dc
+
+    def test_populate_with_interleaved_dcs(self):
+        """Test that DCAwareRoundRobinPolicy doesn't lose hosts when DCs are interleaved.
+        
+        This is a regression test for the issue where groupby only groups consecutive items,
+        which caused hosts to be lost when datacenters were not sorted.
+        """
+        # Create hosts with interleaved datacenters (dc1, dc2, dc1, dc2)
+        hosts = []
+        
+        # DC1 host 1
+        h1 = Host(DefaultEndPoint("10.0.0.1"), SimpleConvictionPolicy)
+        h1.set_location_info("dc1", "rack1")
+        hosts.append(h1)
+        
+        # DC2 host 1
+        h2 = Host(DefaultEndPoint("10.0.0.2"), SimpleConvictionPolicy)
+        h2.set_location_info("dc2", "rack1")
+        hosts.append(h2)
+        
+        # DC1 host 2 (interleaved)
+        h3 = Host(DefaultEndPoint("10.0.0.3"), SimpleConvictionPolicy)
+        h3.set_location_info("dc1", "rack1")
+        hosts.append(h3)
+        
+        # DC2 host 2 (interleaved)
+        h4 = Host(DefaultEndPoint("10.0.0.4"), SimpleConvictionPolicy)
+        h4.set_location_info("dc2", "rack1")
+        hosts.append(h4)
+        
+        policy = DCAwareRoundRobinPolicy("dc1")
+        policy.populate(Mock(), hosts)
+        
+        # Check that all hosts are registered
+        dc1_hosts = policy._dc_live_hosts.get("dc1", ())
+        dc2_hosts = policy._dc_live_hosts.get("dc2", ())
+        
+        assert len(dc1_hosts) == 2, "DC1 should have 2 hosts"
+        assert len(dc2_hosts) == 2, "DC2 should have 2 hosts"
+        assert h1 in dc1_hosts
+        assert h3 in dc1_hosts
+        assert h2 in dc2_hosts
+        assert h4 in dc2_hosts
+
+
+class RackAwareRoundRobinPolicyTest(unittest.TestCase):
+
+    def test_populate_with_interleaved_racks(self):
+        """Test that RackAwareRoundRobinPolicy doesn't lose hosts when racks are interleaved.
+        
+        This is a regression test for the issue where groupby only groups consecutive items,
+        which caused hosts to be lost when racks/datacenters were not sorted.
+        """
+        # Create hosts with interleaved racks
+        hosts = []
+        
+        # DC1 Rack1 host 1
+        h1 = Host(DefaultEndPoint("10.0.0.1"), SimpleConvictionPolicy)
+        h1.set_location_info("dc1", "rack1")
+        hosts.append(h1)
+        
+        # DC1 Rack2 host 1
+        h2 = Host(DefaultEndPoint("10.0.0.2"), SimpleConvictionPolicy)
+        h2.set_location_info("dc1", "rack2")
+        hosts.append(h2)
+        
+        # DC1 Rack1 host 2 (interleaved)
+        h3 = Host(DefaultEndPoint("10.0.0.3"), SimpleConvictionPolicy)
+        h3.set_location_info("dc1", "rack1")
+        hosts.append(h3)
+        
+        # DC1 Rack2 host 2 (interleaved)
+        h4 = Host(DefaultEndPoint("10.0.0.4"), SimpleConvictionPolicy)
+        h4.set_location_info("dc1", "rack2")
+        hosts.append(h4)
+        
+        # DC2 Rack1 host 1
+        h5 = Host(DefaultEndPoint("10.0.0.5"), SimpleConvictionPolicy)
+        h5.set_location_info("dc2", "rack1")
+        hosts.append(h5)
+        
+        # DC1 Rack1 host 3 (interleaved again)
+        h6 = Host(DefaultEndPoint("10.0.0.6"), SimpleConvictionPolicy)
+        h6.set_location_info("dc1", "rack1")
+        hosts.append(h6)
+        
+        policy = RackAwareRoundRobinPolicy("dc1", "rack1")
+        policy.populate(Mock(), hosts)
+        
+        # Check that all hosts are registered
+        dc1_rack1_hosts = policy._live_hosts.get(("dc1", "rack1"), ())
+        dc1_rack2_hosts = policy._live_hosts.get(("dc1", "rack2"), ())
+        dc2_rack1_hosts = policy._live_hosts.get(("dc2", "rack1"), ())
+        
+        dc1_hosts = policy._dc_live_hosts.get("dc1", ())
+        dc2_hosts = policy._dc_live_hosts.get("dc2", ())
+        
+        assert len(dc1_rack1_hosts) == 3, "DC1 Rack1 should have 3 hosts"
+        assert len(dc1_rack2_hosts) == 2, "DC1 Rack2 should have 2 hosts"
+        assert len(dc2_rack1_hosts) == 1, "DC2 Rack1 should have 1 host"
+        assert len(dc1_hosts) == 5, "DC1 should have 5 hosts total"
+        assert len(dc2_hosts) == 1, "DC2 should have 1 host total"
+        
+        assert h1 in dc1_rack1_hosts
+        assert h3 in dc1_rack1_hosts
+        assert h6 in dc1_rack1_hosts
+        assert h2 in dc1_rack2_hosts
+        assert h4 in dc1_rack2_hosts
+        assert h5 in dc2_rack1_hosts
+
 
 class TokenAwarePolicyTest(unittest.TestCase):
 

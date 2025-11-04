@@ -253,8 +253,17 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         return host.datacenter or self.local_dc
 
     def populate(self, cluster, hosts):
-        for dc, dc_hosts in groupby(hosts, lambda h: self._dc(h)):
-            self._dc_live_hosts[dc] = tuple(set(dc_hosts))
+        # Group hosts by datacenter without relying on groupby which only groups consecutive items
+        dc_hosts_dict = {}
+        for host in hosts:
+            dc = self._dc(host)
+            if dc not in dc_hosts_dict:
+                dc_hosts_dict[dc] = []
+            dc_hosts_dict[dc].append(host)
+        
+        # Convert lists to tuples with unique hosts
+        for dc, host_list in dc_hosts_dict.items():
+            self._dc_live_hosts[dc] = tuple(set(host_list))
 
         if not self.local_dc:
             self._endpoints = [
@@ -373,10 +382,31 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
         return host.datacenter or self.local_dc
 
     def populate(self, cluster, hosts):
-        for (dc, rack), rack_hosts in groupby(hosts, lambda host: (self._dc(host), self._rack(host))):
-            self._live_hosts[(dc, rack)] = tuple(set(rack_hosts))
-        for dc, dc_hosts in groupby(hosts, lambda host: self._dc(host)):
-            self._dc_live_hosts[dc] = tuple(set(dc_hosts))
+        # Group hosts by (dc, rack) and by dc without relying on groupby which only groups consecutive items
+        rack_hosts_dict = {}
+        dc_hosts_dict = {}
+        
+        for host in hosts:
+            dc = self._dc(host)
+            rack = self._rack(host)
+            
+            # Group by (dc, rack)
+            key = (dc, rack)
+            if key not in rack_hosts_dict:
+                rack_hosts_dict[key] = []
+            rack_hosts_dict[key].append(host)
+            
+            # Group by dc
+            if dc not in dc_hosts_dict:
+                dc_hosts_dict[dc] = []
+            dc_hosts_dict[dc].append(host)
+        
+        # Convert lists to tuples with unique hosts
+        for key, host_list in rack_hosts_dict.items():
+            self._live_hosts[key] = tuple(set(host_list))
+        
+        for dc, host_list in dc_hosts_dict.items():
+            self._dc_live_hosts[dc] = tuple(set(host_list))
 
         self._position = randint(0, len(hosts) - 1) if hosts else 0
 
