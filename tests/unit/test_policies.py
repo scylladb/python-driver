@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import random
 import unittest
 
 from itertools import islice, cycle
@@ -199,6 +199,8 @@ class TestRackOrDCAwareRoundRobinPolicy:
             h.set_location_info("dc1", "rack1")
             hosts.append(h)
 
+        random.shuffle(hosts)
+
         policy = policy_specialization(*constructor_args)
         policy.populate(None, hosts)
         qplan = list(policy.make_query_plan())
@@ -212,6 +214,8 @@ class TestRackOrDCAwareRoundRobinPolicy:
             h.set_location_info("dc1", "rack2")
         for h in hosts[4:]:
             h.set_location_info("dc2", "rack1")
+
+        random.shuffle(hosts)
 
         local_rack_hosts = set(h for h in hosts if h.datacenter == "dc1" and h.rack == "rack1")
         local_hosts = set(h for h in hosts if h.datacenter == "dc1" and h.rack != "rack1")

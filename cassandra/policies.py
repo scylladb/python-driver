@@ -14,7 +14,6 @@
 import random
 
 from collections import namedtuple
-from functools import lru_cache
 from itertools import islice, cycle, groupby, repeat
 import logging
 from random import randint, shuffle
@@ -254,7 +253,7 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
 
     def populate(self, cluster, hosts):
         for dc, dc_hosts in groupby(hosts, lambda h: self._dc(h)):
-            self._dc_live_hosts[dc] = tuple(set(dc_hosts))
+            self._dc_live_hosts[dc] = tuple({*dc_hosts, *self._dc_live_hosts.get(dc, [])})
 
         if not self.local_dc:
             self._endpoints = [
@@ -374,9 +373,9 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
 
     def populate(self, cluster, hosts):
         for (dc, rack), rack_hosts in groupby(hosts, lambda host: (self._dc(host), self._rack(host))):
-            self._live_hosts[(dc, rack)] = tuple(set(rack_hosts))
+            self._live_hosts[(dc, rack)] = tuple({*rack_hosts, *self._live_hosts.get((dc, rack), [])})
         for dc, dc_hosts in groupby(hosts, lambda host: self._dc(host)):
-            self._dc_live_hosts[dc] = tuple(set(dc_hosts))
+            self._dc_live_hosts[dc] = tuple({*dc_hosts, *self._dc_live_hosts.get(dc, [])})
 
         self._position = randint(0, len(hosts) - 1) if hosts else 0
 
