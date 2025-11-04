@@ -13,7 +13,7 @@
 # limitations under the License.
 import random
 
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 from functools import lru_cache
 from itertools import islice, cycle, groupby, repeat
 import logging
@@ -254,11 +254,9 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
 
     def populate(self, cluster, hosts):
         # Group hosts by datacenter without relying on groupby which only groups consecutive items
-        dc_hosts_dict = {}
+        dc_hosts_dict = defaultdict(list)
         for host in hosts:
             dc = self._dc(host)
-            if dc not in dc_hosts_dict:
-                dc_hosts_dict[dc] = []
             dc_hosts_dict[dc].append(host)
         
         # Convert lists to tuples with unique hosts
@@ -383,22 +381,17 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
 
     def populate(self, cluster, hosts):
         # Group hosts by (dc, rack) and by dc without relying on groupby which only groups consecutive items
-        rack_hosts_dict = {}
-        dc_hosts_dict = {}
+        rack_hosts_dict = defaultdict(list)
+        dc_hosts_dict = defaultdict(list)
         
         for host in hosts:
             dc = self._dc(host)
             rack = self._rack(host)
             
             # Group by (dc, rack)
-            key = (dc, rack)
-            if key not in rack_hosts_dict:
-                rack_hosts_dict[key] = []
-            rack_hosts_dict[key].append(host)
+            rack_hosts_dict[(dc, rack)].append(host)
             
             # Group by dc
-            if dc not in dc_hosts_dict:
-                dc_hosts_dict[dc] = []
             dc_hosts_dict[dc].append(host)
         
         # Convert lists to tuples with unique hosts
