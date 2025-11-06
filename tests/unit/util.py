@@ -9,6 +9,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from unittest.mock import NonCallableMagicMock
 
 
 def check_sequence_consistency(ordered_sequence, equal=False):
@@ -28,3 +29,9 @@ def _check_order_consistency(smaller, bigger, equal=False):
         assert smaller != bigger
         assert smaller < bigger
         assert bigger > smaller
+
+
+class HashableMock(NonCallableMagicMock):
+
+    def __hash__(self):
+        return id(self)

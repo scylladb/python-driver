@@ -29,6 +29,8 @@ from cassandra.pool import Host, NoConnectionsAvailable
 from cassandra.policies import HostDistance, SimpleConvictionPolicy
 import pytest
 
+from tests.unit.util import HashableMock
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -38,13 +40,13 @@ class _PoolTests(unittest.TestCase):
     uses_single_connection = None
 
     def make_session(self):
-        session = NonCallableMagicMock(spec=Session, keyspace='foobarkeyspace')
+        session = NonCallableMagicMock(spec=Session, keyspace='foobarkeyspace', _trash=[])
         return session
 
     def test_borrow_and_return(self):
         host = Mock(spec=Host, address='ip1')
         session = self.make_session()
-        conn = NonCallableMagicMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False, max_request_id=100)
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False, max_request_id=100)
         session.cluster.connection_factory.return_value = conn
 
         pool = self.PoolImpl(host, HostDistance.LOCAL, session)
@@ -63,7 +65,7 @@ class _PoolTests(unittest.TestCase):
     def test_failed_wait_for_connection(self):
         host = Mock(spec=Host, address='ip1')
         session = self.make_session()
-        conn = NonCallableMagicMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False, max_request_id=100)
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False, max_request_id=100)
         session.cluster.connection_factory.return_value = conn
 
         pool = self.PoolImpl(host, HostDistance.LOCAL, session)
@@ -82,7 +84,7 @@ class _PoolTests(unittest.TestCase):
     def test_successful_wait_for_connection(self):
         host = Mock(spec=Host, address='ip1')
         session = self.make_session()
-        conn = NonCallableMagicMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False, max_request_id=100,
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False, max_request_id=100,
                                     lock=Lock())
         session.cluster.connection_factory.return_value = conn
 
@@ -107,7 +109,7 @@ class _PoolTests(unittest.TestCase):
     def test_spawn_when_at_max(self):
         host = Mock(spec=Host, address='ip1')
         session = self.make_session()
-        conn = NonCallableMagicMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False, max_request_id=100)
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False, max_request_id=100)
         conn.max_request_id = 100
         session.cluster.connection_factory.return_value = conn
 
@@ -131,7 +133,7 @@ class _PoolTests(unittest.TestCase):
     def test_return_defunct_connection(self):
         host = Mock(spec=Host, address='ip1')
         session = self.make_session()
-        conn = NonCallableMagicMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False,
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False,
                                     max_request_id=100, signaled_error=False)
         session.cluster.connection_factory.return_value = conn
 
@@ -151,7 +153,7 @@ class _PoolTests(unittest.TestCase):
     def test_return_defunct_connection_on_down_host(self):
         host = Mock(spec=Host, address='ip1')
         session = self.make_session()
-        conn = NonCallableMagicMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False,
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False,
                                     max_request_id=100, signaled_error=False,
                                     orphaned_threshold_reached=False)
         session.cluster.connection_factory.return_value = conn
@@ -180,7 +182,7 @@ class _PoolTests(unittest.TestCase):
     def test_return_closed_connection(self):
         host = Mock(spec=Host, address='ip1')
         session = self.make_session()
-        conn = NonCallableMagicMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=True, max_request_id=100,
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=True, max_request_id=100,
                                     signaled_error=False, orphaned_threshold_reached=False)
         session.cluster.connection_factory.return_value = conn
 
@@ -247,7 +249,7 @@ class HostConnectionTests(_PoolTests):
                     return self.cluster.executor.submit(fn, *args, **kwargs)
 
             def mock_connection_factory(self, *args, **kwargs):
-                connection = MagicMock()
+                connection = HashableMock()
                 connection.is_shutdown = False
                 connection.is_defunct = False
                 connection.is_closed = False
@@ -267,7 +269,7 @@ class HostConnectionTests(_PoolTests):
             LOGGER.info("Testing fast shutdown %d / 20 times", attempt_num + 1)
             host = MagicMock()
             host.endpoint = "1.2.3.4"
-            session = MockSession()
+            session = self.make_session()
 
             pool = HostConnection(host=host, host_distance=HostDistance.REMOTE, session=session)
             LOGGER.info("Initialized pool %s", pool)
