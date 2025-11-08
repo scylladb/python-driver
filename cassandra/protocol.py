@@ -718,11 +718,12 @@ class ResultMessage(_MessageType):
         rows = [self.recv_row(f, len(column_metadata)) for _ in range(rowcount)]
         self.column_names = [c[2] for c in column_metadata]
         self.column_types = [c[3] for c in column_metadata]
-        col_descs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata]
 
         # Optimize by checking column_encryption_policy once per result message.
         # This avoids checking if the policy exists for every single value decoded.
         if column_encryption_policy:
+            col_descs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata]
+
             def decode_val(val, col_md, col_desc):
                 uses_ce = column_encryption_policy.contains_column(col_desc)
                 col_type = column_encryption_policy.column_type(col_desc) if uses_ce else col_md[3]
@@ -739,6 +740,8 @@ class ResultMessage(_MessageType):
         try:
             self.parsed_rows = [decode_row(row) for row in rows]
         except Exception:
+            # Create col_descs only if needed for error reporting
+            col_descs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata]
             for row in rows:
                 for val, col_md, col_desc in zip(row, column_metadata, col_descs):
                     try:
