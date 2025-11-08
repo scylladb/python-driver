@@ -720,23 +720,17 @@ class ResultMessage(_MessageType):
         self.column_types = [c[3] for c in column_metadata]
         col_descs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata]
 
-        # Optimize by checking column_encryption_policy once and defining appropriate decode_row function.
-        # This avoids checking the policy for every single value decoded (rows × columns times).
+        # Optimize by checking column_encryption_policy once per result message.
+        # This avoids checking if the policy exists for every single value decoded.
         if column_encryption_policy:
-            # Pre-compute encryption info for each column to avoid repeated lookups.
-            # For N rows with M columns, this reduces contains_column() calls from N×M to just M.
-            column_encryption_info = [
-                (column_encryption_policy.contains_column(col_desc), col_desc)
-                for col_desc in col_descs
-            ]
-
-            def decode_val(val, col_md, uses_ce, col_desc):
+            def decode_val(val, col_md, col_desc):
+                uses_ce = column_encryption_policy.contains_column(col_desc)
                 col_type = column_encryption_policy.column_type(col_desc) if uses_ce else col_md[3]
                 raw_bytes = column_encryption_policy.decrypt(col_desc, val) if uses_ce else val
                 return col_type.from_binary(raw_bytes, protocol_version)
 
             def decode_row(row):
-                return tuple(decode_val(val, col_md, uses_ce, col_desc) for val, col_md, (uses_ce, col_desc) in zip(row, column_metadata, column_encryption_info))
+                return tuple(decode_val(val, col_md, col_desc) for val, col_md, col_desc in zip(row, column_metadata, col_descs))
         else:
             # Simple path without encryption - just decode raw bytes directly
             def decode_row(row):
@@ -749,10 +743,13 @@ class ResultMessage(_MessageType):
                 for val, col_md, col_desc in zip(row, column_metadata, col_descs):
                     try:
                         # Fallback to original decode_val logic for error reporting
-                        uses_ce = column_encryption_policy and column_encryption_policy.contains_column(col_desc)
-                        col_type = column_encryption_policy.column_type(col_desc) if uses_ce else col_md[3]
-                        raw_bytes = column_encryption_policy.decrypt(col_desc, val) if uses_ce else val
-                        col_type.from_binary(raw_bytes, protocol_version)
+                        if column_encryption_policy:
+                            uses_ce = column_encryption_policy.contains_column(col_desc)
+                            col_type = column_encryption_policy.column_type(col_desc) if uses_ce else col_md[3]
+                            raw_bytes = column_encryption_policy.decrypt(col_desc, val) if uses_ce else val
+                            col_type.from_binary(raw_bytes, protocol_version)
+                        else:
+                            col_md[3].from_binary(val, protocol_version)
                     except Exception as e:
                         raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
                                                                                                      col_md[3].cql_parameterized_type(),
