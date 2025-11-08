@@ -720,9 +720,11 @@ class ResultMessage(_MessageType):
         self.column_types = [c[3] for c in column_metadata]
         col_descs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata]
 
-        # Optimize by checking column_encryption_policy once and creating appropriate decode path
+        # Optimize by checking column_encryption_policy once and creating appropriate decode path.
+        # This avoids checking the policy for every single value decoded (rows × columns times).
         if column_encryption_policy:
-            # Pre-compute encryption info for each column to avoid repeated lookups
+            # Pre-compute encryption info for each column to avoid repeated lookups.
+            # For N rows with M columns, this reduces contains_column() calls from N×M to just M.
             column_encryption_info = [
                 (column_encryption_policy.contains_column(col_desc), col_desc)
                 for col_desc in col_descs
