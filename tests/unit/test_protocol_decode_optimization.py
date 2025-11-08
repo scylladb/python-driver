@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import unittest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 import io
 
 from cassandra import ProtocolVersion

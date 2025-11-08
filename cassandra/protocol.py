@@ -730,13 +730,13 @@ class ResultMessage(_MessageType):
                 for col_desc in col_descs
             ]
 
+            def decode_val(val, col_md, uses_ce, col_desc):
+                col_type = column_encryption_policy.column_type(col_desc) if uses_ce else col_md[3]
+                raw_bytes = column_encryption_policy.decrypt(col_desc, val) if uses_ce else val
+                return col_type.from_binary(raw_bytes, protocol_version)
+
             def decode_row(row):
-                return tuple(
-                    column_encryption_policy.column_type(col_desc).from_binary(
-                        column_encryption_policy.decrypt(col_desc, val), protocol_version
-                    ) if uses_ce else col_md[3].from_binary(val, protocol_version)
-                    for val, col_md, (uses_ce, col_desc) in zip(row, column_metadata, column_encryption_info)
-                )
+                return tuple(decode_val(val, col_md, uses_ce, col_desc) for val, col_md, (uses_ce, col_desc) in zip(row, column_metadata, column_encryption_info))
         else:
             # Simple path without encryption - just decode raw bytes directly
             def decode_row(row):
