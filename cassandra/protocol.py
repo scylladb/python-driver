@@ -732,31 +732,36 @@ class ResultMessage(_MessageType):
 
             def decode_row(row):
                 return tuple(decode_val(val, col_md, col_desc) for val, col_md, col_desc in zip(row, column_metadata, col_descs))
+
+            try:
+                self.parsed_rows = [decode_row(row) for row in rows]
+            except Exception:
+                for row in rows:
+                    for val, col_md, col_desc in zip(row, column_metadata, col_descs):
+                        try:
+                            decode_val(val, col_md, col_desc)
+                        except Exception as e:
+                            raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
+                                                                                                         col_md[3].cql_parameterized_type(),
+                                                                                                         str(e)))
         else:
             # Simple path without encryption - just decode raw bytes directly
             def decode_row(row):
                 return tuple(col_md[3].from_binary(val, protocol_version) for val, col_md in zip(row, column_metadata))
 
-        try:
-            self.parsed_rows = [decode_row(row) for row in rows]
-        except Exception:
-            # Create col_descs only if needed for error reporting
-            col_descs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata]
-            for row in rows:
-                for val, col_md, col_desc in zip(row, column_metadata, col_descs):
-                    try:
-                        # Fallback to original decode_val logic for error reporting
-                        if column_encryption_policy:
-                            uses_ce = column_encryption_policy.contains_column(col_desc)
-                            col_type = column_encryption_policy.column_type(col_desc) if uses_ce else col_md[3]
-                            raw_bytes = column_encryption_policy.decrypt(col_desc, val) if uses_ce else val
-                            col_type.from_binary(raw_bytes, protocol_version)
-                        else:
+            try:
+                self.parsed_rows = [decode_row(row) for row in rows]
+            except Exception:
+                # Create col_descs only if needed for error reporting
+                col_descs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata]
+                for row in rows:
+                    for val, col_md, col_desc in zip(row, column_metadata, col_descs):
+                        try:
                             col_md[3].from_binary(val, protocol_version)
-                    except Exception as e:
-                        raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
-                                                                                                     col_md[3].cql_parameterized_type(),
-                                                                                                     str(e)))
+                        except Exception as e:
+                            raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
+                                                                                                         col_md[3].cql_parameterized_type(),
+                                                                                                         str(e)))
 
     def recv_results_prepared(self, f, protocol_version, user_type_map):
         self.query_id = read_binary_string(f)
