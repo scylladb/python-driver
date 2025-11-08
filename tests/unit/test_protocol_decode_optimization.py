@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import io
 import unittest
 from unittest.mock import Mock
-import io
 
 from cassandra import ProtocolVersion
-from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
 from cassandra.cqltypes import Int32Type, UTF8Type
-from cassandra.policies import ColDesc
 from cassandra.marshal import int32_pack
+from cassandra.policies import ColDesc
+from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
 
 
 class DecodeOptimizationTest(unittest.TestCase):
