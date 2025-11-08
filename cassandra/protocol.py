@@ -720,26 +720,59 @@ class ResultMessage(_MessageType):
         self.column_types = [c[3] for c in column_metadata]
         col_descs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata]
 
-        def decode_val(val, col_md, col_desc):
-            uses_ce = column_encryption_policy and column_encryption_policy.contains_column(col_desc)
-            col_type = column_encryption_policy.column_type(col_desc) if uses_ce else col_md[3]
-            raw_bytes = column_encryption_policy.decrypt(col_desc, val) if uses_ce else val
-            return col_type.from_binary(raw_bytes, protocol_version)
+        # Optimize by checking column_encryption_policy once and creating appropriate decode path
+        if column_encryption_policy:
+            # Pre-compute encryption info for each column to avoid repeated lookups
+            column_encryption_info = [
+                (column_encryption_policy.contains_column(col_desc), col_desc)
+                for col_desc in col_descs
+            ]
 
-        def decode_row(row):
-            return tuple(decode_val(val, col_md, col_desc) for val, col_md, col_desc in zip(row, column_metadata, col_descs))
+            def decode_val_with_encryption(val, col_md, uses_ce, col_desc):
+                if uses_ce:
+                    col_type = column_encryption_policy.column_type(col_desc)
+                    raw_bytes = column_encryption_policy.decrypt(col_desc, val)
+                else:
+                    col_type = col_md[3]
+                    raw_bytes = val
+                return col_type.from_binary(raw_bytes, protocol_version)
 
-        try:
-            self.parsed_rows = [decode_row(row) for row in rows]
-        except Exception:
-            for row in rows:
-                for val, col_md, col_desc in zip(row, column_metadata, col_descs):
-                    try:
-                        decode_val(val, col_md, col_desc)
-                    except Exception as e:
-                        raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
-                                                                                                     col_md[3].cql_parameterized_type(),
-                                                                                                     str(e)))
+            def decode_row(row):
+                return tuple(
+                    decode_val_with_encryption(val, col_md, uses_ce, col_desc)
+                    for val, col_md, (uses_ce, col_desc) in zip(row, column_metadata, column_encryption_info)
+                )
+
+            try:
+                self.parsed_rows = [decode_row(row) for row in rows]
+            except Exception:
+                for row in rows:
+                    for val, col_md, (uses_ce, col_desc) in zip(row, column_metadata, column_encryption_info):
+                        try:
+                            decode_val_with_encryption(val, col_md, uses_ce, col_desc)
+                        except Exception as e:
+                            raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
+                                                                                                         col_md[3].cql_parameterized_type(),
+                                                                                                         str(e)))
+        else:
+            # Simple path without encryption - just decode raw bytes directly
+            def decode_val_simple(val, col_type):
+                return col_type.from_binary(val, protocol_version)
+
+            def decode_row(row):
+                return tuple(decode_val_simple(val, col_md[3]) for val, col_md in zip(row, column_metadata))
+
+            try:
+                self.parsed_rows = [decode_row(row) for row in rows]
+            except Exception:
+                for row in rows:
+                    for val, col_md in zip(row, column_metadata):
+                        try:
+                            decode_val_simple(val, col_md[3])
+                        except Exception as e:
+                            raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
+                                                                                                         col_md[3].cql_parameterized_type(),
+                                                                                                         str(e)))
 
     def recv_results_prepared(self, f, protocol_version, user_type_map):
         self.query_id = read_binary_string(f)
