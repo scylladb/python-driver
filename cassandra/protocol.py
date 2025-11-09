@@ -726,9 +726,12 @@ class ResultMessage(_MessageType):
 
             def decode_val(val, col_md, col_desc):
                 uses_ce = column_encryption_policy.contains_column(col_desc)
-                col_type = column_encryption_policy.column_type(col_desc) if uses_ce else col_md[3]
-                raw_bytes = column_encryption_policy.decrypt(col_desc, val) if uses_ce else val
-                return col_type.from_binary(raw_bytes, protocol_version)
+                if uses_ce:
+                    col_type = column_encryption_policy.column_type(col_desc)
+                    raw_bytes = column_encryption_policy.decrypt(col_desc, val)
+                    return col_type.from_binary(raw_bytes, protocol_version)
+                else:
+                    return col_md[3].from_binary(val, protocol_version)
 
             def decode_row(row):
                 return tuple(decode_val(val, col_md, col_desc) for val, col_md, col_desc in zip(row, column_metadata, col_descs))
