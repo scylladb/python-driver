@@ -29,7 +29,7 @@ from functools import partial, reduce, wraps
 from itertools import groupby, count, chain
 import json
 import logging
-from typing import Optional
+from typing import Optional, Union
 from warnings import warn
 from random import random
 import re
@@ -51,7 +51,7 @@ from cassandra.auth import _proxy_execute_key, PlainTextAuthProvider
 from cassandra.connection import (ConnectionException, ConnectionShutdown,
                                   ConnectionHeartbeat, ProtocolVersionUnsupported,
                                   EndPoint, DefaultEndPoint, DefaultEndPointFactory,
-                                  SniEndPointFactory, ConnectionBusy)
+                                  SniEndPointFactory, ConnectionBusy, locally_supported_compressions)
 from cassandra.cqltypes import UserType
 import cassandra.cqltypes as types
 from cassandra.encoder import Encoder
@@ -686,7 +686,7 @@ class Cluster(object):
     Used for testing new protocol features incrementally before the new version is complete.
     """
 
-    compression = True
+    compression: Union[bool, str] = True
     """
     Controls compression for communications between the driver and Cassandra.
     If left as the default of :const:`True`, either lz4 or snappy compression
@@ -1173,7 +1173,7 @@ class Cluster(object):
     def __init__(self,
                  contact_points=_NOT_SET,
                  port=9042,
-                 compression=True,
+                 compression: Union[bool, str] = True,
                  auth_provider=None,
                  load_balancing_policy=None,
                  reconnection_policy=None,
@@ -1302,6 +1302,24 @@ class Cluster(object):
 
         self._resolve_hostnames()
 
+        if isinstance(compression, bool):
+            if compression and not locally_supported_compressions:
+                log.error(
+                    "Compression is enabled, but no compression libraries are available. "
+                    "Disabling compression, consider installing one of the Python packages: lz4 and/or python-snappy."
+                )
+                compression = False
+        elif isinstance(compression, str):
+            if not locally_supported_compressions.get(compression):
+                raise ValueError(
+                    "Compression '%s' was requested, but it is not available. "
+                    "Consider installing the corresponding Python package." % compression
+                )
+        else:
+            raise TypeError(
+                "The 'compression' option must be either a string (e.g., 'lz4' or 'snappy') "
+                "or a boolean (True to enable any available compression, False to disable it)."
+            )
         self.compression = compression
 
         if protocol_version is not _NOT_SET:
