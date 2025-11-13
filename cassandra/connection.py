@@ -28,7 +28,7 @@ import ssl
 import weakref
 import random
 import itertools
-from typing import Optional
+from typing import Optional, Union
 
 from cassandra.application_info import ApplicationInfoBase
 from cassandra.protocol_features import ProtocolFeatures
@@ -679,7 +679,7 @@ class Connection(object):
     protocol_version = ProtocolVersion.MAX_SUPPORTED
 
     keyspace = None
-    compression = True
+    compression: Union[bool, str] = True
     _compression_type = None
     compressor = None
     decompressor = None
@@ -760,7 +760,7 @@ class Connection(object):
         return self._io_buffer.io_buffer
 
     def __init__(self, host='127.0.0.1', port=9042, authenticator=None,
-                 ssl_options=None, sockopts=None, compression=True,
+                 ssl_options=None, sockopts=None, compression: Union[bool, str] = True,
                  cql_version=None, protocol_version=ProtocolVersion.MAX_SUPPORTED, is_control_connection=False,
                  user_type_map=None, connect_timeout=None, allow_beta_protocol_version=False, no_compact=False,
                  ssl_context=None, owning_pool=None, shard_id=None, total_shards=None,
@@ -1383,10 +1383,11 @@ class Connection(object):
             overlap = (set(locally_supported_compressions.keys()) &
                        set(remote_supported_compressions))
             if len(overlap) == 0:
-                log.error("No available compression types supported on both ends."
-                          " locally supported: %r. remotely supported: %r",
-                          locally_supported_compressions.keys(),
-                          remote_supported_compressions)
+                if locally_supported_compressions:
+                    log.error("No available compression types supported on both ends."
+                              " locally supported: %r. remotely supported: %r",
+                              locally_supported_compressions.keys(),
+                              remote_supported_compressions)
             else:
                 compression_type = None
                 if isinstance(self.compression, str):
