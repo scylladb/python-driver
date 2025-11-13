@@ -19,3 +19,6 @@ class _LwtInfo:
 
     def __init__(self, lwt_meta_bit_mask):
         self.lwt_meta_bit_mask = lwt_meta_bit_mask
+
+    def get_lwt_flag(self, flags):
+        return (flags & self.lwt_meta_bit_mask) == self.lwt_meta_bit_mask

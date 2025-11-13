@@ -686,11 +686,12 @@ class ResultMessage(_MessageType):
     bind_metadata = None
     pk_indexes = None
     schema_change_event = None
+    is_lwt = False
 
     def __init__(self, kind):
         self.kind = kind
 
-    def recv(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
+    def recv(self, f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy):
         if self.kind == RESULT_KIND_VOID:
             return
         elif self.kind == RESULT_KIND_ROWS:
@@ -698,7 +699,7 @@ class ResultMessage(_MessageType):
         elif self.kind == RESULT_KIND_SET_KEYSPACE:
             self.new_keyspace = read_string(f)
         elif self.kind == RESULT_KIND_PREPARED:
-            self.recv_results_prepared(f, protocol_version, user_type_map)
+            self.recv_results_prepared(f, protocol_version, protocol_features, user_type_map)
         elif self.kind == RESULT_KIND_SCHEMA_CHANGE:
             self.recv_results_schema_change(f, protocol_version)
         else:
@@ -708,7 +709,7 @@ class ResultMessage(_MessageType):
     def recv_body(cls, f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy):
         kind = read_int(f)
         msg = cls(kind)
-        msg.recv(f, protocol_version, user_type_map, result_metadata, column_encryption_policy)
+        msg.recv(f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy)
         return msg
 
     def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
@@ -741,13 +742,13 @@ class ResultMessage(_MessageType):
                                                                                                      col_md[3].cql_parameterized_type(),
                                                                                                      str(e)))
 
-    def recv_results_prepared(self, f, protocol_version, user_type_map):
+    def recv_results_prepared(self, f, protocol_version, protocol_features, user_type_map):
         self.query_id = read_binary_string(f)
         if ProtocolVersion.uses_prepared_metadata(protocol_version):
             self.result_metadata_id = read_binary_string(f)
         else:
             self.result_metadata_id = None
-        self.recv_prepared_metadata(f, protocol_version, user_type_map)
+        self.recv_prepared_metadata(f, protocol_version, protocol_features, user_type_map)
 
     def recv_results_metadata(self, f, user_type_map):
         flags = read_int(f)
@@ -785,8 +786,9 @@ class ResultMessage(_MessageType):
 
         self.column_metadata = column_metadata
 
-    def recv_prepared_metadata(self, f, protocol_version, user_type_map):
+    def recv_prepared_metadata(self, f, protocol_version, protocol_features, user_type_map):
         flags = read_int(f)
+        self.is_lwt = protocol_features.lwt_info.get_lwt_flag(flags) if protocol_features.lwt_info is not None else False
         colcount = read_int(f)
         pk_indexes = None
         if protocol_version >= 4:

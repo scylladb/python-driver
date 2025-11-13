@@ -345,6 +345,9 @@ class Statement(object):
     def _del_serial_consistency_level(self):
         self._serial_consistency_level = None
 
+    def is_lwt(self):
+        return False
+
     serial_consistency_level = property(
         _get_serial_consistency_level,
         _set_serial_consistency_level,
@@ -454,10 +457,11 @@ class PreparedStatement(object):
     routing_key_indexes = None
     _routing_key_index_set = None
     serial_consistency_level = None  # TODO never used?
+    _is_lwt = False
 
     def __init__(self, column_metadata, query_id, routing_key_indexes, query,
                  keyspace, protocol_version, result_metadata, result_metadata_id,
-                 column_encryption_policy=None):
+                 is_lwt=False, column_encryption_policy=None):
         self.column_metadata = column_metadata
         self.query_id = query_id
         self.routing_key_indexes = routing_key_indexes
@@ -468,15 +472,16 @@ class PreparedStatement(object):
         self.result_metadata_id = result_metadata_id
         self.column_encryption_policy = column_encryption_policy
         self.is_idempotent = False
+        self._is_lwt = is_lwt
 
     @classmethod
     def from_message(cls, query_id, column_metadata, pk_indexes, cluster_metadata,
                      query, prepared_keyspace, protocol_version, result_metadata,
-                     result_metadata_id, column_encryption_policy=None):
+                     result_metadata_id, is_lwt, column_encryption_policy=None):
         if not column_metadata:
             return PreparedStatement(column_metadata, query_id, None,
                                      query, prepared_keyspace, protocol_version, result_metadata,
-                                     result_metadata_id, column_encryption_policy)
+                                     result_metadata_id, is_lwt, column_encryption_policy)
 
         if pk_indexes:
             routing_key_indexes = pk_indexes
@@ -502,7 +507,7 @@ class PreparedStatement(object):
 
         return PreparedStatement(column_metadata, query_id, routing_key_indexes,
                                  query, prepared_keyspace, protocol_version, result_metadata,
-                                 result_metadata_id, column_encryption_policy)
+                                 result_metadata_id, is_lwt, column_encryption_policy)
 
     def bind(self, values):
         """
@@ -516,6 +521,9 @@ class PreparedStatement(object):
         if self._routing_key_index_set is None:
             self._routing_key_index_set = set(self.routing_key_indexes) if self.routing_key_indexes else set()
         return i in self._routing_key_index_set
+
+    def is_lwt(self):
+        return self._is_lwt
 
     def __str__(self):
         consistency = ConsistencyLevel.value_to_name.get(self.consistency_level, 'Not Set')
@@ -681,6 +689,9 @@ class BoundStatement(Statement):
             self._routing_key = b"".join(self._key_parts_packed(self.values[i] for i in routing_indexes))
 
         return self._routing_key
+
+    def is_lwt(self):
+        return self.prepared_statement.is_lwt()
 
     def __str__(self):
         consistency = ConsistencyLevel.value_to_name.get(self.consistency_level, 'Not Set')
