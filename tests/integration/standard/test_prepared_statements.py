@@ -406,6 +406,29 @@ class PreparedStatementTests(unittest.TestCase):
         with pytest.raises(InvalidRequest):
             self.session.execute(prepared, [0])
 
+    def test_recognize_lwt_query(self):
+        self.session.execute("CREATE TABLE IF NOT EXISTS preparedtests.bound_statement_test (a int PRIMARY KEY, b int)")
+        # Prepare a non-LWT statement
+        statementNonLWT = self.session.prepare("UPDATE preparedtests.bound_statement_test SET b = ? WHERE a = ?")
+        # Prepare an LWT statement
+        statementLWT = self.session.prepare("UPDATE preparedtests.bound_statement_test SET b = ? WHERE a = ? IF b = ?")
+
+        boundNonLWT = statementNonLWT.bind((3, 1))
+        boundLWT = statementLWT.bind((3, 1, 5))
+
+        # Check LWT detection
+        assert not boundNonLWT.is_lwt()
+        assert boundLWT.is_lwt()
+
+        self.session.execute("CREATE TABLE IF NOT EXISTS preparedtests.prepared_statement_test (a int PRIMARY KEY, b int)")
+        # Prepare a non-LWT statement
+        statementNonLWT = self.session.prepare("UPDATE preparedtests.prepared_statement_test SET b = ? WHERE a = ?")
+        # Prepare an LWT statement
+        statementLWT = self.session.prepare("UPDATE preparedtests.prepared_statement_test SET b = ? WHERE a = ? IF b = ?")
+        # Check LWT detection
+        assert not statementNonLWT.is_lwt()
+        assert statementLWT.is_lwt()
+
     @unittest.skipIf((CASSANDRA_VERSION >= Version('3.11.12') and CASSANDRA_VERSION < Version('4.0')) or \
         CASSANDRA_VERSION >= Version('4.0.2'),
         "Fixed server-side in Cassandra 3.11.12, 4.0.2")
