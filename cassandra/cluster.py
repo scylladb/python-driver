@@ -3109,7 +3109,9 @@ class Session(object):
         prepared_keyspace = keyspace if keyspace else None
         prepared_statement = PreparedStatement.from_message(
             response.query_id, response.bind_metadata, response.pk_indexes, self.cluster.metadata, query, prepared_keyspace,
-            self._protocol_version, response.column_metadata, response.result_metadata_id, self.cluster.column_encryption_policy)
+            self._protocol_version, response.column_metadata, response.result_metadata_id,
+            future._current_host.lwt_info.is_lwt(response.flags) if future._current_host.lwt_info is not None else False,
+            self.cluster.column_encryption_policy)
         prepared_statement.custom_payload = future.custom_payload
 
         self.cluster.add_prepared(response.query_id, prepared_statement)

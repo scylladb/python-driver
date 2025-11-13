@@ -686,6 +686,7 @@ class ResultMessage(_MessageType):
     bind_metadata = None
     pk_indexes = None
     schema_change_event = None
+    flags = None
 
     def __init__(self, kind):
         self.kind = kind
@@ -787,6 +788,7 @@ class ResultMessage(_MessageType):
 
     def recv_prepared_metadata(self, f, protocol_version, user_type_map):
         flags = read_int(f)
+        self.flags = flags
         colcount = read_int(f)
         pk_indexes = None
         if protocol_version >= 4:

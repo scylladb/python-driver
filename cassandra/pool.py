@@ -167,6 +167,8 @@ class Host(object):
 
     sharding_info = None
 
+    lwt_info = None
+
     def __init__(self, endpoint, conviction_policy_factory, datacenter=None, rack=None, host_id=None):
         if endpoint is None:
             raise ValueError("endpoint may not be None")
@@ -438,6 +440,8 @@ class HostConnection(object):
         if first_connection.features.sharding_info and not self._session.cluster.shard_aware_options.disable:
             self.host.sharding_info = first_connection.features.sharding_info
             self._open_connections_for_all_shards(first_connection.features.shard_id)
+        if first_connection.features.lwt_info is not None:
+            self.host.lwt_info = first_connection.features.lwt_info
         self.tablets_routing_v1 = first_connection.features.tablets_routing_v1
 
         log.debug("Finished initializing connection for host %s", self.host)
