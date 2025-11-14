@@ -36,7 +36,7 @@ compress-snappy = ['python-snappy']
 
 [dependency-groups]
 dev = [
-    "pytest",
+    "pytest~=8.0",
     "PyYAML",
     "pytz",
     "scales",
