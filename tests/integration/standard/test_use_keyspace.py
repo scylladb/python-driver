@@ -7,7 +7,7 @@ try:
 except ImportError:
     import unittest  # noqa
 
-from mock import patch
+from unittest.mock import patch
 
 from cassandra.connection import Connection
 from cassandra.cluster import Cluster
