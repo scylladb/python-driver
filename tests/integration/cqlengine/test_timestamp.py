@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 from datetime import timedelta, datetime
 from unittest import mock
-import sure
 from uuid import uuid4
 
 from cassandra.cqlengine import columns
@@ -47,7 +47,7 @@ class BatchTest(BaseTimestampTest):
             with BatchQuery(timestamp=timedelta(seconds=30)) as b:
                 TestTimestampModel.batch(b).create(count=1)
 
-        "USING TIMESTAMP".should.be.within(m.call_args[0][0].query_string)
+        assert "USING TIMESTAMP" in m.call_args[0][0].query_string
 
 
 class CreateWithTimestampTest(BaseTimestampTest):
@@ -58,37 +58,34 @@ class CreateWithTimestampTest(BaseTimestampTest):
                 TestTimestampModel.timestamp(timedelta(seconds=10)).batch(b).create(count=1)
 
         query = m.call_args[0][0].query_string
-
-        query.should.match(r"INSERT.*USING TIMESTAMP")
-        query.should_not.match(r"TIMESTAMP.*INSERT")
+        assert re.search(r"INSERT.*USING TIMESTAMP", query)
+        assert not re.search(r"TIMESTAMP.*INSERT", query)
 
     def test_timestamp_not_included_on_normal_create(self):
         with mock.patch.object(self.session, "execute") as m:
             TestTimestampModel.create(count=2)
 
-        "USING TIMESTAMP".shouldnt.be.within(m.call_args[0][0].query_string)
+        assert "USING TIMESTAMP" not in m.call_args[0][0].query_string
 
     def test_timestamp_is_set_on_model_queryset(self):
         delta = timedelta(seconds=30)
         tmp = TestTimestampModel.timestamp(delta)
-        tmp._timestamp.should.equal(delta)
+        assert tmp._timestamp == delta
 
     def test_non_batch_syntax_integration(self):
         tmp = TestTimestampModel.timestamp(timedelta(seconds=30)).create(count=1)
-        tmp.should.be.ok
+        assert tmp
 
     def test_non_batch_syntax_with_tll_integration(self):
         tmp = TestTimestampModel.timestamp(timedelta(seconds=30)).ttl(30).create(count=1)
-        tmp.should.be.ok
+        assert tmp
 
     def test_non_batch_syntax_unit(self):
 
         with mock.patch.object(self.session, "execute") as m:
             TestTimestampModel.timestamp(timedelta(seconds=30)).create(count=1)
 
-        query = m.call_args[0][0].query_string
-
-        "USING TIMESTAMP".should.be.within(query)
+        assert "USING TIMESTAMP" in m.call_args[0][0].query_string
 
     def test_non_batch_syntax_with_ttl_unit(self):
 
@@ -96,9 +93,7 @@ class CreateWithTimestampTest(BaseTimestampTest):
             TestTimestampModel.timestamp(timedelta(seconds=30)).ttl(30).create(
                 count=1)
 
-        query = m.call_args[0][0].query_string
-
-        query.should.match(r"USING TTL \d* AND TIMESTAMP")
+        assert re.search(r"USING TTL \d* AND TIMESTAMP", m.call_args[0][0].query_string)
 
 
 class UpdateWithTimestampTest(BaseTimestampTest):
@@ -112,15 +107,14 @@ class UpdateWithTimestampTest(BaseTimestampTest):
         with mock.patch.object(self.session, "execute") as m:
             self.instance.timestamp(timedelta(seconds=30)).update(count=2)
 
-        "USING TIMESTAMP".should.be.within(m.call_args[0][0].query_string)
+        assert "USING TIMESTAMP" in m.call_args[0][0].query_string
 
     def test_instance_update_in_batch(self):
         with mock.patch.object(self.session, "execute") as m:
             with BatchQuery() as b:
                 self.instance.batch(b).timestamp(timedelta(seconds=30)).update(count=2)
 
-        query = m.call_args[0][0].query_string
-        "USING TIMESTAMP".should.be.within(query)
+        assert "USING TIMESTAMP" in m.call_args[0][0].query_string
 
 
 class DeleteWithTimestampTest(BaseTimestampTest):
@@ -132,7 +126,7 @@ class DeleteWithTimestampTest(BaseTimestampTest):
         uid = uuid4()
         tmp = TestTimestampModel.create(id=uid, count=1)
 
-        TestTimestampModel.get(id=uid).should.be.ok
+        assert TestTimestampModel.get(id=uid)
 
         tmp.timestamp(timedelta(seconds=5)).delete()
 
@@ -146,15 +140,15 @@ class DeleteWithTimestampTest(BaseTimestampTest):
 
         # calling .timestamp sets the TS on the model
         tmp.timestamp(timedelta(seconds=5))
-        tmp._timestamp.should.be.ok
+        assert tmp._timestamp
 
         # calling save clears the set timestamp
         tmp.save()
-        tmp._timestamp.shouldnt.be.ok
+        assert not tmp._timestamp
 
         tmp.timestamp(timedelta(seconds=5))
         tmp.update()
-        tmp._timestamp.shouldnt.be.ok
+        assert not tmp._timestamp
 
     def test_blind_delete(self):
         """
@@ -163,7 +157,7 @@ class DeleteWithTimestampTest(BaseTimestampTest):
         uid = uuid4()
         tmp = TestTimestampModel.create(id=uid, count=1)
 
-        TestTimestampModel.get(id=uid).should.be.ok
+        assert TestTimestampModel.get(id=uid)
 
         TestTimestampModel.objects(id=uid).timestamp(timedelta(seconds=5)).delete()
 
@@ -182,7 +176,7 @@ class DeleteWithTimestampTest(BaseTimestampTest):
         uid = uuid4()
         tmp = TestTimestampModel.create(id=uid, count=1)
 
-        TestTimestampModel.get(id=uid).should.be.ok
+        assert TestTimestampModel.get(id=uid)
 
         plus_five_seconds = datetime.now() + timedelta(seconds=5)
 
@@ -200,11 +194,9 @@ class DeleteWithTimestampTest(BaseTimestampTest):
         uid = uuid4()
         tmp = TestTimestampModel.create(id=uid, count=1)
 
-        TestTimestampModel.get(id=uid).should.be.ok
+        assert TestTimestampModel.get(id=uid)
 
         # delete the in past, should not affect the object created above
         TestTimestampModel.objects(id=uid).timestamp(timedelta(seconds=-60)).delete()
 
         TestTimestampModel.get(id=uid)
-
-

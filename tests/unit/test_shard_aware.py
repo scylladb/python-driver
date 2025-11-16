@@ -18,7 +18,7 @@ except ImportError:
     import unittest  # noqa
 
 import logging
-from mock import MagicMock
+from unittest.mock import MagicMock
 from concurrent.futures import ThreadPoolExecutor
 
 from cassandra.cluster import ShardAwareOptions

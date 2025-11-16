@@ -39,7 +39,6 @@ dev = [
     "pytest",
     "PyYAML",
     "pytz",
-    "sure",
     "scales",
     "pure-sasl",
     "twisted[tls]",
