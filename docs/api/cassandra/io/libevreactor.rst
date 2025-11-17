@@ -1,5 +1,7 @@
-``cassandra.io.libevreactor`` - ``libev`` Event Loop
-====================================================
+cassandra.io.libevreactor
+=========================
+
+``libev`` Event Loop
 
 .. module:: cassandra.io.libevreactor
 

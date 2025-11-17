@@ -1,5 +1,7 @@
-``cassandra.protocol`` - Protocol Features
-=====================================================================
+cassandra.protocol
+==================
+
+Protocol Features
 
 .. module:: cassandra.protocol
 

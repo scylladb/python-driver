@@ -4,7 +4,7 @@ API Documentation
 Core Driver
 -----------
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
 
    cassandra
    cassandra/cluster

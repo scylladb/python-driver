@@ -1,5 +1,7 @@
-``cassandra.metrics`` - Performance Metrics
-===========================================
+cassandra.metrics
+=================
+
+Performance Metrics
 
 .. module:: cassandra.metrics
 

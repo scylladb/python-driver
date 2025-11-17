@@ -1,5 +1,7 @@
-``cassandra.cqlengine.management`` - Schema management for cqlengine
-========================================================================
+cassandra.cqlengine.management
+==============================
+
+Schema management for cqlengine
 
 .. module:: cassandra.cqlengine.management
 

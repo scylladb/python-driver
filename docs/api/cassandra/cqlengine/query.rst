@@ -1,5 +1,7 @@
-``cassandra.cqlengine.query`` - Query and filter model objects
-=================================================================
+cassandra.cqlengine.query
+=========================
+
+Query and filter model objects
 
 .. module:: cassandra.cqlengine.query
 

@@ -1,5 +1,7 @@
-``cassandra.cqlengine.usertype`` - Model classes for User Defined Types
-=======================================================================
+cassandra.cqlengine.usertype
+============================
+
+Model classes for User Defined Types
 
 .. module:: cassandra.cqlengine.usertype
 

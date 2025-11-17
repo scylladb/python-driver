@@ -1,5 +1,7 @@
-``cassandra.cluster`` - Clusters and Sessions
-=============================================
+cassandra.cluster
+=================
+
+Clusters and Sessions
 
 .. module:: cassandra.cluster
 

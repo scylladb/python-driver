@@ -1,5 +1,7 @@
-``cassandra.concurrent`` - Utilities for Concurrent Statement Execution
-=======================================================================
+cassandra.concurrent
+====================
+
+Utilities for Concurrent Statement Execution
 
 .. module:: cassandra.concurrent
 

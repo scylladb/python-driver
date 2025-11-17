@@ -1,5 +1,7 @@
-``cassandra.auth`` - Authentication
-===================================
+cassandra.auth
+==============
+
+Authentication
 
 .. module:: cassandra.auth
 
