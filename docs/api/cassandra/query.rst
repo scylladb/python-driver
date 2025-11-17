@@ -1,5 +1,7 @@
-``cassandra.query`` - Prepared Statements, Batch Statements, Tracing, and Row Factories
-=======================================================================================
+cassandra.query
+===============
+
+Prepared Statements, Batch Statements, Tracing, and Row Factories
 
 .. module:: cassandra.query
 

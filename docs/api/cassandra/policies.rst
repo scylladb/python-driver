@@ -1,5 +1,7 @@
-``cassandra.policies`` - Load balancing and Failure Handling Policies
-=====================================================================
+cassandra.policies
+==================
+
+Load balancing and Failure Handling Policies
 
 .. module:: cassandra.policies
 

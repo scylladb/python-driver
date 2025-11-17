@@ -1,5 +1,7 @@
-``cassandra.io.eventletreactor`` - ``eventlet``-compatible Connection
-=====================================================================
+cassandra.io.eventletreactor
+============================
+
+``eventlet``-compatible Connection
 
 .. module:: cassandra.io.eventletreactor
 

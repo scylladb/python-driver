@@ -1,5 +1,7 @@
-``cassandra.decoder`` - Data Return Formats
-===========================================
+cassandra.decoder
+=================
+
+Data Return Formats
 
 .. module:: cassandra.decoder
 

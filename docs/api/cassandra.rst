@@ -1,5 +1,7 @@
-:mod:`cassandra` - Exceptions and Enums
-=======================================
+cassandra
+=========
+
+Exceptions and Enums
 
 .. module:: cassandra
 

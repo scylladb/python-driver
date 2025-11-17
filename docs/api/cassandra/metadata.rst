@@ -1,5 +1,7 @@
-``cassandra.metadata`` - Schema and Ring Topology
-=================================================
+cassandra.metadata
+==================
+
+Schema and Ring Topology
 
 .. module:: cassandra.metadata
 

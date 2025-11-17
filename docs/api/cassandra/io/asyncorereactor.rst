@@ -1,5 +1,7 @@
-``cassandra.io.asyncorereactor`` - ``asyncore`` Event Loop
-==========================================================
+cassandra.io.asyncorereactor
+============================
+
+``asyncore`` Event Loop
 
 .. module:: cassandra.io.asyncorereactor
 
