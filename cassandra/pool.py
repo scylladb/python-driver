@@ -492,7 +492,7 @@ class HostConnection(object):
                         "Connection to shard_id=%i reached orphaned stream limit, replacing on host %s (%s/%i)",
                         shard_id,
                         self.host,
-                        len(self._connections.keys()),
+                        len(self._connections),
                         self.host.sharding_info.shards_count
                     )
             elif shard_id not in self._connecting:
@@ -503,7 +503,7 @@ class HostConnection(object):
                     "Trying to connect to missing shard_id=%i on host %s (%s/%i)",
                     shard_id,
                     self.host,
-                    len(self._connections.keys()),
+                    len(self._connections),
                     self.host.sharding_info.shards_count
                 )
 
@@ -607,7 +607,7 @@ class HostConnection(object):
 
             log.debug("Replacing connection (%s) to %s", id(connection), self.host)
             try:
-                if connection.features.shard_id in self._connections.keys():
+                if connection.features.shard_id in self._connections:
                     del self._connections[connection.features.shard_id]
                 if self.host.sharding_info and not self._session.cluster.shard_aware_options.disable:
                     self._connecting.add(connection.features.shard_id)
@@ -759,7 +759,7 @@ class HostConnection(object):
             with self._lock:
                 is_shutdown = self.is_shutdown
                 if not is_shutdown:
-                    if conn.features.shard_id in self._connections.keys():
+                    if conn.features.shard_id in self._connections:
                         # Move the current connection to the trash and use the new one from now on
                         old_conn = self._connections[conn.features.shard_id]
                         log.debug(
@@ -804,7 +804,7 @@ class HostConnection(object):
             num_missing_or_needing_replacement = self.num_missing_or_needing_replacement
             log.debug(
                 "Connected to %s/%i shards on host %s (%i missing or needs replacement)",
-                len(self._connections.keys()),
+                len(self._connections),
                 self.host.sharding_info.shards_count,
                 self.host,
                 num_missing_or_needing_replacement
@@ -816,7 +816,7 @@ class HostConnection(object):
                     len(self._excess_connections)
                 )
                 self._close_excess_connections()
-        elif self.host.sharding_info.shards_count == len(self._connections.keys()) and self.num_missing_or_needing_replacement == 0:
+        elif self.host.sharding_info.shards_count == len(self._connections) and self.num_missing_or_needing_replacement == 0:
             log.debug(
                 "All shards are already covered, closing newly opened excess connection %s for host %s",
                 id(self),
@@ -917,7 +917,7 @@ class HostConnection(object):
     @property
     def num_missing_or_needing_replacement(self):
         return self.host.sharding_info.shards_count \
-            - sum(1 for c in self._connections.values() if not c.orphaned_threshold_reached)
+            - sum(1 for c in list(self._connections.values()) if not c.orphaned_threshold_reached)
 
     @property
     def open_count(self):
