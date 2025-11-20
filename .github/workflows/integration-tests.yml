@@ -52,7 +52,7 @@ jobs:
             event_loop_manager: "asyncore"
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Set up JDK ${{ matrix.java-version }}
       uses: actions/setup-java@v5
