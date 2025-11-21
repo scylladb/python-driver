@@ -523,7 +523,7 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         else:
             replicas = self._cluster_metadata.get_replicas(keyspace, query.routing_key)
 
-        if self.shuffle_replicas:
+        if self.shuffle_replicas and not query.is_lwt():
             shuffle(replicas)
 
         def yield_in_order(hosts):
