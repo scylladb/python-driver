@@ -1,5 +1,7 @@
-``cassandra.connection`` - Low Level Connection Info
-====================================================
+cassandra.connection
+====================
+
+Low Level Connection Info
 
 .. module:: cassandra.connection
 

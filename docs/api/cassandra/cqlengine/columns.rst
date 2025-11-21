@@ -1,5 +1,7 @@
-``cassandra.cqlengine.columns`` - Column types for object mapping models
-========================================================================
+cassandra.cqlengine.columns
+===========================
+
+Column types for object mapping models
 
 .. module:: cassandra.cqlengine.columns
 

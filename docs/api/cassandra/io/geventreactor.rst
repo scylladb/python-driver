@@ -1,5 +1,7 @@
-``cassandra.io.geventreactor`` - ``gevent``-compatible Event Loop
-=================================================================
+cassandra.io.geventreactor
+==========================
+
+``gevent``-compatible Event Loop
 
 .. module:: cassandra.io.geventreactor
 

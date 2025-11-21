@@ -1,5 +1,7 @@
-``cassandra.encoder`` - Encoders for non-prepared Statements
-============================================================
+cassandra.encoder
+=================
+
+Encoders for non-prepared Statements
 
 .. module:: cassandra.encoder
 

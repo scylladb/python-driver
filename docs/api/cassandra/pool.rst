@@ -1,5 +1,7 @@
-``cassandra.pool`` - Hosts and Connection Pools
-===============================================
+cassandra.pool
+==============
+
+Hosts and Connection Pools
 
 .. automodule:: cassandra.pool
 

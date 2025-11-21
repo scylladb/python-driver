@@ -1,5 +1,7 @@
-``cassandra.io.twistedreactor`` - Twisted Event Loop
-====================================================
+cassandra.io.twistedreactor
+===========================
+
+Twisted Event Loop
 
 .. module:: cassandra.io.twistedreactor
 
