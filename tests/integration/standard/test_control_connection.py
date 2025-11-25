@@ -14,13 +14,17 @@
 #
 #
 #
+from threading import Event
+
 from cassandra import InvalidRequest
 
 import unittest
+import requests
 
 
 from cassandra.protocol import ConfigurationException
-from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster, greaterthanorequalcass40
+from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster, greaterthanorequalcass40, \
+    xfail_scylla_version_lt
 from tests.integration.datatype_utils import update_datatypes
 
 
@@ -127,3 +131,69 @@ class ControlConnectionTests(unittest.TestCase):
         for host in hosts:
             assert 9042 == host.broadcast_rpc_port
             assert 7000 == host.broadcast_port
+
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#26992 - system.connection_metadata is not yet supported',
+                             oss_scylla_version="7.0", ent_scylla_version="2025.4.0")
+    def test_connection_metadata_change_event(self):
+        cluster = TestCluster()
+
+        # Establish control connection
+        cluster.connect()
+
+        flag = Event()
+
+        connection_ids = ["anytext", "11510f50-f906-4844-8c74-49ddab9ac6a9"]
+        host_ids = ["1a13fa42-c45b-410f-8ba5-58b42ada9c12", "aa13fa42-c45b-410f-8ba5-58b42ada9c12"]
+        got_connection_ids = []
+        got_host_ids = []
+
+        def on_event(event):
+            nonlocal got_connection_ids
+            nonlocal got_host_ids
+            try:
+                assert event.get("change_type") == "UPDATE_NODES"
+                got_connection_ids = event.get("connection_ids")
+                got_host_ids = event.get("host_ids")
+            finally:
+                flag.set()
+
+        cluster.control_connection._connection.register_watchers({"CONNECTION_METADATA_CHANGE": on_event})
+
+        try:
+            payload = [
+                {
+                    "connection_id": connection_ids[0],  # Should be a UUID if API requires that
+                    "host_id": host_ids[0],
+                    "address": "localhost",
+                    "port": 9042,
+                    "tls_port": 0,
+                    "alternator_port": 0,
+                    "alternator_https_port": 0,
+                    "rack": "string",
+                    "datacenter": "string"
+                },
+                {
+                    "connection_id": connection_ids[1],
+                    "host_id": host_ids[1],
+                    "address": "localhost",
+                    "port": 9042,
+                    "tls_port": 0,
+                    "alternator_port": 0,
+                    "alternator_https_port": 0,
+                    "rack": "string",
+                    "datacenter": "string"
+                }
+            ]
+            response = requests.post(
+                "http://" + cluster.contact_points[0] + ":10000/v2/connection-metadata",
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                })
+            assert response.status_code == 200
+            assert flag.wait(20), "Schema change event was not received after registering watchers"
+            assert got_connection_ids == connection_ids
+            assert got_host_ids == host_ids
+        finally:
+            cluster.shutdown()
