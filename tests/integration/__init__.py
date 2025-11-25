@@ -688,16 +688,13 @@ def xfail_scylla_version_lt(reason, oss_scylla_version, ent_scylla_version, *arg
     It is used to mark tests that are going to fail on certain scylla versions.
     :param reason: message to fail test with
     :param oss_scylla_version: str, oss version from which test supposed to succeed
-    :param ent_scylla_version: str, enterprise version from which test supposed to succeed. It should end with `.1.1`
+    :param ent_scylla_version: str, enterprise version from which test supposed to succeed
     """
     if not reason.startswith("scylladb/scylladb#"):
         raise ValueError('reason should start with scylladb/scylladb#<issue-id> to reference issue in scylla repo')
 
     if not isinstance(ent_scylla_version, str):
         raise ValueError('ent_scylla_version should be a str')
-
-    if not ent_scylla_version.endswith("1.1"):
-        raise ValueError('ent_scylla_version should end with "1.1"')
 
     if SCYLLA_VERSION is None:
         return pytest.mark.skipif(False, reason="It is just a NoOP Decor, should not skip anything")
