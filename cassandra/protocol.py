@@ -956,7 +956,8 @@ class BatchMessage(_MessageType):
 known_event_types = frozenset((
     'TOPOLOGY_CHANGE',
     'STATUS_CHANGE',
-    'SCHEMA_CHANGE'
+    'SCHEMA_CHANGE',
+    'CONNECTION_METADATA_CHANGE'
 ))
 
 
@@ -986,6 +987,14 @@ class EventMessage(_MessageType):
             read_method = getattr(cls, 'recv_' + event_type.lower())
             return cls(event_type=event_type, event_args=read_method(f, protocol_version))
         raise NotSupportedError('Unknown event type %r' % event_type)
+
+    @classmethod
+    def recv_connection_metadata_change(cls, f, protocol_version):
+        # "UPDATE_NODES"
+        change_type = read_string(f)
+        connection_ids = read_stringlist(f)
+        host_ids = read_stringlist(f)
+        return dict(change_type=change_type, connection_ids=connection_ids, host_ids=host_ids)
 
     @classmethod
     def recv_topology_change(cls, f, protocol_version):
