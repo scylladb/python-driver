@@ -14,7 +14,7 @@
 
 import unittest
 
-from cassandra.query import BatchStatement, SimpleStatement
+from cassandra.query import BatchStatement, PreparedStatement, SimpleStatement
 
 
 class BatchStatementTest(unittest.TestCase):
@@ -68,3 +68,50 @@ class BatchStatementTest(unittest.TestCase):
             batch.add_all(statements=['%s'] * n,
                           parameters=[(i,) for i in range(n)])
             assert len(batch) == n
+
+    def _make_prepared_statement(self, is_lwt=False):
+        return PreparedStatement(
+            column_metadata=[],
+            query_id=b"query-id",
+            routing_key_indexes=[],
+            query="INSERT INTO test.table (id) VALUES (1)",
+            keyspace=None,
+            protocol_version=4,
+            result_metadata=[],
+            result_metadata_id=None,
+            is_lwt=is_lwt,
+        )
+
+    def test_is_lwt_false_for_non_lwt_statements(self):
+        batch = BatchStatement()
+        batch.add(self._make_prepared_statement(is_lwt=False))
+        batch.add(self._make_prepared_statement(is_lwt=False).bind(()))
+        batch.add(SimpleStatement("INSERT INTO test.table (id) VALUES (3)"))
+        batch.add("INSERT INTO test.table (id) VALUES (4)")
+        assert batch.is_lwt() is False
+
+    def test_is_lwt_propagates_from_statements(self):
+        batch = BatchStatement()
+        batch.add(self._make_prepared_statement(is_lwt=False))
+        assert batch.is_lwt() is False
+
+        batch.add(self._make_prepared_statement(is_lwt=True))
+        assert batch.is_lwt() is True
+
+        bound_lwt = self._make_prepared_statement(is_lwt=True).bind(())
+        batch_with_bound = BatchStatement()
+        batch_with_bound.add(bound_lwt)
+        assert batch_with_bound.is_lwt() is True
+
+        class LwtSimpleStatement(SimpleStatement):
+            def __init__(self):
+                super(LwtSimpleStatement, self).__init__(
+                    "INSERT INTO test.table (id) VALUES (2) IF NOT EXISTS"
+                )
+
+            def is_lwt(self):
+                return True
+
+        batch_with_simple = BatchStatement()
+        batch_with_simple.add(LwtSimpleStatement())
+        assert batch_with_simple.is_lwt() is True
