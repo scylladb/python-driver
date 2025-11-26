@@ -761,6 +761,7 @@ class BatchStatement(Statement):
 
     _statements_and_parameters = None
     _session = None
+    _is_lwt = False
 
     def __init__(self, batch_type=BatchType.LOGGED, retry_policy=None,
                  consistency_level=None, serial_consistency_level=None,
@@ -845,6 +846,8 @@ class BatchStatement(Statement):
             query_id = statement.query_id
             bound_statement = statement.bind(() if parameters is None else parameters)
             self._update_state(bound_statement)
+            if statement.is_lwt():
+                self._is_lwt = True
             self._add_statement_and_params(True, query_id, bound_statement.values)
         elif isinstance(statement, BoundStatement):
             if parameters:
@@ -852,6 +855,8 @@ class BatchStatement(Statement):
                     "Parameters cannot be passed with a BoundStatement "
                     "to BatchStatement.add()")
             self._update_state(statement)
+            if statement.is_lwt():
+                self._is_lwt = True
             self._add_statement_and_params(True, statement.prepared_statement.query_id, statement.values)
         else:
             # it must be a SimpleStatement
@@ -860,6 +865,8 @@ class BatchStatement(Statement):
                 encoder = Encoder() if self._session is None else self._session.encoder
                 query_string = bind_params(query_string, parameters, encoder)
             self._update_state(statement)
+            if statement.is_lwt():
+                self._is_lwt = True
             self._add_statement_and_params(False, query_string, ())
         return self
 
@@ -892,6 +899,9 @@ class BatchStatement(Statement):
     def _update_state(self, statement):
         self._maybe_set_routing_attributes(statement)
         self._update_custom_payload(statement)
+
+    def is_lwt(self):
+        return self._is_lwt
 
     def __len__(self):
         return len(self._statements_and_parameters)
