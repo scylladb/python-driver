@@ -126,7 +126,7 @@ class TestConfigAsDict(unittest.TestCase):
                                                         'options': {'local_dc': '',
                                                                     'used_hosts_per_remote_dc': 0},
                                                         'type': 'DCAwareRoundRobinPolicy'},
-                                       'shuffle_replicas': False},
+                                       'shuffle_replicas': True},
                            'type': 'TokenAwarePolicy'},
          'readTimeout': 10.0,
          'retry': {'namespace': 'cassandra.policies', 'options': {}, 'type': 'RetryPolicy'},
@@ -145,7 +145,7 @@ class TestConfigAsDict(unittest.TestCase):
                                                         'options': {'local_dc': '',
                                                                     'used_hosts_per_remote_dc': 0},
                                                         'type': 'DCAwareRoundRobinPolicy'},
-                                       'shuffle_replicas': False},
+                                       'shuffle_replicas': True},
                            'type': 'TokenAwarePolicy'},
          'readTimeout': 30.0,
          'retry': {'namespace': 'cassandra.policies', 'options': {}, 'type': 'NeverRetryPolicy'},
@@ -167,7 +167,7 @@ class TestConfigAsDict(unittest.TestCase):
                                                                                      'options': {'local_dc': '',
                                                                                                  'used_hosts_per_remote_dc': 0},
                                                                                      'type': 'DCAwareRoundRobinPolicy'},
-                                                                    'shuffle_replicas': False},
+                                                                    'shuffle_replicas': True},
                                                         'type': 'TokenAwarePolicy'}},
                            'type': 'DefaultLoadBalancingPolicy'},
          'readTimeout': 604800.0,
@@ -195,7 +195,7 @@ class TestConfigAsDict(unittest.TestCase):
          'options': {'child_policy': {'namespace': 'cassandra.policies',
                                       'options': {},
                                       'type': 'LoadBalancingPolicy'},
-                     'shuffle_replicas': False},
+                     'shuffle_replicas': True},
          'type': 'TokenAwarePolicy'}
 
     def test_whitelist_round_robin_policy(self):
