@@ -31,7 +31,7 @@ requires-python = ">=3.9"
 "Issues" = "https://github.com/scylladb/python-driver/issues"
 
 [project.optional-dependencies]
-graph = ['gremlinpython==3.7.4']
+graph = ['gremlinpython==3.8.0']
 cle = ['cryptography>=35.0']
 compress-lz4 = ['lz4']
 compress-snappy = ['python-snappy']
