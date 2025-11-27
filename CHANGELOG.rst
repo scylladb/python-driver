@@ -1,3 +1,18 @@
+3.29.6
+======
+November 27, 2025
+
+* Rename connection_metadata to client_routes (#608)
+* TokenAwarePolicy: enable shuffling by default (#478)
+* Add support of LWT flag for BatchStatement (#606)
+* Add support of CONNECTION_METADATA_CHANGE event (#601)
+* Add LWT support (#584)
+* Add support for Python 3.14 (#566)
+* Fix dict handling in pool and metrics (#595)
+* Remove serverless code (#590)
+* tests: drop `sure` package (#592)
+* compression: better handle configuration problems (#585)
+
 3.29.5
 ======
 November 5, 2025
