@@ -132,9 +132,9 @@ class ControlConnectionTests(unittest.TestCase):
             assert 9042 == host.broadcast_rpc_port
             assert 7000 == host.broadcast_port
 
-    @xfail_scylla_version_lt(reason='scylladb/scylladb#26992 - system.connection_metadata is not yet supported',
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#26992 - system.client_routes is not yet supported',
                              oss_scylla_version="7.0", ent_scylla_version="2025.4.0")
-    def test_connection_metadata_change_event(self):
+    def test_client_routes_change_event(self):
         cluster = TestCluster()
 
         # Establish control connection
@@ -157,7 +157,7 @@ class ControlConnectionTests(unittest.TestCase):
             finally:
                 flag.set()
 
-        cluster.control_connection._connection.register_watchers({"CONNECTION_METADATA_CHANGE": on_event})
+        cluster.control_connection._connection.register_watchers({"CLIENT_ROUTES_CHANGE": on_event})
 
         try:
             payload = [
@@ -185,7 +185,7 @@ class ControlConnectionTests(unittest.TestCase):
                 }
             ]
             response = requests.post(
-                "http://" + cluster.contact_points[0] + ":10000/v2/connection-metadata",
+                "http://" + cluster.contact_points[0] + ":10000/v2/client-routes",
                 json=payload,
                 headers={
                     "Content-Type": "application/json",
