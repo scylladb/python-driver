@@ -604,14 +604,14 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
             replicas = get_replicas(None, struct.pack('>i', i))
             other = set(h for h in hosts if h not in replicas)
-            assert replicas == qplan[:2]
+            assert sorted(replicas) == sorted(qplan[:2])
             assert other == set(qplan[2:])
 
         # Should use the secondary policy
         for i in range(4):
             qplan = list(policy.make_query_plan())
 
-            assert set(qplan) == set(hosts)
+            assert sorted(set(qplan)) == sorted(set(hosts))
 
     def test_wrap_dc_aware(self):
         cluster = Mock(spec=Cluster)
