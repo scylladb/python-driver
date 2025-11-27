@@ -957,7 +957,7 @@ known_event_types = frozenset((
     'TOPOLOGY_CHANGE',
     'STATUS_CHANGE',
     'SCHEMA_CHANGE',
-    'CONNECTION_METADATA_CHANGE'
+    'CLIENT_ROUTES_CHANGE'
 ))
 
 
@@ -989,7 +989,7 @@ class EventMessage(_MessageType):
         raise NotSupportedError('Unknown event type %r' % event_type)
 
     @classmethod
-    def recv_connection_metadata_change(cls, f, protocol_version):
+    def recv_client_routes_change(cls, f, protocol_version):
         # "UPDATE_NODES"
         change_type = read_string(f)
         connection_ids = read_stringlist(f)
