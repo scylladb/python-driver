@@ -122,6 +122,51 @@ class ClusterTest(unittest.TestCase):
             with pytest.raises(ValueError):
                 cluster = Cluster(contact_points=['127.0.0.1'], port=invalid_port)
 
+    def test_compression_autodisabled_without_libraries(self):
+        with patch.dict('cassandra.cluster.locally_supported_compressions', {}, clear=True):
+            with patch('cassandra.cluster.log') as patched_logger:
+                cluster = Cluster(compression=True)
+
+        patched_logger.error.assert_called_once()
+        assert cluster.compression is False
+
+    def test_compression_validates_requested_algorithm(self):
+        with patch.dict('cassandra.cluster.locally_supported_compressions', {}, clear=True):
+            with pytest.raises(ValueError):
+                Cluster(compression='lz4')
+
+        with patch.dict('cassandra.cluster.locally_supported_compressions', {'lz4': ('c', 'd')}, clear=True):
+            with patch('cassandra.cluster.log') as patched_logger:
+                cluster = Cluster(compression='lz4')
+
+        patched_logger.error.assert_not_called()
+        assert cluster.compression == 'lz4'
+
+    def test_compression_type_validation(self):
+        with pytest.raises(TypeError):
+            Cluster(compression=123)
+
+    def test_connection_factory_passes_compression_kwarg(self):
+        endpoint = Mock(address='127.0.0.1')
+        scenarios = [
+            ({}, True, False),
+            ({'snappy': ('c', 'd')}, True, True),
+            ({'lz4': ('c', 'd')}, 'lz4', 'lz4'),
+            ({'lz4': ('c', 'd'), 'snappy': ('c', 'd')}, False, False),
+            ({'lz4': ('c', 'd'), 'snappy': ('c', 'd')}, None, False),
+        ]
+
+        for supported, configured, expected in scenarios:
+            with patch.dict('cassandra.cluster.locally_supported_compressions', supported, clear=True):
+                with patch.object(Cluster.connection_class, 'factory', autospec=True, return_value='connection') as factory:
+                    cluster = Cluster(compression=configured)
+                    conn = cluster.connection_factory(endpoint)
+
+                assert conn == 'connection'
+                assert factory.call_count == 1
+                assert factory.call_args.kwargs['compression'] == expected
+                assert cluster.compression == expected
+
 
 class SchedulerTest(unittest.TestCase):
     # TODO: this suite could be expanded; for now just adding a test covering a ticket

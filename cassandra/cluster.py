@@ -685,7 +685,7 @@ class Cluster(object):
     Used for testing new protocol features incrementally before the new version is complete.
     """
 
-    compression: Union[bool, str] = True
+    compression: Union[bool, str, None] = True
     """
     Controls compression for communications between the driver and Cassandra.
     If left as the default of :const:`True`, either lz4 or snappy compression
@@ -695,7 +695,7 @@ class Cluster(object):
     You may also set this to 'snappy' or 'lz4' to request that specific
     compression type.
 
-    Setting this to :const:`False` disables compression.
+    Setting this to :const:`False` or :const:`None` disables compression.
     """
 
     _application_info: Optional[ApplicationInfoBase] = None
@@ -1172,7 +1172,7 @@ class Cluster(object):
     def __init__(self,
                  contact_points=_NOT_SET,
                  port=9042,
-                 compression: Union[bool, str] = True,
+                 compression: Union[bool, str, None] = True,
                  auth_provider=None,
                  load_balancing_policy=None,
                  reconnection_policy=None,
@@ -1285,7 +1285,8 @@ class Cluster(object):
 
         self._resolve_hostnames()
 
-        if isinstance(compression, bool):
+        if isinstance(compression, bool) or compression is None:
+            compression = bool(compression)
             if compression and not locally_supported_compressions:
                 log.error(
                     "Compression is enabled, but no compression libraries are available. "
