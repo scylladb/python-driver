@@ -26,7 +26,7 @@ To check if the installation was successful, you can run::
 
     python -c 'import cassandra; print(cassandra.__version__)'
 
-It should print something like "3.29.6".
+It should print something like "3.29.7".
 
 (*Optional*) Compression Support
 --------------------------------
@@ -208,7 +208,7 @@ through `Homebrew <http://brew.sh/>`_. For example, on Mac OS X::
 
     $ brew install libev
 
-The libev extension can now be built for Windows as of Python driver version 3.29.6.  You can
+The libev extension can now be built for Windows as of Python driver version 3.29.7.  You can
 install libev using any Windows package manager.  For example, to install using `vcpkg <https://vcpkg.io>`_:
 
     $ vcpkg install libev

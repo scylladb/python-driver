@@ -27,10 +27,11 @@ TAGS = [
     '3.29.4-scylla',
     '3.29.5-scylla',
     '3.29.6-scylla',
+    '3.29.7-scylla',
 ]
 BRANCHES = ['master']
 # Set the latest version.
-LATEST_VERSION = '3.29.6-scylla'
+LATEST_VERSION = '3.29.7-scylla'
 # Set which versions are not released yet.
 UNSTABLE_VERSIONS = ['master']
 # Set which versions are deprecated

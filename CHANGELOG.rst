@@ -1,3 +1,11 @@
+3.29.7
+======
+December 08, 2025
+
+Bug Fixes
+---------
+* Make compression=None a valid case (#610)
+
 3.29.6
 ======
 November 27, 2025
