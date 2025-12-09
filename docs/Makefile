@@ -24,7 +24,7 @@ all: dirhtml
 
 .PHONY: update
 update:
-	$(UV) update
+	$(UV) lock --upgrade
 
 # Clean commands
 .PHONY: pristine
