@@ -153,7 +153,7 @@ jobs:
         run: |
           GITHUB_WORKFLOW_REF="scylladb/python-driver/.github/workflows/lib-build-and-push.yml@refs/heads/master" CIBW_BUILD="cp3*" cibuildwheel --archs aarch64 --output-dir wheelhouse
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: wheels-${{ matrix.target }}-${{ matrix.os }}
           path: ./wheelhouse/*.whl
@@ -172,7 +172,7 @@ jobs:
       - name: Build sdist
         run: uv build --sdist
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: source-dist
           path: dist/*.tar.gz
@@ -185,7 +185,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
