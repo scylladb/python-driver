@@ -1892,7 +1892,7 @@ class Murmur3Token(HashToken):
 
     def __init__(self, token):
         """ `token` is an int or string representing the token. """
-        self.value = int(token)
+        super().__init__(int(token))
 
 
 class MD5Token(HashToken):
