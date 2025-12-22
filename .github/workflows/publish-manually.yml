@@ -1,5 +1,8 @@
 name: Build and upload to PyPi manually
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:
