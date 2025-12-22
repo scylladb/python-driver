@@ -22,6 +22,7 @@ import threading
 from queue import PriorityQueue
 import sys
 import platform
+import uuid
 
 from cassandra.cluster import Cluster, Session
 from cassandra.concurrent import execute_concurrent, execute_concurrent_with_args
@@ -248,7 +249,7 @@ class ConcurrencyTest((unittest.TestCase)):
         PYTHON-585
         """
         max_recursion = sys.getrecursionlimit()
-        s = Session(Cluster(), [Host("127.0.0.1", SimpleConvictionPolicy)])
+        s = Session(Cluster(), [Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
         with pytest.raises(TypeError):
             execute_concurrent_with_args(s, "doesn't matter", [('param',)] * max_recursion, raise_on_first_error=True)
 
