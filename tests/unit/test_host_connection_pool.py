@@ -14,6 +14,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import logging
 import time
+import uuid
 from cassandra.protocol_features import ProtocolFeatures
 
 from cassandra.shard_info import _ShardingInfo
@@ -205,20 +206,20 @@ class _PoolTests(unittest.TestCase):
         """
 
         with pytest.raises(ValueError):
-            Host(None, None)
+            Host(None, None, host_id=uuid.uuid4())
         with pytest.raises(ValueError):
-            Host('127.0.0.1', None)
+            Host('127.0.0.1', None, host_id=uuid.uuid4())
         with pytest.raises(ValueError):
-            Host(None, SimpleConvictionPolicy)
+            Host(None, SimpleConvictionPolicy, host_id=uuid.uuid4())
 
     def test_host_equality(self):
         """
         Test host equality has correct logic
         """
 
-        a = Host('127.0.0.1', SimpleConvictionPolicy)
-        b = Host('127.0.0.1', SimpleConvictionPolicy)
-        c = Host('127.0.0.2', SimpleConvictionPolicy)
+        a = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        b = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        c = Host('127.0.0.2', SimpleConvictionPolicy, host_id=uuid.uuid4())
 
         assert a == b, 'Two Host instances should be equal when sharing.'
         assert a != c, 'Two Host instances should NOT be equal when using two different addresses.'
@@ -253,7 +254,7 @@ class HostConnectionTests(_PoolTests):
                 connection.is_shutdown = False
                 connection.is_defunct = False
                 connection.is_closed = False
-                connection.features = ProtocolFeatures(shard_id=self.connection_counter, 
+                connection.features = ProtocolFeatures(shard_id=self.connection_counter,
                                                        sharding_info=_ShardingInfo(shard_id=1, shards_count=14,
                                                                     partitioner="", sharding_algorithm="", sharding_ignore_msb=0,
                                                                     shard_aware_port="", shard_aware_port_ssl=""))
