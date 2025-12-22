@@ -17,6 +17,7 @@ import logging
 import socket
 
 from unittest.mock import patch, Mock
+import uuid
 
 from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, RequestExecutionException, ReadTimeout, WriteTimeout, CoordinationFailure, ReadFailure, WriteFailure, FunctionFailure, AlreadyExists,\
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
@@ -200,7 +201,7 @@ class SessionTest(unittest.TestCase):
         PR #510
         """
         c = Cluster(protocol_version=4)
-        s = Session(c, [Host("127.0.0.1", SimpleConvictionPolicy)])
+        s = Session(c, [Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
         c.connection_class.initialize_reactor()
 
         # default is None
@@ -229,7 +230,7 @@ class SessionTest(unittest.TestCase):
         PR #510
         """
         c = Cluster(protocol_version=4)
-        s = Session(c, [Host("127.0.0.1", SimpleConvictionPolicy)])
+        s = Session(c, [Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
         c.connection_class.initialize_reactor()
         # default is None
         assert s.default_serial_consistency_level is None
@@ -286,7 +287,7 @@ class ExecutionProfileTest(unittest.TestCase):
         assert cluster.profile_manager.default.load_balancing_policy.__class__ == default_lbp_factory().__class__
         assert cluster.default_retry_policy.__class__ == RetryPolicy
         assert cluster.profile_manager.default.retry_policy.__class__ == RetryPolicy
-        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy)])
+        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
         assert session.default_timeout == 10.0
         assert cluster.profile_manager.default.request_timeout == 10.0
         assert session.default_consistency_level == ConsistencyLevel.LOCAL_ONE
@@ -300,7 +301,7 @@ class ExecutionProfileTest(unittest.TestCase):
     def test_default_legacy(self):
         cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), default_retry_policy=DowngradingConsistencyRetryPolicy())
         assert cluster._config_mode == _ConfigMode.LEGACY
-        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy)])
+        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
         session.default_timeout = 3.7
         session.default_consistency_level = ConsistencyLevel.ALL
         session.default_serial_consistency_level = ConsistencyLevel.SERIAL
@@ -314,7 +315,7 @@ class ExecutionProfileTest(unittest.TestCase):
     def test_default_profile(self):
         non_default_profile = ExecutionProfile(RoundRobinPolicy(), *[object() for _ in range(2)])
         cluster = Cluster(execution_profiles={'non-default': non_default_profile})
-        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy)])
+        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
 
         assert cluster._config_mode == _ConfigMode.PROFILES
 
@@ -347,7 +348,7 @@ class ExecutionProfileTest(unittest.TestCase):
     def test_statement_params_override_legacy(self):
         cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), default_retry_policy=DowngradingConsistencyRetryPolicy())
         assert cluster._config_mode == _ConfigMode.LEGACY
-        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy)])
+        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
 
         ss = SimpleStatement("query", retry_policy=DowngradingConsistencyRetryPolicy(),
                              consistency_level=ConsistencyLevel.ALL, serial_consistency_level=ConsistencyLevel.SERIAL)
@@ -368,7 +369,7 @@ class ExecutionProfileTest(unittest.TestCase):
     def test_statement_params_override_profile(self):
         non_default_profile = ExecutionProfile(RoundRobinPolicy(), *[object() for _ in range(2)])
         cluster = Cluster(execution_profiles={'non-default': non_default_profile})
-        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy)])
+        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
 
         assert cluster._config_mode == _ConfigMode.PROFILES
 
@@ -406,7 +407,7 @@ class ExecutionProfileTest(unittest.TestCase):
 
         # session settings lock out profiles
         cluster = Cluster()
-        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy)])
+        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
         for attr, value in (('default_timeout', 1),
                             ('default_consistency_level', ConsistencyLevel.ANY),
                             ('default_serial_consistency_level', ConsistencyLevel.SERIAL),
@@ -432,7 +433,7 @@ class ExecutionProfileTest(unittest.TestCase):
                                 ('load_balancing_policy', default_lbp_factory())):
                 with pytest.raises(ValueError):
                     setattr(cluster, attr, value)
-            session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy)])
+            session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
             for attr, value in (('default_timeout', 1),
                                 ('default_consistency_level', ConsistencyLevel.ANY),
                                 ('default_serial_consistency_level', ConsistencyLevel.SERIAL),
@@ -445,7 +446,7 @@ class ExecutionProfileTest(unittest.TestCase):
 
         internalized_profile = ExecutionProfile(RoundRobinPolicy(), *[object() for _ in range(2)])
         cluster = Cluster(execution_profiles={'by-name': internalized_profile})
-        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy)])
+        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
         assert cluster._config_mode == _ConfigMode.PROFILES
 
         rf = session.execute_async("query", execution_profile='by-name')
@@ -459,7 +460,7 @@ class ExecutionProfileTest(unittest.TestCase):
     def test_exec_profile_clone(self):
 
         cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(), 'one': ExecutionProfile()})
-        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy)])
+        session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
 
         profile_attrs = {'request_timeout': 1,
                          'consistency_level': ConsistencyLevel.ANY,
