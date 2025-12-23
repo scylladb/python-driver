@@ -16,7 +16,7 @@ holding custom key/value pairs.
 By default these are ignored by the server. They can be useful for servers implementing
 a custom QueryHandler.
 
-See :meth:`.Session.execute`, ::meth:`.Session.execute_async`, :attr:`.ResponseFuture.custom_payload`.
+See :meth:`.Session.execute`, :meth:`.Session.execute_async`, :attr:`.ResponseFuture.custom_payload`.
 
 .. autoclass:: _ProtocolHandler
 
@@ -53,5 +53,5 @@ These protocol handlers comprise different parsers, and return results as descri
 - LazyProtocolHandler: near drop-in replacement for the above, except that it returns an iterator over rows,
   lazily decoded into the default row format (this is more efficient since all decoded results are not materialized at once)
 
-- NumpyProtocolHander: deserializes results directly into NumPy arrays. This facilitates efficient integration with
+- NumpyProtocolHandler: deserializes results directly into NumPy arrays. This facilitates efficient integration with
   analysis toolkits such as Pandas.
