@@ -90,7 +90,10 @@ class ClusterTest(unittest.TestCase):
 
     def test_tuple_for_contact_points(self):
         cluster = Cluster(contact_points=[('localhost', 9045), ('127.0.0.2', 9046), '127.0.0.3'], port=9999)
-        localhost_addr = set([addr[0] for addr in [t for (_,_,_,_,t) in socket.getaddrinfo("localhost",80)]])
+        # Refactored for clarity
+        addr_info = socket.getaddrinfo("localhost", 80)
+        sockaddr_tuples = [info[4] for info in addr_info]  # info[4] is sockaddr
+        localhost_addr = set([sockaddr[0] for sockaddr in sockaddr_tuples])
         for cp in cluster.endpoints_resolved:
             if cp.address in localhost_addr:
                 assert cp.port == 9045
@@ -107,7 +110,7 @@ class ClusterTest(unittest.TestCase):
             Cluster(contact_points="not a sequence", protocol_version=4, connect_timeout=1)
 
     def test_port_str(self):
-        """Check port passed as tring is converted and checked properly"""
+        """Check port passed as string is converted and checked properly"""
         cluster = Cluster(contact_points=['127.0.0.1'], port='1111')
         for cp in cluster.endpoints_resolved:
             if cp.address in ('::1', '127.0.0.1'):
@@ -181,7 +184,7 @@ class SchedulerTest(unittest.TestCase):
         """
         sched = _Scheduler(None)
         sched.schedule(0, lambda: None)
-        sched.schedule(0, lambda: None)  # pre-473: "TypeError: unorderable types: function() < function()"t
+        sched.schedule(0, lambda: None)  # pre-473: "TypeError: unorderable types: function() < function()"
 
 
 class SessionTest(unittest.TestCase):
@@ -291,7 +294,7 @@ class ExecutionProfileTest(unittest.TestCase):
         assert cluster.profile_manager.default.request_timeout == 10.0
         assert session.default_consistency_level == ConsistencyLevel.LOCAL_ONE
         assert cluster.profile_manager.default.consistency_level == ConsistencyLevel.LOCAL_ONE
-        assert session.default_serial_consistency_level == None
+        assert session.default_serial_consistency_level is None
         assert cluster.profile_manager.default.serial_consistency_level == None
         assert session.row_factory == named_tuple_factory
         assert cluster.profile_manager.default.row_factory == named_tuple_factory
