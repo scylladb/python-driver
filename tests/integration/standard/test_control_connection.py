@@ -90,14 +90,14 @@ class ControlConnectionTests(unittest.TestCase):
         """
 
         host = self.cluster.get_control_connection_host()
-        assert host == None
+        assert host is None
 
         self.session = self.cluster.connect()
         cc_host = self.cluster.control_connection._connection.host
 
         host = self.cluster.get_control_connection_host()
         assert host.address == cc_host
-        assert host.is_up == True
+        assert host.is_up
 
         # reconnect and make sure that the new host is reflected correctly
         self.cluster.control_connection._reconnect()
@@ -117,16 +117,16 @@ class ControlConnectionTests(unittest.TestCase):
         self.cluster = TestCluster()
 
         host = self.cluster.get_control_connection_host()
-        assert host == None
+        assert host is None
 
         self.session = self.cluster.connect()
         cc_endpoint = self.cluster.control_connection._connection.endpoint
 
         host = self.cluster.get_control_connection_host()
         assert host.endpoint == cc_endpoint
-        assert host.is_up == True
+        assert host.is_up
         hosts = self.cluster.metadata.all_hosts()
-        assert 3 == len(hosts)
+        assert len(hosts) == 3
 
         for host in hosts:
             assert 9042 == host.broadcast_rpc_port
