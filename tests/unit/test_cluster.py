@@ -295,7 +295,7 @@ class ExecutionProfileTest(unittest.TestCase):
         assert session.default_consistency_level == ConsistencyLevel.LOCAL_ONE
         assert cluster.profile_manager.default.consistency_level == ConsistencyLevel.LOCAL_ONE
         assert session.default_serial_consistency_level is None
-        assert cluster.profile_manager.default.serial_consistency_level == None
+        assert cluster.profile_manager.default.serial_consistency_level is None
         assert session.row_factory == named_tuple_factory
         assert cluster.profile_manager.default.row_factory == named_tuple_factory
 
