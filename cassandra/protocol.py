@@ -719,24 +719,37 @@ class ResultMessage(_MessageType):
         rows = [self.recv_row(f, len(column_metadata)) for _ in range(rowcount)]
         self.column_names = [c[2] for c in column_metadata]
         self.column_types = [c[3] for c in column_metadata]
-        col_descs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata]
 
-        def decode_val(val, col_md, col_desc):
-            uses_ce = column_encryption_policy and column_encryption_policy.contains_column(col_desc)
-            col_type = column_encryption_policy.column_type(col_desc) if uses_ce else col_md[3]
-            raw_bytes = column_encryption_policy.decrypt(col_desc, val) if uses_ce else val
-            return col_type.from_binary(raw_bytes, protocol_version)
+        if column_encryption_policy:
+            col_descs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata]
 
-        def decode_row(row):
-            return tuple(decode_val(val, col_md, col_desc) for val, col_md, col_desc in zip(row, column_metadata, col_descs))
+            def decode_val(val, col_md, col_desc):
+                uses_ce = column_encryption_policy.contains_column(col_desc)
+                if uses_ce:
+                    col_type = column_encryption_policy.column_type(col_desc)
+                    raw_bytes = column_encryption_policy.decrypt(col_desc, val)
+                    return col_type.from_binary(raw_bytes, protocol_version)
+                else:
+                    return col_md[3].from_binary(val, protocol_version)
+
+            def decode_row(row):
+                return tuple(decode_val(val, col_md, col_desc) for val, col_md, col_desc in zip(row, column_metadata, col_descs))
+        else:
+            def decode_row(row):
+                return tuple(col_md[3].from_binary(val, protocol_version) for val, col_md in zip(row, column_metadata))
 
         try:
             self.parsed_rows = [decode_row(row) for row in rows]
         except Exception:
+            if not column_encryption_policy:
+                col_descs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata]
             for row in rows:
                 for val, col_md, col_desc in zip(row, column_metadata, col_descs):
                     try:
-                        decode_val(val, col_md, col_desc)
+                        if column_encryption_policy:
+                            decode_val(val, col_md, col_desc)
+                        else:
+                            col_md[3].from_binary(val, protocol_version)
                     except Exception as e:
                         raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
                                                                                                      col_md[3].cql_parameterized_type(),
