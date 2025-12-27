@@ -3441,6 +3441,43 @@ def _clear_watcher(conn, expiring_weakref):
         pass
 
 
+def _fetch_all_pages(connection, query_msg, timeout, fail_on_error=True):
+    response = connection.wait_for_response(query_msg, timeout=timeout, fail_on_error=fail_on_error)
+    
+    if not fail_on_error:
+        success, result = response
+        if not success:
+            return response
+    else:
+        result = response
+    
+    if not result or not result.paging_state:
+        return response if not fail_on_error else result
+    
+    all_rows = list(result.parsed_rows) if result.parsed_rows else []
+    
+    # Fetch remaining pages
+    while result and result.paging_state:
+        query_msg.paging_state = result.paging_state
+        page_response = connection.wait_for_response(query_msg, timeout=timeout, fail_on_error=fail_on_error)
+        
+        if not fail_on_error:
+            page_success, page_result = page_response
+            if not page_success:
+                return page_response
+            result = page_result
+        else:
+            result = page_response
+            
+        if result and result.parsed_rows:
+            all_rows.extend(result.parsed_rows)
+    
+    if result:
+        result.parsed_rows = all_rows
+    
+    return (True, result) if not fail_on_error else result
+
+
 class ControlConnection(object):
     """
     Internal
@@ -3634,23 +3671,27 @@ class ControlConnection(object):
             sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
             sel_local = self._SELECT_LOCAL if self._token_meta_enabled else self._SELECT_LOCAL_NO_TOKENS
             peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                       consistency_level=ConsistencyLevel.ONE)
+                                       consistency_level=ConsistencyLevel.ONE,
+                                       fetch_size=self._schema_meta_page_size)
             local_query = QueryMessage(query=maybe_add_timeout_to_query(sel_local, self._metadata_request_timeout),
-                                       consistency_level=ConsistencyLevel.ONE)
-            (peers_success, peers_result), (local_success, local_result) = connection.wait_for_responses(
-                peers_query, local_query, timeout=self._timeout, fail_on_error=False)
+                                       consistency_level=ConsistencyLevel.ONE,
+                                       fetch_size=self._schema_meta_page_size)
+
+            local_success, local_result = _fetch_all_pages(connection, local_query, self._timeout, fail_on_error=False)
 
             if not local_success:
                 raise local_result
 
+            peers_success, peers_result = _fetch_all_pages(connection, peers_query, self._timeout, fail_on_error=False)
+            
             if not peers_success:
                 # error with the peers v2 query, fallback to peers v1
                 self._uses_peers_v2 = False
                 sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
                 peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                           consistency_level=ConsistencyLevel.ONE)
-                peers_result = connection.wait_for_response(
-                    peers_query, timeout=self._timeout)
+                                           consistency_level=ConsistencyLevel.ONE,
+                                           fetch_size=self._schema_meta_page_size)
+                peers_result = _fetch_all_pages(connection, peers_query, self._timeout)
 
             shared_results = (peers_result, local_result)
             self._refresh_node_list_and_token_map(connection, preloaded_results=shared_results)
@@ -3793,11 +3834,17 @@ class ControlConnection(object):
                 log.debug("[control connection] Refreshing node list and token map")
                 sel_local = self._SELECT_LOCAL
             peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                       consistency_level=cl)
+                                       consistency_level=cl,
+                                       fetch_size=self._schema_meta_page_size)
             local_query = QueryMessage(query=maybe_add_timeout_to_query(sel_local, self._metadata_request_timeout),
-                                       consistency_level=cl)
-            peers_result, local_result = connection.wait_for_responses(
-                peers_query, local_query, timeout=self._timeout)
+                                       consistency_level=cl,
+                                       fetch_size=self._schema_meta_page_size)
+            
+            # Fetch all pages for both queries
+            # Note: system.local always has exactly 1 row, so it will never have additional pages
+            # system.peers might have multiple pages for very large clusters (>1000 nodes)
+            peers_result = _fetch_all_pages(connection, peers_query, self._timeout)
+            local_result = _fetch_all_pages(connection, local_query, self._timeout)
 
         peers_result = dict_factory(peers_result.column_names, peers_result.parsed_rows)
 
@@ -3852,9 +3899,11 @@ class ControlConnection(object):
                         # in system.local. See CASSANDRA-9436.
                         local_rpc_address_query = QueryMessage(
                             query=maybe_add_timeout_to_query(self._SELECT_LOCAL_NO_TOKENS_RPC_ADDRESS, self._metadata_request_timeout),
-                            consistency_level=ConsistencyLevel.ONE)
-                        success, local_rpc_address_result = connection.wait_for_response(
-                            local_rpc_address_query, timeout=self._timeout, fail_on_error=False)
+                            consistency_level=ConsistencyLevel.ONE,
+                            fetch_size=self._schema_meta_page_size)
+                        # Fetch all pages (system.local table always contains exactly one row, so this is effectively a no-op)
+                        success, local_rpc_address_result = _fetch_all_pages(
+                            connection, local_rpc_address_query, self._timeout, fail_on_error=False)
                         if success:
                             row = dict_factory(
                                 local_rpc_address_result.column_names,
@@ -4088,13 +4137,19 @@ class ControlConnection(object):
 
             while elapsed < total_timeout:
                 peers_query = QueryMessage(query=maybe_add_timeout_to_query(select_peers_query, self._metadata_request_timeout),
-                                           consistency_level=cl)
+                                           consistency_level=cl,
+                                           fetch_size=self._schema_meta_page_size)
                 local_query = QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_SCHEMA_LOCAL, self._metadata_request_timeout),
-                                           consistency_level=cl)
+                                           consistency_level=cl,
+                                           fetch_size=self._schema_meta_page_size)
                 try:
                     timeout = min(self._timeout, total_timeout - elapsed)
-                    peers_result, local_result = connection.wait_for_responses(
-                        peers_query, local_query, timeout=timeout)
+                    
+                    # Fetch all pages if there are more results
+                    # Note: system.local always has exactly 1 row, so it will never have additional pages
+                    # system.peers might have multiple pages for very large clusters (>1000 nodes)
+                    peers_result = _fetch_all_pages(connection, peers_query, timeout)
+                    local_result = _fetch_all_pages(connection, local_query, timeout)
                 except OperationTimedOut as timeout:
                     log.debug("[control connection] Timed out waiting for "
                               "response during schema agreement check: %s", timeout)

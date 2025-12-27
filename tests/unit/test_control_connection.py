@@ -15,10 +15,10 @@
 import unittest
 
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import Mock, ANY, call
+from unittest.mock import Mock, ANY, call, MagicMock
 
-from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
-from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
+from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType, ConsistencyLevel
+from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS, QueryMessage
 from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.pool import Host
 from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
@@ -167,6 +167,20 @@ class MockConnection(object):
              ["192.168.1.2", 9042, "10.0.0.2", 7040, "a", "dc1", "rack1", ["2", "102", "202"], "uuid3"]]
         ]
         self.wait_for_responses = Mock(return_value=_node_meta_results(self.local_results, self.peer_results))
+        # Set up wait_for_response to return the appropriate result based on the query
+        def wait_for_response_side_effect(query_msg, timeout=None, fail_on_error=True):
+            # Create a result that matches the expected format
+            result = ResultMessage(kind=RESULT_KIND_ROWS)
+            # Return peer or local results based on some simple heuristic
+            if "peers" in query_msg.query.lower():
+                result.column_names = self.peer_results[0]
+                result.parsed_rows = self.peer_results[1]
+            else:
+                result.column_names = self.local_results[0]
+                result.parsed_rows = self.local_results[1]
+            result.paging_state = None
+            return result
+        self.wait_for_response = Mock(side_effect=wait_for_response_side_effect)
 
 
 class FakeTime(object):
@@ -304,6 +318,68 @@ class ControlConnectionTest(unittest.TestCase):
             assert host.rack == "rack1"
 
         assert self.connection.wait_for_responses.call_count == 1
+
+    def test_topology_queries_use_paging(self):
+        """
+        Test that topology queries (system.peers and system.local) use fetch_size parameter
+        """
+        # Test during refresh_node_list_and_token_map
+        self.control_connection.refresh_node_list_and_token_map()
+        
+        # Verify that wait_for_response was called (now used instead of wait_for_responses)
+        assert self.connection.wait_for_response.called
+        
+        # Get the QueryMessage arguments from the calls
+        calls = self.connection.wait_for_response.call_args_list
+        
+        # Verify QueryMessage instances have fetch_size set
+        for call in calls:
+            query_msg = call[0][0]  # First positional argument
+            assert isinstance(query_msg, QueryMessage)
+            assert query_msg.fetch_size == self.control_connection._schema_meta_page_size
+
+    def test_topology_queries_fetch_all_pages(self):
+        """
+        Test that topology queries fetch all pages when results are paged
+        """
+        from cassandra.cluster import _fetch_all_pages
+        
+        # Create mock connection
+        mock_connection = MagicMock()
+        mock_connection.endpoint = DefaultEndPoint("192.168.1.0")
+        mock_connection.original_endpoint = mock_connection.endpoint
+        
+        # Create first page of peers results with paging_state
+        first_page = ResultMessage(kind=RESULT_KIND_ROWS)
+        first_page.column_names = ["rpc_address", "peer", "schema_version", "data_center", "rack", "tokens", "host_id"]
+        first_page.parsed_rows = [["192.168.1.1", "10.0.0.1", "a", "dc1", "rack1", ["1", "101", "201"], "uuid2"]]
+        first_page.paging_state = b"has_more_pages"
+        
+        # Create second page of peers results without paging_state
+        second_page = ResultMessage(kind=RESULT_KIND_ROWS)
+        second_page.column_names = ["rpc_address", "peer", "schema_version", "data_center", "rack", "tokens", "host_id"]
+        second_page.parsed_rows = [["192.168.1.2", "10.0.0.2", "a", "dc1", "rack1", ["2", "102", "202"], "uuid3"]]
+        second_page.paging_state = None
+        
+        # Setup mock: first call returns first page, second call returns second page
+        mock_connection.wait_for_response.side_effect = [first_page, second_page]
+        
+        # Test _fetch_remaining_pages
+        self.control_connection._connection = mock_connection
+        query_msg = QueryMessage(query="SELECT * FROM system.peers", 
+                                consistency_level=ConsistencyLevel.ONE, 
+                                fetch_size=self.control_connection._schema_meta_page_size)
+        
+        result = _fetch_all_pages(mock_connection, query_msg, timeout=5)
+        
+        # Verify that both pages were fetched
+        assert len(result.parsed_rows) == 2
+        assert result.parsed_rows[0][0] == "192.168.1.1"
+        assert result.parsed_rows[1][0] == "192.168.1.2"
+        assert result.paging_state is None
+        
+        # Verify wait_for_response was called twice (first page + second page)
+        assert mock_connection.wait_for_response.call_count == 2
 
     def test_refresh_nodes_and_tokens_with_invalid_peers(self):
         def refresh_and_validate_added_hosts():
