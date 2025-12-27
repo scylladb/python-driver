@@ -62,6 +62,29 @@ def datetime_from_timestamp(timestamp):
     return dt
 
 
+def datetime_from_timestamp_ms(timestamp_ms):
+    """
+    Creates a timezone-agnostic datetime from timestamp in milliseconds.
+    Avoids floating-point conversion to maintain precision for large timestamps.
+    
+    Works around precision loss issues with large timestamps (far from epoch)
+    by using integer arithmetic throughout.
+    
+    :param timestamp_ms: a unix timestamp, in milliseconds (as integer)
+    """
+    # Break down milliseconds into components to avoid float conversion
+    timestamp_seconds = timestamp_ms // 1000
+    remainder_ms = timestamp_ms % 1000
+    # Handle negative timestamps correctly
+    if remainder_ms < 0:
+        remainder_ms += 1000
+        timestamp_seconds -= 1
+    
+    microseconds = remainder_ms * 1000
+    dt = DATETIME_EPOC + datetime.timedelta(seconds=timestamp_seconds, microseconds=microseconds)
+    return dt
+
+
 def utc_datetime_from_ms_timestamp(timestamp):
     """
     Creates a UTC datetime from a timestamp in milliseconds. See
