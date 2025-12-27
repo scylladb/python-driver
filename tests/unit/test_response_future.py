@@ -24,7 +24,7 @@ from cassandra.connection import Connection, ConnectionException
 from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessage,
                                 UnavailableErrorMessage, ResultMessage, QueryMessage,
                                 OverloadedErrorMessage, IsBootstrappingErrorMessage,
-                                PreparedQueryNotFound, PrepareMessage,
+                                PreparedQueryNotFound, PrepareMessage, ServerError,
                                 RESULT_KIND_ROWS, RESULT_KIND_SET_KEYSPACE,
                                 RESULT_KIND_SCHEMA_CHANGE, RESULT_KIND_PREPARED,
                                 ProtocolHandler)
@@ -668,3 +668,58 @@ class ResponseFutureTests(unittest.TestCase):
 
         assert len(connection.request_ids) == 0, \
             "Request IDs should be empty but it's not: {}".format(connection.request_ids)
+
+    def test_single_host_query_plan_exhausted_after_one_retry(self):
+        """
+        Test that when a specific host is provided, the query plan is properly
+        exhausted after one attempt and doesn't cause infinite retries.
+        
+        This test reproduces the issue where providing a single host in the query plan
+        (via the host parameter) would cause infinite retries on server errors because
+        the query_plan was a list instead of an iterator.
+        """
+        session = self.make_basic_session()
+        pool = self.make_pool()
+        session._pools.get.return_value = pool
+        
+        # Create a specific host
+        specific_host = Mock()
+        
+        connection = Mock(spec=Connection)
+        pool.borrow_connection.return_value = (connection, 1)
+        
+        query = SimpleStatement("INSERT INTO foo (a, b) VALUES (1, 2)")
+        message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
+        
+        # Create ResponseFuture with a specific host (this is the key to reproducing the bug)
+        rf = ResponseFuture(session, message, query, 1, host=specific_host)
+        rf.send_request()
+        
+        # Verify initial request was sent
+        rf.session._pools.get.assert_called_once_with(specific_host)
+        pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY)
+        connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
+        
+        # Simulate a ServerError response (which triggers RETRY_NEXT_HOST by default)
+        result = Mock(spec=ServerError, info={})
+        result.to_exception.return_value = result
+        rf._set_result(specific_host, None, None, result)
+        
+        # The retry should be scheduled
+        rf.session.cluster.scheduler.schedule.assert_called_once_with(ANY, rf._retry_task, False, specific_host)
+        assert 1 == rf._query_retries
+        
+        # Reset mocks to track next calls
+        pool.borrow_connection.reset_mock()
+        connection.send_msg.reset_mock()
+        
+        # Now simulate the retry task executing
+        # The bug would cause this to succeed and retry again infinitely
+        # The fix ensures the iterator is exhausted after the first try
+        rf._retry_task(False, specific_host)
+        
+        # After the retry, send_request should be called but the query_plan iterator
+        # should be exhausted, so no new request should be sent
+        # Instead, it should set a NoHostAvailable exception
+        assert rf._final_exception is not None
+        assert isinstance(rf._final_exception, NoHostAvailable)
