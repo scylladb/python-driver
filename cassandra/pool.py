@@ -176,7 +176,7 @@ class Host(object):
         self.endpoint = endpoint if isinstance(endpoint, EndPoint) else DefaultEndPoint(endpoint)
         self.conviction_policy = conviction_policy_factory(self)
         if not host_id:
-            host_id = uuid.uuid4()
+            raise ValueError("host_id may not be None")
         self.host_id = host_id
         self.set_location_info(datacenter, rack)
         self.lock = RLock()
