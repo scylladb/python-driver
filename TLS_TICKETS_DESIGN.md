@@ -242,6 +242,23 @@ cluster = Cluster(
 - **Memory**: Minimal (~1KB per cached session)
 - **Cache management**: O(1) operations with occasional O(n) cleanup
 
+## Limitations
+
+### PyOpenSSL-based Reactors
+
+The initial implementation focuses on the standard Python `ssl` module used by:
+- AsyncoreConnection (default)
+- LibevConnection
+- AsyncioConnection
+- GeventConnection (when not using SSL)
+
+The following reactors use PyOpenSSL and have different session management APIs:
+- EventletConnection
+- TwistedConnection
+- GeventConnection (with SSL)
+
+Session caching for PyOpenSSL-based reactors is not included in this initial implementation but can be added in a future enhancement.
+
 ## Alternatives Considered
 
 ### 1. Global Session Cache
