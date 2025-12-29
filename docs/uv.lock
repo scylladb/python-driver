@@ -325,7 +325,7 @@ wheels = [
 
 [[package]]
 name = "gremlinpython"
-version = "3.7.4"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aenum" },
@@ -334,9 +334,9 @@ dependencies = [
     { name = "isodate" },
     { name = "nest-asyncio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bc/86/a0b20fed6bb699054f19e693b40570c27d06432469d50be677a156b65fcb/gremlinpython-3.7.4.tar.gz", hash = "sha256:d41579a8ef83c1dce9e51ccff2b5fb496170be0fdb0f491d4124c29e7df9b14d", size = 52639, upload-time = "2025-08-08T16:55:23.376Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3b/43/fb7de8d7a6229099fda0793c808a86f232914aaa80768c6e8579d22305a8/gremlinpython-3.8.0.tar.gz", hash = "sha256:e4389f20dfc4429ebf5d5512e78832ccdde6df04b34c232d02315cd4a81cef11", size = 54619, upload-time = "2025-11-17T23:15:27.479Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b1/84/7a268ae9d5ae4a64a701fa099497b7531820d42f6c19dfec39dcdb238bf7/gremlinpython-3.7.4-py3-none-any.whl", hash = "sha256:b6b336320d0110382b6a3832bc19b4e2bf72e4b3f38dab25fdbedfa1a3167987", size = 78522, upload-time = "2025-08-08T16:55:22.246Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/8b/d1daa2d0cc0413101a690ba0ff6dfe259d163c8457cdc1d0246c399e743c/gremlinpython-3.8.0-py3-none-any.whl", hash = "sha256:e3b5d2340ec6da771b9505d5bcba435495979c6fce0872ba53a909a3ff0d5f41", size = 75905, upload-time = "2025-11-17T23:15:25.271Z" },
 ]
 
 [[package]]
@@ -650,7 +650,7 @@ dev = [
 requires-dist = [
     { name = "eventlet", specifier = ">=0.40.3,<1.0.0" },
     { name = "gevent", specifier = ">=25.9.1,<26.0.0" },
-    { name = "gremlinpython", specifier = "==3.7.4" },
+    { name = "gremlinpython", specifier = "==3.8.0" },
     { name = "pygments", specifier = ">=2.19.2,<3.0.0" },
     { name = "recommonmark", specifier = "==0.7.1" },
     { name = "redirects-cli", specifier = "~=0.1.3" },
