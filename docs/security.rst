@@ -402,3 +402,108 @@ then you can do a proxy execute...
     s.execute('select * from k.t;', execute_as='user1')  # the request will be executed as 'user1'
 
 Please see the `official documentation <https://docs.datastax.com/en/latest-dse/datastax_enterprise/unifiedAuth/unifiedAuthTOC.html>`_ for more details on the feature and configuration process.
+
+TLS Session Resumption
+----------------------
+
+.. versionadded:: 3.30.0
+
+The driver automatically caches TLS sessions to enable session resumption for faster reconnections.
+When a TLS connection is established, the session is cached and can be reused for subsequent
+connections to the same endpoint, reducing handshake latency and CPU usage.
+
+Session caching is **enabled by default** when SSL/TLS is configured and applies to the following
+connection classes:
+
+* :class:`~cassandra.io.asyncorereactor.AsyncoreConnection` (default)
+* :class:`~cassandra.io.libevreactor.LibevConnection`
+* :class:`~cassandra.io.asyncioreactor.AsyncioConnection`
+* :class:`~cassandra.io.geventreactor.GeventConnection` (when not using SSL)
+
+.. note::
+    Session caching is not currently supported for PyOpenSSL-based reactors
+    (:class:`~cassandra.io.twistedreactor.TwistedConnection`,
+    :class:`~cassandra.io.eventletreactor.EventletConnection`) but may be added in a future release.
+
+Configuration
+^^^^^^^^^^^^^
+
+TLS session caching is controlled by three cluster-level parameters:
+
+* :attr:`~.Cluster.tls_session_cache_enabled` - Enable or disable session caching (default: ``True``)
+* :attr:`~.Cluster.tls_session_cache_size` - Maximum number of sessions to cache (default: ``100``)
+* :attr:`~.Cluster.tls_session_cache_ttl` - Time-to-live for cached sessions in seconds (default: ``3600``)
+
+Example with default settings (session caching enabled):
+
+.. code-block:: python
+
+    from cassandra.cluster import Cluster
+    import ssl
+
+    ssl_context = ssl.create_default_context(cafile='/path/to/ca.crt')
+    cluster = Cluster(
+        contact_points=['127.0.0.1'],
+        ssl_context=ssl_context
+    )
+    session = cluster.connect()
+
+Example with custom cache settings:
+
+.. code-block:: python
+
+    from cassandra.cluster import Cluster
+    import ssl
+
+    ssl_context = ssl.create_default_context(cafile='/path/to/ca.crt')
+    cluster = Cluster(
+        contact_points=['127.0.0.1'],
+        ssl_context=ssl_context,
+        tls_session_cache_size=200,  # Cache up to 200 sessions
+        tls_session_cache_ttl=7200   # Sessions expire after 2 hours
+    )
+    session = cluster.connect()
+
+Example with session caching disabled:
+
+.. code-block:: python
+
+    from cassandra.cluster import Cluster
+    import ssl
+
+    ssl_context = ssl.create_default_context(cafile='/path/to/ca.crt')
+    cluster = Cluster(
+        contact_points=['127.0.0.1'],
+        ssl_context=ssl_context,
+        tls_session_cache_enabled=False
+    )
+    session = cluster.connect()
+
+How It Works
+^^^^^^^^^^^^
+
+When session caching is enabled:
+
+1. The first connection to an endpoint establishes a new TLS session and caches it
+2. Subsequent connections to the same endpoint reuse the cached session
+3. Sessions are cached per endpoint (host:port combination)
+4. Sessions expire after the configured TTL
+5. When the cache reaches max size, the least recently used session is evicted
+
+Performance Benefits
+^^^^^^^^^^^^^^^^^^^^
+
+TLS session resumption can provide:
+
+* **20-50% faster reconnection times** - Reduced handshake latency
+* **Lower CPU usage** - Fewer cryptographic operations during reconnection
+* **Better overall throughput** - Especially beneficial for workloads with frequent reconnections
+
+Security Considerations
+^^^^^^^^^^^^^^^^^^^^^^^
+
+* Sessions are stored in memory only and never persisted to disk
+* Sessions are cached per cluster and not shared across different cluster instances
+* Sessions for one endpoint are never used for a different endpoint
+* Hostname verification still occurs on each connection, even when reusing sessions
+* Sessions automatically expire after the configured TTL
