@@ -838,8 +838,8 @@ class Cluster(object):
     Using ssl_options without ssl_context is deprecated and will be removed in the
     next major release.
 
-    An optional dict which will be used as kwargs for ``ssl.SSLContext.wrap_socket`` 
-    when new sockets are created. This should be used when client encryption is enabled 
+    An optional dict which will be used as kwargs for ``ssl.SSLContext.wrap_socket``
+    when new sockets are created. This should be used when client encryption is enabled
     in Cassandra.
 
     The following documentation only applies when ssl_options is used without ssl_context.
@@ -1086,10 +1086,10 @@ class Cluster(object):
     """
     Specifies a server-side timeout (in seconds) for all internal driver queries,
     such as schema metadata lookups and cluster topology requests.
-    
+
     The timeout is enforced by appending `USING TIMEOUT <timeout>` to queries
     executed by the driver.
-    
+
     - A value of `0` disables explicit timeout enforcement. In this case,
       the driver does not add `USING TIMEOUT`, and the timeout is determined
       by the server's defaults.
@@ -1717,7 +1717,7 @@ class Cluster(object):
                           self.contact_points, self.protocol_version)
                 self.connection_class.initialize_reactor()
                 _register_cluster_shutdown(self)
-                
+
                 self._add_resolved_hosts()
 
                 try:
@@ -3534,7 +3534,7 @@ class ControlConnection(object):
         if old:
             log.debug("[control connection] Closing old connection %r, replacing with %r", old, conn)
             old.close()
-    
+
     def _connect_host_in_lbp(self):
         errors = {}
         lbp = (
@@ -3545,13 +3545,13 @@ class ControlConnection(object):
 
         for host in lbp.make_query_plan():
             try:
-                return (self._try_connect(host), None)
+                return (self._try_connect(host.endpoint), None)
             except Exception as exc:
                 errors[str(host.endpoint)] = exc
                 log.warning("[control connection] Error connecting to %s:", host, exc_info=True)
             if self._is_shutdown:
                 raise DriverException("[control connection] Reconnection in progress during shutdown")
-        
+
         return (None, errors)
 
     def _reconnect_internal(self):
@@ -3575,31 +3575,31 @@ class ControlConnection(object):
         (conn, errors) = self._connect_host_in_lbp()
         if conn is not None:
             return conn
-        
+
         raise NoHostAvailable("Unable to connect to any servers", errors)
 
-    def _try_connect(self, host):
+    def _try_connect(self, endpoint):
         """
         Creates a new Connection, registers for pushed events, and refreshes
         node/token and schema metadata.
         """
-        log.debug("[control connection] Opening new connection to %s", host)
+        log.debug("[control connection] Opening new connection to %s", endpoint)
 
         while True:
             try:
-                connection = self._cluster.connection_factory(host.endpoint, is_control_connection=True)
+                connection = self._cluster.connection_factory(endpoint, is_control_connection=True)
                 if self._is_shutdown:
                     connection.close()
                     raise DriverException("Reconnecting during shutdown")
                 break
             except ProtocolVersionUnsupported as e:
-                self._cluster.protocol_downgrade(host.endpoint, e.startup_version)
+                self._cluster.protocol_downgrade(endpoint, e.startup_version)
             except ProtocolException as e:
                 # protocol v5 is out of beta in C* >=4.0-beta5 and is now the default driver
                 # protocol version. If the protocol version was not explicitly specified,
                 # and that the server raises a beta protocol error, we should downgrade.
                 if not self._cluster._protocol_version_explicit and e.is_beta_protocol_error:
-                    self._cluster.protocol_downgrade(host.endpoint, self._cluster.protocol_version)
+                    self._cluster.protocol_downgrade(endpoint, self._cluster.protocol_version)
                 else:
                     raise
 
