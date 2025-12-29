@@ -3545,7 +3545,7 @@ class ControlConnection(object):
 
         for host in lbp.make_query_plan():
             try:
-                return (self._try_connect(host), None)
+                return (self._try_connect(host.endpoint), None)
             except ConnectionException as exc:
                 errors[str(host.endpoint)] = exc
                 log.warning("[control connection] Error connecting to %s:", host, exc_info=True)
@@ -3582,28 +3582,28 @@ class ControlConnection(object):
         
         raise NoHostAvailable("Unable to connect to any servers", errors)
 
-    def _try_connect(self, host):
+    def _try_connect(self, endpoint):
         """
         Creates a new Connection, registers for pushed events, and refreshes
         node/token and schema metadata.
         """
-        log.debug("[control connection] Opening new connection to %s", host)
+        log.debug("[control connection] Opening new connection to %s", endpoint)
 
         while True:
             try:
-                connection = self._cluster.connection_factory(host.endpoint, is_control_connection=True)
+                connection = self._cluster.connection_factory(endpoint, is_control_connection=True)
                 if self._is_shutdown:
                     connection.close()
                     raise DriverException("Reconnecting during shutdown")
                 break
             except ProtocolVersionUnsupported as e:
-                self._cluster.protocol_downgrade(host.endpoint, e.startup_version)
+                self._cluster.protocol_downgrade(endpoint, e.startup_version)
             except ProtocolException as e:
                 # protocol v5 is out of beta in C* >=4.0-beta5 and is now the default driver
                 # protocol version. If the protocol version was not explicitly specified,
                 # and that the server raises a beta protocol error, we should downgrade.
                 if not self._cluster._protocol_version_explicit and e.is_beta_protocol_error:
-                    self._cluster.protocol_downgrade(host.endpoint, self._cluster.protocol_version)
+                    self._cluster.protocol_downgrade(endpoint, self._cluster.protocol_version)
                 else:
                     raise
 
