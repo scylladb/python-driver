@@ -87,19 +87,15 @@ class TLSSessionCacheTest(unittest.TestCase):
         
         # Fill cache to capacity
         cache.set_session('host1', 9042, session1)
-        time.sleep(0.01)  # Ensure different access times
         cache.set_session('host2', 9042, session2)
-        time.sleep(0.01)
         cache.set_session('host3', 9042, session3)
         
         self.assertEqual(cache.size(), 3)
         
-        # Access session2 to update its access time
-        time.sleep(0.01)
+        # Access session2 to mark it as recently used
         cache.get_session('host2', 9042)
         
-        # Add a fourth session - should evict session1 (oldest access)
-        time.sleep(0.01)
+        # Add a fourth session - should evict session1 (least recently used)
         cache.set_session('host4', 9042, session4)
         
         self.assertEqual(cache.size(), 3)
