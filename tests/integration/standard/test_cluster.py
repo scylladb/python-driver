@@ -900,8 +900,9 @@ class ClusterTests(unittest.TestCase):
         """
         Tests that profile load balancing policies are not shared
 
-        Creates two LBP, runs a few queries, and validates that each LBP is execised
-        seperately between EP's
+        Creates two LBP, runs a few queries, and validates that each LBP is exercised
+        separately between EP's. Each RoundRobinPolicy starts from its own random
+        position and maintains independent round-robin ordering.
 
         @since 3.5
         @jira_ticket PYTHON-569
@@ -916,17 +917,28 @@ class ClusterTests(unittest.TestCase):
         with TestCluster(execution_profiles=exec_profiles) as cluster:
             session = cluster.connect(wait_for_all_pools=True)
 
-            # default is DCA RR for all hosts
             expected_hosts = set(cluster.metadata.all_hosts())
-            rr1_queried_hosts = set()
-            rr2_queried_hosts = set()
+            num_hosts = len(expected_hosts)
+            assert num_hosts > 1, "Need at least 2 hosts for this test"
 
-            rs = session.execute(query, execution_profile='rr1')
-            rr1_queried_hosts.add(rs.response_future._current_host)
-            rs = session.execute(query, execution_profile='rr2')
-            rr2_queried_hosts.add(rs.response_future._current_host)
+            rr1_queried_hosts = []
+            rr2_queried_hosts = []
 
-            assert rr2_queried_hosts == rr1_queried_hosts
+            for _ in range(num_hosts * 2):
+                rs = session.execute(query, execution_profile='rr1')
+                rr1_queried_hosts.append(rs.response_future._current_host)
+                rs = session.execute(query, execution_profile='rr2')
+                rr2_queried_hosts.append(rs.response_future._current_host)
+
+            # Both policies should have queried all hosts
+            assert set(rr1_queried_hosts) == expected_hosts
+            assert set(rr2_queried_hosts) == expected_hosts
+
+            # The order of hosts should demonstrate round-robin behavior
+            # After num_hosts queries, the pattern should repeat
+            for i in range(num_hosts):
+                assert rr1_queried_hosts[i] == rr1_queried_hosts[i + num_hosts]
+                assert rr2_queried_hosts[i] == rr2_queried_hosts[i + num_hosts]
 
     def test_ta_lbp(self):
         """
