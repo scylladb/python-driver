@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from __future__ import absolute_import  # to enable import io from stdlib
-from collections import defaultdict, deque
+from collections import defaultdict, deque, OrderedDict, namedtuple
 import errno
 from functools import wraps, partial, total_ordering
 from heapq import heappush, heappop
@@ -128,6 +128,10 @@ DEFAULT_LOCAL_PORT_HIGH = 65535
 frame_header_v3 = struct.Struct('>BhBi')
 
 
+# Named tuple for TLS session cache entries
+_SessionCacheEntry = namedtuple('_SessionCacheEntry', ['session', 'timestamp'])
+
+
 class TLSSessionCache:
     """
     Thread-safe cache for TLS sessions to enable session resumption.
@@ -135,7 +139,7 @@ class TLSSessionCache:
     This cache stores TLS sessions per endpoint (host:port) to allow
     quick TLS renegotiation when reconnecting to the same server.
     Sessions are automatically expired after a TTL and the cache has
-    a maximum size with LRU eviction.
+    a maximum size with LRU eviction using OrderedDict.
     """
     
     def __init__(self, max_size=100, ttl=3600):
@@ -146,7 +150,7 @@ class TLSSessionCache:
             max_size: Maximum number of sessions to cache (default: 100)
             ttl: Time-to-live for cached sessions in seconds (default: 3600)
         """
-        self._sessions = {}  # {endpoint_key: (session, timestamp, access_time)}
+        self._sessions = OrderedDict()  # OrderedDict for O(1) LRU eviction
         self._lock = RLock()
         self._max_size = max_size
         self._ttl = ttl
@@ -171,16 +175,16 @@ class TLSSessionCache:
             if key not in self._sessions:
                 return None
             
-            session, timestamp, _ = self._sessions[key]
+            entry = self._sessions[key]
             
             # Check if session has expired
-            if time.time() - timestamp > self._ttl:
+            if time.time() - entry.timestamp > self._ttl:
                 del self._sessions[key]
                 return None
             
-            # Update access time for LRU
-            self._sessions[key] = (session, timestamp, time.time())
-            return session
+            # Move to end to mark as recently used (LRU)
+            self._sessions.move_to_end(key)
+            return entry.session
     
     def set_session(self, host, port, session):
         """
@@ -198,23 +202,26 @@ class TLSSessionCache:
         current_time = time.time()
         
         with self._lock:
-            # If cache is at max size, remove least recently used entry
-            if len(self._sessions) >= self._max_size and key not in self._sessions:
-                # Find entry with oldest access time
-                oldest_key = min(self._sessions.keys(), 
-                               key=lambda k: self._sessions[k][2])
-                del self._sessions[oldest_key]
+            # If key already exists, just update it
+            if key in self._sessions:
+                self._sessions[key] = _SessionCacheEntry(session, current_time)
+                self._sessions.move_to_end(key)
+                return
             
-            # Store session with creation time and access time
-            self._sessions[key] = (session, current_time, current_time)
+            # If cache is at max size, remove least recently used entry (first item)
+            if len(self._sessions) >= self._max_size:
+                self._sessions.popitem(last=False)
+            
+            # Store session with creation time
+            self._sessions[key] = _SessionCacheEntry(session, current_time)
     
     def clear_expired(self):
         """Remove all expired sessions from the cache."""
         current_time = time.time()
         with self._lock:
             expired_keys = [
-                key for key, (_, timestamp, _) in self._sessions.items()
-                if current_time - timestamp > self._ttl
+                key for key, entry in self._sessions.items()
+                if current_time - entry.timestamp > self._ttl
             ]
             for key in expired_keys:
                 del self._sessions[key]
