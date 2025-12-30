@@ -3546,10 +3546,6 @@ class ControlConnection(object):
         for host in lbp.make_query_plan():
             try:
                 return (self._try_connect(host), None)
-            except ConnectionException as exc:
-                errors[str(host.endpoint)] = exc
-                log.warning("[control connection] Error connecting to %s:", host, exc_info=True)
-                self._cluster.signal_connection_failure(host, exc, is_host_addition=False)
             except Exception as exc:
                 errors[str(host.endpoint)] = exc
                 log.warning("[control connection] Error connecting to %s:", host, exc_info=True)
