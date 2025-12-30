@@ -412,6 +412,10 @@ The driver automatically caches TLS sessions to enable session resumption for fa
 When a TLS connection is established, the session is cached and can be reused for subsequent
 connections to the same endpoint, reducing handshake latency and CPU usage.
 
+**TLS Version Support**: Session resumption works with both TLS 1.2 and TLS 1.3. TLS 1.2 uses
+Session IDs and optionally Session Tickets (RFC 5077), while TLS 1.3 uses Session Tickets (RFC 8446)
+as the primary mechanism. Python's ``ssl.SSLSession`` API handles both versions transparently.
+
 Session caching is **enabled by default** when SSL/TLS is configured and applies to the following
 connection classes:
 

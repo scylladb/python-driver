@@ -140,6 +140,13 @@ class TLSSessionCache:
     quick TLS renegotiation when reconnecting to the same server.
     Sessions are automatically expired after a TTL and the cache has
     a maximum size with LRU eviction using OrderedDict.
+    
+    TLS session resumption works with both TLS 1.2 and TLS 1.3:
+    - TLS 1.2: Session IDs (RFC 5246) and optionally Session Tickets (RFC 5077)
+    - TLS 1.3: Session Tickets (RFC 8446)
+    
+    Python's ssl.SSLSession API handles both versions transparently, so no
+    version-specific checks are needed.
     """
     
     def __init__(self, max_size=100, ttl=3600):
@@ -1027,6 +1034,8 @@ class Connection(object):
             opts['server_hostname'] = server_hostname
 
         # Try to get a cached TLS session for resumption
+        # Note: Session resumption works with both TLS 1.2 and TLS 1.3
+        # Python's ssl module handles both transparently via SSLSession objects
         if self.tls_session_cache:
             cached_session = self.tls_session_cache.get_session(
                 self.endpoint.address, self.endpoint.port)

@@ -8,11 +8,16 @@ This document describes the design and implementation of TLS session ticket supp
 
 ### What are TLS Session Tickets?
 
-TLS session tickets (RFC 5077 and RFC 8446 for TLS 1.3) allow clients to cache session state and reuse it for subsequent connections. This provides:
+TLS session tickets (RFC 5077 for TLS 1.2 and RFC 8446 for TLS 1.3) allow clients to cache session state and reuse it for subsequent connections. This provides:
 
 - **Faster reconnections**: Reduced handshake latency by resuming previous sessions
 - **Less CPU usage**: Fewer cryptographic operations during reconnection
 - **Better performance**: Especially important for connection pools that frequently reconnect
+
+**Note**: TLS session resumption works with both TLS 1.2 and TLS 1.3:
+- TLS 1.2 uses Session IDs (RFC 5246) and optionally Session Tickets (RFC 5077)
+- TLS 1.3 uses Session Tickets (RFC 8446) as the primary mechanism
+- Python's `ssl.SSLSession` API works transparently with both versions
 
 ### Python SSL Support
 
