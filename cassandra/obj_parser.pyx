@@ -80,7 +80,7 @@ cdef class TupleRowParser(RowParser):
                     col_type = ce_policy.column_type(coldesc)
                     decrypted_bytes = ce_policy.decrypt(coldesc, to_bytes(&buf))
                     PyBytes_AsStringAndSize(decrypted_bytes, &newbuf.ptr, &newbuf.size)
-                    deserializer = find_deserializer(ce_policy.column_type(coldesc), desc.protocol_version)
+                    deserializer = find_deserializer(ce_policy.column_type(coldesc), deserializer.protocol_version)
                     val = from_binary(deserializer, &newbuf)
                 else:
                     val = from_binary(deserializer, &buf)
