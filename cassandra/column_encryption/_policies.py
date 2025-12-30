@@ -114,7 +114,7 @@ class AES256ColumnEncryptionPolicy(ColumnEncryptionPolicy):
         coldata = self.coldata.get(coldesc)
         if not coldata:
             raise ValueError("Could not find ColData for ColDesc %s".format(coldesc))
-        return self.encrypt(coldesc, coldata.type.serialize(obj, None))
+        return self.encrypt(coldesc, coldata.type(None).serialize(obj))
 
     def cache_info(self):
         return AES256ColumnEncryptionPolicy._build_cipher.cache_info()

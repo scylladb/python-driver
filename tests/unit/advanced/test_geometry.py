@@ -36,12 +36,12 @@ class GeoTypes(unittest.TestCase):
         for proto_ver in protocol_versions:
             for geo in self.samples:
                 cql_type = lookup_casstype(geo.__class__.__name__ + 'Type')
-                assert cql_type.from_binary(cql_type.to_binary(geo, proto_ver), proto_ver) == geo
+                assert cql_type(proto_ver).from_binary(cql_type(proto_ver).to_binary(geo)) == geo
 
     def _verify_both_endian(self, typ, body_fmt, params, expected):
         for proto_ver in protocol_versions:
-            assert typ.from_binary(struct.pack(">BI" + body_fmt, wkb_be, *params), proto_ver) == expected
-            assert typ.from_binary(struct.pack("<BI" + body_fmt, wkb_le, *params), proto_ver) == expected
+            assert typ(proto_ver).from_binary(struct.pack(">BI" + body_fmt, wkb_be, *params)) == expected
+            assert typ(proto_ver).from_binary(struct.pack("<BI" + body_fmt, wkb_le, *params)) == expected
 
     def test_both_endian(self):
         self._verify_both_endian(PointType, "dd", (WKBGeometryType.POINT, 1, 2), Point(1, 2))
@@ -52,8 +52,8 @@ class GeoTypes(unittest.TestCase):
         for cls in (LineString, Polygon):
             class_name = cls.__name__
             cql_type = lookup_casstype(class_name + 'Type')
-            assert str(cql_type.from_binary(cql_type.to_binary(cls(), 0), 0)) == class_name.upper() + " EMPTY"
-        assert str(PointType.from_binary(PointType.to_binary(Point(), 0), 0)) == "POINT (nan nan)"
+            assert str(cql_type(0).from_binary(cql_type(0).to_binary(cls()))) == class_name.upper() + " EMPTY"
+        assert str(PointType(0).from_binary(PointType(0).to_binary(Point()))) == "POINT (nan nan)"
 
     def test_str_wkt(self):
         assert str(Point(1., 2.)) == 'POINT (1.0 2.0)'

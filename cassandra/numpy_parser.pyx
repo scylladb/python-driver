@@ -156,7 +156,7 @@ cdef inline int unpack_row(
 
         if arr.is_object:
             deserializer = desc.deserializers[i]
-            val = from_binary(deserializer, &buf, desc.protocol_version)
+            val = from_binary(deserializer, &buf)
             Py_INCREF(val)
             (<PyObject **> arr.buf_ptr)[0] = <PyObject *> val
         elif buf.size >= 0:

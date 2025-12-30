@@ -948,7 +948,7 @@ class ModelMetaClass(type):
             key_cols = [c for c in partition_keys.values()]
             partition_key_index = dict((col.db_field_name, col._partition_key_index) for col in key_cols)
             key_cql_types = [c.cql_type for c in key_cols]
-            key_serializer = staticmethod(lambda parts, proto_version: [t.to_binary(p, proto_version) for t, p in zip(key_cql_types, parts)])
+            key_serializer = staticmethod(lambda parts, proto_version: [t(proto_version).to_binary(p) for t, p in zip(key_cql_types, parts)])
         else:
             partition_key_index = {}
             key_serializer = staticmethod(lambda parts, proto_version: None)

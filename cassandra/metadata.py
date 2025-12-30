@@ -2204,7 +2204,7 @@ class SchemaParserV22(_SchemaParser):
         cass_state_type = types.lookup_casstype(aggregate_row['state_type'])
         initial_condition = aggregate_row['initcond']
         if initial_condition is not None:
-            initial_condition = _encoder.cql_encode_all_types(cass_state_type.deserialize(initial_condition, 3))
+            initial_condition = _encoder.cql_encode_all_types(cass_state_type(3).deserialize(initial_condition))
         state_type = _cql_from_cass_type(cass_state_type)
         return_type = cls._schema_type_to_cql(aggregate_row['return_type'])
         return Aggregate(aggregate_row['keyspace_name'], aggregate_row['aggregate_name'],
@@ -3475,7 +3475,7 @@ def group_keys_by_replica(session, keyspace, table, keys):
     distance = cluster._default_load_balancing_policy.distance
 
     for key in keys:
-        serialized_key = [serializer.serialize(pk, cluster.protocol_version)
+        serialized_key = [serializer(cluster.protocol_version).serialize(pk)
                           for serializer, pk in zip(serializers, key)]
         if len(serialized_key) == 1:
             routing_key = serialized_key[0]

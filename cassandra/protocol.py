@@ -89,6 +89,7 @@ class _MessageType(object, metaclass=_RegisterMessageType):
     tracing = False
     custom_payload = None
     warnings = None
+    protocol_version = None
 
     def update_custom_payload(self, other):
         if other:
@@ -126,13 +127,15 @@ class ErrorMessage(_MessageType, Exception):
     @classmethod
     def recv_body(cls, f, protocol_version, protocol_features, *args):
         code = read_int(f)
-        msg = read_string(f)
+        msg_text = read_string(f)
         if code == protocol_features.rate_limit_error:
             subcls = RateLimitReachedException
         else:
             subcls = error_classes.get(code, cls)
-        extra_info = subcls.recv_error_info(f, protocol_version)
-        return subcls(code=code, message=msg, info=extra_info)
+        msg = subcls(code=code, message=msg_text, info=None)
+        msg.protocol_version = protocol_version
+        msg.info = msg.recv_error_info(f)
+        return msg
 
     def summary_msg(self):
         msg = 'Error from server: code=%04x [%s] message="%s"' \
@@ -143,8 +146,7 @@ class ErrorMessage(_MessageType, Exception):
         return '<%s>' % self.summary_msg()
     __repr__ = __str__
 
-    @staticmethod
-    def recv_error_info(f, protocol_version):
+    def recv_error_info(self, f):
         pass
 
     def to_exception(self):
@@ -192,8 +194,7 @@ class UnavailableErrorMessage(RequestExecutionException):
     summary = 'Unavailable exception'
     error_code = 0x1000
 
-    @staticmethod
-    def recv_error_info(f, protocol_version):
+    def recv_error_info(self, f):
         return {
             'consistency': read_consistency_level(f),
             'required_replicas': read_int(f),
@@ -223,8 +224,7 @@ class WriteTimeoutErrorMessage(RequestExecutionException):
     summary = "Coordinator node timed out waiting for replica nodes' responses"
     error_code = 0x1100
 
-    @staticmethod
-    def recv_error_info(f, protocol_version):
+    def recv_error_info(self, f):
         return {
             'consistency': read_consistency_level(f),
             'received_responses': read_int(f),
@@ -240,8 +240,7 @@ class ReadTimeoutErrorMessage(RequestExecutionException):
     summary = "Coordinator node timed out waiting for replica nodes' responses"
     error_code = 0x1200
 
-    @staticmethod
-    def recv_error_info(f, protocol_version):
+    def recv_error_info(self, f):
         return {
             'consistency': read_consistency_level(f),
             'received_responses': read_int(f),
@@ -257,13 +256,12 @@ class ReadFailureMessage(RequestExecutionException):
     summary = "Replica(s) failed to execute read"
     error_code = 0x1300
 
-    @staticmethod
-    def recv_error_info(f, protocol_version):
+    def recv_error_info(self, f):
         consistency = read_consistency_level(f)
         received_responses = read_int(f)
         required_responses = read_int(f)
 
-        if ProtocolVersion.uses_error_code_map(protocol_version):
+        if ProtocolVersion.uses_error_code_map(self.protocol_version):
             error_code_map = read_error_code_map(f)
             failures = len(error_code_map)
         else:
@@ -289,8 +287,7 @@ class FunctionFailureMessage(RequestExecutionException):
     summary = "User Defined Function failure"
     error_code = 0x1400
 
-    @staticmethod
-    def recv_error_info(f, protocol_version):
+    def recv_error_info(self, f):
         return {
             'keyspace': read_string(f),
             'function': read_string(f),
@@ -305,13 +302,12 @@ class WriteFailureMessage(RequestExecutionException):
     summary = "Replica(s) failed to execute write"
     error_code = 0x1500
 
-    @staticmethod
-    def recv_error_info(f, protocol_version):
+    def recv_error_info(self, f):
         consistency = read_consistency_level(f)
         received_responses = read_int(f)
         required_responses = read_int(f)
 
-        if ProtocolVersion.uses_error_code_map(protocol_version):
+        if ProtocolVersion.uses_error_code_map(self.protocol_version):
             error_code_map = read_error_code_map(f)
             failures = len(error_code_map)
         else:
@@ -368,8 +364,7 @@ class PreparedQueryNotFound(RequestValidationException):
     summary = 'Matching prepared statement not found on this node'
     error_code = 0x2500
 
-    @staticmethod
-    def recv_error_info(f, protocol_version):
+    def recv_error_info(self, f):
         # return the query ID
         return read_binary_string(f)
 
@@ -378,8 +373,7 @@ class AlreadyExistsException(ConfigurationException):
     summary = 'Item already exists'
     error_code = 0x2400
 
-    @staticmethod
-    def recv_error_info(f, protocol_version):
+    def recv_error_info(self, f):
         return {
             'keyspace': read_string(f),
             'table': read_string(f),
@@ -392,8 +386,7 @@ class RateLimitReachedException(ConfigurationException):
     summary= 'Rate limit was exceeded for a partition affected by the request'
     error_code = 0x4321
 
-    @staticmethod
-    def recv_error_info(f, protocol_version):
+    def recv_error_info(self, f):
         return {
             'op_type': OperationType(read_byte(f)),
             'rejected_by_coordinator': read_byte(f) != 0
@@ -421,7 +414,7 @@ class StartupMessage(_MessageType):
         self.cqlversion = cqlversion
         self.options = options
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f):
         optmap = self.options.copy()
         optmap['CQL_VERSION'] = self.cqlversion
         write_stringmap(f, optmap)
@@ -456,8 +449,8 @@ class CredentialsMessage(_MessageType):
     def __init__(self, creds):
         self.creds = creds
 
-    def send_body(self, f, protocol_version):
-        if protocol_version > 1:
+    def send_body(self, f):
+        if self.protocol_version > 1:
             raise UnsupportedOperation(
                 "Credentials-based authentication is not supported with "
                 "protocol version 2 or higher.  Use the SASL authentication "
@@ -487,7 +480,7 @@ class AuthResponseMessage(_MessageType):
     def __init__(self, response):
         self.response = response
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f):
         write_longstring(f, self.response)
 
 
@@ -507,7 +500,7 @@ class OptionsMessage(_MessageType):
     opcode = 0x05
     name = 'OPTIONS'
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f):
         pass
 
 
@@ -555,7 +548,7 @@ class _QueryMessage(_MessageType):
         self.skip_meta = skip_meta
         self.keyspace = keyspace
 
-    def _write_query_params(self, f, protocol_version):
+    def _write_query_params(self, f):
         write_consistency_level(f, self.consistency_level)
         flags = 0x00
         if self.query_params is not None:
@@ -574,14 +567,14 @@ class _QueryMessage(_MessageType):
             flags |= _PROTOCOL_TIMESTAMP_FLAG
 
         if self.keyspace is not None:
-            if ProtocolVersion.uses_keyspace_flag(protocol_version):
+            if ProtocolVersion.uses_keyspace_flag(self.protocol_version):
                 flags |= _WITH_KEYSPACE_FLAG
             else:
                 raise UnsupportedOperation(
                     "Keyspaces may only be set on queries with protocol version "
                     "5 or DSE_V2 or higher. Consider setting Cluster.protocol_version.")
 
-        if ProtocolVersion.uses_int_query_flags(protocol_version):
+        if ProtocolVersion.uses_int_query_flags(self.protocol_version):
             write_uint(f, flags)
         else:
             write_byte(f, flags)
@@ -601,7 +594,7 @@ class _QueryMessage(_MessageType):
         if self.keyspace is not None:
             write_string(f, self.keyspace)
 
-    def _write_paging_options(self, f, paging_options, protocol_version):
+    def _write_paging_options(self, f, paging_options):
         write_int(f, paging_options.max_pages)
         write_int(f, paging_options.max_pages_per_second)
 
@@ -616,9 +609,9 @@ class QueryMessage(_QueryMessage):
         super(QueryMessage, self).__init__(None, consistency_level, serial_consistency_level, fetch_size,
                                            paging_state, timestamp, False, continuous_paging_options, keyspace)
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f):
         write_longstring(f, self.query)
-        self._write_query_params(f, protocol_version)
+        self._write_query_params(f)
 
 
 class ExecuteMessage(_QueryMessage):
@@ -634,14 +627,14 @@ class ExecuteMessage(_QueryMessage):
         super(ExecuteMessage, self).__init__(query_params, consistency_level, serial_consistency_level, fetch_size,
                                              paging_state, timestamp, skip_meta, continuous_paging_options)
 
-    def _write_query_params(self, f, protocol_version):
-        super(ExecuteMessage, self)._write_query_params(f, protocol_version)
+    def _write_query_params(self, f):
+        super(ExecuteMessage, self)._write_query_params(f)
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f):
         write_string(f, self.query_id)
-        if ProtocolVersion.uses_prepared_metadata(protocol_version):
+        if ProtocolVersion.uses_prepared_metadata(self.protocol_version):
             write_string(f, self.result_metadata_id)
-        self._write_query_params(f, protocol_version)
+        self._write_query_params(f)
 
 
 CUSTOM_TYPE = object()
@@ -691,17 +684,17 @@ class ResultMessage(_MessageType):
     def __init__(self, kind):
         self.kind = kind
 
-    def recv(self, f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy):
+    def recv(self, f, protocol_features, user_type_map, result_metadata, column_encryption_policy):
         if self.kind == RESULT_KIND_VOID:
             return
         elif self.kind == RESULT_KIND_ROWS:
-            self.recv_results_rows(f, protocol_version, user_type_map, result_metadata, column_encryption_policy)
+            self.recv_results_rows(f, user_type_map, result_metadata, column_encryption_policy)
         elif self.kind == RESULT_KIND_SET_KEYSPACE:
             self.new_keyspace = read_string(f)
         elif self.kind == RESULT_KIND_PREPARED:
-            self.recv_results_prepared(f, protocol_version, protocol_features, user_type_map)
+            self.recv_results_prepared(f, protocol_features, user_type_map)
         elif self.kind == RESULT_KIND_SCHEMA_CHANGE:
-            self.recv_results_schema_change(f, protocol_version)
+            self.recv_results_schema_change(f)
         else:
             raise DriverException("Unknown RESULT kind: %d" % self.kind)
 
@@ -709,10 +702,11 @@ class ResultMessage(_MessageType):
     def recv_body(cls, f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy):
         kind = read_int(f)
         msg = cls(kind)
-        msg.recv(f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy)
+        msg.protocol_version = protocol_version
+        msg.recv(f, protocol_features, user_type_map, result_metadata, column_encryption_policy)
         return msg
 
-    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
+    def recv_results_rows(self, f, user_type_map, result_metadata, column_encryption_policy):
         self.recv_results_metadata(f, user_type_map)
         column_metadata = self.column_metadata or result_metadata
         rowcount = read_int(f)
@@ -725,7 +719,7 @@ class ResultMessage(_MessageType):
             uses_ce = column_encryption_policy and column_encryption_policy.contains_column(col_desc)
             col_type = column_encryption_policy.column_type(col_desc) if uses_ce else col_md[3]
             raw_bytes = column_encryption_policy.decrypt(col_desc, val) if uses_ce else val
-            return col_type.from_binary(raw_bytes, protocol_version)
+            return col_type(self.protocol_version).from_binary(raw_bytes)
 
         def decode_row(row):
             return tuple(decode_val(val, col_md, col_desc) for val, col_md, col_desc in zip(row, column_metadata, col_descs))
@@ -742,13 +736,13 @@ class ResultMessage(_MessageType):
                                                                                                      col_md[3].cql_parameterized_type(),
                                                                                                      str(e)))
 
-    def recv_results_prepared(self, f, protocol_version, protocol_features, user_type_map):
+    def recv_results_prepared(self, f, protocol_features, user_type_map):
         self.query_id = read_binary_string(f)
-        if ProtocolVersion.uses_prepared_metadata(protocol_version):
+        if ProtocolVersion.uses_prepared_metadata(self.protocol_version):
             self.result_metadata_id = read_binary_string(f)
         else:
             self.result_metadata_id = None
-        self.recv_prepared_metadata(f, protocol_version, protocol_features, user_type_map)
+        self.recv_prepared_metadata(f, protocol_features, user_type_map)
 
     def recv_results_metadata(self, f, user_type_map):
         flags = read_int(f)
@@ -786,12 +780,12 @@ class ResultMessage(_MessageType):
 
         self.column_metadata = column_metadata
 
-    def recv_prepared_metadata(self, f, protocol_version, protocol_features, user_type_map):
+    def recv_prepared_metadata(self, f, protocol_features, user_type_map):
         flags = read_int(f)
         self.is_lwt = protocol_features.lwt_info.get_lwt_flag(flags) if protocol_features.lwt_info is not None else False
         colcount = read_int(f)
         pk_indexes = None
-        if protocol_version >= 4:
+        if self.protocol_version >= 4:
             num_pk_indexes = read_int(f)
             pk_indexes = [read_short(f) for _ in range(num_pk_indexes)]
 
@@ -816,8 +810,8 @@ class ResultMessage(_MessageType):
         self.bind_metadata = bind_metadata
         self.pk_indexes = pk_indexes
 
-    def recv_results_schema_change(self, f, protocol_version):
-        self.schema_change_event = EventMessage.recv_schema_change(f, protocol_version)
+    def recv_results_schema_change(self, f):
+        self.schema_change_event = EventMessage.recv_schema_change(f)
 
     @classmethod
     def read_type(cls, f, user_type_map):
@@ -866,20 +860,20 @@ class PrepareMessage(_MessageType):
         self.query = query
         self.keyspace = keyspace
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f):
         write_longstring(f, self.query)
 
         flags = 0x00
 
         if self.keyspace is not None:
-            if ProtocolVersion.uses_keyspace_flag(protocol_version):
+            if ProtocolVersion.uses_keyspace_flag(self.protocol_version):
                 flags |= _PREPARED_WITH_KEYSPACE_FLAG
             else:
                 raise UnsupportedOperation(
                     "Keyspaces may only be set on queries with protocol version "
                     "5 or DSE_V2 or higher. Consider setting Cluster.protocol_version.")
 
-        if ProtocolVersion.uses_prepare_flags(protocol_version):
+        if ProtocolVersion.uses_prepare_flags(self.protocol_version):
             write_uint(f, flags)
         else:
             # checks above should prevent this, but just to be safe...
@@ -889,9 +883,9 @@ class PrepareMessage(_MessageType):
                     "protocol version {pv}, which doesn't support flags"
                     "in prepared statements."
                     "Consider setting Cluster.protocol_version to 5 or DSE_V2."
-                    "".format(flags=flags, pv=protocol_version))
+                    "".format(flags=flags, pv=self.protocol_version))
 
-        if ProtocolVersion.uses_keyspace_flag(protocol_version):
+        if ProtocolVersion.uses_keyspace_flag(self.protocol_version):
             if self.keyspace:
                 write_string(f, self.keyspace)
 
@@ -910,7 +904,7 @@ class BatchMessage(_MessageType):
         self.timestamp = timestamp
         self.keyspace = keyspace
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f):
         write_byte(f, self.batch_type.value)
         write_short(f, len(self.queries))
         for prepared, string_or_query_id, params in self.queries:
@@ -932,13 +926,13 @@ class BatchMessage(_MessageType):
         if self.timestamp is not None:
             flags |= _PROTOCOL_TIMESTAMP_FLAG
         if self.keyspace:
-            if ProtocolVersion.uses_keyspace_flag(protocol_version):
+            if ProtocolVersion.uses_keyspace_flag(self.protocol_version):
                 flags |= _WITH_KEYSPACE_FLAG
             else:
                 raise UnsupportedOperation(
                     "Keyspaces may only be set on queries with protocol version "
                     "5 or higher. Consider setting Cluster.protocol_version to 5.")
-        if ProtocolVersion.uses_int_query_flags(protocol_version):
+        if ProtocolVersion.uses_int_query_flags(self.protocol_version):
             write_int(f, flags)
         else:
             write_byte(f, flags)
@@ -948,7 +942,7 @@ class BatchMessage(_MessageType):
         if self.timestamp is not None:
             write_long(f, self.timestamp)
 
-        if ProtocolVersion.uses_keyspace_flag(protocol_version):
+        if ProtocolVersion.uses_keyspace_flag(self.protocol_version):
             if self.keyspace is not None:
                 write_string(f, self.keyspace)
 
@@ -968,7 +962,7 @@ class RegisterMessage(_MessageType):
     def __init__(self, event_list):
         self.event_list = event_list
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f):
         write_stringlist(f, self.event_list)
 
 
@@ -985,11 +979,13 @@ class EventMessage(_MessageType):
         event_type = read_string(f).upper()
         if event_type in known_event_types:
             read_method = getattr(cls, 'recv_' + event_type.lower())
-            return cls(event_type=event_type, event_args=read_method(f, protocol_version))
+            msg = cls(event_type=event_type, event_args=read_method(f))
+            msg.protocol_version = protocol_version
+            return msg
         raise NotSupportedError('Unknown event type %r' % event_type)
 
     @classmethod
-    def recv_client_routes_change(cls, f, protocol_version):
+    def recv_client_routes_change(cls, f):
         # "UPDATE_NODES"
         change_type = read_string(f)
         connection_ids = read_stringlist(f)
@@ -997,21 +993,21 @@ class EventMessage(_MessageType):
         return dict(change_type=change_type, connection_ids=connection_ids, host_ids=host_ids)
 
     @classmethod
-    def recv_topology_change(cls, f, protocol_version):
+    def recv_topology_change(cls, f):
         # "NEW_NODE" or "REMOVED_NODE"
         change_type = read_string(f)
         address = read_inet(f)
         return dict(change_type=change_type, address=address)
 
     @classmethod
-    def recv_status_change(cls, f, protocol_version):
+    def recv_status_change(cls, f):
         # "UP" or "DOWN"
         change_type = read_string(f)
         address = read_inet(f)
         return dict(change_type=change_type, address=address)
 
     @classmethod
-    def recv_schema_change(cls, f, protocol_version):
+    def recv_schema_change(cls, f):
         # "CREATED", "DROPPED", or "UPDATED"
         change_type = read_string(f)
         target = read_string(f)
@@ -1042,7 +1038,7 @@ class ReviseRequestMessage(_MessageType):
         self.op_id = op_id
         self.next_pages = next_pages
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f):
         write_int(f, self.op_type)
         write_int(f, self.op_id)
         if self.op_type == ReviseRequestMessage.RevisionType.PAGING_BACKPRESSURE:
@@ -1091,7 +1087,8 @@ class _ProtocolHandler(object):
                 raise UnsupportedOperation("Custom key/value payloads can only be used with protocol version 4 or higher")
             flags |= CUSTOM_PAYLOAD_FLAG
             write_bytesmap(body, msg.custom_payload)
-        msg.send_body(body, protocol_version)
+        msg.protocol_version = protocol_version
+        msg.send_body(body)
         body = body.getvalue()
 
         # With checksumming, the compression is done at the segment frame encoding

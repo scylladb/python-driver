@@ -4714,7 +4714,7 @@ class ResponseFuture(object):
                 protocol = self.session.cluster.protocol_version
                 info = self._custom_payload.get('tablets-routing-v1')
                 ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
-                tablet_routing_info = ctype.from_binary(info, protocol)
+                tablet_routing_info = ctype(protocol).from_binary(info)
                 first_token = tablet_routing_info[0]
                 last_token = tablet_routing_info[1]
                 tablet_replicas = tablet_routing_info[2]

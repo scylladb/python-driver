@@ -649,7 +649,7 @@ class BoundStatement(Statement):
                     col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
                     uses_ce = ce_policy and ce_policy.contains_column(col_desc)
                     col_type = ce_policy.column_type(col_desc) if uses_ce else col_spec.type
-                    col_bytes = col_type.serialize(value, proto_version)
+                    col_bytes = col_type(proto_version).serialize(value)
                     if uses_ce:
                         col_bytes = ce_policy.encrypt(col_desc, col_bytes)
                     self.values.append(col_bytes)
