@@ -1046,15 +1046,8 @@ class Connection(object):
 
         ssl_socket = self.ssl_context.wrap_socket(self._socket, **opts)
         
-        # Store the session for future reuse
-        if self.tls_session_cache and ssl_socket.session:
-            self.tls_session_cache.set_session(
-                self.endpoint.address, self.endpoint.port, ssl_socket.session)
-            # Track if the session was reused
-            self.session_reused = ssl_socket.session_reused
-            if self.session_reused:
-                log.debug("TLS session was reused for %s:%s", 
-                         self.endpoint.address, self.endpoint.port)
+        # Note: Session is NOT stored here - it will be stored after successful connection
+        # in _connect_socket() to ensure we only cache sessions for successful connections
         
         return ssl_socket
 
@@ -1111,6 +1104,19 @@ class Connection(object):
                 # run that here.
                 if self._check_hostname:
                     self._validate_hostname()
+                
+                # Store the TLS session after successful connection
+                # This ensures we only cache sessions for connections that actually succeeded
+                if self.tls_session_cache and self.ssl_context and hasattr(self._socket, 'session'):
+                    if self._socket.session:
+                        self.tls_session_cache.set_session(
+                            self.endpoint.address, self.endpoint.port, self._socket.session)
+                        # Track if the session was reused
+                        self.session_reused = self._socket.session_reused
+                        if self.session_reused:
+                            log.debug("TLS session was reused for %s:%s", 
+                                     self.endpoint.address, self.endpoint.port)
+                
                 sockerr = None
                 break
             except socket.error as err:
