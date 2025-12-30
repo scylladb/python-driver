@@ -233,9 +233,14 @@ cluster = Cluster(
 
 ### Expected Benefits
 
-- **Reduced connection time**: 20-50% faster reconnections
-- **Lower CPU usage**: Fewer cryptographic operations
+TLS session resumption is a standard TLS feature that provides performance benefits:
+
+- **Reduced connection time**: Faster reconnections by avoiding full TLS handshake
+- **Lower CPU usage**: Fewer cryptographic operations during reconnection
 - **Better throughput**: Especially for workloads with frequent reconnections
+
+The actual performance improvement depends on various factors including network latency, 
+server configuration, and workload characteristics.
 
 ### Overhead
 

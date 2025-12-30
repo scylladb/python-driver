@@ -493,11 +493,14 @@ When session caching is enabled:
 Performance Benefits
 ^^^^^^^^^^^^^^^^^^^^
 
-TLS session resumption can provide:
+TLS session resumption is a standard TLS feature that provides performance benefits:
 
-* **20-50% faster reconnection times** - Reduced handshake latency
+* **Faster reconnection times** - Reduced handshake latency by reusing cached sessions
 * **Lower CPU usage** - Fewer cryptographic operations during reconnection
 * **Better overall throughput** - Especially beneficial for workloads with frequent reconnections
+
+The actual performance improvement depends on various factors including network latency,
+server configuration, and workload characteristics.
 
 Security Considerations
 ^^^^^^^^^^^^^^^^^^^^^^^

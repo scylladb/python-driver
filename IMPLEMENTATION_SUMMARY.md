@@ -79,9 +79,14 @@ All tests pass successfully in ~2.2 seconds.
 
 ## Performance Benefits
 
-- **20-50% faster reconnections** - Reduced TLS handshake latency
-- **Lower CPU usage** - Fewer cryptographic operations
+TLS session resumption is a standard TLS feature that provides performance benefits:
+
+- **Faster reconnections** - Reduced TLS handshake latency by reusing cached sessions
+- **Lower CPU usage** - Fewer cryptographic operations during reconnection
 - **Better throughput** - Especially for workloads with frequent reconnections
+
+The actual performance improvement depends on various factors including network latency,
+server configuration, and workload characteristics.
 
 ## Supported Connection Classes
 
