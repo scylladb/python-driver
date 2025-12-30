@@ -195,6 +195,10 @@ _GRAPH_PAGING_MIN_DSE_VERSION = Version('6.8.0')
 
 _NOT_SET = object()
 
+# TLS session cache defaults
+_DEFAULT_TLS_SESSION_CACHE_SIZE = 100
+_DEFAULT_TLS_SESSION_CACHE_TTL = 3600  # 1 hour in seconds
+
 
 class NoHostAvailable(Exception):
     """
@@ -886,7 +890,7 @@ class Cluster(object):
     .. versionadded:: 3.30.0
     """
 
-    tls_session_cache_size = 100
+    tls_session_cache_size = _DEFAULT_TLS_SESSION_CACHE_SIZE
     """
     Maximum number of TLS sessions to cache. When the cache is full, the least
     recently used session is evicted.
@@ -896,7 +900,7 @@ class Cluster(object):
     .. versionadded:: 3.30.0
     """
 
-    tls_session_cache_ttl = 3600
+    tls_session_cache_ttl = _DEFAULT_TLS_SESSION_CACHE_TTL
     """
     Time-to-live for cached TLS sessions in seconds. Sessions older than this
     are not reused and are removed from the cache.
@@ -1236,8 +1240,8 @@ class Cluster(object):
                  no_compact=False,
                  ssl_context=None,
                  tls_session_cache_enabled=True,
-                 tls_session_cache_size=100,
-                 tls_session_cache_ttl=3600,
+                 tls_session_cache_size=_DEFAULT_TLS_SESSION_CACHE_SIZE,
+                 tls_session_cache_ttl=_DEFAULT_TLS_SESSION_CACHE_TTL,
                  endpoint_factory=None,
                  application_name=None,
                  application_version=None,
