@@ -281,14 +281,14 @@ cdef class DesMapType(_DesParameterizedType):
         result = _deserialize_map(
             buf,
             self.key_deserializer, self.val_deserializer,
-            key_type, val_type)
+            key_type(self.key_deserializer.protocol_version), val_type)
 
         return result
 
 
 cdef _deserialize_map(Buffer *buf,
                       Deserializer key_deserializer, Deserializer val_deserializer,
-                      key_type, val_type):
+                      key_type_instance, val_type):
     cdef Buffer key_buf, val_buf
     cdef Buffer itemlen_buf
 
@@ -298,7 +298,7 @@ cdef _deserialize_map(Buffer *buf,
 
     _unpack_len(buf, 0, &numelements)
     offset = sizeof(int32_t)
-    themap = util.OrderedMapSerializedKey(key_type, key_deserializer.protocol_version)
+    themap = util.OrderedMapSerializedKey(key_type_instance)
     for _ in range(numelements):
         subelem(buf, &key_buf, &offset)
         subelem(buf, &val_buf, &offset)
