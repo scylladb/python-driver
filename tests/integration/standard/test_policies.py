@@ -45,9 +45,6 @@ class HostFilterPolicyTests(unittest.TestCase):
         external_event = True
         contact_point = DefaultEndPoint("127.0.0.1")
 
-        single_host = {Host(contact_point, SimpleConvictionPolicy)}
-        all_hosts = {Host(DefaultEndPoint("127.0.0.{}".format(i)), SimpleConvictionPolicy) for i in (1, 2, 3)}
-
         predicate = lambda host: host.endpoint == contact_point if external_event else True
         hfp = ExecutionProfile(
             load_balancing_policy=HostFilterPolicy(RoundRobinPolicy(), predicate=predicate)
@@ -62,7 +59,8 @@ class HostFilterPolicyTests(unittest.TestCase):
             response = session.execute("SELECT * from system.local WHERE key='local'")
             queried_hosts.update(response.response_future.attempted_hosts)
 
-        assert queried_hosts == single_host
+        assert len(queried_hosts) == 1
+        assert queried_hosts.pop().endpoint == contact_point
 
         external_event = False
         futures = session.update_created_pools()
@@ -72,7 +70,8 @@ class HostFilterPolicyTests(unittest.TestCase):
         for _ in range(10):
             response = session.execute("SELECT * from system.local WHERE key='local'")
             queried_hosts.update(response.response_future.attempted_hosts)
-        assert queried_hosts == all_hosts
+        assert len(queried_hosts) == 3
+        assert {host.endpoint for host in queried_hosts} == {DefaultEndPoint(f"127.0.0.{i}") for i in range(1, 4)}
 
 
 class WhiteListRoundRobinPolicyTests(unittest.TestCase):

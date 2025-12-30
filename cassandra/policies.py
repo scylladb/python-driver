@@ -264,6 +264,9 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
 
     def distance(self, host):
         dc = self._dc(host)
+        if not self.local_dc:
+            self.local_dc = dc
+            return HostDistance.LOCAL
         if dc == self.local_dc:
             return HostDistance.LOCAL
 

@@ -1683,14 +1683,7 @@ class Cluster(object):
                     "http://datastax.github.io/python-driver/api/cassandra/cluster.html#cassandra.cluster.Cluster.protocol_version", self.protocol_version, new_version, host_endpoint)
         self.protocol_version = new_version
 
-    def _add_resolved_hosts(self):
-        for endpoint in self.endpoints_resolved:
-            host, new = self.add_host(endpoint, signal=False)
-            if new:
-                host.set_up()
-                for listener in self.listeners:
-                    listener.on_add(host)
-
+    def _populate_hosts(self):
         self.profile_manager.populate(
             weakref.proxy(self), self.metadata.all_hosts())
         self.load_balancing_policy.populate(
@@ -1717,17 +1710,10 @@ class Cluster(object):
                           self.contact_points, self.protocol_version)
                 self.connection_class.initialize_reactor()
                 _register_cluster_shutdown(self)
-                
-                self._add_resolved_hosts()
 
                 try:
                     self.control_connection.connect()
-
-                    # we set all contact points up for connecting, but we won't infer state after this
-                    for endpoint in self.endpoints_resolved:
-                        h = self.metadata.get_host(endpoint)
-                        if h and self.profile_manager.distance(h) == HostDistance.IGNORED:
-                            h.is_up = None
+                    self._populate_hosts()
 
                     log.debug("Control connection created")
                 except Exception:
@@ -3534,28 +3520,22 @@ class ControlConnection(object):
         if old:
             log.debug("[control connection] Closing old connection %r, replacing with %r", old, conn)
             old.close()
-    
-    def _connect_host_in_lbp(self):
-        errors = {}
-        lbp = (
-            self._cluster.load_balancing_policy
-            if self._cluster._config_mode == _ConfigMode.LEGACY else
-            self._cluster._default_load_balancing_policy
-        )
 
-        for host in lbp.make_query_plan():
+    def _try_connect_to_hosts(self):
+        errors = {}
+
+        lbp = self._cluster.load_balancing_policy \
+            if self._cluster._config_mode == _ConfigMode.LEGACY else self._cluster._default_load_balancing_policy
+
+        for endpoint in chain((host.endpoint for host in lbp.make_query_plan()), self._cluster.endpoints_resolved):
             try:
-                return (self._try_connect(host), None)
-            except ConnectionException as exc:
-                errors[str(host.endpoint)] = exc
-                log.warning("[control connection] Error connecting to %s:", host, exc_info=True)
-                self._cluster.signal_connection_failure(host, exc, is_host_addition=False)
+                return (self._try_connect(endpoint), None)
             except Exception as exc:
-                errors[str(host.endpoint)] = exc
-                log.warning("[control connection] Error connecting to %s:", host, exc_info=True)
+                errors[str(endpoint)] = exc
+                log.warning("[control connection] Error connecting to %s:", endpoint, exc_info=True)
             if self._is_shutdown:
                 raise DriverException("[control connection] Reconnection in progress during shutdown")
-        
+
         return (None, errors)
 
     def _reconnect_internal(self):
@@ -3567,43 +3547,43 @@ class ControlConnection(object):
         to the exception that was raised when an attempt was made to open
         a connection to that host.
         """
-        (conn, _) = self._connect_host_in_lbp()
+        (conn, _) = self._try_connect_to_hosts()
         if conn is not None:
             return conn
 
         # Try to re-resolve hostnames as a fallback when all hosts are unreachable
         self._cluster._resolve_hostnames()
 
-        self._cluster._add_resolved_hosts()
+        self._cluster._populate_hosts()
 
-        (conn, errors) = self._connect_host_in_lbp()
+        (conn, errors) = self._try_connect_to_hosts()
         if conn is not None:
             return conn
-        
+
         raise NoHostAvailable("Unable to connect to any servers", errors)
 
-    def _try_connect(self, host):
+    def _try_connect(self, endpoint):
         """
         Creates a new Connection, registers for pushed events, and refreshes
         node/token and schema metadata.
         """
-        log.debug("[control connection] Opening new connection to %s", host)
+        log.debug("[control connection] Opening new connection to %s", endpoint)
 
         while True:
             try:
-                connection = self._cluster.connection_factory(host.endpoint, is_control_connection=True)
+                connection = self._cluster.connection_factory(endpoint, is_control_connection=True)
                 if self._is_shutdown:
                     connection.close()
                     raise DriverException("Reconnecting during shutdown")
                 break
             except ProtocolVersionUnsupported as e:
-                self._cluster.protocol_downgrade(host.endpoint, e.startup_version)
+                self._cluster.protocol_downgrade(endpoint, e.startup_version)
             except ProtocolException as e:
                 # protocol v5 is out of beta in C* >=4.0-beta5 and is now the default driver
                 # protocol version. If the protocol version was not explicitly specified,
                 # and that the server raises a beta protocol error, we should downgrade.
                 if not self._cluster._protocol_version_explicit and e.is_beta_protocol_error:
-                    self._cluster.protocol_downgrade(host.endpoint, self._cluster.protocol_version)
+                    self._cluster.protocol_downgrade(endpoint, self._cluster.protocol_version)
                 else:
                     raise
 
@@ -3821,7 +3801,10 @@ class ControlConnection(object):
             tokens = local_row.get("tokens")
 
             host = self._cluster.metadata.get_host(connection.original_endpoint)
-            if host:
+            if not host:
+                log.info("[control connection] Local host %s not found in metadata, adding it", connection.original_endpoint)
+                peers_result.append(local_row)
+            else:
                 datacenter = local_row.get("data_center")
                 rack = local_row.get("rack")
                 self._update_location_info(host, datacenter, rack)
@@ -4177,8 +4160,9 @@ class ControlConnection(object):
                 query_template = (self._SELECT_SCHEMA_PEERS_TEMPLATE
                                   if peers_query_type == self.PeersQueryType.PEERS_SCHEMA
                                   else self._SELECT_PEERS_NO_TOKENS_TEMPLATE)
-                host_release_version = self._cluster.metadata.get_host(connection.original_endpoint).release_version
-                host_dse_version = self._cluster.metadata.get_host(connection.original_endpoint).dse_version
+                original_endpoint_host = self._cluster.metadata.get_host(connection.original_endpoint)
+                host_release_version = None if original_endpoint_host is None else original_endpoint_host.release_version
+                host_dse_version = None if original_endpoint_host is None else original_endpoint_host.dse_version
                 uses_native_address_query = (
                     host_dse_version and Version(host_dse_version) >= self._MINIMUM_NATIVE_ADDRESS_DSE_VERSION)
 

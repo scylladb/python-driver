@@ -139,6 +139,10 @@ class Metadata(object):
     def refresh(self, connection, timeout, target_type=None, change_type=None, fetch_size=None,
                 metadata_request_timeout=None, **kwargs):
 
+        # If the host is not in metadata, we can't proceed, hosts should be added after succesfully establishing control connection
+        if not self.get_host(connection.original_endpoint):
+            return
+
         server_version = self.get_host(connection.original_endpoint).release_version
         dse_version = self.get_host(connection.original_endpoint).dse_version
         parser = get_schema_parser(connection, server_version, dse_version, timeout, metadata_request_timeout, fetch_size)
