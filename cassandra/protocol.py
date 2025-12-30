@@ -688,7 +688,7 @@ class ResultMessage(_MessageType):
         if self.kind == RESULT_KIND_VOID:
             return
         elif self.kind == RESULT_KIND_ROWS:
-            self.recv_results_rows(f, user_type_map, result_metadata, column_encryption_policy)
+            self.recv_results_rows(f, self.protocol_version, user_type_map, result_metadata, column_encryption_policy)
         elif self.kind == RESULT_KIND_SET_KEYSPACE:
             self.new_keyspace = read_string(f)
         elif self.kind == RESULT_KIND_PREPARED:
@@ -706,7 +706,7 @@ class ResultMessage(_MessageType):
         msg.recv(f, protocol_features, user_type_map, result_metadata, column_encryption_policy)
         return msg
 
-    def recv_results_rows(self, f, user_type_map, result_metadata, column_encryption_policy):
+    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
         self.recv_results_metadata(f, user_type_map)
         column_metadata = self.column_metadata or result_metadata
         rowcount = read_int(f)
@@ -719,7 +719,7 @@ class ResultMessage(_MessageType):
             uses_ce = column_encryption_policy and column_encryption_policy.contains_column(col_desc)
             col_type = column_encryption_policy.column_type(col_desc) if uses_ce else col_md[3]
             raw_bytes = column_encryption_policy.decrypt(col_desc, val) if uses_ce else val
-            return col_type(self.protocol_version).from_binary(raw_bytes)
+            return col_type(protocol_version).from_binary(raw_bytes)
 
         def decode_row(row):
             return tuple(decode_val(val, col_md, col_desc) for val, col_md, col_desc in zip(row, column_metadata, col_descs))
