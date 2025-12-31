@@ -633,7 +633,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         query = session.prepare("SELECT * FROM test_tr.users WHERE id = ?")
         for i in range(100):
             f = session.execute_async(query, (i,), trace=True)
-            full_dc1_replicas = [h for h in cluster.metadata.get_replicas('test_tr', cqltypes.Int32Type.serialize(i, cluster.protocol_version))
+            full_dc1_replicas = [h for h in cluster.metadata.get_replicas('test_tr', cqltypes.Int32Type(cluster.protocol_version).serialize(i))
                                  if h.datacenter == 'dc1']
             assert len(full_dc1_replicas) == 2
 

@@ -241,7 +241,7 @@ class CustomResultMessageTracked(ResultMessage):
         self.column_types = [c[3] for c in column_metadata]
         self.checked_rev_row_set.update(self.column_types)
         self.parsed_rows = [
-            tuple(ctype.from_binary(val, protocol_version)
+            tuple(ctype(protocol_version).from_binary(val)
                   for ctype, val in zip(self.column_types, row))
             for row in rows]
 
