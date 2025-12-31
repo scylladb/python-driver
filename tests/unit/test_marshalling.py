@@ -132,6 +132,7 @@ class UnmarshalTest(unittest.TestCase):
         converted_types = (10001, (0, (1, 0, 0, 0, 0, 1), -3), 100.1, -87.629798)
 
         for proto_ver in range(3, ProtocolVersion.MAX_SUPPORTED + 1):
+            decimal_type = DecimalType(proto_ver)
             for n in converted_types:
                 expected = Decimal(n)
-                assert DecimalType(proto_ver).from_binary(DecimalType(proto_ver).to_binary(n)) == expected
+                assert decimal_type.from_binary(decimal_type.to_binary(n)) == expected

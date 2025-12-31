@@ -171,13 +171,14 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
         assert om == {}
 
     def test_normalized_lookup(self):
-        key_type = lookup_casstype('MapType(UTF8Type, Int32Type)')
+        key_type_class = lookup_casstype('MapType(UTF8Type, Int32Type)')
         protocol_version = 3
-        om = OrderedMapSerializedKey(key_type(protocol_version))
+        key_type = key_type_class(protocol_version)
+        om = OrderedMapSerializedKey(key_type)
         key_ascii = {'one': 1}
         key_unicode = {u'two': 2}
-        om._insert_unchecked(key_ascii, key_type(protocol_version).serialize(key_ascii), object())
-        om._insert_unchecked(key_unicode, key_type(protocol_version).serialize(key_unicode), object())
+        om._insert_unchecked(key_ascii, key_type.serialize(key_ascii), object())
+        om._insert_unchecked(key_unicode, key_type.serialize(key_unicode), object())
 
         # type lookup is normalized by key_type
         # PYTHON-231

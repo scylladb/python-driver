@@ -35,8 +35,9 @@ class GeoTypes(unittest.TestCase):
     def test_marshal_platform(self):
         for proto_ver in protocol_versions:
             for geo in self.samples:
-                cql_type = lookup_casstype(geo.__class__.__name__ + 'Type')
-                assert cql_type(proto_ver).from_binary(cql_type(proto_ver).to_binary(geo)) == geo
+                cql_type_class = lookup_casstype(geo.__class__.__name__ + 'Type')
+                cql_type = cql_type_class(proto_ver)
+                assert cql_type.from_binary(cql_type.to_binary(geo)) == geo
 
     def _verify_both_endian(self, typ, body_fmt, params, expected):
         for proto_ver in protocol_versions:
@@ -51,9 +52,11 @@ class GeoTypes(unittest.TestCase):
     def test_empty_wkb(self):
         for cls in (LineString, Polygon):
             class_name = cls.__name__
-            cql_type = lookup_casstype(class_name + 'Type')
-            assert str(cql_type(0).from_binary(cql_type(0).to_binary(cls()))) == class_name.upper() + " EMPTY"
-        assert str(PointType(0).from_binary(PointType(0).to_binary(Point()))) == "POINT (nan nan)"
+            cql_type_class = lookup_casstype(class_name + 'Type')
+            cql_type = cql_type_class(0)
+            assert str(cql_type.from_binary(cql_type.to_binary(cls()))) == class_name.upper() + " EMPTY"
+        point_type = PointType(0)
+        assert str(point_type.from_binary(point_type.to_binary(Point()))) == "POINT (nan nan)"
 
     def test_str_wkt(self):
         assert str(Point(1., 2.)) == 'POINT (1.0 2.0)'
