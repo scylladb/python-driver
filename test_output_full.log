@@ -1,0 +1,62 @@
+/usr/lib/python3.14/site-packages/pytest_asyncio/plugin.py:211: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+============================= test session starts ==============================
+platform linux -- Python 3.14.2, pytest-8.3.5, pluggy-1.6.0
+rootdir: /home/ykaul/github/python-driver
+configfile: pyproject.toml
+plugins: asyncio-1.1.0, anyio-4.11.0
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 646 items
+
+tests/unit/advanced/test_execution_profile.py ..                         [  0%]
+tests/unit/advanced/test_geometry.py .......ssss                         [  2%]
+tests/unit/advanced/test_graph.py .......................                [  5%]
+tests/unit/advanced/test_insights.py ................                    [  8%]
+tests/unit/advanced/test_metadata.py ............                        [  9%]
+tests/unit/advanced/test_policies.py ......                              [ 10%]
+tests/unit/column_encryption/test_policies.py sssssssssssssss            [ 13%]
+tests/unit/cqlengine/test_columns.py ..                                  [ 13%]
+tests/unit/cqlengine/test_connection.py ...                              [ 13%]
+tests/unit/cqlengine/test_udt.py .                                       [ 14%]
+tests/unit/cython/test_bytesio.py ss                                     [ 14%]
+tests/unit/cython/test_types.py ss                                       [ 14%]
+tests/unit/cython/test_utils.py s                                        [ 14%]
+tests/unit/io/test_asyncioreactor.py ss                                  [ 15%]
+tests/unit/io/test_asyncorereactor.py ssssssssssssssss                   [ 17%]
+tests/unit/io/test_eventletreactor.py ss                                 [ 17%]
+tests/unit/io/test_geventreactor.py ss                                   [ 18%]
+tests/unit/io/test_libevreactor.py sssssssssssssssss                     [ 20%]
+tests/unit/io/test_twistedreactor.py ssssssssss                          [ 22%]
+tests/unit/test_auth.py .                                                [ 22%]
+tests/unit/test_cluster.py ..........ss.sssssssssssssssss                [ 27%]
+tests/unit/test_concurrent.py .........                                  [ 28%]
+tests/unit/test_connection.py .........................                  [ 32%]
+tests/unit/test_control_connection.py ......................             [ 35%]
+tests/unit/test_endpoints.py ...                                         [ 36%]
+tests/unit/test_exception.py ..                                          [ 36%]
+tests/unit/test_host_connection_pool.py ..
+
+=============================== warnings summary ===============================
+tests/unit/advanced/test_insights.py::TestConfigAsDict::test_graph_options
+  /home/ykaul/github/python-driver/cassandra/datastax/graph/query.py:80: UserWarning: Unknown keyword argument received for GraphOptions: graph_invalid_option
+    warn("Unknown keyword argument received for GraphOptions: {0}".format(attr))
+
+tests/unit/advanced/test_policies.py::DSELoadBalancingPolicyTest::test_no_target
+tests/unit/advanced/test_policies.py::DSELoadBalancingPolicyTest::test_status_updates
+tests/unit/advanced/test_policies.py::DSELoadBalancingPolicyTest::test_target_host_down
+tests/unit/advanced/test_policies.py::DSELoadBalancingPolicyTest::test_target_host_nominal
+tests/unit/advanced/test_policies.py::DSELoadBalancingPolicyTest::test_target_no_host
+  /home/ykaul/github/python-driver/cassandra/policies.py:1377: DeprecationWarning: DSELoadBalancingPolicy will be removed in 4.0. Consider using DefaultLoadBalancingPolicy.
+    warnings.warn("DSELoadBalancingPolicy will be removed in 4.0. Consider using "
+
+tests/unit/test_concurrent.py: 816 warnings
+  /home/ykaul/github/python-driver/tests/unit/test_concurrent.py:105: DeprecationWarning: isSet() is deprecated, use is_set() instead
+    return self._stopper.isSet()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! KeyboardInterrupt !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+/home/ykaul/github/python-driver/tests/unit/test_host_connection_pool.py:279: KeyboardInterrupt
+(to show a full traceback on KeyboardInterrupt use --full-trace)
+================ 147 passed, 92 skipped, 822 warnings in 15.54s ================

@@ -414,7 +414,7 @@ class StartupMessage(_MessageType):
         self.cqlversion = cqlversion
         self.options = options
 
-    def send_body(self, f):
+    def send_body(self, f, protocol_version):
         optmap = self.options.copy()
         optmap['CQL_VERSION'] = self.cqlversion
         write_stringmap(f, optmap)
@@ -449,8 +449,8 @@ class CredentialsMessage(_MessageType):
     def __init__(self, creds):
         self.creds = creds
 
-    def send_body(self, f):
-        if self.protocol_version > 1:
+    def send_body(self, f, protocol_version):
+        if protocol_version > 1:
             raise UnsupportedOperation(
                 "Credentials-based authentication is not supported with "
                 "protocol version 2 or higher.  Use the SASL authentication "
@@ -480,7 +480,7 @@ class AuthResponseMessage(_MessageType):
     def __init__(self, response):
         self.response = response
 
-    def send_body(self, f):
+    def send_body(self, f, protocol_version):
         write_longstring(f, self.response)
 
 
@@ -500,7 +500,7 @@ class OptionsMessage(_MessageType):
     opcode = 0x05
     name = 'OPTIONS'
 
-    def send_body(self, f):
+    def send_body(self, f, protocol_version):
         pass
 
 
@@ -548,7 +548,7 @@ class _QueryMessage(_MessageType):
         self.skip_meta = skip_meta
         self.keyspace = keyspace
 
-    def _write_query_params(self, f):
+    def _write_query_params(self, f, protocol_version):
         write_consistency_level(f, self.consistency_level)
         flags = 0x00
         if self.query_params is not None:
@@ -567,14 +567,14 @@ class _QueryMessage(_MessageType):
             flags |= _PROTOCOL_TIMESTAMP_FLAG
 
         if self.keyspace is not None:
-            if ProtocolVersion.uses_keyspace_flag(self.protocol_version):
+            if ProtocolVersion.uses_keyspace_flag(protocol_version):
                 flags |= _WITH_KEYSPACE_FLAG
             else:
                 raise UnsupportedOperation(
                     "Keyspaces may only be set on queries with protocol version "
                     "5 or DSE_V2 or higher. Consider setting Cluster.protocol_version.")
 
-        if ProtocolVersion.uses_int_query_flags(self.protocol_version):
+        if ProtocolVersion.uses_int_query_flags(protocol_version):
             write_uint(f, flags)
         else:
             write_byte(f, flags)
@@ -609,9 +609,9 @@ class QueryMessage(_QueryMessage):
         super(QueryMessage, self).__init__(None, consistency_level, serial_consistency_level, fetch_size,
                                            paging_state, timestamp, False, continuous_paging_options, keyspace)
 
-    def send_body(self, f):
+    def send_body(self, f, protocol_version):
         write_longstring(f, self.query)
-        self._write_query_params(f)
+        self._write_query_params(f, protocol_version)
 
 
 class ExecuteMessage(_QueryMessage):
@@ -627,14 +627,14 @@ class ExecuteMessage(_QueryMessage):
         super(ExecuteMessage, self).__init__(query_params, consistency_level, serial_consistency_level, fetch_size,
                                              paging_state, timestamp, skip_meta, continuous_paging_options)
 
-    def _write_query_params(self, f):
-        super(ExecuteMessage, self)._write_query_params(f)
+    def _write_query_params(self, f, protocol_version):
+        super(ExecuteMessage, self)._write_query_params(f, protocol_version)
 
-    def send_body(self, f):
+    def send_body(self, f, protocol_version):
         write_string(f, self.query_id)
-        if ProtocolVersion.uses_prepared_metadata(self.protocol_version):
+        if ProtocolVersion.uses_prepared_metadata(protocol_version):
             write_string(f, self.result_metadata_id)
-        self._write_query_params(f)
+        self._write_query_params(f, protocol_version)
 
 
 CUSTOM_TYPE = object()
@@ -860,20 +860,20 @@ class PrepareMessage(_MessageType):
         self.query = query
         self.keyspace = keyspace
 
-    def send_body(self, f):
+    def send_body(self, f, protocol_version):
         write_longstring(f, self.query)
 
         flags = 0x00
 
         if self.keyspace is not None:
-            if ProtocolVersion.uses_keyspace_flag(self.protocol_version):
+            if ProtocolVersion.uses_keyspace_flag(protocol_version):
                 flags |= _PREPARED_WITH_KEYSPACE_FLAG
             else:
                 raise UnsupportedOperation(
                     "Keyspaces may only be set on queries with protocol version "
                     "5 or DSE_V2 or higher. Consider setting Cluster.protocol_version.")
 
-        if ProtocolVersion.uses_prepare_flags(self.protocol_version):
+        if ProtocolVersion.uses_prepare_flags(protocol_version):
             write_uint(f, flags)
         else:
             # checks above should prevent this, but just to be safe...
@@ -883,9 +883,9 @@ class PrepareMessage(_MessageType):
                     "protocol version {pv}, which doesn't support flags"
                     "in prepared statements."
                     "Consider setting Cluster.protocol_version to 5 or DSE_V2."
-                    "".format(flags=flags, pv=self.protocol_version))
+                    "".format(flags=flags, pv=protocol_version))
 
-        if ProtocolVersion.uses_keyspace_flag(self.protocol_version):
+        if ProtocolVersion.uses_keyspace_flag(protocol_version):
             if self.keyspace:
                 write_string(f, self.keyspace)
 
@@ -904,7 +904,7 @@ class BatchMessage(_MessageType):
         self.timestamp = timestamp
         self.keyspace = keyspace
 
-    def send_body(self, f):
+    def send_body(self, f, protocol_version):
         write_byte(f, self.batch_type.value)
         write_short(f, len(self.queries))
         for prepared, string_or_query_id, params in self.queries:
@@ -926,13 +926,13 @@ class BatchMessage(_MessageType):
         if self.timestamp is not None:
             flags |= _PROTOCOL_TIMESTAMP_FLAG
         if self.keyspace:
-            if ProtocolVersion.uses_keyspace_flag(self.protocol_version):
+            if ProtocolVersion.uses_keyspace_flag(protocol_version):
                 flags |= _WITH_KEYSPACE_FLAG
             else:
                 raise UnsupportedOperation(
                     "Keyspaces may only be set on queries with protocol version "
                     "5 or higher. Consider setting Cluster.protocol_version to 5.")
-        if ProtocolVersion.uses_int_query_flags(self.protocol_version):
+        if ProtocolVersion.uses_int_query_flags(protocol_version):
             write_int(f, flags)
         else:
             write_byte(f, flags)
@@ -942,7 +942,7 @@ class BatchMessage(_MessageType):
         if self.timestamp is not None:
             write_long(f, self.timestamp)
 
-        if ProtocolVersion.uses_keyspace_flag(self.protocol_version):
+        if ProtocolVersion.uses_keyspace_flag(protocol_version):
             if self.keyspace is not None:
                 write_string(f, self.keyspace)
 
@@ -962,7 +962,7 @@ class RegisterMessage(_MessageType):
     def __init__(self, event_list):
         self.event_list = event_list
 
-    def send_body(self, f):
+    def send_body(self, f, protocol_version):
         write_stringlist(f, self.event_list)
 
 
@@ -1038,7 +1038,7 @@ class ReviseRequestMessage(_MessageType):
         self.op_id = op_id
         self.next_pages = next_pages
 
-    def send_body(self, f):
+    def send_body(self, f, protocol_version):
         write_int(f, self.op_type)
         write_int(f, self.op_id)
         if self.op_type == ReviseRequestMessage.RevisionType.PAGING_BACKPRESSURE:
@@ -1087,8 +1087,7 @@ class _ProtocolHandler(object):
                 raise UnsupportedOperation("Custom key/value payloads can only be used with protocol version 4 or higher")
             flags |= CUSTOM_PAYLOAD_FLAG
             write_bytesmap(body, msg.custom_payload)
-        msg.protocol_version = protocol_version
-        msg.send_body(body)
+        msg.send_body(body, protocol_version)
         body = body.getvalue()
 
         # With checksumming, the compression is done at the segment frame encoding
