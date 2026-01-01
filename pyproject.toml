@@ -32,7 +32,7 @@ requires-python = ">=3.9"
 
 [project.optional-dependencies]
 graph = ['gremlinpython==3.7.4']
-cle = ['cryptography>=35.0']
+cle = ['cryptography>=42.0.4']
 compress-lz4 = ['lz4']
 compress-snappy = ['python-snappy']
 
@@ -51,6 +51,7 @@ dev = [
     "futurist",
     "asynctest",
     "pyyaml",
+    "cryptography>=42.0.4",
     "ccm @ git+https://git@github.com/scylladb/scylla-ccm.git@master",
 ]
 
