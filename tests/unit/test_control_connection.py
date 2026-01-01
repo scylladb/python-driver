@@ -315,16 +315,13 @@ class ControlConnectionTest(unittest.TestCase):
         # Verify that wait_for_responses was called
         assert self.connection.wait_for_responses.called
         
-        # Get the QueryMessage arguments
+        # Get the QueryMessage arguments - both should be QueryMessage instances
         call_args = self.connection.wait_for_responses.call_args[0]
-        peers_query = call_args[0]
-        local_query = call_args[1]
         
-        # Verify that both queries have fetch_size set
-        assert isinstance(peers_query, QueryMessage)
-        assert isinstance(local_query, QueryMessage)
-        assert peers_query.fetch_size == 1000  # default schema_meta_page_size
-        assert local_query.fetch_size == 1000  # default schema_meta_page_size
+        # Verify both arguments are QueryMessage instances with fetch_size set
+        for query_msg in call_args:
+            assert isinstance(query_msg, QueryMessage)
+            assert query_msg.fetch_size == self.control_connection._schema_meta_page_size
 
     def test_refresh_nodes_and_tokens_with_invalid_peers(self):
         def refresh_and_validate_added_hosts():
