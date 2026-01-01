@@ -30,7 +30,8 @@ from cassandra.metadata import (Murmur3Token, MD5Token,
                                 UserType, KeyspaceMetadata, get_schema_parser,
                                 _UnknownStrategy, ColumnMetadata, TableMetadata,
                                 IndexMetadata, Function, Aggregate,
-                                Metadata, TokenMap, ReplicationFactor)
+                                Metadata, TokenMap, ReplicationFactor,
+                                SchemaParserDSE68)
 from cassandra.policies import SimpleConvictionPolicy
 from cassandra.pool import Host
 from tests.util import assertCountEqual
@@ -614,6 +615,22 @@ class IndexTest(unittest.TestCase):
         row['index_type'] = 'CUSTOM'
         index_meta = parser._build_index_metadata(column_meta, row)
         assert index_meta.as_cql_query() == "CREATE CUSTOM INDEX index_name_here ON keyspace_name_here.table_name_here (column_name_here) USING 'class_name_here'"
+
+
+class SchemaParserLookupTests(unittest.TestCase):
+
+    def test_reads_versions_from_system_local_when_missing(self):
+        connection = Mock()
+        local_result = Mock()
+        local_result.column_names = ["release_version", "dse_version"]
+        local_result.parsed_rows = [["4.0.0", "6.8.0"]]
+        connection.wait_for_response.return_value = (True, local_result)
+
+        parser = get_schema_parser(connection, None, None, 0.1, None)
+
+        assert isinstance(parser, SchemaParserDSE68)
+        message = connection.wait_for_response.call_args[0][0]
+        assert "system.local" in message.query
 
 
 class UnicodeIdentifiersTests(unittest.TestCase):
