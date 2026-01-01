@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock, ANY, call
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
-from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
+from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS, QueryMessage
 from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.pool import Host
 from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
@@ -304,6 +304,27 @@ class ControlConnectionTest(unittest.TestCase):
             assert host.rack == "rack1"
 
         assert self.connection.wait_for_responses.call_count == 1
+
+    def test_topology_queries_use_paging(self):
+        """
+        Test that topology queries (system.peers and system.local) use fetch_size parameter
+        """
+        # Test during refresh_node_list_and_token_map
+        self.control_connection.refresh_node_list_and_token_map()
+        
+        # Verify that wait_for_responses was called
+        assert self.connection.wait_for_responses.called
+        
+        # Get the QueryMessage arguments
+        call_args = self.connection.wait_for_responses.call_args[0]
+        peers_query = call_args[0]
+        local_query = call_args[1]
+        
+        # Verify that both queries have fetch_size set
+        assert isinstance(peers_query, QueryMessage)
+        assert isinstance(local_query, QueryMessage)
+        assert peers_query.fetch_size == 1000  # default schema_meta_page_size
+        assert local_query.fetch_size == 1000  # default schema_meta_page_size
 
     def test_refresh_nodes_and_tokens_with_invalid_peers(self):
         def refresh_and_validate_added_hosts():

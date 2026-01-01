@@ -3638,9 +3638,11 @@ class ControlConnection(object):
             sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
             sel_local = self._SELECT_LOCAL if self._token_meta_enabled else self._SELECT_LOCAL_NO_TOKENS
             peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                       consistency_level=ConsistencyLevel.ONE)
+                                       consistency_level=ConsistencyLevel.ONE,
+                                       fetch_size=self._schema_meta_page_size)
             local_query = QueryMessage(query=maybe_add_timeout_to_query(sel_local, self._metadata_request_timeout),
-                                       consistency_level=ConsistencyLevel.ONE)
+                                       consistency_level=ConsistencyLevel.ONE,
+                                       fetch_size=self._schema_meta_page_size)
             (peers_success, peers_result), (local_success, local_result) = connection.wait_for_responses(
                 peers_query, local_query, timeout=self._timeout, fail_on_error=False)
 
@@ -3652,7 +3654,8 @@ class ControlConnection(object):
                 self._uses_peers_v2 = False
                 sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
                 peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                           consistency_level=ConsistencyLevel.ONE)
+                                           consistency_level=ConsistencyLevel.ONE,
+                                           fetch_size=self._schema_meta_page_size)
                 peers_result = connection.wait_for_response(
                     peers_query, timeout=self._timeout)
 
@@ -3797,9 +3800,11 @@ class ControlConnection(object):
                 log.debug("[control connection] Refreshing node list and token map")
                 sel_local = self._SELECT_LOCAL
             peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                       consistency_level=cl)
+                                       consistency_level=cl,
+                                       fetch_size=self._schema_meta_page_size)
             local_query = QueryMessage(query=maybe_add_timeout_to_query(sel_local, self._metadata_request_timeout),
-                                       consistency_level=cl)
+                                       consistency_level=cl,
+                                       fetch_size=self._schema_meta_page_size)
             peers_result, local_result = connection.wait_for_responses(
                 peers_query, local_query, timeout=self._timeout)
 
@@ -3856,7 +3861,8 @@ class ControlConnection(object):
                         # in system.local. See CASSANDRA-9436.
                         local_rpc_address_query = QueryMessage(
                             query=maybe_add_timeout_to_query(self._SELECT_LOCAL_NO_TOKENS_RPC_ADDRESS, self._metadata_request_timeout),
-                            consistency_level=ConsistencyLevel.ONE)
+                            consistency_level=ConsistencyLevel.ONE,
+                            fetch_size=self._schema_meta_page_size)
                         success, local_rpc_address_result = connection.wait_for_response(
                             local_rpc_address_query, timeout=self._timeout, fail_on_error=False)
                         if success:
@@ -4092,9 +4098,11 @@ class ControlConnection(object):
 
             while elapsed < total_timeout:
                 peers_query = QueryMessage(query=maybe_add_timeout_to_query(select_peers_query, self._metadata_request_timeout),
-                                           consistency_level=cl)
+                                           consistency_level=cl,
+                                           fetch_size=self._schema_meta_page_size)
                 local_query = QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_SCHEMA_LOCAL, self._metadata_request_timeout),
-                                           consistency_level=cl)
+                                           consistency_level=cl,
+                                           fetch_size=self._schema_meta_page_size)
                 try:
                     timeout = min(self._timeout, total_timeout - elapsed)
                     peers_result, local_result = connection.wait_for_responses(
