@@ -139,8 +139,9 @@ class Metadata(object):
     def refresh(self, connection, timeout, target_type=None, change_type=None, fetch_size=None,
                 metadata_request_timeout=None, **kwargs):
 
-        server_version = self.get_host(connection.original_endpoint).release_version
-        dse_version = self.get_host(connection.original_endpoint).dse_version
+        host = self.get_host(connection.original_endpoint)
+        server_version = host.release_version if host else None
+        dse_version = host.dse_version if host else None
         parser = get_schema_parser(connection, server_version, dse_version, timeout, metadata_request_timeout, fetch_size)
 
         if not target_type:
@@ -3410,7 +3411,21 @@ class EdgeMetadata(object):
 
 
 def get_schema_parser(connection, server_version, dse_version, timeout, metadata_request_timeout, fetch_size=None):
-    version = Version(server_version)
+    if server_version is None and dse_version is None:
+        local_query = QueryMessage(
+            query=maybe_add_timeout_to_query(
+                "SELECT * FROM system.local WHERE key='local'",
+                metadata_request_timeout),
+            consistency_level=ConsistencyLevel.ONE)
+        success, local_result = connection.wait_for_response(
+            local_query, timeout=timeout, fail_on_error=False)
+        if success and local_result.parsed_rows:
+            local_rows = dict_factory(local_result.column_names, local_result.parsed_rows)
+            local_row = local_rows[0]
+            server_version = local_row.get("release_version")
+            dse_version = local_row.get("dse_version")
+
+    version = Version(server_version or "0")
     if dse_version:
         v = Version(dse_version)
         if v >= Version('6.8.0'):
