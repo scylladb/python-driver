@@ -30,9 +30,11 @@ from cassandra.metadata import (Murmur3Token, MD5Token,
                                 UserType, KeyspaceMetadata, get_schema_parser,
                                 _UnknownStrategy, ColumnMetadata, TableMetadata,
                                 IndexMetadata, Function, Aggregate,
-                                Metadata, TokenMap, ReplicationFactor)
+                                Metadata, TokenMap, ReplicationFactor,
+                                SchemaParserDSE68)
 from cassandra.policies import SimpleConvictionPolicy
 from cassandra.pool import Host
+from cassandra.protocol import QueryMessage
 from tests.util import assertCountEqual
 import pytest
 
@@ -614,6 +616,37 @@ class IndexTest(unittest.TestCase):
         row['index_type'] = 'CUSTOM'
         index_meta = parser._build_index_metadata(column_meta, row)
         assert index_meta.as_cql_query() == "CREATE CUSTOM INDEX index_name_here ON keyspace_name_here.table_name_here (column_name_here) USING 'class_name_here'"
+
+
+class SchemaParserLookupTests(unittest.TestCase):
+
+    def test_reads_versions_from_system_local_when_missing(self):
+        connection = Mock()
+
+        release_version_resp = Mock()
+        release_version_resp.column_names = ["release_version"]
+        release_version_resp.parsed_rows = [["4.0.0"]]
+
+        dse_version_resp = Mock()
+        dse_version_resp.column_names = ["dse_version"]
+        dse_version_resp.parsed_rows = [["6.8.0"]]
+
+        def mock_system_local(query, *args, **kwargs):
+            if not isinstance(query, QueryMessage):
+                raise RuntimeError("first argument should be a QueryMessage")
+            if "release_version" in query.query:
+                return (True, release_version_resp)
+            if "dse_version" in query.query:
+                return (True, dse_version_resp)
+            raise RuntimeError("unexpected query")
+
+        connection.wait_for_response.side_effect = mock_system_local
+
+        parser = get_schema_parser(connection, None, None, 0.1, None)
+
+        assert isinstance(parser, SchemaParserDSE68)
+        message = connection.wait_for_response.call_args[0][0]
+        assert "system.local" in message.query
 
 
 class UnicodeIdentifiersTests(unittest.TestCase):
