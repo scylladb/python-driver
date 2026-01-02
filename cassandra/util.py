@@ -73,13 +73,9 @@ def datetime_from_timestamp_ms(timestamp_ms):
     :param timestamp_ms: a unix timestamp, in milliseconds (as integer)
     """
     # Break down milliseconds into components to avoid float conversion
+    # Python's % operator always returns non-negative result for positive divisor
     timestamp_seconds = timestamp_ms // 1000
     remainder_ms = timestamp_ms % 1000
-    # Handle negative timestamps correctly
-    if remainder_ms < 0:
-        remainder_ms += 1000
-        timestamp_seconds -= 1
-    
     microseconds = remainder_ms * 1000
     dt = DATETIME_EPOC + datetime.timedelta(seconds=timestamp_seconds, microseconds=microseconds)
     return dt

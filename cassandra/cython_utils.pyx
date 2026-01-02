@@ -70,12 +70,9 @@ cdef datetime_from_timestamp_ms(int64_t timestamp_ms):
     :param timestamp_ms: a unix timestamp, in milliseconds
     """
     # Break down milliseconds into components to avoid float conversion
+    # Cython's % operator uses Python semantics, always returns non-negative for positive divisor
     cdef int64_t timestamp_seconds = timestamp_ms // 1000
     cdef int64_t remainder_ms = timestamp_ms % 1000
-    # Handle negative timestamps correctly
-    if remainder_ms < 0:
-        remainder_ms += 1000
-        timestamp_seconds -= 1
     
     cdef int days = <int> (timestamp_seconds // DAY_IN_SECONDS)
     cdef int64_t days_in_seconds = (<int64_t> days) * DAY_IN_SECONDS
