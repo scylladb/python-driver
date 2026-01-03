@@ -506,13 +506,15 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
         child = self._child_policy
         
-        # Call child.make_query_plan only once and convert to list for reuse
-        child_plan = list(child.make_query_plan(keyspace, query))
-        
+        # Early return case: pass through the generator directly without materializing
         if query is None or query.routing_key is None or keyspace is None:
-            for host in child_plan:
+            for host in child.make_query_plan(keyspace, query):
                 yield host
             return
+
+        # Call child.make_query_plan only once and convert to list for reuse
+        # This is necessary because we need to iterate over it multiple times
+        child_plan = list(child.make_query_plan(keyspace, query))
 
         replicas = []
         if self._cluster_metadata._tablets.table_has_tablets(keyspace, query.table):
