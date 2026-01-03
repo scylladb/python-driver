@@ -506,14 +506,17 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
         child = self._child_policy
         
-        # Early return case: pass through the generator directly without materializing
+        # Early return case: pass through the generator to preserve lazy evaluation
+        # This avoids materializing the full host list in memory when we don't need token-aware routing
         if query is None or query.routing_key is None or keyspace is None:
             for host in child.make_query_plan(keyspace, query):
                 yield host
             return
 
         # Call child.make_query_plan only once and convert to list for reuse
-        # This is necessary because we need to iterate over it multiple times
+        # List conversion is necessary because we iterate over it twice:
+        # 1. To identify replicas (either from tablets or token ring)
+        # 2. To yield remaining hosts not in the replica set
         child_plan = list(child.make_query_plan(keyspace, query))
 
         replicas = []
