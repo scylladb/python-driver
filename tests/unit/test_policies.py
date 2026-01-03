@@ -945,12 +945,69 @@ class TokenAwarePolicyTest(unittest.TestCase):
         else:
             assert set(replicas) == set(qplan[:2])
             assert hosts[:2] == qplan[2:]
-            if is_tablets:
-                child_policy.make_query_plan.assert_called_with(keyspace, query)
-                assert child_policy.make_query_plan.call_count == 2
-            else:
-                child_policy.make_query_plan.assert_called_once_with(keyspace, query)
+            # After optimization, child.make_query_plan should be called once for both tablets and vnodes
+            child_policy.make_query_plan.assert_called_once_with(keyspace, query)
             assert patched_shuffle.call_count == 1
+
+    def test_child_make_query_plan_called_once(self):
+        """
+        Test to validate that child.make_query_plan is called only once
+        in all scenarios (with/without tablets, with/without routing key)
+        
+        @test_category policy
+        """
+        # Test with vnodes (no tablets)
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(4)]
+        for host in hosts:
+            host.set_up()
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.table_has_tablets.return_value = False
+        replicas = hosts[2:]
+        cluster.metadata.get_replicas.return_value = replicas
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy)
+        policy.populate(cluster, hosts)
+
+        # Test case 1: With routing key and keyspace (should call once)
+        child_policy.reset_mock()
+        keyspace = 'keyspace'
+        routing_key = 'routing_key'
+        query = Statement(routing_key=routing_key, keyspace=keyspace)
+        qplan = list(policy.make_query_plan(keyspace, query))
+        child_policy.make_query_plan.assert_called_once_with(keyspace, query)
+
+        # Test case 2: Without routing key (should call once)
+        child_policy.reset_mock()
+        query = Statement(routing_key=None, keyspace=keyspace)
+        qplan = list(policy.make_query_plan(keyspace, query))
+        child_policy.make_query_plan.assert_called_once_with(keyspace, query)
+
+        # Test case 3: Without keyspace (should call once)
+        child_policy.reset_mock()
+        query = Statement(routing_key=routing_key, keyspace=None)
+        qplan = list(policy.make_query_plan(None, query))
+        child_policy.make_query_plan.assert_called_once_with(None, query)
+
+        # Test case 4: With tablets (should call once)
+        cluster.metadata._tablets.table_has_tablets.return_value = True
+        tablet = Mock(spec=Tablet)
+        tablet.replicas = [(hosts[0].host_id, None), (hosts[1].host_id, None)]
+        cluster.metadata._tablets.get_tablet_for_key.return_value = tablet
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class = Mock()
+        cluster.metadata.token_map.token_class.from_key.return_value = 'token'
+        
+        child_policy.reset_mock()
+        query = Statement(routing_key=routing_key, keyspace=keyspace, table='test_table')
+        qplan = list(policy.make_query_plan(keyspace, query))
+        child_policy.make_query_plan.assert_called_once_with(keyspace, query)
 
 
 class ConvictionPolicyTest(unittest.TestCase):
