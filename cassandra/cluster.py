@@ -3902,7 +3902,7 @@ class ControlConnection(object):
                         success, local_rpc_address_result = connection.wait_for_response(
                             local_rpc_address_query, timeout=self._timeout, fail_on_error=False)
                         if success:
-                            # Fetch all pages if there are more results (system.local table always contains exactly one row)
+                            # Fetch all pages for consistency (system.local table always contains exactly one row, so this is effectively a no-op)
                             local_rpc_address_result = self._fetch_all_pages(connection, local_rpc_address_result, 
                                                                              local_rpc_address_query, self._timeout)
                             row = dict_factory(
