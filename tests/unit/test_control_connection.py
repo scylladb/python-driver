@@ -15,7 +15,7 @@
 import unittest
 
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import Mock, ANY, call
+from unittest.mock import Mock, ANY, call, MagicMock
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType, ConsistencyLevel
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS, QueryMessage
@@ -327,8 +327,6 @@ class ControlConnectionTest(unittest.TestCase):
         """
         Test that topology queries fetch all pages when results are paged
         """
-        from unittest.mock import MagicMock
-        
         # Create mock connection
         mock_connection = MagicMock()
         mock_connection.endpoint = DefaultEndPoint("192.168.1.0")

@@ -3728,23 +3728,24 @@ class ControlConnection(object):
         Fetch all pages for a paged query result.
         Returns the result with all parsed_rows combined from all pages.
         """
-        if not result.paging_state:
+        if not result or not result.paging_state:
             return result
         
-        all_rows = list(result.parsed_rows)
+        all_rows = list(result.parsed_rows) if result.parsed_rows else []
         
         # Save original paging_state to restore later
         original_paging_state = query_msg.paging_state
         
         try:
-            while result.paging_state:
+            while result and result.paging_state:
                 query_msg.paging_state = result.paging_state
                 result = connection.wait_for_response(query_msg, timeout=timeout)
-                if result.parsed_rows:
+                if result and result.parsed_rows:
                     all_rows.extend(result.parsed_rows)
             
             # Update the result with all rows
-            result.parsed_rows = all_rows
+            if result:
+                result.parsed_rows = all_rows
             return result
         finally:
             # Restore original paging_state to avoid side effects
@@ -3901,7 +3902,7 @@ class ControlConnection(object):
                         success, local_rpc_address_result = connection.wait_for_response(
                             local_rpc_address_query, timeout=self._timeout, fail_on_error=False)
                         if success:
-                            # Fetch all pages if there are more results (though system.local has only 1 row)
+                            # Fetch all pages if there are more results (system.local table always contains exactly one row)
                             local_rpc_address_result = self._fetch_all_pages(connection, local_rpc_address_result, 
                                                                              local_rpc_address_query, self._timeout)
                             row = dict_factory(
