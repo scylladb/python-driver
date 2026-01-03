@@ -358,7 +358,9 @@ class ControlConnectionTest(unittest.TestCase):
         
         # Test _fetch_all_pages
         self.control_connection._connection = mock_connection
-        query_msg = QueryMessage(query="SELECT * FROM system.peers", consistency_level=ConsistencyLevel.ONE, fetch_size=1000)
+        query_msg = QueryMessage(query="SELECT * FROM system.peers", 
+                                consistency_level=ConsistencyLevel.ONE, 
+                                fetch_size=self.control_connection._schema_meta_page_size)
         
         result = self.control_connection._fetch_all_pages(mock_connection, first_page, query_msg, timeout=5)
         

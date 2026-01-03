@@ -3733,15 +3733,22 @@ class ControlConnection(object):
         
         all_rows = list(result.parsed_rows)
         
-        while result.paging_state:
-            query_msg.paging_state = result.paging_state
-            result = connection.wait_for_response(query_msg, timeout=timeout)
-            if result.parsed_rows:
-                all_rows.extend(result.parsed_rows)
+        # Save original paging_state to restore later
+        original_paging_state = query_msg.paging_state
         
-        # Update the result with all rows
-        result.parsed_rows = all_rows
-        return result
+        try:
+            while result.paging_state:
+                query_msg.paging_state = result.paging_state
+                result = connection.wait_for_response(query_msg, timeout=timeout)
+                if result.parsed_rows:
+                    all_rows.extend(result.parsed_rows)
+            
+            # Update the result with all rows
+            result.parsed_rows = all_rows
+            return result
+        finally:
+            # Restore original paging_state to avoid side effects
+            query_msg.paging_state = original_paging_state
 
     def shutdown(self):
         # stop trying to reconnect (if we are)
