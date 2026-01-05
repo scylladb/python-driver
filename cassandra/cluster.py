@@ -3660,6 +3660,8 @@ class ControlConnection(object):
                     peers_query, timeout=self._timeout)
 
             # Fetch all pages if there are more results
+            # Note: system.local always has exactly 1 row, so it will never have additional pages
+            # system.peers might have multiple pages for very large clusters (>1000 nodes)
             peers_result = self._fetch_all_pages(connection, peers_result, peers_query, self._timeout)
             local_result = self._fetch_all_pages(connection, local_result, local_query, self._timeout)
 
@@ -3841,6 +3843,8 @@ class ControlConnection(object):
                 peers_query, local_query, timeout=self._timeout)
             
             # Fetch all pages if there are more results
+            # Note: system.local always has exactly 1 row, so it will never have additional pages
+            # system.peers might have multiple pages for very large clusters (>1000 nodes)
             peers_result = self._fetch_all_pages(connection, peers_result, peers_query, self._timeout)
             local_result = self._fetch_all_pages(connection, local_result, local_query, self._timeout)
 
@@ -4148,6 +4152,8 @@ class ControlConnection(object):
                         peers_query, local_query, timeout=timeout)
                     
                     # Fetch all pages if there are more results
+                    # Note: system.local always has exactly 1 row, so it will never have additional pages
+                    # system.peers might have multiple pages for very large clusters (>1000 nodes)
                     peers_result = self._fetch_all_pages(connection, peers_result, peers_query, timeout)
                     local_result = self._fetch_all_pages(connection, local_result, local_query, timeout)
                 except OperationTimedOut as timeout:
