@@ -3748,7 +3748,7 @@ class ControlConnection(object):
                 result.parsed_rows = all_rows
             return result
         finally:
-            # Restore original paging_state to avoid side effects
+            # Restore original paging_state to prevent affecting subsequent uses of this QueryMessage
             query_msg.paging_state = original_paging_state
 
     def shutdown(self):
