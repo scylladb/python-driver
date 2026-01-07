@@ -443,7 +443,7 @@ class RetryPolicyTests(unittest.TestCase):
 
             assert len(rf.attempted_hosts) == 1  # no retry
 
-        assert next(retry_policy.request_error) == 3
+        assert next(retry_policy.request_error) == 3  # 3 calls (excludes TruncateError)
 
         # Test TruncateError is not retried (no on_request_error call)
         clear_queries()
@@ -457,6 +457,7 @@ class RetryPolicyTests(unittest.TestCase):
         assert "Error during truncate" in str(exc_info.value)
         assert "truncate_error" in str(exc_info.value)  # primed server message
         assert len(rf.attempted_hosts) == 1  # no retry
+        assert next(retry_policy.request_error) == 4  # counter unchanged: on_request_error not called
 
         # Test that by default, errors retry on next host (except TruncateError)
         retry_policy = RetryPolicy()
