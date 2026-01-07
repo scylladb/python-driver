@@ -424,14 +424,13 @@ class RetryPolicyTests(unittest.TestCase):
             "message": "server_error"
         }
 
-        # Test the on_request_error call
+        # Test the on_request_error call for errors that should retry
         retry_policy = CounterRetryPolicy()
         self.set_cluster(retry_policy)
 
         for prime_error, exc in [
             (overloaded_error, OverloadedErrorMessage),
             (bootstrapping_error, IsBootstrappingErrorMessage),
-            (truncate_error, TruncateError),
             (server_error, ServerError)]:
 
             clear_queries()
@@ -444,13 +443,24 @@ class RetryPolicyTests(unittest.TestCase):
 
             assert len(rf.attempted_hosts) == 1  # no retry
 
-        assert next(retry_policy.request_error) == 4
+        assert next(retry_policy.request_error) == 3
 
-        # Test that by default, retry on next host
+        # Test TruncateError is not retried (no on_request_error call)
+        clear_queries()
+        query_to_prime = "SELECT * from simulacron_keyspace.simulacron_table;"
+        prime_query(query_to_prime, then=truncate_error, rows=None, column_types=None)
+        rf = self.session.execute_async(query_to_prime)
+
+        with pytest.raises(TruncateError):
+            rf.result()
+
+        assert len(rf.attempted_hosts) == 1  # no retry
+
+        # Test that by default, errors retry on next host (except TruncateError)
         retry_policy = RetryPolicy()
         self.set_cluster(retry_policy)
 
-        for e in [overloaded_error, bootstrapping_error, truncate_error, server_error]:
+        for e in [overloaded_error, bootstrapping_error, server_error]:
             clear_queries()
             query_to_prime = "SELECT * from simulacron_keyspace.simulacron_table;"
             prime_query(query_to_prime, then=e, rows=None, column_types=None)
@@ -460,3 +470,14 @@ class RetryPolicyTests(unittest.TestCase):
                 rf.result()
 
             assert len(rf.attempted_hosts) == 3  # all 3 nodes failed
+
+        # Test TruncateError does not retry even with default RetryPolicy
+        clear_queries()
+        query_to_prime = "SELECT * from simulacron_keyspace.simulacron_table;"
+        prime_query(query_to_prime, then=truncate_error, rows=None, column_types=None)
+        rf = self.session.execute_async(query_to_prime)
+
+        with pytest.raises(TruncateError):
+            rf.result()
+
+        assert len(rf.attempted_hosts) == 1  # no retry for TruncateError
