@@ -443,7 +443,7 @@ class RetryPolicyTests(unittest.TestCase):
 
             assert len(rf.attempted_hosts) == 1  # no retry
 
-        assert next(retry_policy.request_error) == 3
+        assert next(retry_policy.request_error) == 3  # 3 calls (excludes TruncateError)
 
         # Test TruncateError is not retried (no on_request_error call)
         clear_queries()
