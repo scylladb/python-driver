@@ -4789,10 +4789,7 @@ class ResponseFuture(object):
                     log.warning("Host %s truncate error: %s.", host, response.summary)
                     if self._metrics is not None:
                         self._metrics.on_other_error()
-                    if hasattr(response, 'to_exception'):
-                        self._set_final_exception(response.to_exception())
-                    else:
-                        self._set_final_exception(response)
+                    self._set_final_exception(response.to_exception())
                     return
                 elif isinstance(response, PreparedQueryNotFound):
                     if self.prepared_statement:
