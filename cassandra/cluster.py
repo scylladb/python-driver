@@ -4776,7 +4776,7 @@ class ResponseFuture(object):
                         self.query, retry_num=self._query_retries, **response.info)
                 elif isinstance(response, (OverloadedErrorMessage,
                                            IsBootstrappingErrorMessage,
-                                           TruncateError, ServerError)):
+                                           ServerError)):
                     log.warning("Host %s error: %s.", host, response.summary)
                     if self._metrics is not None:
                         self._metrics.on_other_error()
@@ -4784,6 +4784,16 @@ class ResponseFuture(object):
                     retry = retry_policy.on_request_error(
                         self.query, cl, error=response,
                         retry_num=self._query_retries)
+                elif isinstance(response, TruncateError):
+                    # TruncateError should not be retried as it indicates a permanent failure
+                    log.warning("Host %s truncate error: %s.", host, response.summary)
+                    if self._metrics is not None:
+                        self._metrics.on_other_error()
+                    if hasattr(response, 'to_exception'):
+                        self._set_final_exception(response.to_exception())
+                    else:
+                        self._set_final_exception(response)
+                    return
                 elif isinstance(response, PreparedQueryNotFound):
                     if self.prepared_statement:
                         query_id = self.prepared_statement.query_id
