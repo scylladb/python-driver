@@ -2016,13 +2016,13 @@ class Cluster(object):
 
         log.debug("Handling new host %r and notifying listeners", host)
 
+        self.profile_manager.on_add(host)
+        self.control_connection.on_add(host, refresh_nodes)
+
         distance = self.profile_manager.distance(host)
         if distance != HostDistance.IGNORED:
             self._prepare_all_queries(host)
             log.debug("Done preparing queries for new host %r", host)
-
-        self.profile_manager.on_add(host)
-        self.control_connection.on_add(host, refresh_nodes)
 
         if distance == HostDistance.IGNORED:
             log.debug("Not adding connection pool for new host %r because the "
