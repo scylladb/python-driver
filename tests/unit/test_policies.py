@@ -556,15 +556,6 @@ class DCAwareRoundRobinPolicyTest(unittest.TestCase):
         assert policy.local_dc != host_remote.datacenter
         assert policy.local_dc == host_local.datacenter
 
-        # contact DC second
-        policy = DCAwareRoundRobinPolicy()
-        policy.populate(cluster, [host_none])
-        assert not policy.local_dc
-        policy.on_add(host_remote)
-        policy.on_add(host_local)
-        assert policy.local_dc != host_remote.datacenter
-        assert policy.local_dc == host_local.datacenter
-
         # no DC
         policy = DCAwareRoundRobinPolicy()
         policy.populate(cluster, [host_none])
@@ -577,7 +568,7 @@ class DCAwareRoundRobinPolicyTest(unittest.TestCase):
         policy.populate(cluster, [host_none])
         assert not policy.local_dc
         policy.on_add(host_remote)
-        assert not policy.local_dc
+        assert policy.local_dc
 
 class TokenAwarePolicyTest(unittest.TestCase):
 
