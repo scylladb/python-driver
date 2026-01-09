@@ -4543,7 +4543,7 @@ class ResponseFuture(object):
         # or to the explicit host target if set
         if self._host:
             # returning a single value effectively disables retries
-            self.query_plan = [self._host]
+            self.query_plan = iter([self._host])
         else:
             # convert the list/generator/etc to an iterator so that subsequent
             # calls to send_request (which retries may do) will resume where
