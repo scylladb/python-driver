@@ -53,6 +53,34 @@ class NotSupportedError(Exception):
 class InternalError(Exception):
     pass
 
+
+class BytesReader:
+    """
+    Lightweight reader for bytes data without BytesIO overhead.
+    Provides the same read() interface but operates directly on a
+    bytes or memoryview object, avoiding internal buffer copies.
+    """
+    __slots__ = ('_data', '_pos', '_size')
+
+    def __init__(self, data):
+        self._data = data
+        self._pos = 0
+        self._size = len(data)
+
+    def read(self, n=-1):
+        if n < 0:
+            result = self._data[self._pos:]
+            self._pos = self._size
+        else:
+            end = self._pos + n
+            if end > self._size:
+                raise EOFError("Cannot read past the end of the buffer")
+            result = self._data[self._pos:end]
+            self._pos = end
+        # Return bytes to maintain compatibility with unpack functions
+        return bytes(result) if isinstance(result, memoryview) else result
+
+
 ColumnMetadata = namedtuple("ColumnMetadata", ['keyspace_name', 'table_name', 'name', 'type'])
 
 HEADER_DIRECTION_TO_CLIENT = 0x80
@@ -1154,7 +1182,8 @@ class _ProtocolHandler(object):
             body = decompressor(body)
             flags ^= COMPRESSED_FLAG
 
-        body = io.BytesIO(body)
+        # Use lightweight BytesReader instead of io.BytesIO to avoid buffer copy
+        body = BytesReader(body)
         if flags & TRACING_FLAG:
             trace_id = UUID(bytes=body.read(16))
             flags ^= TRACING_FLAG
