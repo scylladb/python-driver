@@ -630,14 +630,25 @@ class _ConnectionIOBuffer(object):
     def readable_cql_frame_bytes(self):
         return self.cql_frame_buffer.tell()
 
+    @staticmethod
+    def _reset_buffer(buf):
+        """
+        Reset a BytesIO buffer by discarding consumed data.
+        Avoid an intermediate bytes copy from .read(); slice the existing buffer.
+        BytesIO will still materialize its own backing store, but this reduces
+        one full-buffer allocation on the hot receive path.
+        """
+        pos = buf.tell()
+        new_buf = io.BytesIO(buf.getbuffer()[pos:])
+        new_buf.seek(0, 2)  # 2 == SEEK_END
+        return new_buf
+
     def reset_io_buffer(self):
-        self._io_buffer = io.BytesIO(self._io_buffer.read())
-        self._io_buffer.seek(0, 2)  # 2 == SEEK_END
+        self._io_buffer = self._reset_buffer(self._io_buffer)
 
     def reset_cql_frame_buffer(self):
         if self.is_checksumming_enabled:
-            self._cql_frame_buffer = io.BytesIO(self._cql_frame_buffer.read())
-            self._cql_frame_buffer.seek(0, 2)  # 2 == SEEK_END
+            self._cql_frame_buffer = self._reset_buffer(self._cql_frame_buffer)
         else:
             self.reset_io_buffer()
 
@@ -1191,9 +1202,10 @@ class Connection(object):
 
     @defunct_on_error
     def _read_frame_header(self):
-        buf = self._io_buffer.cql_frame_buffer.getvalue()
-        pos = len(buf)
+        cql_buf = self._io_buffer.cql_frame_buffer
+        pos = cql_buf.tell()
         if pos:
+            buf = cql_buf.getbuffer()
             version = buf[0] & PROTOCOL_VERSION_MASK
             if version not in ProtocolVersion.SUPPORTED_VERSIONS:
                 raise ProtocolError("This version of the driver does not support protocol version %d" % version)
