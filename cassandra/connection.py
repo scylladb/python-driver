@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from __future__ import absolute_import  # to enable import io from stdlib
-from collections import defaultdict, deque
+from collections import defaultdict, deque, OrderedDict, namedtuple
 import errno
 from functools import wraps, partial, total_ordering
 from heapq import heappush, heappop
@@ -126,6 +126,122 @@ DEFAULT_LOCAL_PORT_LOW = 49152
 DEFAULT_LOCAL_PORT_HIGH = 65535
 
 frame_header_v3 = struct.Struct('>BhBi')
+
+
+# Named tuple for TLS session cache entries
+_SessionCacheEntry = namedtuple('_SessionCacheEntry', ['session', 'timestamp'])
+
+
+class TLSSessionCache:
+    """
+    Thread-safe cache for TLS sessions to enable session resumption.
+    
+    This cache stores TLS sessions per endpoint (host:port) to allow
+    quick TLS renegotiation when reconnecting to the same server.
+    Sessions are automatically expired after a TTL and the cache has
+    a maximum size with LRU eviction using OrderedDict.
+    
+    TLS session resumption works with both TLS 1.2 and TLS 1.3:
+    - TLS 1.2: Session IDs (RFC 5246) and optionally Session Tickets (RFC 5077)
+    - TLS 1.3: Session Tickets (RFC 8446)
+    
+    Python's ssl.SSLSession API handles both versions transparently, so no
+    version-specific checks are needed.
+    """
+    
+    def __init__(self, max_size=100, ttl=3600):
+        """
+        Initialize the TLS session cache.
+        
+        Args:
+            max_size: Maximum number of sessions to cache (default: 100)
+            ttl: Time-to-live for cached sessions in seconds (default: 3600)
+        """
+        self._sessions = OrderedDict()  # OrderedDict for O(1) LRU eviction
+        self._lock = RLock()
+        self._max_size = max_size
+        self._ttl = ttl
+    
+    def _make_key(self, host, port):
+        """Create a cache key from host and port."""
+        return (host, port)
+    
+    def get_session(self, host, port):
+        """
+        Get a cached TLS session for the given endpoint.
+        
+        Args:
+            host: The hostname or IP address
+            port: The port number
+            
+        Returns:
+            ssl.SSLSession object if a valid cached session exists, None otherwise
+        """
+        key = self._make_key(host, port)
+        with self._lock:
+            if key not in self._sessions:
+                return None
+            
+            entry = self._sessions[key]
+            
+            # Check if session has expired
+            if time.time() - entry.timestamp > self._ttl:
+                del self._sessions[key]
+                return None
+            
+            # Move to end to mark as recently used (LRU)
+            self._sessions.move_to_end(key)
+            return entry.session
+    
+    def set_session(self, host, port, session):
+        """
+        Store a TLS session for the given endpoint.
+        
+        Args:
+            host: The hostname or IP address
+            port: The port number
+            session: The ssl.SSLSession object to cache
+        """
+        if session is None:
+            return
+        
+        key = self._make_key(host, port)
+        current_time = time.time()
+        
+        with self._lock:
+            # If key already exists, just update it
+            if key in self._sessions:
+                self._sessions[key] = _SessionCacheEntry(session, current_time)
+                self._sessions.move_to_end(key)
+                return
+            
+            # If cache is at max size, remove least recently used entry (first item)
+            if len(self._sessions) >= self._max_size:
+                self._sessions.popitem(last=False)
+            
+            # Store session with creation time
+            self._sessions[key] = _SessionCacheEntry(session, current_time)
+    
+    def clear_expired(self):
+        """Remove all expired sessions from the cache."""
+        current_time = time.time()
+        with self._lock:
+            expired_keys = [
+                key for key, entry in self._sessions.items()
+                if current_time - entry.timestamp > self._ttl
+            ]
+            for key in expired_keys:
+                del self._sessions[key]
+    
+    def clear(self):
+        """Clear all sessions from the cache."""
+        with self._lock:
+            self._sessions.clear()
+    
+    def size(self):
+        """Return the current number of cached sessions."""
+        with self._lock:
+            return len(self._sessions)
 
 
 class EndPoint(object):
@@ -687,6 +803,8 @@ class Connection(object):
     endpoint = None
     ssl_options = None
     ssl_context = None
+    tls_session_cache = None
+    session_reused = False
     last_error = None
 
     # The current number of operations that are in flight. More precisely,
@@ -763,7 +881,7 @@ class Connection(object):
                  ssl_options=None, sockopts=None, compression: Union[bool, str] = True,
                  cql_version=None, protocol_version=ProtocolVersion.MAX_SUPPORTED, is_control_connection=False,
                  user_type_map=None, connect_timeout=None, allow_beta_protocol_version=False, no_compact=False,
-                 ssl_context=None, owning_pool=None, shard_id=None, total_shards=None,
+                 ssl_context=None, tls_session_cache=None, owning_pool=None, shard_id=None, total_shards=None,
                  on_orphaned_stream_released=None, application_info: Optional[ApplicationInfoBase] = None):
         # TODO next major rename host to endpoint and remove port kwarg.
         self.endpoint = host if isinstance(host, EndPoint) else DefaultEndPoint(host, port)
@@ -771,6 +889,8 @@ class Connection(object):
         self.authenticator = authenticator
         self.ssl_options = ssl_options.copy() if ssl_options else {}
         self.ssl_context = ssl_context
+        self.tls_session_cache = tls_session_cache
+        self.session_reused = False
         self.sockopts = sockopts
         self.compression = compression
         self.cql_version = cql_version
@@ -913,7 +1033,23 @@ class Connection(object):
             server_hostname = self.endpoint.address
             opts['server_hostname'] = server_hostname
 
-        return self.ssl_context.wrap_socket(self._socket, **opts)
+        # Try to get a cached TLS session for resumption
+        # Note: Session resumption works with both TLS 1.2 and TLS 1.3
+        # Python's ssl module handles both transparently via SSLSession objects
+        if self.tls_session_cache:
+            cached_session = self.tls_session_cache.get_session(
+                self.endpoint.address, self.endpoint.port)
+            if cached_session:
+                opts['session'] = cached_session
+                log.debug("Using cached TLS session for %s:%s", 
+                         self.endpoint.address, self.endpoint.port)
+
+        ssl_socket = self.ssl_context.wrap_socket(self._socket, **opts)
+        
+        # Note: Session is NOT stored here - it will be stored after successful connection
+        # in _connect_socket() to ensure we only cache sessions for successful connections
+        
+        return ssl_socket
 
     def _initiate_connection(self, sockaddr):
         if self.features.shard_id is not None:
@@ -968,6 +1104,19 @@ class Connection(object):
                 # run that here.
                 if self._check_hostname:
                     self._validate_hostname()
+                
+                # Store the TLS session after successful connection
+                # This ensures we only cache sessions for connections that actually succeeded
+                if self.tls_session_cache and self.ssl_context and hasattr(self._socket, 'session'):
+                    if self._socket.session:
+                        self.tls_session_cache.set_session(
+                            self.endpoint.address, self.endpoint.port, self._socket.session)
+                        # Track if the session was reused
+                        self.session_reused = self._socket.session_reused
+                        if self.session_reused:
+                            log.debug("TLS session was reused for %s:%s", 
+                                     self.endpoint.address, self.endpoint.port)
+                
                 sockerr = None
                 break
             except socket.error as err:
