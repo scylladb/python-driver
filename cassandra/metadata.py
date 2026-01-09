@@ -2571,7 +2571,6 @@ class SchemaParserV3(SchemaParserV22):
     _SELECT_TABLES = "SELECT * FROM system_schema.tables"
     _SELECT_COLUMNS = "SELECT * FROM system_schema.columns"
     _SELECT_INDEXES = "SELECT * FROM system_schema.indexes"
-    _SELECT_TRIGGERS = "SELECT * FROM system_schema.triggers"
     _SELECT_TYPES = "SELECT * FROM system_schema.types"
     _SELECT_FUNCTIONS = "SELECT * FROM system_schema.functions"
     _SELECT_AGGREGATES = "SELECT * FROM system_schema.aggregates"
@@ -2627,9 +2626,6 @@ class SchemaParserV3(SchemaParserV22):
         indexes_query = QueryMessage(
             query=maybe_add_timeout_to_query(self._SELECT_INDEXES + where_clause, self.metadata_request_timeout),
             consistency_level=cl, fetch_size=fetch_size)
-        triggers_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_TRIGGERS + where_clause, self.metadata_request_timeout),
-            consistency_level=cl, fetch_size=fetch_size)
 
         # in protocol v4 we don't know if this event is a view or a table, so we look for both
         where_clause = bind_params(" WHERE keyspace_name = %s AND view_name = %s", (keyspace, table), _encoder)
@@ -2637,18 +2633,17 @@ class SchemaParserV3(SchemaParserV22):
             query=maybe_add_timeout_to_query(self._SELECT_VIEWS + where_clause, self.metadata_request_timeout),
             consistency_level=cl, fetch_size=fetch_size)
         ((cf_success, cf_result), (col_success, col_result),
-         (indexes_sucess, indexes_result), (triggers_success, triggers_result),
+         (indexes_sucess, indexes_result),
          (view_success, view_result)) = (
              self.connection.wait_for_responses(
-                 cf_query, col_query, indexes_query, triggers_query,
+                 cf_query, col_query, indexes_query,
                  view_query, timeout=self.timeout, fail_on_error=False)
         )
         table_result = self._handle_results(cf_success, cf_result, query_msg=cf_query)
         col_result = self._handle_results(col_success, col_result, query_msg=col_query)
         if table_result:
             indexes_result = self._handle_results(indexes_sucess, indexes_result, query_msg=indexes_query)
-            triggers_result = self._handle_results(triggers_success, triggers_result, query_msg=triggers_query)
-            return self._build_table_metadata(table_result[0], col_result, triggers_result, indexes_result)
+            return self._build_table_metadata(table_result[0], col_result, None, indexes_result)
 
         view_result = self._handle_results(view_success, view_result, query_msg=view_query)
         if view_result:
@@ -2674,7 +2669,6 @@ class SchemaParserV3(SchemaParserV22):
         table_name = row[self._table_name_col]
 
         col_rows = col_rows or self.keyspace_table_col_rows[keyspace_name][table_name]
-        trigger_rows = trigger_rows or self.keyspace_table_trigger_rows[keyspace_name][table_name]
         index_rows = index_rows or self.keyspace_table_index_rows[keyspace_name][table_name]
 
         table_meta = self._table_metadata_class(keyspace_name, table_name, virtual=virtual)
@@ -2695,10 +2689,6 @@ class SchemaParserV3(SchemaParserV22):
                 is_dense = False
 
             self._build_table_columns(table_meta, col_rows, compact_static, is_dense, virtual)
-
-            for trigger_row in trigger_rows:
-                trigger_meta = self._build_trigger_metadata(table_meta, trigger_row)
-                table_meta.triggers[trigger_meta.name] = trigger_meta
 
             for index_row in index_rows:
                 index_meta = self._build_index_metadata(table_meta, index_row)
@@ -2786,12 +2776,6 @@ class SchemaParserV3(SchemaParserV22):
         else:
             return None
 
-    @staticmethod
-    def _build_trigger_metadata(table_metadata, row):
-        name = row["trigger_name"]
-        options = row["options"]
-        trigger_meta = TriggerMetadata(table_metadata, name, options)
-        return trigger_meta
 
     def _query_all(self):
         cl = ConsistencyLevel.ONE
@@ -2809,8 +2793,6 @@ class SchemaParserV3(SchemaParserV22):
                          fetch_size=fetch_size, consistency_level=cl),
             QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_AGGREGATES, self.metadata_request_timeout),
                          fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TRIGGERS, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
             QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_INDEXES, self.metadata_request_timeout),
                          fetch_size=fetch_size, consistency_level=cl),
             QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIEWS, self.metadata_request_timeout),
@@ -2823,7 +2805,6 @@ class SchemaParserV3(SchemaParserV22):
          (types_success, types_result),
          (functions_success, functions_result),
          (aggregates_success, aggregates_result),
-         (triggers_success, triggers_result),
          (indexes_success, indexes_result),
          (views_success, views_result)) = self.connection.wait_for_responses(
              *queries, timeout=self.timeout, fail_on_error=False
@@ -2832,12 +2813,11 @@ class SchemaParserV3(SchemaParserV22):
         self.keyspaces_result = self._handle_results(ks_success, ks_result, query_msg=queries[0])
         self.tables_result = self._handle_results(table_success, table_result, query_msg=queries[1])
         self.columns_result = self._handle_results(col_success, col_result, query_msg=queries[2])
-        self.triggers_result = self._handle_results(triggers_success, triggers_result, query_msg=queries[6])
         self.types_result = self._handle_results(types_success, types_result, query_msg=queries[3])
         self.functions_result = self._handle_results(functions_success, functions_result, query_msg=queries[4])
         self.aggregates_result = self._handle_results(aggregates_success, aggregates_result, query_msg=queries[5])
-        self.indexes_result = self._handle_results(indexes_success, indexes_result, query_msg=queries[7])
-        self.views_result = self._handle_results(views_success, views_result, query_msg=queries[8])
+        self.indexes_result = self._handle_results(indexes_success, indexes_result, query_msg=queries[6])
+        self.views_result = self._handle_results(views_success, views_result, query_msg=queries[7])
 
         self._aggregate_results()
 
@@ -2915,8 +2895,6 @@ class SchemaParserV4(SchemaParserV3):
                          fetch_size=fetch_size, consistency_level=cl),
             QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_AGGREGATES, self.metadata_request_timeout),
                          fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TRIGGERS, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
             QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_INDEXES, self.metadata_request_timeout),
                          fetch_size=fetch_size, consistency_level=cl),
             QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIEWS, self.metadata_request_timeout),
@@ -2940,7 +2918,6 @@ class SchemaParserV4(SchemaParserV3):
             (types_success, types_result),
             (functions_success, functions_result),
             (aggregates_success, aggregates_result),
-            (triggers_success, triggers_result),
             (indexes_success, indexes_result),
             (views_success, views_result),
             # V4-only responses
@@ -2953,26 +2930,25 @@ class SchemaParserV4(SchemaParserV3):
         self.keyspaces_result = self._handle_results(ks_success, ks_result, query_msg=queries[0])
         self.tables_result = self._handle_results(table_success, table_result, query_msg=queries[1])
         self.columns_result = self._handle_results(col_success, col_result, query_msg=queries[2])
-        self.triggers_result = self._handle_results(triggers_success, triggers_result, query_msg=queries[6])
         self.types_result = self._handle_results(types_success, types_result, query_msg=queries[3])
         self.functions_result = self._handle_results(functions_success, functions_result, query_msg=queries[4])
         self.aggregates_result = self._handle_results(aggregates_success, aggregates_result, query_msg=queries[5])
-        self.indexes_result = self._handle_results(indexes_success, indexes_result, query_msg=queries[7])
-        self.views_result = self._handle_results(views_success, views_result, query_msg=queries[8])
+        self.indexes_result = self._handle_results(indexes_success, indexes_result, query_msg=queries[6])
+        self.views_result = self._handle_results(views_success, views_result, query_msg=queries[7])
         # V4-only results
         # These tables don't exist in some DSE versions reporting 4.X so we can
         # ignore them if we got an error
         self.virtual_keyspaces_result = self._handle_results(
             virtual_ks_success, virtual_ks_result,
-            expected_failures=(InvalidRequest,), query_msg=queries[9]
+            expected_failures=(InvalidRequest,), query_msg=queries[8]
         )
         self.virtual_tables_result = self._handle_results(
             virtual_table_success, virtual_table_result,
-            expected_failures=(InvalidRequest,), query_msg=queries[10]
+            expected_failures=(InvalidRequest,), query_msg=queries[9]
         )
         self.virtual_columns_result = self._handle_results(
             virtual_column_success, virtual_column_result,
-            expected_failures=(InvalidRequest,), query_msg=queries[11]
+            expected_failures=(InvalidRequest,), query_msg=queries[10]
         )
 
         self._aggregate_results()
