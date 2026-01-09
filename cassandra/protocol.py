@@ -1085,20 +1085,10 @@ class _ProtocolHandler(object):
         :param compressor: optional compression function to be used on the body
         """
         flags = 0
-        body = io.BytesIO()
         if msg.custom_payload:
             if protocol_version < 4:
                 raise UnsupportedOperation("Custom key/value payloads can only be used with protocol version 4 or higher")
             flags |= CUSTOM_PAYLOAD_FLAG
-            write_bytesmap(body, msg.custom_payload)
-        msg.send_body(body, protocol_version)
-        body = body.getvalue()
-
-        # With checksumming, the compression is done at the segment frame encoding
-        if (not ProtocolVersion.has_checksumming_support(protocol_version)
-                and compressor and len(body) > 0):
-            body = compressor(body)
-            flags |= COMPRESSED_FLAG
 
         if msg.tracing:
             flags |= TRACING_FLAG
@@ -1107,9 +1097,31 @@ class _ProtocolHandler(object):
             flags |= USE_BETA_FLAG
 
         buff = io.BytesIO()
-        cls._write_header(buff, protocol_version, flags, stream_id, msg.opcode, len(body))
-        buff.write(body)
+        buff.seek(9)
 
+        # With checksumming, the compression is done at the segment frame encoding
+        if (compressor and not ProtocolVersion.has_checksumming_support(protocol_version)):
+            body = io.BytesIO()
+            if msg.custom_payload:
+                write_bytesmap(body, msg.custom_payload)
+            msg.send_body(body, protocol_version)
+            body = body.getvalue()
+
+            if len(body) > 0:
+                body = compressor(body)
+                flags |= COMPRESSED_FLAG
+
+            buff.write(body)
+            length = len(body)
+        else:
+            if msg.custom_payload:
+                write_bytesmap(buff, msg.custom_payload)
+            msg.send_body(buff, protocol_version)
+
+            length = buff.tell() - 9
+
+        buff.seek(0)
+        cls._write_header(buff, protocol_version, flags, stream_id, msg.opcode, length)
         return buff.getvalue()
 
     @staticmethod
