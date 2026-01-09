@@ -17,7 +17,7 @@ from libc.stdint cimport int32_t, uint16_t, int64_t
 
 include 'cython_marshal.pyx'
 from cassandra.buffer cimport Buffer, to_bytes, slice_buffer
-from cassandra.cython_utils cimport datetime_from_timestamp, datetime_from_timestamp_ms
+from cassandra.cython_utils cimport datetime_from_timestamp_ms
 
 from cython.view cimport array as cython_array
 from cassandra.tuple cimport tuple_new, tuple_set
