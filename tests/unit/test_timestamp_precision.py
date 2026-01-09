@@ -21,7 +21,7 @@ from cassandra.marshal import int64_pack
 class TimestampPrecisionTests(unittest.TestCase):
     """
     Tests for timestamp precision with large values (far from epoch).
-    See: https://github.com/scylladb/python-driver/issues/XXX
+    See: https://github.com/scylladb/python-driver/issues/532
     """
 
     def test_large_timestamp_roundtrip(self):
@@ -85,7 +85,7 @@ class TimestampPrecisionTests(unittest.TestCase):
             10413792000999,  # 2300-01-01 00:00:00.999
             15768000000000,  # 2469-12-31 12:00:00.000
             20000000000001,  # ~2603 with millisecond precision
-            -10413792000001, # ~1640 BCE
+            -10413792000001, # ~1640 CE (330 years before epoch)
         ]
         
         for original_ms in test_timestamps_ms:
