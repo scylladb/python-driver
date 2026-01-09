@@ -1260,8 +1260,12 @@ class Connection(object):
                 return
             else:
                 frame = self._current_frame
-                self._io_buffer.cql_frame_buffer.seek(frame.body_offset)
-                msg = self._io_buffer.cql_frame_buffer.read(frame.end_pos - frame.body_offset)
+                # Use memoryview to avoid intermediate allocation, then convert to bytes
+                # Explicitly scope the buffer to ensure memoryview is released before reset
+                cql_buf = self._io_buffer.cql_frame_buffer
+                msg = bytes(cql_buf.getbuffer()[frame.body_offset:frame.end_pos])
+                # Advance buffer position to end of frame before reset
+                cql_buf.seek(frame.end_pos)
                 self.process_msg(frame, msg)
                 self._io_buffer.reset_cql_frame_buffer()
                 self._current_frame = None
