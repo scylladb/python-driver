@@ -3796,72 +3796,8 @@ class ControlConnection(object):
             local_row = local_rows[0]
             cluster_name = local_row["cluster_name"]
             self._cluster.metadata.cluster_name = cluster_name
-
             partitioner = local_row.get("partitioner")
-            tokens = local_row.get("tokens")
-
-            host = self._cluster.metadata.get_host(connection.original_endpoint)
-            if not host:
-                log.info("[control connection] Local host %s not found in metadata, adding it", connection.original_endpoint)
-                peers_result.insert(0, local_row)
-            else:
-                datacenter = local_row.get("data_center")
-                rack = local_row.get("rack")
-                self._update_location_info(host, datacenter, rack)
-
-                # support the use case of connecting only with public address
-                if isinstance(self._cluster.endpoint_factory, SniEndPointFactory):
-                    new_endpoint = self._cluster.endpoint_factory.create(local_row)
-
-                    if new_endpoint.address:
-                        host.endpoint = new_endpoint
-
-                host.host_id = local_row.get("host_id")
-
-                found_host_ids.add(host.host_id)
-                found_endpoints.add(host.endpoint)
-
-                host.listen_address = local_row.get("listen_address")
-                host.listen_port = local_row.get("listen_port")
-                host.broadcast_address = _NodeInfo.get_broadcast_address(local_row)
-                host.broadcast_port = _NodeInfo.get_broadcast_port(local_row)
-
-                host.broadcast_rpc_address = _NodeInfo.get_broadcast_rpc_address(local_row)
-                host.broadcast_rpc_port = _NodeInfo.get_broadcast_rpc_port(local_row)
-                if host.broadcast_rpc_address is None:
-                    if self._token_meta_enabled:
-                        # local rpc_address is not available, use the connection endpoint
-                        host.broadcast_rpc_address = connection.endpoint.address
-                        host.broadcast_rpc_port = connection.endpoint.port
-                    else:
-                        # local rpc_address has not been queried yet, try to fetch it
-                        # separately, which might fail because C* < 2.1.6 doesn't have rpc_address
-                        # in system.local. See CASSANDRA-9436.
-                        local_rpc_address_query = QueryMessage(
-                            query=maybe_add_timeout_to_query(self._SELECT_LOCAL_NO_TOKENS_RPC_ADDRESS, self._metadata_request_timeout),
-                            consistency_level=ConsistencyLevel.ONE)
-                        success, local_rpc_address_result = connection.wait_for_response(
-                            local_rpc_address_query, timeout=self._timeout, fail_on_error=False)
-                        if success:
-                            row = dict_factory(
-                                local_rpc_address_result.column_names,
-                                local_rpc_address_result.parsed_rows)
-                            host.broadcast_rpc_address = _NodeInfo.get_broadcast_rpc_address(row[0])
-                            host.broadcast_rpc_port = _NodeInfo.get_broadcast_rpc_port(row[0])
-                        else:
-                            host.broadcast_rpc_address = connection.endpoint.address
-                            host.broadcast_rpc_port = connection.endpoint.port
-
-                host.release_version = local_row.get("release_version")
-                host.dse_version = local_row.get("dse_version")
-                host.dse_workload = local_row.get("workload")
-                host.dse_workloads = local_row.get("workloads")
-
-                if partitioner and tokens:
-                    token_map[host] = tokens
-
-                self._cluster.metadata.update_host(host, old_endpoint=connection.endpoint)
-                connection.original_endpoint = connection.endpoint = host.endpoint
+            peers_result.insert(0, local_row)
         # Check metadata.partitioner to see if we haven't built anything yet. If
         # every node in the cluster was in the contact points, we won't discover
         # any new nodes, so we need this additional check.  (See PYTHON-90)
