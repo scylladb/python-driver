@@ -17,6 +17,7 @@ import unittest
 from itertools import islice, cycle
 from unittest.mock import Mock, patch, call
 from random import randint
+import uuid
 import pytest
 from _thread import LockType
 import sys
@@ -46,7 +47,7 @@ class LoadBalancingPolicyTest(unittest.TestCase):
         """
 
         policy = LoadBalancingPolicy()
-        host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy)
+        host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
         host.set_location_info("dc1", "rack1")
 
         with pytest.raises(NotImplementedError):
@@ -192,11 +193,11 @@ class TestRackOrDCAwareRoundRobinPolicy:
     def test_no_remote(self, policy_specialization, constructor_args):
         hosts = []
         for i in range(2):
-            h = Host(DefaultEndPoint(i), SimpleConvictionPolicy)
+            h = Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4())
             h.set_location_info("dc1", "rack2")
             hosts.append(h)
         for i in range(2):
-            h = Host(DefaultEndPoint(i + 2), SimpleConvictionPolicy)
+            h = Host(DefaultEndPoint(i + 2), SimpleConvictionPolicy, host_id=uuid.uuid4())
             h.set_location_info("dc1", "rack1")
             hosts.append(h)
 
@@ -208,7 +209,7 @@ class TestRackOrDCAwareRoundRobinPolicy:
         assert sorted(qplan) == sorted(hosts)
 
     def test_with_remotes(self, policy_specialization, constructor_args):
-        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy) for i in range(6)]
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(6)]
         for h in hosts[:2]:
             h.set_location_info("dc1", "rack1")
         for h in hosts[2:4]:
@@ -263,7 +264,7 @@ class TestRackOrDCAwareRoundRobinPolicy:
         policy = policy_specialization(*constructor_args, used_hosts_per_remote_dc=0)
 
         # same dc, same rack
-        host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy)
+        host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
         host.set_location_info("dc1", "rack1")
         policy.populate(Mock(), [host])
 
@@ -273,14 +274,14 @@ class TestRackOrDCAwareRoundRobinPolicy:
             assert policy.distance(host) == HostDistance.LOCAL_RACK
 
         # same dc different rack
-        host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy)
+        host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
         host.set_location_info("dc1", "rack2")
         policy.populate(Mock(), [host])
 
         assert policy.distance(host) == HostDistance.LOCAL
 
         # used_hosts_per_remote_dc is set to 0, so ignore it
-        remote_host = Host(DefaultEndPoint("ip2"), SimpleConvictionPolicy)
+        remote_host = Host(DefaultEndPoint("ip2"), SimpleConvictionPolicy, host_id=uuid.uuid4())
         remote_host.set_location_info("dc2", "rack1")
         assert policy.distance(remote_host) == HostDistance.IGNORED
 
@@ -294,14 +295,14 @@ class TestRackOrDCAwareRoundRobinPolicy:
 
         # since used_hosts_per_remote_dc is set to 1, only the first
         # remote host in dc2 will be REMOTE, the rest are IGNORED
-        second_remote_host = Host(DefaultEndPoint("ip3"), SimpleConvictionPolicy)
+        second_remote_host = Host(DefaultEndPoint("ip3"), SimpleConvictionPolicy, host_id=uuid.uuid4())
         second_remote_host.set_location_info("dc2", "rack1")
         policy.populate(Mock(), [host, remote_host, second_remote_host])
         distances = set([policy.distance(remote_host), policy.distance(second_remote_host)])
         assert distances == set([HostDistance.REMOTE, HostDistance.IGNORED])
 
     def test_status_updates(self, policy_specialization, constructor_args):
-        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy) for i in range(5)]
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(5)]
         for h in hosts[:2]:
             h.set_location_info("dc1", "rack1")
         for h in hosts[2:4]:
@@ -314,11 +315,11 @@ class TestRackOrDCAwareRoundRobinPolicy:
         policy.on_down(hosts[0])
         policy.on_remove(hosts[2])
 
-        new_local_host = Host(DefaultEndPoint(5), SimpleConvictionPolicy)
+        new_local_host = Host(DefaultEndPoint(5), SimpleConvictionPolicy, host_id=uuid.uuid4())
         new_local_host.set_location_info("dc1", "rack1")
         policy.on_up(new_local_host)
 
-        new_remote_host = Host(DefaultEndPoint(6), SimpleConvictionPolicy)
+        new_remote_host = Host(DefaultEndPoint(6), SimpleConvictionPolicy, host_id=uuid.uuid4())
         new_remote_host.set_location_info("dc9000", "rack1")
         policy.on_add(new_remote_host)
 
@@ -343,7 +344,7 @@ class TestRackOrDCAwareRoundRobinPolicy:
         assert qplan == []
 
     def test_modification_during_generation(self, policy_specialization, constructor_args):
-        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy) for i in range(4)]
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
         for h in hosts[:2]:
             h.set_location_info("dc1", "rack1")
         for h in hosts[2:]:
@@ -357,7 +358,7 @@ class TestRackOrDCAwareRoundRobinPolicy:
         # approach that changes specific things during known phases of the
         # generator.
 
-        new_host = Host(DefaultEndPoint(4), SimpleConvictionPolicy)
+        new_host = Host(DefaultEndPoint(4), SimpleConvictionPolicy, host_id=uuid.uuid4())
         new_host.set_location_info("dc1", "rack1")
 
         # new local before iteration
@@ -468,7 +469,7 @@ class TestRackOrDCAwareRoundRobinPolicy:
         policy.on_up(hosts[2])
         policy.on_up(hosts[3])
 
-        another_host = Host(DefaultEndPoint(5), SimpleConvictionPolicy)
+        another_host = Host(DefaultEndPoint(5), SimpleConvictionPolicy, host_id=uuid.uuid4())
         another_host.set_location_info("dc3", "rack1")
         new_host.set_location_info("dc3", "rack1")
 
@@ -502,7 +503,7 @@ class TestRackOrDCAwareRoundRobinPolicy:
 
         hosts = []
         for i in range(4):
-            h = Host(DefaultEndPoint(i), SimpleConvictionPolicy)
+            h = Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4())
             h.set_location_info("dc1", "rack1")
             hosts.append(h)
 
@@ -527,7 +528,7 @@ class TestRackOrDCAwareRoundRobinPolicy:
         assert qplan == []
 
     def test_wrong_dc(self, policy_specialization, constructor_args):
-        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy) for i in range(3)]
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(3)]
         for h in hosts[:3]:
             h.set_location_info("dc2", "rack2")
 
@@ -539,9 +540,9 @@ class TestRackOrDCAwareRoundRobinPolicy:
 class DCAwareRoundRobinPolicyTest(unittest.TestCase):
 
     def test_default_dc(self):
-        host_local = Host(DefaultEndPoint(1), SimpleConvictionPolicy, 'local')
-        host_remote = Host(DefaultEndPoint(2), SimpleConvictionPolicy, 'remote')
-        host_none = Host(DefaultEndPoint(1), SimpleConvictionPolicy)
+        host_local = Host(DefaultEndPoint(1), SimpleConvictionPolicy, 'local', host_id=uuid.uuid4())
+        host_remote = Host(DefaultEndPoint(2), SimpleConvictionPolicy, 'remote', host_id=uuid.uuid4())
+        host_none = Host(DefaultEndPoint(1), SimpleConvictionPolicy, host_id=uuid.uuid4())
 
         # contact point is '1'
         cluster = Mock(endpoints_resolved=[DefaultEndPoint(1)])
@@ -552,15 +553,6 @@ class DCAwareRoundRobinPolicyTest(unittest.TestCase):
         assert not policy.local_dc
         policy.on_add(host_local)
         policy.on_add(host_remote)
-        assert policy.local_dc != host_remote.datacenter
-        assert policy.local_dc == host_local.datacenter
-
-        # contact DC second
-        policy = DCAwareRoundRobinPolicy()
-        policy.populate(cluster, [host_none])
-        assert not policy.local_dc
-        policy.on_add(host_remote)
-        policy.on_add(host_local)
         assert policy.local_dc != host_remote.datacenter
         assert policy.local_dc == host_local.datacenter
 
@@ -576,7 +568,7 @@ class DCAwareRoundRobinPolicyTest(unittest.TestCase):
         policy.populate(cluster, [host_none])
         assert not policy.local_dc
         policy.on_add(host_remote)
-        assert not policy.local_dc
+        assert policy.local_dc
 
 class TokenAwarePolicyTest(unittest.TestCase):
 
@@ -585,7 +577,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.table_has_tablets.return_value = []
-        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(4)]
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
         for host in hosts:
             host.set_up()
 
@@ -618,7 +610,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.table_has_tablets.return_value = []
-        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(4)]
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
         for host in hosts:
             host.set_up()
         for h in hosts[:2]:
@@ -667,7 +659,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.table_has_tablets.return_value = []
-        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(8)]
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(8)]
         for host in hosts:
             host.set_up()
         hosts[0].set_location_info("dc1", "rack1")
@@ -731,7 +723,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         """
 
         policy = TokenAwarePolicy(DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=0))
-        host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy)
+        host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
         host.set_location_info("dc1", "rack1")
 
         policy.populate(self.FakeCluster(), [host])
@@ -739,7 +731,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         assert policy.distance(host) == HostDistance.LOCAL
 
         # used_hosts_per_remote_dc is set to 0, so ignore it
-        remote_host = Host(DefaultEndPoint("ip2"), SimpleConvictionPolicy)
+        remote_host = Host(DefaultEndPoint("ip2"), SimpleConvictionPolicy, host_id=uuid.uuid4())
         remote_host.set_location_info("dc2", "rack1")
         assert policy.distance(remote_host) == HostDistance.IGNORED
 
@@ -753,7 +745,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         # since used_hosts_per_remote_dc is set to 1, only the first
         # remote host in dc2 will be REMOTE, the rest are IGNORED
-        second_remote_host = Host(DefaultEndPoint("ip3"), SimpleConvictionPolicy)
+        second_remote_host = Host(DefaultEndPoint("ip3"), SimpleConvictionPolicy, host_id=uuid.uuid4())
         second_remote_host.set_location_info("dc2", "rack1")
         policy.populate(self.FakeCluster(), [host, remote_host, second_remote_host])
         distances = set([policy.distance(remote_host), policy.distance(second_remote_host)])
@@ -764,7 +756,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         Same test as DCAwareRoundRobinPolicyTest.test_status_updates()
         """
 
-        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy) for i in range(4)]
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
         for h in hosts[:2]:
             h.set_location_info("dc1", "rack1")
         for h in hosts[2:]:
@@ -775,11 +767,11 @@ class TokenAwarePolicyTest(unittest.TestCase):
         policy.on_down(hosts[0])
         policy.on_remove(hosts[2])
 
-        new_local_host = Host(DefaultEndPoint(4), SimpleConvictionPolicy)
+        new_local_host = Host(DefaultEndPoint(4), SimpleConvictionPolicy, host_id=uuid.uuid4())
         new_local_host.set_location_info("dc1", "rack1")
         policy.on_up(new_local_host)
 
-        new_remote_host = Host(DefaultEndPoint(5), SimpleConvictionPolicy)
+        new_remote_host = Host(DefaultEndPoint(5), SimpleConvictionPolicy, host_id=uuid.uuid4())
         new_remote_host.set_location_info("dc9000", "rack1")
         policy.on_add(new_remote_host)
 
@@ -802,7 +794,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         assert qplan == []
 
     def test_statement_keyspace(self):
-        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(4)]
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
         for host in hosts:
             host.set_up()
 
@@ -896,7 +888,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         self._assert_shuffle(cluster=self._prepare_cluster_with_tablets(), keyspace='keyspace', routing_key=None)
 
     def _prepare_cluster_with_vnodes(self):
-        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(4)]
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
         for host in hosts:
             host.set_up()
         cluster = Mock(spec=Cluster)
@@ -908,7 +900,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         return cluster
 
     def _prepare_cluster_with_tablets(self):
-        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(4)]
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
         for host in hosts:
             host.set_up()
         cluster = Mock(spec=Cluster)
@@ -1422,7 +1414,7 @@ class WhiteListRoundRobinPolicyTest(unittest.TestCase):
     def test_hosts_with_hostname(self):
         hosts = ['localhost']
         policy = WhiteListRoundRobinPolicy(hosts)
-        host = Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy)
+        host = Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
         policy.populate(None, [host])
 
         qplan = list(policy.make_query_plan())
@@ -1433,7 +1425,7 @@ class WhiteListRoundRobinPolicyTest(unittest.TestCase):
     def test_hosts_with_socket_hostname(self):
         hosts = [UnixSocketEndPoint('/tmp/scylla-workdir/cql.m')]
         policy = WhiteListRoundRobinPolicy(hosts)
-        host = Host(UnixSocketEndPoint('/tmp/scylla-workdir/cql.m'), SimpleConvictionPolicy)
+        host = Host(UnixSocketEndPoint('/tmp/scylla-workdir/cql.m'), SimpleConvictionPolicy, host_id=uuid.uuid4())
         policy.populate(None, [host])
 
         qplan = list(policy.make_query_plan())
@@ -1559,8 +1551,8 @@ class HostFilterPolicyDistanceTest(unittest.TestCase):
             child_policy=Mock(name='child_policy', distance=Mock(name='distance')),
             predicate=lambda host: host.address == 'acceptme'
         )
-        self.ignored_host = Host(DefaultEndPoint('ignoreme'), conviction_policy_factory=Mock())
-        self.accepted_host = Host(DefaultEndPoint('acceptme'), conviction_policy_factory=Mock())
+        self.ignored_host = Host(DefaultEndPoint('ignoreme'), conviction_policy_factory=Mock(), host_id=uuid.uuid4())
+        self.accepted_host = Host(DefaultEndPoint('acceptme'), conviction_policy_factory=Mock(), host_id=uuid.uuid4())
 
     def test_ignored_with_filter(self):
         assert self.hfp.distance(self.ignored_host) == HostDistance.IGNORED
@@ -1629,7 +1621,7 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
 
     def test_wrap_token_aware(self):
         cluster = Mock(spec=Cluster)
-        hosts = [Host(DefaultEndPoint("127.0.0.{}".format(i)), SimpleConvictionPolicy) for i in range(1, 6)]
+        hosts = [Host(DefaultEndPoint("127.0.0.{}".format(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(1, 6)]
         for host in hosts:
             host.set_up()
 
@@ -1656,13 +1648,13 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
         query_plan = hfp.make_query_plan("keyspace", mocked_query)
         # First the not filtered replica, and then the rest of the allowed hosts ordered
         query_plan = list(query_plan)
-        assert query_plan[0] == Host(DefaultEndPoint("127.0.0.2"), SimpleConvictionPolicy)
-        assert set(query_plan[1:]) == {Host(DefaultEndPoint("127.0.0.3"), SimpleConvictionPolicy),
-                                              Host(DefaultEndPoint("127.0.0.5"), SimpleConvictionPolicy)}
+        assert query_plan[0] == Host(DefaultEndPoint("127.0.0.2"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        assert set(query_plan[1:]) == {Host(DefaultEndPoint("127.0.0.3"), SimpleConvictionPolicy, host_id=uuid.uuid4()),
+                                              Host(DefaultEndPoint("127.0.0.5"), SimpleConvictionPolicy, host_id=uuid.uuid4())}
 
     def test_create_whitelist(self):
         cluster = Mock(spec=Cluster)
-        hosts = [Host(DefaultEndPoint("127.0.0.{}".format(i)), SimpleConvictionPolicy) for i in range(1, 6)]
+        hosts = [Host(DefaultEndPoint("127.0.0.{}".format(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(1, 6)]
         for host in hosts:
             host.set_up()
 
@@ -1680,5 +1672,5 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
         mocked_query = Mock()
         query_plan = hfp.make_query_plan("keyspace", mocked_query)
         # Only the filtered replicas should be allowed
-        assert set(query_plan) == {Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy),
-                                           Host(DefaultEndPoint("127.0.0.4"), SimpleConvictionPolicy)}
+        assert set(query_plan) == {Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy, host_id=uuid.uuid4()),
+                                           Host(DefaultEndPoint("127.0.0.4"), SimpleConvictionPolicy, host_id=uuid.uuid4())}

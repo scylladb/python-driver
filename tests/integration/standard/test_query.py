@@ -460,7 +460,8 @@ class ForcedHostIndexPolicy(RoundRobinPolicy):
         live_hosts = sorted(list(self._live_hosts))
         host = []
         try:
-            host = [live_hosts[self.host_index_to_use]]
+            if len(live_hosts) > 0:
+                host = [live_hosts[self.host_index_to_use]]
         except IndexError as e:
             raise IndexError(
                 'You specified an index larger than the number of hosts. Total hosts: {}. Index specified: {}'.format(

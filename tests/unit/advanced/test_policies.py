@@ -13,6 +13,7 @@
 # limitations under the License.
 import unittest
 from unittest.mock import Mock
+import uuid
 
 from cassandra.pool import Host
 from cassandra.policies import RoundRobinPolicy
@@ -72,7 +73,7 @@ class DSELoadBalancingPolicyTest(unittest.TestCase):
 
     def test_target_host_down(self):
         node_count = 4
-        hosts = [Host(i, Mock()) for i in range(node_count)]
+        hosts = [Host(i, Mock(), host_id=uuid.uuid4()) for i in range(node_count)]
         target_host = hosts[1]
 
         policy = DSELoadBalancingPolicy(RoundRobinPolicy())
@@ -87,7 +88,7 @@ class DSELoadBalancingPolicyTest(unittest.TestCase):
 
     def test_target_host_nominal(self):
         node_count = 4
-        hosts = [Host(i, Mock()) for i in range(node_count)]
+        hosts = [Host(i, Mock(), host_id=uuid.uuid4()) for i in range(node_count)]
         target_host = hosts[1]
         target_host.is_up = True
 

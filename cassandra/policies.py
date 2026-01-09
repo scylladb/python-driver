@@ -245,7 +245,6 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         self.used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._dc_live_hosts = {}
         self._position = 0
-        self._endpoints = []
         LoadBalancingPolicy.__init__(self)
 
     def _dc(self, host):
@@ -254,11 +253,6 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
     def populate(self, cluster, hosts):
         for dc, dc_hosts in groupby(hosts, lambda h: self._dc(h)):
             self._dc_live_hosts[dc] = tuple({*dc_hosts, *self._dc_live_hosts.get(dc, [])})
-
-        if not self.local_dc:
-            self._endpoints = [
-                endpoint
-                for endpoint in cluster.endpoints_resolved]
 
         self._position = randint(0, len(hosts) - 1) if hosts else 0
 
@@ -301,13 +295,11 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         # not worrying about threads because this will happen during
         # control connection startup/refresh
         if not self.local_dc and host.datacenter:
-            if host.endpoint in self._endpoints:
-                self.local_dc = host.datacenter
-                log.info("Using datacenter '%s' for DCAwareRoundRobinPolicy (via host '%s'); "
-                         "if incorrect, please specify a local_dc to the constructor, "
-                         "or limit contact points to local cluster nodes" %
-                         (self.local_dc, host.endpoint))
-                del self._endpoints
+            self.local_dc = host.datacenter
+            log.info("Using datacenter '%s' for DCAwareRoundRobinPolicy (via host '%s'); "
+                        "if incorrect, please specify a local_dc to the constructor, "
+                        "or limit contact points to local cluster nodes" %
+                        (self.local_dc, host.endpoint))
 
         dc = self._dc(host)
         with self._hosts_lock:
