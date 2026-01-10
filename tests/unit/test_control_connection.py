@@ -327,6 +327,8 @@ class ControlConnectionTest(unittest.TestCase):
         """
         Test that topology queries fetch all pages when results are paged
         """
+        from cassandra.cluster import _fetch_remaining_pages
+        
         # Create mock connection
         mock_connection = MagicMock()
         mock_connection.endpoint = DefaultEndPoint("192.168.1.0")
@@ -354,13 +356,13 @@ class ControlConnectionTest(unittest.TestCase):
         mock_connection.wait_for_responses.return_value = (first_page, local_result)
         mock_connection.wait_for_response.return_value = second_page
         
-        # Test _fetch_all_pages
+        # Test _fetch_remaining_pages
         self.control_connection._connection = mock_connection
         query_msg = QueryMessage(query="SELECT * FROM system.peers", 
                                 consistency_level=ConsistencyLevel.ONE, 
                                 fetch_size=self.control_connection._schema_meta_page_size)
         
-        result = self.control_connection._fetch_all_pages(mock_connection, first_page, query_msg, timeout=5)
+        result = _fetch_remaining_pages(mock_connection, first_page, query_msg, timeout=5)
         
         # Verify that both pages were fetched
         assert len(result.parsed_rows) == 2
