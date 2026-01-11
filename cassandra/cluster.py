@@ -3451,32 +3451,25 @@ def _fetch_remaining_pages(connection, query_msg, timeout):
     :param timeout: Timeout for each query operation
     :return: The result with all parsed_rows combined from all pages
     """
-    # Save original paging_state to restore later
-    original_paging_state = query_msg.paging_state
+    # Execute the query to get the first page
+    result = connection.wait_for_response(query_msg, timeout=timeout)
     
-    try:
-        # Execute the query to get the first page
-        result = connection.wait_for_response(query_msg, timeout=timeout)
-        
-        if not result or not result.paging_state:
-            return result
-        
-        all_rows = list(result.parsed_rows) if result.parsed_rows else []
-        
-        # Fetch remaining pages
-        while result and result.paging_state:
-            query_msg.paging_state = result.paging_state
-            result = connection.wait_for_response(query_msg, timeout=timeout)
-            if result and result.parsed_rows:
-                all_rows.extend(result.parsed_rows)
-        
-        # Update the result with all rows
-        if result:
-            result.parsed_rows = all_rows
+    if not result or not result.paging_state:
         return result
-    finally:
-        # Restore original paging_state to prevent affecting subsequent uses of this QueryMessage
-        query_msg.paging_state = original_paging_state
+    
+    all_rows = list(result.parsed_rows) if result.parsed_rows else []
+    
+    # Fetch remaining pages
+    while result and result.paging_state:
+        query_msg.paging_state = result.paging_state
+        result = connection.wait_for_response(query_msg, timeout=timeout)
+        if result and result.parsed_rows:
+            all_rows.extend(result.parsed_rows)
+    
+    # Update the result with all rows
+    if result:
+        result.parsed_rows = all_rows
+    return result
 
 
 class ControlConnection(object):
