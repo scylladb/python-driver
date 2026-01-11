@@ -167,6 +167,20 @@ class MockConnection(object):
              ["192.168.1.2", 9042, "10.0.0.2", 7040, "a", "dc1", "rack1", ["2", "102", "202"], "uuid3"]]
         ]
         self.wait_for_responses = Mock(return_value=_node_meta_results(self.local_results, self.peer_results))
+        # Set up wait_for_response to return the appropriate result based on the query
+        def wait_for_response_side_effect(query_msg, timeout=None, fail_on_error=True):
+            # Create a result that matches the expected format
+            result = ResultMessage(kind=RESULT_KIND_ROWS)
+            # Return peer or local results based on some simple heuristic
+            if "peers" in query_msg.query.lower():
+                result.column_names = self.peer_results[0]
+                result.parsed_rows = self.peer_results[1]
+            else:
+                result.column_names = self.local_results[0]
+                result.parsed_rows = self.local_results[1]
+            result.paging_state = None
+            return result
+        self.wait_for_response = Mock(side_effect=wait_for_response_side_effect)
 
 
 class FakeTime(object):
@@ -312,14 +326,15 @@ class ControlConnectionTest(unittest.TestCase):
         # Test during refresh_node_list_and_token_map
         self.control_connection.refresh_node_list_and_token_map()
         
-        # Verify that wait_for_responses was called
-        assert self.connection.wait_for_responses.called
+        # Verify that wait_for_response was called (now used instead of wait_for_responses)
+        assert self.connection.wait_for_response.called
         
-        # Get the QueryMessage arguments - both should be QueryMessage instances
-        call_args = self.connection.wait_for_responses.call_args[0]
+        # Get the QueryMessage arguments from the calls
+        calls = self.connection.wait_for_response.call_args_list
         
-        # Verify both arguments are QueryMessage instances with fetch_size set
-        for query_msg in call_args:
+        # Verify QueryMessage instances have fetch_size set
+        for call in calls:
+            query_msg = call[0][0]  # First positional argument
             assert isinstance(query_msg, QueryMessage)
             assert query_msg.fetch_size == self.control_connection._schema_meta_page_size
 
@@ -346,15 +361,8 @@ class ControlConnectionTest(unittest.TestCase):
         second_page.parsed_rows = [["192.168.1.2", "10.0.0.2", "a", "dc1", "rack1", ["2", "102", "202"], "uuid3"]]
         second_page.paging_state = None
         
-        # Create local result without paging
-        local_result = ResultMessage(kind=RESULT_KIND_ROWS)
-        local_result.column_names = ["rpc_address", "schema_version", "cluster_name", "data_center", "rack", "partitioner", "release_version", "tokens", "host_id"]
-        local_result.parsed_rows = [["192.168.1.0", "a", "foocluster", "dc1", "rack1", "Murmur3Partitioner", "2.2.0", ["0", "100", "200"], "uuid1"]]
-        local_result.paging_state = None
-        
         # Setup mock: first call returns first page, second call returns second page
-        mock_connection.wait_for_responses.return_value = (first_page, local_result)
-        mock_connection.wait_for_response.return_value = second_page
+        mock_connection.wait_for_response.side_effect = [first_page, second_page]
         
         # Test _fetch_remaining_pages
         self.control_connection._connection = mock_connection
@@ -362,7 +370,7 @@ class ControlConnectionTest(unittest.TestCase):
                                 consistency_level=ConsistencyLevel.ONE, 
                                 fetch_size=self.control_connection._schema_meta_page_size)
         
-        result = _fetch_remaining_pages(mock_connection, first_page, query_msg, timeout=5)
+        result = _fetch_remaining_pages(mock_connection, query_msg, timeout=5)
         
         # Verify that both pages were fetched
         assert len(result.parsed_rows) == 2
@@ -370,8 +378,8 @@ class ControlConnectionTest(unittest.TestCase):
         assert result.parsed_rows[1][0] == "192.168.1.2"
         assert result.paging_state is None
         
-        # Verify wait_for_response was called once to fetch the second page
-        assert mock_connection.wait_for_response.called
+        # Verify wait_for_response was called twice (first page + second page)
+        assert mock_connection.wait_for_response.call_count == 2
 
     def test_refresh_nodes_and_tokens_with_invalid_peers(self):
         def refresh_and_validate_added_hosts():

@@ -3441,25 +3441,28 @@ def _clear_watcher(conn, expiring_weakref):
         pass
 
 
-def _fetch_remaining_pages(connection, result, query_msg, timeout):
+def _fetch_remaining_pages(connection, query_msg, timeout):
     """
-    Fetch remaining pages for a paged query result that already has the first page.
+    Fetch all pages for a paged query.
+    Executes the query and fetches all pages if the result is paged.
     
     :param connection: The connection to use for querying
-    :param result: The initial result from the first page (must have paging_state if there are more pages)
-    :param query_msg: The QueryMessage used for the initial query (will be reused with paging_state)
+    :param query_msg: The QueryMessage to execute (must have fetch_size set for paging)
     :param timeout: Timeout for each query operation
     :return: The result with all parsed_rows combined from all pages
     """
-    if not result or not result.paging_state:
-        return result
-    
-    all_rows = list(result.parsed_rows) if result.parsed_rows else []
-    
     # Save original paging_state to restore later
     original_paging_state = query_msg.paging_state
     
     try:
+        # Execute the query to get the first page
+        result = connection.wait_for_response(query_msg, timeout=timeout)
+        
+        if not result or not result.paging_state:
+            return result
+        
+        all_rows = list(result.parsed_rows) if result.parsed_rows else []
+        
         # Fetch remaining pages
         while result and result.paging_state:
             query_msg.paging_state = result.paging_state
@@ -3678,27 +3681,21 @@ class ControlConnection(object):
             local_query = QueryMessage(query=maybe_add_timeout_to_query(sel_local, self._metadata_request_timeout),
                                        consistency_level=ConsistencyLevel.ONE,
                                        fetch_size=self._schema_meta_page_size)
-            (peers_success, peers_result), (local_success, local_result) = connection.wait_for_responses(
-                peers_query, local_query, timeout=self._timeout, fail_on_error=False)
-
-            if not local_success:
-                raise local_result
-
-            if not peers_success:
+            
+            # Try to execute peers query (might be peers_v2)
+            try:
+                peers_result = _fetch_remaining_pages(connection, peers_query, self._timeout)
+            except Exception as e:
                 # error with the peers v2 query, fallback to peers v1
                 self._uses_peers_v2 = False
                 sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
                 peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
                                            consistency_level=ConsistencyLevel.ONE,
                                            fetch_size=self._schema_meta_page_size)
-                peers_result = connection.wait_for_response(
-                    peers_query, timeout=self._timeout)
-
-            # Fetch all pages if there are more results
-            # Note: system.local always has exactly 1 row, so it will never have additional pages
-            # system.peers might have multiple pages for very large clusters (>1000 nodes)
-            peers_result = _fetch_remaining_pages(connection, peers_result, peers_query, self._timeout)
-            local_result = _fetch_remaining_pages(connection, local_result, local_query, self._timeout)
+                peers_result = _fetch_remaining_pages(connection, peers_query, self._timeout)
+            
+            # Fetch local query (note: system.local always has exactly 1 row, so it will never have additional pages)
+            local_result = _fetch_remaining_pages(connection, local_query, self._timeout)
 
             shared_results = (peers_result, local_result)
             self._refresh_node_list_and_token_map(connection, preloaded_results=shared_results)
@@ -3846,14 +3843,12 @@ class ControlConnection(object):
             local_query = QueryMessage(query=maybe_add_timeout_to_query(sel_local, self._metadata_request_timeout),
                                        consistency_level=cl,
                                        fetch_size=self._schema_meta_page_size)
-            peers_result, local_result = connection.wait_for_responses(
-                peers_query, local_query, timeout=self._timeout)
             
-            # Fetch all pages if there are more results
+            # Fetch all pages for both queries
             # Note: system.local always has exactly 1 row, so it will never have additional pages
             # system.peers might have multiple pages for very large clusters (>1000 nodes)
-            peers_result = _fetch_remaining_pages(connection, peers_result, peers_query, self._timeout)
-            local_result = _fetch_remaining_pages(connection, local_result, local_query, self._timeout)
+            peers_result = _fetch_remaining_pages(connection, peers_query, self._timeout)
+            local_result = _fetch_remaining_pages(connection, local_query, self._timeout)
 
         peers_result = dict_factory(peers_result.column_names, peers_result.parsed_rows)
 
@@ -3910,18 +3905,15 @@ class ControlConnection(object):
                             query=maybe_add_timeout_to_query(self._SELECT_LOCAL_NO_TOKENS_RPC_ADDRESS, self._metadata_request_timeout),
                             consistency_level=ConsistencyLevel.ONE,
                             fetch_size=self._schema_meta_page_size)
-                        success, local_rpc_address_result = connection.wait_for_response(
-                            local_rpc_address_query, timeout=self._timeout, fail_on_error=False)
-                        if success:
-                            # Fetch all pages for consistency (system.local table always contains exactly one row, so this is effectively a no-op)
-                            local_rpc_address_result = _fetch_remaining_pages(connection, local_rpc_address_result, 
-                                                                             local_rpc_address_query, self._timeout)
+                        try:
+                            # Fetch all pages (system.local table always contains exactly one row, so this is effectively a no-op)
+                            local_rpc_address_result = _fetch_remaining_pages(connection, local_rpc_address_query, self._timeout)
                             row = dict_factory(
                                 local_rpc_address_result.column_names,
                                 local_rpc_address_result.parsed_rows)
                             host.broadcast_rpc_address = _NodeInfo.get_broadcast_rpc_address(row[0])
                             host.broadcast_rpc_port = _NodeInfo.get_broadcast_rpc_port(row[0])
-                        else:
+                        except Exception:
                             host.broadcast_rpc_address = connection.endpoint.address
                             host.broadcast_rpc_port = connection.endpoint.port
 
@@ -4155,14 +4147,12 @@ class ControlConnection(object):
                                            fetch_size=self._schema_meta_page_size)
                 try:
                     timeout = min(self._timeout, total_timeout - elapsed)
-                    peers_result, local_result = connection.wait_for_responses(
-                        peers_query, local_query, timeout=timeout)
                     
                     # Fetch all pages if there are more results
                     # Note: system.local always has exactly 1 row, so it will never have additional pages
                     # system.peers might have multiple pages for very large clusters (>1000 nodes)
-                    peers_result = _fetch_remaining_pages(connection, peers_result, peers_query, timeout)
-                    local_result = _fetch_remaining_pages(connection, local_result, local_query, timeout)
+                    peers_result = _fetch_remaining_pages(connection, peers_query, timeout)
+                    local_result = _fetch_remaining_pages(connection, local_query, timeout)
                 except OperationTimedOut as timeout:
                     log.debug("[control connection] Timed out waiting for "
                               "response during schema agreement check: %s", timeout)
