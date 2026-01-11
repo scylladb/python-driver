@@ -3441,7 +3441,7 @@ def _clear_watcher(conn, expiring_weakref):
         pass
 
 
-def _fetch_remaining_pages(connection, query_msg, timeout):
+def _fetch_remaining_pages(connection, query_msg, timeout, fail_on_error=True):
     """
     Fetch all pages for a paged query.
     Executes the query and fetches all pages if the result is paged.
@@ -3449,27 +3449,47 @@ def _fetch_remaining_pages(connection, query_msg, timeout):
     :param connection: The connection to use for querying
     :param query_msg: The QueryMessage to execute (must have fetch_size set for paging)
     :param timeout: Timeout for each query operation
-    :return: The result with all parsed_rows combined from all pages
+    :param fail_on_error: If True, raise exceptions on query failure. If False, return (success, result) tuple. Defaults to True (same as connection.wait_for_response)
+    :return: If fail_on_error=True, returns the result with all parsed_rows combined from all pages.
+             If fail_on_error=False, returns (success, result) tuple where result has all parsed_rows combined.
     """
     # Execute the query to get the first page
-    result = connection.wait_for_response(query_msg, timeout=timeout)
+    response = connection.wait_for_response(query_msg, timeout=timeout, fail_on_error=fail_on_error)
+    
+    # Handle fail_on_error=False case where response is (success, result) tuple
+    if not fail_on_error:
+        success, result = response
+        if not success:
+            return response  # Return (False, exception) tuple
+    else:
+        result = response
     
     if not result or not result.paging_state:
-        return result
+        return response if not fail_on_error else result
     
     all_rows = list(result.parsed_rows) if result.parsed_rows else []
     
     # Fetch remaining pages
     while result and result.paging_state:
         query_msg.paging_state = result.paging_state
-        result = connection.wait_for_response(query_msg, timeout=timeout)
+        page_response = connection.wait_for_response(query_msg, timeout=timeout, fail_on_error=fail_on_error)
+        
+        if not fail_on_error:
+            page_success, page_result = page_response
+            if not page_success:
+                return page_response  # Return (False, exception) tuple
+            result = page_result
+        else:
+            result = page_response
+            
         if result and result.parsed_rows:
             all_rows.extend(result.parsed_rows)
     
     # Update the result with all rows
     if result:
         result.parsed_rows = all_rows
-    return result
+    
+    return (True, result) if not fail_on_error else result
 
 
 class ControlConnection(object):
@@ -3676,9 +3696,10 @@ class ControlConnection(object):
                                        fetch_size=self._schema_meta_page_size)
             
             # Try to execute peers query (might be peers_v2)
-            try:
-                peers_result = _fetch_remaining_pages(connection, peers_query, self._timeout)
-            except Exception as e:
+            # Use fail_on_error=False to handle peers_v2 fallback gracefully
+            peers_success, peers_result = _fetch_remaining_pages(connection, peers_query, self._timeout, fail_on_error=False)
+            
+            if not peers_success:
                 # error with the peers v2 query, fallback to peers v1
                 self._uses_peers_v2 = False
                 sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
@@ -3688,7 +3709,11 @@ class ControlConnection(object):
                 peers_result = _fetch_remaining_pages(connection, peers_query, self._timeout)
             
             # Fetch local query (note: system.local always has exactly 1 row, so it will never have additional pages)
-            local_result = _fetch_remaining_pages(connection, local_query, self._timeout)
+            # Use fail_on_error=False to match original behavior
+            local_success, local_result = _fetch_remaining_pages(connection, local_query, self._timeout, fail_on_error=False)
+            
+            if not local_success:
+                raise local_result
 
             shared_results = (peers_result, local_result)
             self._refresh_node_list_and_token_map(connection, preloaded_results=shared_results)
