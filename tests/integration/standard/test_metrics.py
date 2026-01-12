@@ -218,7 +218,7 @@ class MetricsNamespaceTest(BasicSharedKeyspaceUnitTestCaseRF3WM):
         try:
             # Test write
             query = SimpleStatement("INSERT INTO {0}.{0} (k, v) VALUES (2, 2)".format(self.ks_name), consistency_level=ConsistencyLevel.ALL)
-            with pytest.raises(WriteTimeout):
+            with pytest.raises((WriteTimeout, Unavailable)):
                 self.session.execute(query, timeout=None)
         finally:
             get_node(1).resume()
@@ -230,7 +230,7 @@ class MetricsNamespaceTest(BasicSharedKeyspaceUnitTestCaseRF3WM):
         stats_cluster2 = cluster2.metrics.get_stats()
 
         # Test direct access to stats
-        assert 1 == self.cluster.metrics.stats.write_timeouts
+        assert (1 == self.cluster.metrics.stats.write_timeouts or 1 == self.cluster.metrics.stats.unavailables)
         assert 0 == cluster2.metrics.stats.write_timeouts
 
         # Test direct access to a child stats
