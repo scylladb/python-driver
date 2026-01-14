@@ -206,7 +206,7 @@ class DefaultTLSSessionCache(TLSSessionCache):
             return len(self._sessions)
 
 
-class DefaultTLSSessionCacheOptions(TLSSessionCacheOptions):
+class TLSSessionCacheOptions:
     """
     Default implementation of TLS session cache configuration options.
     """

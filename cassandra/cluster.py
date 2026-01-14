@@ -204,7 +204,7 @@ _DEFAULT_TLS_SESSION_CACHE_TTL = 3600  # 1 hour in seconds
 from abc import ABC, abstractmethod
 
 
-class TLSSessionCache(ABC):
+class TLSSessionCacheBase(ABC):
     """
     Abstract base class for TLS session caching.
     
@@ -252,7 +252,7 @@ class TLSSessionCache(ABC):
         pass
 
 
-class TLSSessionCacheOptions(ABC):
+class TLSSessionCacheOptionsBase(ABC):
     """
     Abstract base class for TLS session cache configuration options.
     """
@@ -960,10 +960,10 @@ class Cluster(object):
     
     Example::
     
-        from cassandra.tls import DefaultTLSSessionCacheOptions
+        from cassandra.tls import TLSSessionCacheOptions
         
         # Cache by host only (ignoring port)
-        options = DefaultTLSSessionCacheOptions(
+        options = TLSSessionCacheOptions(
             max_size=200,
             ttl=7200,
             cache_by_host_only=True
@@ -1524,11 +1524,11 @@ class Cluster(object):
         # Initialize TLS session cache if SSL is enabled
         self._tls_session_cache = None
         if (ssl_context or ssl_options) and tls_session_cache_options is not False:
-            from cassandra.tls import DefaultTLSSessionCacheOptions
+            from cassandra.tls import TLSSessionCacheOptions
             
             # Use provided options or create default
             if tls_session_cache_options is None:
-                cache_options = DefaultTLSSessionCacheOptions(
+                cache_options = TLSSessionCacheOptions(
                     max_size=_DEFAULT_TLS_SESSION_CACHE_SIZE,
                     ttl=_DEFAULT_TLS_SESSION_CACHE_TTL,
                     cache_by_host_only=False
