@@ -497,10 +497,19 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         keyspace = query.keyspace if query and query.keyspace else working_keyspace
 
         child = self._child_policy
+        
+        # Early return case: pass through the generator to preserve lazy evaluation
+        # This avoids materializing the full host list in memory when we don't need token-aware routing
         if query is None or query.routing_key is None or keyspace is None:
             for host in child.make_query_plan(keyspace, query):
                 yield host
             return
+
+        # Call child.make_query_plan only once and convert to list for reuse
+        # List conversion is necessary because we iterate over it twice:
+        # 1. To identify replicas (either from tablets or token ring)
+        # 2. To yield remaining hosts not in the replica set
+        child_plan = list(child.make_query_plan(keyspace, query))
 
         replicas = []
         if self._cluster_metadata._tablets.table_has_tablets(keyspace, query.table):
@@ -509,8 +518,6 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
             if tablet is not None:
                 replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
-                child_plan = child.make_query_plan(keyspace, query)
-
                 replicas = [host for host in child_plan if host.host_id in replicas_mapped]
         else:
             replicas = self._cluster_metadata.get_replicas(keyspace, query.routing_key)
@@ -527,7 +534,7 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         # yield replicas: local_rack, local, remote
         yield from yield_in_order(replicas)
         # yield rest of the cluster: local_rack, local, remote
-        yield from yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas])
+        yield from yield_in_order([host for host in child_plan if host not in replicas])
 
     def on_up(self, *args, **kwargs):
         return self._child_policy.on_up(*args, **kwargs)
