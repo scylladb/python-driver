@@ -689,7 +689,6 @@ class Connection(object):
     ssl_options = None
     ssl_context = None
     tls_session_cache = None
-    session_reused = False
     last_error = None
 
     # The current number of operations that are in flight. More precisely,
@@ -775,7 +774,6 @@ class Connection(object):
         self.ssl_options = ssl_options.copy() if ssl_options else {}
         self.ssl_context = ssl_context
         self.tls_session_cache = tls_session_cache
-        self.session_reused = False
         self.sockopts = sockopts
         self.compression = compression
         self.cql_version = cql_version
@@ -994,9 +992,7 @@ class Connection(object):
                 if self.tls_session_cache and self.ssl_context and hasattr(self._socket, 'session'):
                     if self._socket.session:
                         self.tls_session_cache.set_session(self.endpoint, self._socket.session)
-                        # Track if the session was reused
-                        self.session_reused = self._socket.session_reused
-                        if self.session_reused:
+                        if self._socket.session_reused:
                             log.debug("TLS session was reused for %s:%s", 
                                      self.endpoint.address, self.endpoint.port)
                 
