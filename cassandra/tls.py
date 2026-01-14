@@ -20,7 +20,6 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict, namedtuple
 from threading import RLock
 import time
-from typing import Optional
 
 
 # Named tuple for TLS session cache entries
