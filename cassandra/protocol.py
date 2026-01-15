@@ -85,10 +85,12 @@ class _RegisterMessageType(type):
 
 
 class _MessageType(object, metaclass=_RegisterMessageType):
+    __slots__ = ('custom_payload', 'tracing', 'allow_beta_protocol_version')
 
-    tracing = False
-    custom_payload = None
-    warnings = None
+    def __init__(self):
+        self.custom_payload = None
+        self.tracing = False
+        self.allow_beta_protocol_version = False
 
     def update_custom_payload(self, other):
         if other:
@@ -102,18 +104,28 @@ class _MessageType(object, metaclass=_RegisterMessageType):
         return '<%s(%s)>' % (self.__class__.__name__, ', '.join('%s=%r' % i for i in _get_params(self)))
 
 
+class _DecodableMessageType(_MessageType):
+    """Base class for messages that can be decoded and receive protocol attributes"""
+    __slots__ = ('stream_id', 'trace_id', 'warnings')
+
+
 def _get_params(message_obj):
     base_attrs = dir(_MessageType)
+    # Use __slots__ to get attributes since we no longer have __dict__
+    all_slots = []
+    for cls in type(message_obj).__mro__:
+        if hasattr(cls, '__slots__'):
+            all_slots.extend(cls.__slots__)
     return (
-        (n, a) for n, a in message_obj.__dict__.items()
-        if n not in base_attrs and not n.startswith('_') and not callable(a)
+        (n, getattr(message_obj, n, None)) for n in all_slots
+        if n not in base_attrs and not n.startswith('_') and hasattr(message_obj, n)
     )
 
 
 error_classes = {}
 
 
-class ErrorMessage(_MessageType, Exception):
+class ErrorMessage(Exception):
     opcode = 0x00
     name = 'ERROR'
     summary = 'Unknown'
@@ -407,6 +419,10 @@ class ClientWriteError(RequestExecutionException):
     error_code = 0x8000
 
 
+# Manually register ErrorMessage since it doesn't use _RegisterMessageType metaclass
+register_class(ErrorMessage)
+
+
 class StartupMessage(_MessageType):
     opcode = 0x01
     name = 'STARTUP'
@@ -418,6 +434,7 @@ class StartupMessage(_MessageType):
     ))
 
     def __init__(self, cqlversion, options):
+        super().__init__()
         self.cqlversion = cqlversion
         self.options = options
 
@@ -427,7 +444,9 @@ class StartupMessage(_MessageType):
         write_stringmap(f, optmap)
 
 
-class ReadyMessage(_MessageType):
+class ReadyMessage(_DecodableMessageType):
+    __slots__ = ()
+
     opcode = 0x02
     name = 'READY'
 
@@ -436,11 +455,14 @@ class ReadyMessage(_MessageType):
         return cls()
 
 
-class AuthenticateMessage(_MessageType):
+class AuthenticateMessage(_DecodableMessageType):
+    __slots__ = ('authenticator',)
+
     opcode = 0x03
     name = 'AUTHENTICATE'
 
     def __init__(self, authenticator):
+        super().__init__()
         self.authenticator = authenticator
 
     @classmethod
@@ -454,6 +476,7 @@ class CredentialsMessage(_MessageType):
     name = 'CREDENTIALS'
 
     def __init__(self, creds):
+        super().__init__()
         self.creds = creds
 
     def send_body(self, f, protocol_version):
@@ -468,11 +491,14 @@ class CredentialsMessage(_MessageType):
             write_string(f, credval)
 
 
-class AuthChallengeMessage(_MessageType):
+class AuthChallengeMessage(_DecodableMessageType):
+    __slots__ = ('challenge',)
+
     opcode = 0x0E
     name = 'AUTH_CHALLENGE'
 
     def __init__(self, challenge):
+        super().__init__()
         self.challenge = challenge
 
     @classmethod
@@ -485,17 +511,21 @@ class AuthResponseMessage(_MessageType):
     name = 'AUTH_RESPONSE'
 
     def __init__(self, response):
+        super().__init__()
         self.response = response
 
     def send_body(self, f, protocol_version):
         write_longstring(f, self.response)
 
 
-class AuthSuccessMessage(_MessageType):
+class AuthSuccessMessage(_DecodableMessageType):
+    __slots__ = ('token',)
+
     opcode = 0x10
     name = 'AUTH_SUCCESS'
 
     def __init__(self, token):
+        super().__init__()
         self.token = token
 
     @classmethod
@@ -511,11 +541,14 @@ class OptionsMessage(_MessageType):
         pass
 
 
-class SupportedMessage(_MessageType):
+class SupportedMessage(_DecodableMessageType):
+    __slots__ = ('cql_versions', 'options')
+
     opcode = 0x06
     name = 'SUPPORTED'
 
     def __init__(self, cql_versions, options):
+        super().__init__()
         self.cql_versions = cql_versions
         self.options = options
 
@@ -541,11 +574,15 @@ _PAGING_OPTIONS_FLAG = 0x80000000
 
 
 class _QueryMessage(_MessageType):
+    __slots__ = ('query_params', 'consistency_level', 'serial_consistency_level',
+                 'fetch_size', 'paging_state', 'skip_meta', 'timestamp', 'keyspace')
 
-    def __init__(self, query_params, consistency_level,
-                 serial_consistency_level=None, fetch_size=None,
-                 paging_state=None, timestamp=None, skip_meta=False,
-                 continuous_paging_options=None, keyspace=None):
+    def __init__(self, query_params, consistency_level, serial_consistency_level=None,
+                 fetch_size=None, paging_state=None, skip_meta=False,
+                 timestamp=None, keyspace=None, continuous_paging_options=None):
+        super().__init__()
+        # Note: continuous_paging_options is accepted for backward compatibility
+        # but is not currently implemented (not stored or used)
         self.query_params = query_params
         self.consistency_level = consistency_level
         self.serial_consistency_level = serial_consistency_level
@@ -607,14 +644,21 @@ class _QueryMessage(_MessageType):
 
 
 class QueryMessage(_QueryMessage):
+    __slots__ = ('query',)
+
     opcode = 0x07
     name = 'QUERY'
 
     def __init__(self, query, consistency_level, serial_consistency_level=None,
                  fetch_size=None, paging_state=None, timestamp=None, continuous_paging_options=None, keyspace=None):
+        # Note: continuous_paging_options is accepted for backward compatibility
+        # but is not currently implemented (not stored or used)
         self.query = query
-        super(QueryMessage, self).__init__(None, consistency_level, serial_consistency_level, fetch_size,
-                                           paging_state, timestamp, False, continuous_paging_options, keyspace)
+        super(QueryMessage, self).__init__(query_params=None, consistency_level=consistency_level,
+                                           serial_consistency_level=serial_consistency_level,
+                                           fetch_size=fetch_size, paging_state=paging_state,
+                                           skip_meta=False, timestamp=timestamp, keyspace=keyspace,
+                                           continuous_paging_options=continuous_paging_options)
 
     def send_body(self, f, protocol_version):
         write_longstring(f, self.query)
@@ -622,6 +666,8 @@ class QueryMessage(_QueryMessage):
 
 
 class ExecuteMessage(_QueryMessage):
+    __slots__ = ('query_id', 'result_metadata_id')
+
     opcode = 0x0A
     name = 'EXECUTE'
 
@@ -629,10 +675,15 @@ class ExecuteMessage(_QueryMessage):
                  serial_consistency_level=None, fetch_size=None,
                  paging_state=None, timestamp=None, skip_meta=False,
                  continuous_paging_options=None, result_metadata_id=None):
+        # Note: continuous_paging_options is accepted for backward compatibility
+        # but is not currently implemented (not stored or used)
         self.query_id = query_id
         self.result_metadata_id = result_metadata_id
-        super(ExecuteMessage, self).__init__(query_params, consistency_level, serial_consistency_level, fetch_size,
-                                             paging_state, timestamp, skip_meta, continuous_paging_options)
+        super(ExecuteMessage, self).__init__(query_params=query_params, consistency_level=consistency_level,
+                                             serial_consistency_level=serial_consistency_level,
+                                             fetch_size=fetch_size, paging_state=paging_state,
+                                             skip_meta=skip_meta, timestamp=timestamp, keyspace=None,
+                                             continuous_paging_options=continuous_paging_options)
 
     def _write_query_params(self, f, protocol_version):
         super(ExecuteMessage, self)._write_query_params(f, protocol_version)
@@ -653,13 +704,13 @@ RESULT_KIND_PREPARED = 0x0004
 RESULT_KIND_SCHEMA_CHANGE = 0x0005
 
 
-class ResultMessage(_MessageType):
+class ResultMessage(_DecodableMessageType):
+    __slots__ = ('kind', 'result_metadata_id', 'results', 'paging_state', 'column_names', 'column_types',
+                 'parsed_rows', 'continuous_paging_seq', 'continuous_paging_last', 'new_keyspace',
+                 'column_metadata', 'query_id', 'bind_metadata', 'pk_indexes', 'schema_change_event', 'is_lwt')
+
     opcode = 0x08
     name = 'RESULT'
-
-    kind = None
-    results = None
-    paging_state = None
 
     # Names match type name in module scope. Most are imported from cassandra.cqltypes (except CUSTOM_TYPE)
     type_codes = _cqltypes_by_code = dict((v, globals()[k]) for k, v in type_codes.__dict__.items() if not k.startswith('_'))
@@ -671,25 +722,25 @@ class ResultMessage(_MessageType):
     _CONTINUOUS_PAGING_LAST_FLAG = 0x80000000
     _METADATA_ID_FLAG = 0x0008
 
-    kind = None
-
-    # These are all the things a result message might contain. They are populated according to 'kind'
-    column_names = None
-    column_types = None
-    parsed_rows = None
-    paging_state = None
-    continuous_paging_seq = None
-    continuous_paging_last = None
-    new_keyspace = None
-    column_metadata = None
-    query_id = None
-    bind_metadata = None
-    pk_indexes = None
-    schema_change_event = None
-    is_lwt = False
-
     def __init__(self, kind):
+        super().__init__()
         self.kind = kind
+        # Initialize all slot attributes to None
+        self.result_metadata_id = None
+        self.results = None
+        self.paging_state = None
+        self.column_names = None
+        self.column_types = None
+        self.parsed_rows = None
+        self.continuous_paging_seq = None
+        self.continuous_paging_last = None
+        self.new_keyspace = None
+        self.column_metadata = None
+        self.query_id = None
+        self.bind_metadata = None
+        self.pk_indexes = None
+        self.schema_change_event = None
+        self.is_lwt = None
 
     def recv(self, f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy):
         if self.kind == RESULT_KIND_VOID:
@@ -859,10 +910,13 @@ class ResultMessage(_MessageType):
 
 
 class PrepareMessage(_MessageType):
+    __slots__ = ('query', 'keyspace')
+
     opcode = 0x09
     name = 'PREPARE'
 
     def __init__(self, query, keyspace=None):
+        super().__init__()
         self.query = query
         self.keyspace = keyspace
 
@@ -897,12 +951,15 @@ class PrepareMessage(_MessageType):
 
 
 class BatchMessage(_MessageType):
+    __slots__ = ('batch_type', 'queries', 'consistency_level', 'serial_consistency_level',
+                 'timestamp', 'keyspace')
+
     opcode = 0x0D
     name = 'BATCH'
 
     def __init__(self, batch_type, queries, consistency_level,
-                 serial_consistency_level=None, timestamp=None,
-                 keyspace=None):
+                 serial_consistency_level=None, timestamp=None, keyspace=None):
+        super().__init__()
         self.batch_type = batch_type
         self.queries = queries
         self.consistency_level = consistency_level
@@ -962,21 +1019,27 @@ known_event_types = frozenset((
 
 
 class RegisterMessage(_MessageType):
+    __slots__ = ('event_list',)
+
     opcode = 0x0B
     name = 'REGISTER'
 
     def __init__(self, event_list):
+        super().__init__()
         self.event_list = event_list
 
     def send_body(self, f, protocol_version):
         write_stringlist(f, self.event_list)
 
 
-class EventMessage(_MessageType):
+class EventMessage(_DecodableMessageType):
+    __slots__ = ('event_type', 'event_args')
+
     opcode = 0x0C
     name = 'EVENT'
 
     def __init__(self, event_type, event_args):
+        super().__init__()
         self.event_type = event_type
         self.event_args = event_args
 
@@ -1038,6 +1101,7 @@ class ReviseRequestMessage(_MessageType):
     name = 'REVISE_REQUEST'
 
     def __init__(self, op_type, op_id, next_pages=0):
+        super().__init__()
         self.op_type = op_type
         self.op_id = op_id
         self.next_pages = next_pages
