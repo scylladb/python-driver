@@ -370,6 +370,8 @@ class UnixSocketEndPoint(EndPoint):
 
 
 class _Frame(object):
+    __slots__ = ('version', 'flags', 'stream', 'opcode', 'body_offset', 'end_pos')
+
     def __init__(self, version, flags, stream, opcode, body_offset, end_pos):
         self.version = version
         self.flags = flags
