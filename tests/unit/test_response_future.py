@@ -16,7 +16,7 @@ import unittest
 
 from collections import deque
 from threading import RLock
-from unittest.mock import Mock, MagicMock, ANY
+from unittest.mock import Mock, MagicMock, ANY, patch
 
 from cassandra import ConsistencyLevel, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
 from cassandra.cluster import Session, ResponseFuture, NoHostAvailable, ProtocolVersion
@@ -632,15 +632,16 @@ class ResponseFutureTests(unittest.TestCase):
         response.results = (None, None, None, None, None)
         response.query_id = query_id
 
-        rf._query = Mock(return_value=True)
-        rf._execute_after_prepare('host', None, None, response)
-        rf._query.assert_called_once_with('host')
+        with patch.object(ResponseFuture, '_query', return_value=True) as mock_query:
+            rf._execute_after_prepare('host', None, None, response)
+            # When patching at class level, self is not passed to the mock
+            mock_query.assert_called_once_with('host')
 
         rf.prepared_statement = Mock()
         rf.prepared_statement.query_id = query_id
-        rf._query = Mock(return_value=True)
-        rf._execute_after_prepare('host', None, None, response)
-        rf._query.assert_called_once_with('host')
+        with patch.object(ResponseFuture, '_query', return_value=True) as mock_query:
+            rf._execute_after_prepare('host', None, None, response)
+            mock_query.assert_called_once_with('host')
 
     def test_timeout_does_not_release_stream_id(self):
         """

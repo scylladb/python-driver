@@ -4283,71 +4283,35 @@ class ResponseFuture(object):
        :meth:`.add_callbacks()`.
     """
 
-    query = None
-    """
-    The :class:`~.Statement` instance that is being executed through this
-    :class:`.ResponseFuture`.
-    """
-
-    is_schema_agreed = True
-    """
-    For DDL requests, this may be set ``False`` if the schema agreement poll after the response fails.
-
-    Always ``True`` for non-DDL requests.
-    """
-
-    request_encoded_size = None
-    """
-    Size of the request message sent
-    """
-
-    coordinator_host = None
-    """
-    The host from which we received a response
-    """
-
-    attempted_hosts = None
-    """
-    A list of hosts tried, including all speculative executions, retries, and pages
-    """
-
-    session = None
-    row_factory = None
-    message = None
-
-    _retry_policy = None
-
-    _req_id = None
-    _final_result = _NOT_SET
-    _col_names = None
-    _col_types = None
-    _final_exception = None
-    _query_traces = None
-    _callbacks = None
-    _errbacks = None
-    _current_host = None
-    _connection = None
-    _query_retries = 0
-    _start_time = None
-    _metrics = None
-    _paging_state = None
-    _custom_payload = None
-    _warnings = None
-    _timer = None
-    _protocol_handler = ProtocolHandler
-    _spec_execution_plan = NoSpeculativeExecutionPlan()
-    _continuous_paging_session = None
-    _host = None
+    __slots__ = (
+        # Public attributes
+        'query', 'is_schema_agreed', 'request_encoded_size', 'coordinator_host',
+        'attempted_hosts', 'session', 'row_factory', 'message', 'timeout',
+        'prepared_statement', 'query_plan',
+        # Private attributes
+        '_retry_policy', '_req_id', '_final_result', '_col_names', '_col_types',
+        '_final_exception', '_query_traces', '_callbacks', '_errbacks',
+        '_current_host', '_connection', '_query_retries', '_start_time',
+        '_metrics', '_paging_state', '_custom_payload', '_warnings', '_timer',
+        '_protocol_handler', '_spec_execution_plan', '_continuous_paging_session',
+        '_host', '_load_balancer', '_callback_lock', '_event', '_errors',
+        '_continuous_paging_state'
+    )
 
     def __init__(self, session, message, query, timeout, metrics=None, prepared_statement=None,
                  retry_policy=RetryPolicy(), row_factory=None, load_balancer=None, start_time=None,
                  speculative_execution_plan=None, continuous_paging_state=None, host=None):
+        # Initialize attributes with default values
+        self.query = query
+        self.is_schema_agreed = True
+        self.request_encoded_size = None
+        self.coordinator_host = None
+        self.attempted_hosts = []
         self.session = session
         # TODO: normalize handling of retry policy and row factory
         self.row_factory = row_factory or session.row_factory
         self._load_balancer = load_balancer or session.cluster._default_load_balancing_policy
         self.message = message
-        self.query = query
         self.timeout = timeout
         self._retry_policy = retry_policy
         self._metrics = metrics
@@ -4355,13 +4319,30 @@ class ResponseFuture(object):
         self._callback_lock = Lock()
         self._start_time = start_time or time.time()
         self._host = host
-        self._spec_execution_plan = speculative_execution_plan or self._spec_execution_plan
+        self._spec_execution_plan = speculative_execution_plan or NoSpeculativeExecutionPlan()
+        self._protocol_handler = ProtocolHandler
+
+        # Initialize other private attributes
+        self._req_id = None
+        self._final_result = _NOT_SET
+        self._col_names = None
+        self._col_types = None
+        self._final_exception = None
+        self._query_traces = None
+        self._current_host = None
+        self._connection = None
+        self._query_retries = 0
+        self._paging_state = None
+        self._custom_payload = None
+        self._warnings = None
+        self._timer = None
+        self._continuous_paging_session = None
+
         self._make_query_plan()
         self._event = Event()
         self._errors = {}
         self._callbacks = []
         self._errbacks = []
-        self.attempted_hosts = []
         self._start_timer()
         self._continuous_paging_state = continuous_paging_state
 
