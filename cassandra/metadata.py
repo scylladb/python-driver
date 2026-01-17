@@ -1647,31 +1647,18 @@ def escape_name(name):
 class ColumnMetadata(object):
     """
     A representation of a single column in a table.
+
+    Attributes:
+        table: The :class:`.TableMetadata` this column belongs to.
+        name: The string name of this column.
+        cql_type: The CQL type for the column.
+        is_static: If this column is static (available in Cassandra 2.1+), this
+    will be :const:`True`, otherwise :const:`False`.
+        is_reversed: If this column is reversed (DESC) as in clustering order.
+        _cass_type: Internal cache for the cassandra type.
     """
 
-    table = None
-    """ The :class:`.TableMetadata` this column belongs to. """
-
-    name = None
-    """ The string name of this column. """
-
-    cql_type = None
-    """
-    The CQL type for the column.
-    """
-
-    is_static = False
-    """
-    If this column is static (available in Cassandra 2.1+), this will
-    be :const:`True`, otherwise :const:`False`.
-    """
-
-    is_reversed = False
-    """
-    If this column is reversed (DESC) as in clustering order
-    """
-
-    _cass_type = None
+    __slots__ = ('table', 'name', 'cql_type', 'is_static', 'is_reversed', '_cass_type')
 
     def __init__(self, table_metadata, column_name, cql_type, is_static=False, is_reversed=False):
         self.table = table_metadata
@@ -1679,6 +1666,7 @@ class ColumnMetadata(object):
         self.cql_type = cql_type
         self.is_static = is_static
         self.is_reversed = is_reversed
+        self._cass_type = None
 
     def __str__(self):
         return "%s %s" % (self.name, self.cql_type)
@@ -1687,21 +1675,16 @@ class ColumnMetadata(object):
 class IndexMetadata(object):
     """
     A representation of a secondary index on a column.
+
+    Attributes:
+        keyspace_name: A string name of the keyspace.
+        table_name: A string name of the table this index is on.
+        name: A string name for the index.
+        kind: A string representing the kind of index (COMPOSITE, CUSTOM, ...).
+        index_options: A dict of index options.
     """
-    keyspace_name = None
-    """ A string name of the keyspace. """
 
-    table_name = None
-    """ A string name of the table this index is on. """
-
-    name = None
-    """ A string name for the index. """
-
-    kind = None
-    """ A string representing the kind of index (COMPOSITE, CUSTOM,...). """
-
-    index_options = {}
-    """ A dict of index options. """
+    __slots__ = ('keyspace_name', 'table_name', 'name', 'kind', 'index_options')
 
     def __init__(self, keyspace_name, table_name, index_name, kind, index_options):
         self.keyspace_name = keyspace_name
