@@ -584,7 +584,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster = Mock(spec=Cluster)
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
-        cluster.metadata._tablets.table_has_tablets.return_value = []
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(4)]
         for host in hosts:
             host.set_up()
@@ -617,7 +617,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster = Mock(spec=Cluster)
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
-        cluster.metadata._tablets.table_has_tablets.return_value = []
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(4)]
         for host in hosts:
             host.set_up()
@@ -666,7 +666,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster = Mock(spec=Cluster)
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
-        cluster.metadata._tablets.table_has_tablets.return_value = []
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy) for i in range(8)]
         for host in hosts:
             host.set_up()
@@ -811,7 +811,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata._tablets = Mock(spec=Tablets)
         replicas = hosts[2:]
         cluster.metadata.get_replicas.return_value = replicas
-        cluster.metadata._tablets.table_has_tablets.return_value = []
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None
 
         child_policy = Mock()
         child_policy.make_query_plan.return_value = hosts
@@ -904,7 +904,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata.all_hosts.return_value = hosts
         cluster.metadata.get_replicas.return_value = hosts[2:]
-        cluster.metadata._tablets.table_has_tablets.return_value = False
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None
         return cluster
 
     def _prepare_cluster_with_tablets(self):
@@ -916,7 +916,6 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata.all_hosts.return_value = hosts
         cluster.metadata.get_replicas.return_value = hosts[2:]
-        cluster.metadata._tablets.table_has_tablets.return_value = True
         cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(replicas=[(h.host_id, 0) for h in hosts[2:]])
         return cluster
 
@@ -930,8 +929,6 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
         policy.populate(cluster, hosts)
-
-        is_tablets = cluster.metadata._tablets.table_has_tablets()
 
         cluster.metadata.get_replicas.reset_mock()
         child_policy.make_query_plan.reset_mock()
@@ -964,7 +961,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster = Mock(spec=Cluster)
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
-        cluster.metadata._tablets.table_has_tablets.return_value = False
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None  # No tablets for this table
         replicas = hosts[2:]
         cluster.metadata.get_replicas.return_value = replicas
 
@@ -996,7 +993,6 @@ class TokenAwarePolicyTest(unittest.TestCase):
         child_policy.make_query_plan.assert_called_once_with(None, query)
 
         # Test case 4: With tablets (should call once)
-        cluster.metadata._tablets.table_has_tablets.return_value = True
         tablet = Mock(spec=Tablet)
         tablet.replicas = [(hosts[0].host_id, None), (hosts[1].host_id, None)]
         cluster.metadata._tablets.get_tablet_for_key.return_value = tablet
@@ -1695,7 +1691,7 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
 
         cluster.metadata.get_replicas.side_effect = get_replicas
         cluster.metadata._tablets = Mock(spec=Tablets)
-        cluster.metadata._tablets.table_has_tablets.return_value = []
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None
 
         child_policy = TokenAwarePolicy(RoundRobinPolicy())
 
