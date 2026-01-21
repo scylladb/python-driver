@@ -1729,30 +1729,18 @@ class IndexMetadata(object):
 class TokenMap(object):
     """
     Information about the layout of the ring.
+
+    Attributes:
+        token_class: A subclass of :class:`.Token`, depending on what partitioner the cluster uses.
+        token_to_host_owner: A map of :class:`.Token` objects to the :class:`.Host` that owns that token.
+        tokens_to_hosts_by_ks: A map of keyspace names to a nested map of :class:`.Token` objects to sets of :class:`.Host` objects.
+        ring: An ordered list of :class:`.Token` instances in the ring.
+        _metadata: Metadata reference for internal use.
+        _rebuild_lock: Lock for thread-safe operations.
     """
 
-    token_class = None
-    """
-    A subclass of :class:`.Token`, depending on what partitioner the cluster uses.
-    """
-
-    token_to_host_owner = None
-    """
-    A map of :class:`.Token` objects to the :class:`.Host` that owns that token.
-    """
-
-    tokens_to_hosts_by_ks = None
-    """
-    A map of keyspace names to a nested map of :class:`.Token` objects to
-    sets of :class:`.Host` objects.
-    """
-
-    ring = None
-    """
-    An ordered list of :class:`.Token` instances in the ring.
-    """
-
-    _metadata = None
+    __slots__ = ('token_class', 'token_to_host_owner', 'tokens_to_hosts_by_ks',
+                 'ring', '_metadata', '_rebuild_lock')
 
     def __init__(self, token_class, token_to_host_owner, all_tokens, metadata):
         self.token_class = token_class
@@ -1815,6 +1803,8 @@ class Token(object):
     Abstract class representing a token.
     """
 
+    __slots__ = ('value',)
+
     def __init__(self, token):
         self.value = token
 
@@ -1854,6 +1844,8 @@ class NoMurmur3(Exception):
 
 class HashToken(Token):
 
+    __slots__ = ()
+
     @classmethod
     def from_string(cls, token_string):
         """ `token_string` should be the string representation from the server. """
@@ -1865,6 +1857,8 @@ class Murmur3Token(HashToken):
     """
     A token for ``Murmur3Partitioner``.
     """
+
+    __slots__ = ()
 
     @classmethod
     def hash_fn(cls, key):
@@ -1884,6 +1878,8 @@ class MD5Token(HashToken):
     A token for ``RandomPartitioner``.
     """
 
+    __slots__ = ()
+
     @classmethod
     def hash_fn(cls, key):
         if isinstance(key, str):
@@ -1895,6 +1891,8 @@ class BytesToken(Token):
     """
     A token for ``ByteOrderedPartitioner``.
     """
+
+    __slots__ = ()
 
     @classmethod
     def from_string(cls, token_string):
