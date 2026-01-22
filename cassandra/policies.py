@@ -244,34 +244,36 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         self.local_dc = local_dc
         self.used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._dc_live_hosts = {}
+        self._remote_hosts = {}
         self._position = 0
         LoadBalancingPolicy.__init__(self)
 
     def _dc(self, host):
         return host.datacenter or self.local_dc
 
+    def _refresh_remote_hosts(self):
+        remote_hosts = {}
+        if self.used_hosts_per_remote_dc > 0:
+            for datacenter, hosts in self._dc_live_hosts.items():
+                if datacenter != self.local_dc:
+                    remote_hosts.update(dict.fromkeys(hosts[:self.used_hosts_per_remote_dc]))
+        self._remote_hosts = remote_hosts
+
     def populate(self, cluster, hosts):
         for dc, dc_hosts in groupby(hosts, lambda h: self._dc(h)):
             self._dc_live_hosts[dc] = tuple({*dc_hosts, *self._dc_live_hosts.get(dc, [])})
 
         self._position = randint(0, len(hosts) - 1) if hosts else 0
+        self._refresh_remote_hosts()
 
     def distance(self, host):
         dc = self._dc(host)
         if dc == self.local_dc:
             return HostDistance.LOCAL
 
-        if not self.used_hosts_per_remote_dc:
-            return HostDistance.IGNORED
-        else:
-            dc_hosts = self._dc_live_hosts.get(dc)
-            if not dc_hosts:
-                return HostDistance.IGNORED
-
-            if host in list(dc_hosts)[:self.used_hosts_per_remote_dc]:
-                return HostDistance.REMOTE
-            else:
-                return HostDistance.IGNORED
+        if host in self._remote_hosts:
+            return HostDistance.REMOTE
+        return HostDistance.IGNORED
 
     def make_query_plan(self, working_keyspace=None, query=None):
         # not thread-safe, but we don't care much about lost increments
@@ -284,28 +286,29 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         for host in islice(cycle(local_live), pos, pos + len(local_live)):
             yield host
 
-        # the dict can change, so get candidate DCs iterating over keys of a copy
-        other_dcs = [dc for dc in self._dc_live_hosts.copy().keys() if dc != self.local_dc]
-        for dc in other_dcs:
-            remote_live = self._dc_live_hosts.get(dc, ())
-            for host in remote_live[:self.used_hosts_per_remote_dc]:
-                yield host
+        for host in self._remote_hosts:
+            yield host
 
     def on_up(self, host):
         # not worrying about threads because this will happen during
         # control connection startup/refresh
+        refresh_remote = False
         if not self.local_dc and host.datacenter:
             self.local_dc = host.datacenter
             log.info("Using datacenter '%s' for DCAwareRoundRobinPolicy (via host '%s'); "
                         "if incorrect, please specify a local_dc to the constructor, "
                         "or limit contact points to local cluster nodes" %
                         (self.local_dc, host.endpoint))
+            refresh_remote = True
 
         dc = self._dc(host)
         with self._hosts_lock:
             current_hosts = self._dc_live_hosts.get(dc, ())
             if host not in current_hosts:
                 self._dc_live_hosts[dc] = current_hosts + (host, )
+
+            if refresh_remote or dc != self.local_dc:
+                self._refresh_remote_hosts()
 
     def on_down(self, host):
         dc = self._dc(host)
@@ -317,6 +320,9 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
                     self._dc_live_hosts[dc] = hosts
                 else:
                     del self._dc_live_hosts[dc]
+
+                if dc != self.local_dc:
+                     self._refresh_remote_hosts()
 
     def on_add(self, host):
         self.on_up(host)
