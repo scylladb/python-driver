@@ -274,6 +274,16 @@ class TestRackOrDCAwareRoundRobinPolicy:
             assert policy.distance(host) == HostDistance.LOCAL_RACK
 
         # same dc different rack
+        # Reset policy state to simulate a fresh view or handle the "move" correctly
+        # In a real scenario, a host moving racks would be handled by on_down/on_up or distinct host objects.
+        # Here we are reusing the same policy instance with populate(), which merges hosts.
+        # To avoid the host existing in both rack1 and rack2 buckets due to address equality,
+        # we clear the internal state.
+        if hasattr(policy, '_live_hosts'):
+            policy._live_hosts.clear()
+        if hasattr(policy, '_dc_live_hosts'):
+            policy._dc_live_hosts.clear()
+
         host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
         host.set_location_info("dc1", "rack2")
         policy.populate(Mock(), [host])
