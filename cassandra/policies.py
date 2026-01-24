@@ -359,6 +359,8 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
         self.used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._live_hosts = {}
         self._dc_live_hosts = {}
+        self._remote_hosts = {}
+        self._non_local_rack_hosts = []
         self._endpoints = []
         self._position = 0
         LoadBalancingPolicy.__init__(self)
@@ -369,6 +371,18 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
     def _dc(self, host):
         return host.datacenter or self.local_dc
 
+    def _refresh_remote_hosts(self):
+        remote_hosts = {}
+        if self.used_hosts_per_remote_dc > 0:
+            for datacenter, hosts in self._dc_live_hosts.items():
+                if datacenter != self.local_dc:
+                    remote_hosts.update(dict.fromkeys(hosts[:self.used_hosts_per_remote_dc]))
+        self._remote_hosts = remote_hosts
+
+    def _refresh_non_local_rack_hosts(self):
+        local_live = self._dc_live_hosts.get(self.local_dc, ())
+        self._non_local_rack_hosts = [h for h in local_live if self._rack(h) != self.local_rack]
+
     def populate(self, cluster, hosts):
         for (dc, rack), rack_hosts in groupby(hosts, lambda host: (self._dc(host), self._rack(host))):
             self._live_hosts[(dc, rack)] = tuple({*rack_hosts, *self._live_hosts.get((dc, rack), [])})
@@ -376,71 +390,64 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
             self._dc_live_hosts[dc] = tuple({*dc_hosts, *self._dc_live_hosts.get(dc, [])})
 
         self._position = randint(0, len(hosts) - 1) if hosts else 0
+        self._refresh_remote_hosts()
+        self._refresh_non_local_rack_hosts()
 
     def distance(self, host):
-        rack = self._rack(host)
         dc = self._dc(host)
-        if rack == self.local_rack and dc == self.local_dc:
-            return HostDistance.LOCAL_RACK
-
         if dc == self.local_dc:
+            if self._rack(host) == self.local_rack:
+                return HostDistance.LOCAL_RACK
             return HostDistance.LOCAL
 
-        if not self.used_hosts_per_remote_dc:
-            return HostDistance.IGNORED
-
-        dc_hosts = self._dc_live_hosts.get(dc, ())
-        if not dc_hosts:
-            return HostDistance.IGNORED
-        if host in dc_hosts and dc_hosts.index(host) < self.used_hosts_per_remote_dc:
+        if host in self._remote_hosts:
             return HostDistance.REMOTE
-        else:
-            return HostDistance.IGNORED
+        return HostDistance.IGNORED
 
     def make_query_plan(self, working_keyspace=None, query=None):
         pos = self._position
         self._position += 1
 
         local_rack_live = self._live_hosts.get((self.local_dc, self.local_rack), ())
-        pos = (pos % len(local_rack_live)) if local_rack_live else 0
-        # Slice the cyclic iterator to start from pos and include the next len(local_live) elements
-        # This ensures we get exactly one full cycle starting from pos
-        for host in islice(cycle(local_rack_live), pos, pos + len(local_rack_live)):
-            yield host
+        length = len(local_rack_live)
+        if length:
+            p = pos % length
+            for host in islice(cycle(local_rack_live), p, p + length):
+                yield host
 
-        local_live = [host for host in self._dc_live_hosts.get(self.local_dc, ()) if host.rack != self.local_rack]
-        pos = (pos % len(local_live)) if local_live else 0
-        for host in islice(cycle(local_live), pos, pos + len(local_live)):
-            yield host
+        local_non_rack = self._non_local_rack_hosts
+        length = len(local_non_rack)
+        if length:
+            p = pos % length
+            for host in islice(cycle(local_non_rack), p, p + length):
+                yield host
 
-        # the dict can change, so get candidate DCs iterating over keys of a copy
-        for dc, remote_live in self._dc_live_hosts.copy().items():
-            if dc != self.local_dc:
-                for host in remote_live[:self.used_hosts_per_remote_dc]:
-                    yield host
+        for host in self._remote_hosts:
+            yield host
 
     def on_up(self, host):
         dc = self._dc(host)
         rack = self._rack(host)
         with self._hosts_lock:
-            current_rack_hosts = self._live_hosts.get((dc, rack), ())
-            if host not in current_rack_hosts:
-                self._live_hosts[(dc, rack)] = current_rack_hosts + (host, )
             current_dc_hosts = self._dc_live_hosts.get(dc, ())
             if host not in current_dc_hosts:
                 self._dc_live_hosts[dc] = current_dc_hosts + (host, )
+
+                if dc != self.local_dc:
+                    self._refresh_remote_hosts()
+                else:
+                    self._refresh_non_local_rack_hosts()
+
+            current_rack_hosts = self._live_hosts.get((dc, rack), ())
+            if host not in current_rack_hosts:
+                self._live_hosts[(dc, rack)] = current_rack_hosts + (host, )
+                if dc == self.local_dc:
+                     self._refresh_non_local_rack_hosts()
 
     def on_down(self, host):
         dc = self._dc(host)
         rack = self._rack(host)
         with self._hosts_lock:
-            current_rack_hosts = self._live_hosts.get((dc, rack), ())
-            if host in current_rack_hosts:
-                hosts = tuple(h for h in current_rack_hosts if h != host)
-                if hosts:
-                    self._live_hosts[(dc, rack)] = hosts
-                else:
-                    del self._live_hosts[(dc, rack)]
             current_dc_hosts = self._dc_live_hosts.get(dc, ())
             if host in current_dc_hosts:
                 hosts = tuple(h for h in current_dc_hosts if h != host)
@@ -448,6 +455,22 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
                     self._dc_live_hosts[dc] = hosts
                 else:
                     del self._dc_live_hosts[dc]
+
+                if dc != self.local_dc:
+                    self._refresh_remote_hosts()
+                else:
+                    self._refresh_non_local_rack_hosts()
+
+            current_rack_hosts = self._live_hosts.get((dc, rack), ())
+            if host in current_rack_hosts:
+                hosts = tuple(h for h in current_rack_hosts if h != host)
+                if hosts:
+                    self._live_hosts[(dc, rack)] = hosts
+                else:
+                    del self._live_hosts[(dc, rack)]
+
+                if dc == self.local_dc:
+                     self._refresh_non_local_rack_hosts()
 
     def on_add(self, host):
         self.on_up(host)
