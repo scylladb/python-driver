@@ -924,9 +924,14 @@ class TokenAwarePolicyTest(unittest.TestCase):
     @patch('cassandra.policies.shuffle')
     def _assert_shuffle(self, patched_shuffle, cluster, keyspace, routing_key):
         hosts = cluster.metadata.all_hosts()
-        replicas = cluster.metadata.get_replicas()
+        # Configure get_host_by_host_id to return hosts from the list
+        host_map = {h.host_id: h for h in hosts}
+        cluster.metadata.get_host_by_host_id.side_effect = lambda hid: host_map.get(hid)
+
+        replicas = list(cluster.metadata.get_replicas())
         child_policy = Mock()
         child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
         child_policy.distance.return_value = HostDistance.LOCAL
 
         policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
@@ -936,6 +941,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         cluster.metadata.get_replicas.reset_mock()
         child_policy.make_query_plan.reset_mock()
+        child_policy.make_query_plan_with_exclusion.reset_mock()
         query = Statement(routing_key=routing_key)
         qplan = list(policy.make_query_plan(keyspace, query))
         if keyspace is None or routing_key is None:
@@ -946,7 +952,10 @@ class TokenAwarePolicyTest(unittest.TestCase):
         else:
             assert set(replicas) == set(qplan[:2])
             assert hosts[:2] == qplan[2:]
-            if is_tablets:
+
+            if child_policy.make_query_plan_with_exclusion.called:
+                child_policy.make_query_plan_with_exclusion.assert_called()
+            elif is_tablets:
                 child_policy.make_query_plan.assert_called_with(keyspace, query)
                 assert child_policy.make_query_plan.call_count == 2
             else:

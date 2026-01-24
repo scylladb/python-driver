@@ -14,7 +14,7 @@
 import random
 
 from collections import namedtuple
-from itertools import islice, cycle, groupby, repeat
+from itertools import islice, cycle, groupby, repeat, chain
 import logging
 from random import randint, shuffle
 from threading import Lock
@@ -157,6 +157,18 @@ class LoadBalancingPolicy(HostStateListener):
         """
         raise NotImplementedError()
 
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        """
+        Same as :meth:`make_query_plan`, but with an additional `excluded` parameter.
+        `excluded` should be a container (set, list, etc.) of hosts to skip.
+
+        The default implementation simply delegates to `make_query_plan` and filters the result.
+        Subclasses may override this for performance.
+        """
+        for host in self.make_query_plan(working_keyspace, query):
+            if host not in excluded:
+                yield host
+
     def check_supported(self):
         """
         This will be called after the cluster Metadata has been initialized.
@@ -197,6 +209,20 @@ class RoundRobinPolicy(LoadBalancingPolicy):
             return islice(cycle(hosts), pos, pos + length)
         else:
             return []
+
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        pos = self._position
+        self._position += 1
+
+        hosts = self._live_hosts
+        length = len(hosts)
+        if length:
+            pos %= length
+            for host in islice(cycle(hosts), pos, pos + length):
+                if host not in excluded:
+                    yield host
+        else:
+            return
 
     def on_up(self, host):
         with self._hosts_lock:
@@ -287,6 +313,24 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
             yield host
 
         for host in self._remote_hosts:
+            yield host
+
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        # not thread-safe, but we don't care much about lost increments
+        # for the purposes of load balancing
+        pos = self._position
+        self._position += 1
+
+        local_live = self._dc_live_hosts.get(self.local_dc, ())
+        pos = (pos % len(local_live)) if local_live else 0
+        for host in islice(cycle(local_live), pos, pos + len(local_live)):
+            if excluded and host in excluded:
+                continue
+            yield host
+
+        for host in self._remote_hosts:
+            if excluded and host in excluded:
+                continue
             yield host
 
     def on_up(self, host):
@@ -424,6 +468,33 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
 
         for host in self._remote_hosts:
             yield host
+    
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        pos = self._position
+        self._position += 1
+
+        local_rack_live = self._live_hosts.get((self.local_dc, self.local_rack), ())
+        length = len(local_rack_live)
+        if length:
+            p = pos % length
+            for host in islice(cycle(local_rack_live), p, p + length):
+                if excluded and host in excluded:
+                    continue
+                yield host
+
+        local_non_rack = self._non_local_rack_hosts
+        length = len(local_non_rack)
+        if length:
+            p = pos % length
+            for host in islice(cycle(local_non_rack), p, p + length):
+                if excluded and host in excluded:
+                    continue
+                yield host
+
+        for host in self._remote_hosts:
+            if excluded and host in excluded:
+                continue
+            yield host
 
     def on_up(self, host):
         dc = self._dc(host)
@@ -495,16 +566,12 @@ class TokenAwarePolicy(LoadBalancingPolicy):
     policy's query plan will be used as is.
     """
 
-    _child_policy = None
-    _cluster_metadata = None
-    shuffle_replicas = True
-    """
-    Yield local replicas in a random order.
-    """
+    __slots__ = ('_child_policy', '_cluster_metadata', 'shuffle_replicas')
 
     def __init__(self, child_policy, shuffle_replicas=True):
         self._child_policy = child_policy
         self.shuffle_replicas = shuffle_replicas
+        self._cluster_metadata = None
 
     def populate(self, cluster, hosts):
         self._cluster_metadata = cluster.metadata
@@ -527,35 +594,69 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
         child = self._child_policy
         if query is None or query.routing_key is None or keyspace is None:
-            for host in child.make_query_plan(keyspace, query):
-                yield host
+            yield from child.make_query_plan(keyspace, query)
             return
 
+        cluster_metadata = self._cluster_metadata
+        token_map = cluster_metadata.token_map
         replicas = []
-        tablet = self._cluster_metadata._tablets.get_tablet_for_key(
-            keyspace, query.table, self._cluster_metadata.token_map.token_class.from_key(query.routing_key))
 
-        if tablet is not None:
-            replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
-            child_plan = child.make_query_plan(keyspace, query)
+        if token_map:
+            try:
+                token = token_map.token_class.from_key(query.routing_key)
+                tablet = cluster_metadata._tablets.get_tablet_for_key(
+                    keyspace, query.table, token)
 
-            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
-        else:
-            replicas = self._cluster_metadata.get_replicas(keyspace, query.routing_key)
+                if tablet is not None:
+                    replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
+                    for host_id in replicas_mapped:
+                        host = cluster_metadata.get_host_by_host_id(host_id)
+                        if host:
+                            replicas.append(host)
+                else:
+                    try:
+                        replicas = list(token_map.get_replicas(keyspace, token))
+                    except Exception:
+                        replicas = cluster_metadata.get_replicas(keyspace, query.routing_key)
+            except Exception:
+                pass
+
 
         if self.shuffle_replicas and not query.is_lwt():
             shuffle(replicas)
 
-        def yield_in_order(hosts):
-            for distance in [HostDistance.LOCAL_RACK, HostDistance.LOCAL, HostDistance.REMOTE]:
-                for replica in hosts:
-                    if replica.is_up and child.distance(replica) == distance:
-                        yield replica
+        local_rack = []
+        local = []
+        remote = []
 
-        # yield replicas: local_rack, local, remote
-        yield from yield_in_order(replicas)
-        # yield rest of the cluster: local_rack, local, remote
-        yield from yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas])
+        child_distance = child.distance
+
+        for replica in replicas:
+             if replica.is_up:
+                 d = child_distance(replica)
+                 if d == HostDistance.LOCAL_RACK:
+                     local_rack.append(replica)
+                 elif d == HostDistance.LOCAL:
+                     local.append(replica)
+                 elif d == HostDistance.REMOTE:
+                     remote.append(replica)
+        
+        yielded_sequence = tuple(chain(local_rack, local, remote))
+        
+        if yielded_sequence:
+            yield from yielded_sequence
+            
+            yielded = set(yielded_sequence)
+
+            # yield rest of the cluster
+            try:
+                yield from child.make_query_plan_with_exclusion(keyspace, query, yielded)
+            except (AttributeError, TypeError):
+                for host in child.make_query_plan(keyspace, query):
+                    if host not in yielded:
+                        yield host
+        else:
+            yield from child.make_query_plan(keyspace, query)
 
     def on_up(self, *args, **kwargs):
         return self._child_policy.on_up(*args, **kwargs)
