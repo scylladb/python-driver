@@ -875,6 +875,16 @@ class HostFilterPolicy(LoadBalancingPolicy):
             if self.predicate(host):
                 yield host
 
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        if excluded:
+            excluded = set(excluded)
+        child_qp = self._child_policy.make_query_plan_with_exclusion(
+            working_keyspace=working_keyspace, query=query, excluded=excluded
+        )
+        for host in child_qp:
+            if self.predicate(host):
+                yield host
+
     def check_supported(self):
         return self._child_policy.check_supported()
 
@@ -1528,6 +1538,27 @@ class DefaultLoadBalancingPolicy(WrapperPolicy):
         else:
             for h in child.make_query_plan(keyspace, query):
                 yield h
+
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        if query and query.keyspace:
+            keyspace = query.keyspace
+        else:
+            keyspace = working_keyspace
+
+        addr = getattr(query, 'target_host', None) if query else None
+        target_host = self._cluster_metadata.get_host(addr)
+
+        if excluded:
+            excluded = set(excluded)
+
+        child = self._child_policy
+        if target_host and target_host.is_up and target_host not in excluded:
+            yield target_host
+            for h in child.make_query_plan_with_exclusion(keyspace, query, excluded):
+                if h != target_host:
+                    yield h
+        else:
+            yield from child.make_query_plan_with_exclusion(keyspace, query, excluded)
 
 
 # TODO for backward compatibility, remove in next major
