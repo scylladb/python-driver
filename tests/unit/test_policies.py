@@ -587,6 +587,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
         for host in hosts:
             host.set_up()
@@ -596,8 +598,9 @@ class TokenAwarePolicyTest(unittest.TestCase):
             return list(islice(cycle(hosts), index, index + 2))
 
         cluster.metadata.get_replicas.side_effect = get_replicas
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
 
-        policy = TokenAwarePolicy(RoundRobinPolicy())
+        policy = TokenAwarePolicy(RoundRobinPolicy(), shuffle_replicas=False)
         policy.populate(cluster, hosts)
 
         for i in range(4):
@@ -620,6 +623,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
         for host in hosts:
             host.set_up()
@@ -637,8 +642,9 @@ class TokenAwarePolicyTest(unittest.TestCase):
                 return [hosts[1], hosts[3]]
 
         cluster.metadata.get_replicas.side_effect = get_replicas
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
 
-        policy = TokenAwarePolicy(DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=2))
+        policy = TokenAwarePolicy(DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=2), shuffle_replicas=False)
         policy.populate(cluster, hosts)
 
         for i in range(4):
@@ -669,6 +675,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(8)]
         for host in hosts:
             host.set_up()
@@ -690,8 +698,9 @@ class TokenAwarePolicyTest(unittest.TestCase):
                 return [hosts[4], hosts[5], hosts[6], hosts[7]]
 
         cluster.metadata.get_replicas.side_effect = get_replicas
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
 
-        policy = TokenAwarePolicy(RackAwareRoundRobinPolicy("dc1", "rack1", used_hosts_per_remote_dc=4))
+        policy = TokenAwarePolicy(RackAwareRoundRobinPolicy("dc1", "rack1", used_hosts_per_remote_dc=4), shuffle_replicas=False)
         policy.populate(cluster, hosts)
 
         for i in range(4):
@@ -814,12 +823,16 @@ class TokenAwarePolicyTest(unittest.TestCase):
         replicas = hosts[2:]
         cluster.metadata.get_replicas.return_value = replicas
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
 
         child_policy = Mock()
         child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
         child_policy.distance.return_value = HostDistance.LOCAL
 
-        policy = TokenAwarePolicy(child_policy)
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
         policy.populate(cluster, hosts)
 
         # no keyspace, child policy is called
@@ -907,6 +920,9 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata.all_hosts.return_value = hosts
         cluster.metadata.get_replicas.return_value = hosts[2:]
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
         return cluster
 
     def _prepare_cluster_with_tablets(self):
@@ -919,6 +935,9 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata.all_hosts.return_value = hosts
         cluster.metadata.get_replicas.return_value = hosts[2:]
         cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(replicas=[(h.host_id, 0) for h in hosts[2:]])
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
         return cluster
 
     @patch('cassandra.policies.shuffle')
@@ -1649,8 +1668,11 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
         cluster.metadata.get_replicas.side_effect = get_replicas
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
 
-        child_policy = TokenAwarePolicy(RoundRobinPolicy())
+        child_policy = TokenAwarePolicy(RoundRobinPolicy(), shuffle_replicas=False)
 
         hfp = HostFilterPolicy(
             child_policy=child_policy,

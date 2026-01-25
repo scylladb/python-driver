@@ -308,9 +308,11 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         self._position += 1
 
         local_live = self._dc_live_hosts.get(self.local_dc, ())
-        pos = (pos % len(local_live)) if local_live else 0
-        for host in islice(cycle(local_live), pos, pos + len(local_live)):
-            yield host
+        length = len(local_live)
+        if length:
+            pos %= length
+            for i in range(length):
+                yield local_live[(pos + i) % length]
 
         for host in self._remote_hosts:
             yield host
@@ -322,14 +324,29 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         self._position += 1
 
         local_live = self._dc_live_hosts.get(self.local_dc, ())
-        pos = (pos % len(local_live)) if local_live else 0
-        for host in islice(cycle(local_live), pos, pos + len(local_live)):
-            if excluded and host in excluded:
-                continue
-            yield host
+        length = len(local_live)
+        if not excluded:
+            if length:
+                pos %= length
+                for i in range(length):
+                    yield local_live[(pos + i) % length]
+            for host in self._remote_hosts:
+                yield host
+            return
+
+        if not isinstance(excluded, set):
+            excluded = set(excluded)
+
+        if length:
+            pos %= length
+            for i in range(length):
+                host = local_live[(pos + i) % length]
+                if host in excluded:
+                    continue
+                yield host
 
         for host in self._remote_hosts:
-            if excluded and host in excluded:
+            if host in excluded:
                 continue
             yield host
 
@@ -456,15 +473,15 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
         length = len(local_rack_live)
         if length:
             p = pos % length
-            for host in islice(cycle(local_rack_live), p, p + length):
-                yield host
+            for i in range(length):
+                yield local_rack_live[(p + i) % length]
 
         local_non_rack = self._non_local_rack_hosts
         length = len(local_non_rack)
         if length:
             p = pos % length
-            for host in islice(cycle(local_non_rack), p, p + length):
-                yield host
+            for i in range(length):
+                yield local_non_rack[(p + i) % length]
 
         for host in self._remote_hosts:
             yield host
@@ -475,10 +492,31 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
 
         local_rack_live = self._live_hosts.get((self.local_dc, self.local_rack), ())
         length = len(local_rack_live)
+        if not excluded:
+            if length:
+                p = pos % length
+                for i in range(length):
+                    yield local_rack_live[(p + i) % length]
+
+            local_non_rack = self._non_local_rack_hosts
+            length = len(local_non_rack)
+            if length:
+                p = pos % length
+                for i in range(length):
+                    yield local_non_rack[(p + i) % length]
+
+            for host in self._remote_hosts:
+                yield host
+            return
+
+        if not isinstance(excluded, set):
+            excluded = set(excluded)
+
         if length:
             p = pos % length
-            for host in islice(cycle(local_rack_live), p, p + length):
-                if excluded and host in excluded:
+            for i in range(length):
+                host = local_rack_live[(p + i) % length]
+                if host in excluded:
                     continue
                 yield host
 
@@ -486,13 +524,14 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
         length = len(local_non_rack)
         if length:
             p = pos % length
-            for host in islice(cycle(local_non_rack), p, p + length):
-                if excluded and host in excluded:
+            for i in range(length):
+                host = local_non_rack[(p + i) % length]
+                if host in excluded:
                     continue
                 yield host
 
         for host in self._remote_hosts:
-            if excluded and host in excluded:
+            if host in excluded:
                 continue
             yield host
 
@@ -608,14 +647,14 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                     keyspace, query.table, token)
 
                 if tablet is not None:
-                    replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
+                    replicas_mapped = {r[0] for r in tablet.replicas}
                     for host_id in replicas_mapped:
                         host = cluster_metadata.get_host_by_host_id(host_id)
                         if host:
                             replicas.append(host)
                 else:
                     try:
-                        replicas = list(token_map.get_replicas(keyspace, token))
+                        replicas = token_map.get_replicas(keyspace, token)
                     except Exception:
                         replicas = cluster_metadata.get_replicas(keyspace, query.routing_key)
             except Exception:
@@ -623,6 +662,7 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
 
         if self.shuffle_replicas and not query.is_lwt():
+            replicas = list(replicas)
             shuffle(replicas)
 
         local_rack = []
@@ -641,20 +681,23 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                  elif d == HostDistance.REMOTE:
                      remote.append(replica)
         
-        yielded_sequence = tuple(chain(local_rack, local, remote))
-        
-        if yielded_sequence:
-            yield from yielded_sequence
-            
-            yielded = set(yielded_sequence)
+        if local_rack or local or remote:
+            yielded = set()
+
+            for replica in local_rack:
+                yielded.add(replica)
+                yield replica
+
+            for replica in local:
+                yielded.add(replica)
+                yield replica
+
+            for replica in remote:
+                yielded.add(replica)
+                yield replica
 
             # yield rest of the cluster
-            try:
-                yield from child.make_query_plan_with_exclusion(keyspace, query, yielded)
-            except (AttributeError, TypeError):
-                for host in child.make_query_plan(keyspace, query):
-                    if host not in yielded:
-                        yield host
+            yield from child.make_query_plan_with_exclusion(keyspace, query, yielded)
         else:
             yield from child.make_query_plan(keyspace, query)
 
