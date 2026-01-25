@@ -6,6 +6,8 @@ import os
 import statistics
 from unittest.mock import Mock
 
+"A micro-bechmark for performance of policies"
+
 from cassandra.policies import (
     DCAwareRoundRobinPolicy,
     RackAwareRoundRobinPolicy,
