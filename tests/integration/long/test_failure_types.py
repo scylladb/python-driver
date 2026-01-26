@@ -32,6 +32,8 @@ from tests.integration import (
     get_node, start_cluster_wait_for_up, requiresmallclockgranularity,
     local, CASSANDRA_VERSION, TestCluster)
 
+from tests.integration import requires_java_udf
+
 import unittest
 import pytest
 
@@ -269,6 +271,7 @@ class ClientExceptionTests(unittest.TestCase):
             DROP TABLE test3rf.test2;
             """, consistency_level=ConsistencyLevel.ALL, expected_exception=None)
 
+    @requires_java_udf
     def test_user_function_failure(self):
         """
         Test to validate that exceptions in user defined function are correctly surfaced by the driver to us.
