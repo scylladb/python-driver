@@ -32,9 +32,9 @@ cdef class ListParser(ColumnParser):
         rowcount = read_int(reader)
         cdef RowParser rowparser = TupleRowParser()
         if desc.column_encryption_policy:
-            return [rowparser.unpack_ce_row(reader, desc) for i in range(rowcount)]
+            return [rowparser.unpack_col_encrypted_row(reader, desc) for i in range(rowcount)]
         else:
-            return [rowparser.unpack_row(reader, desc) for i in range(rowcount)]
+            return [rowparser.unpack_plain_row(reader, desc) for i in range(rowcount)]
 
 
 cdef class LazyParser(ColumnParser):
@@ -51,9 +51,9 @@ def parse_rows_lazy(BytesIOReader reader, ParseDesc desc):
     rowcount = read_int(reader)
     cdef RowParser rowparser = TupleRowParser()
     if desc.column_encryption_policy:
-        return (rowparser.unpack_ce_row(reader, desc) for i in range(rowcount))
+        return (rowparser.unpack_col_encrypted_row(reader, desc) for i in range(rowcount))
     else:
-        return (rowparser.unpack_row(reader, desc) for i in range(rowcount))
+        return (rowparser.unpack_plain_row(reader, desc) for i in range(rowcount))
 
 
 cdef class TupleRowParser(RowParser):
@@ -61,11 +61,11 @@ cdef class TupleRowParser(RowParser):
     Parse a single returned row into a tuple of objects:
 
         (obj1, ..., objN)
-    If CE (Column encryption) policy is enabled - use unpack_ce_row(),
-    otherwsise use unpack_row()
+    If CE (Column encryption) policy is enabled - use unpack_col_encrypted_row(),
+    otherwsise use unpack_plain_row()
     """
 
-    cpdef unpack_ce_row(self, BytesIOReader reader, ParseDesc desc):
+    cpdef unpack_col_encrypted_row(self, BytesIOReader reader, ParseDesc desc):
         assert desc.rowsize >= 0
 
         cdef Buffer buf
@@ -101,7 +101,7 @@ cdef class TupleRowParser(RowParser):
 
         return res
 
-    cpdef unpack_row(self, BytesIOReader reader, ParseDesc desc):
+    cpdef unpack_plain_row(self, BytesIOReader reader, ParseDesc desc):
         assert desc.rowsize >= 0
 
         cdef Buffer buf

@@ -46,9 +46,9 @@ def make_recv_results_rows(ColumnParser colparser):
             rowcount = read_int(reader)
             if desc.column_encryption_policy:
                 for i in range(rowcount):
-                    rowparser.unpack_ce_row(reader, desc)
+                    rowparser.unpack_col_encrypted_row(reader, desc)
             else:
                 for i in range(rowcount):
-                    rowparser.unpack_row(reader, desc)
+                    rowparser.unpack_plain_row(reader, desc)
 
     return recv_results_rows
