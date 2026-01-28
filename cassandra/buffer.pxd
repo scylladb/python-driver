@@ -41,18 +41,8 @@ cdef inline char *buf_read(Buffer *buf, Py_ssize_t size) except NULL:
         raise IndexError("Requested more than length of buffer")
     return buf.ptr
 
-cdef inline int slice_buffer(Buffer *buf, Buffer *out,
-                             Py_ssize_t start, Py_ssize_t size) except -1:
-    if size < 0:
-        raise ValueError("Length must be positive")
+cdef inline void from_ptr_and_size(char *ptr, Py_ssize_t size, Buffer *buf):
+    buf.ptr = ptr
+    buf.size = size
 
-    if start + size > buf.size:
-        raise IndexError("Buffer slice out of bounds")
 
-    out.ptr = buf.ptr + start
-    out.size = size
-    return 0
-
-cdef inline void from_ptr_and_size(char *ptr, Py_ssize_t size, Buffer *out):
-    out.ptr = ptr
-    out.size = size
