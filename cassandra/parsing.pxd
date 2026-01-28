@@ -28,5 +28,5 @@ cdef class ColumnParser:
     cpdef parse_rows(self, BytesIOReader reader, ParseDesc desc)
 
 cdef class RowParser:
-    cpdef unpack_row(self, BytesIOReader reader, ParseDesc desc)
+    cpdef unpack_plain_row(self, BytesIOReader reader, ParseDesc desc)
 
