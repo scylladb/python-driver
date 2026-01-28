@@ -13,10 +13,10 @@
 # limitations under the License.
 
 
-from libc.stdint cimport int32_t, uint16_t
+from libc.stdint cimport int32_t, uint16_t, uint32_t
 
 include 'cython_marshal.pyx'
-from cassandra.buffer cimport Buffer, to_bytes, slice_buffer
+from cassandra.buffer cimport Buffer, to_bytes
 from cassandra.cython_utils cimport datetime_from_timestamp
 
 from cython.view cimport array as cython_array
@@ -58,10 +58,12 @@ cdef class DesBytesTypeByteArray(Deserializer):
 # TODO: Use libmpdec: http://www.bytereef.org/mpdecimal/index.html
 cdef class DesDecimalType(Deserializer):
     cdef deserialize(self, Buffer *buf, int protocol_version):
-        cdef Buffer varint_buf
-        slice_buffer(buf, &varint_buf, 4, buf.size - 4)
-
         cdef int32_t scale = unpack_num[int32_t](buf)
+
+        # Create a view of the remaining bytes (after the 4-byte scale)
+        cdef Buffer varint_buf
+        varint_buf.ptr = buf.ptr + 4
+        varint_buf.size = buf.size - 4
         unscaled = varint_unpack(&varint_buf)
 
         return Decimal('%de%d' % (unscaled, -scale))
@@ -252,17 +254,17 @@ cdef inline int subelem(
 
     _unpack_len(buf, offset[0], &elemlen)
     offset[0] += sizeof(int32_t)
-    slice_buffer(buf, elem_buf, offset[0], elemlen)
+    # Direct pointer assignment instead of slice_buffer
+    elem_buf.ptr = buf.ptr + offset[0]
+    elem_buf.size = elemlen
     offset[0] += elemlen
     return 0
 
 
-cdef int _unpack_len(Buffer *buf, int offset, int32_t *output) except -1:
-    cdef Buffer itemlen_buf
-    slice_buffer(buf, &itemlen_buf, offset, sizeof(int32_t))
-
-    output[0] = unpack_num[int32_t](&itemlen_buf)
-
+cdef inline int _unpack_len(Buffer *buf, int offset, int32_t *output) except -1:
+    """Read a big-endian int32 at the given offset using direct pointer access."""
+    cdef uint32_t *src = <uint32_t*>(buf.ptr + offset)
+    output[0] = <int32_t>ntohl(src[0])
     return 0
 
 #--------------------------------------------------------------------------
@@ -322,7 +324,6 @@ cdef class DesTupleType(_DesParameterizedType):
         cdef int32_t itemlen
         cdef tuple res = tuple_new(self.subtypes_len)
         cdef Buffer item_buf
-        cdef Buffer itemlen_buf
         cdef Deserializer deserializer
 
         # collections inside UDTs are always encoded with at least the
@@ -334,11 +335,13 @@ cdef class DesTupleType(_DesParameterizedType):
         for i in range(self.subtypes_len):
             item = None
             if p < buf.size:
-                slice_buffer(buf, &itemlen_buf, p, 4)
-                itemlen = unpack_num[int32_t](&itemlen_buf)
+                # Read itemlen directly using ntohl instead of slice_buffer
+                itemlen = <int32_t>ntohl((<uint32_t*>(buf.ptr + p))[0])
                 p += 4
                 if itemlen >= 0:
-                    slice_buffer(buf, &item_buf, p, itemlen)
+                    # Direct pointer assignment instead of slice_buffer
+                    item_buf.ptr = buf.ptr + p
+                    item_buf.size = itemlen
                     p += itemlen
 
                     deserializer = self.deserializers[i]
@@ -384,15 +387,19 @@ cdef class DesCompositeType(_DesParameterizedType):
                 break
 
             element_length = unpack_num[uint16_t](buf)
-            slice_buffer(buf, &elem_buf, 2, element_length)
+            # Direct pointer assignment instead of slice_buffer
+            elem_buf.ptr = buf.ptr + 2
+            elem_buf.size = element_length
 
             deserializer = self.deserializers[i]
             item = from_binary(deserializer, &elem_buf, protocol_version)
             tuple_set(res, i, item)
 
             # skip element length, element, and the EOC (one byte)
+            # Advance buffer in-place with direct assignment
             start = 2 + element_length + 1
-            slice_buffer(buf, buf, start, buf.size - start)
+            buf.ptr = buf.ptr + start
+            buf.size = buf.size - start
 
         return res
 

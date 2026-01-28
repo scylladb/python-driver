@@ -40,11 +40,7 @@ v3_header_unpack = v3_header_struct.unpack
 
 
 def varint_unpack(term):
-    val = int(''.join("%02x" % i for i in term), 16)
-    if (term[0] & 128) != 0:
-        len_term = len(term)  # pulling this out of the expression to avoid overflow in cython optimized code
-        val -= 1 << (len_term * 8)
-    return val
+    return int.from_bytes(term, byteorder='big', signed=True)
 
 
 def bit_length(n):
