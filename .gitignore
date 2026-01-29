@@ -43,6 +43,11 @@ tests/unit/cython/bytesio_testhelper.c
 #iPython
 *.ipynb
 
+uv.lock
+.venv/
+
+
+
 # Files from upstream that we don't need
 Jenkinsfile
 Jenkinsfile.bak
