@@ -109,6 +109,13 @@ class EventletConnection(Connection):
             # This is necessary for SNI
             self._socket.set_tlsext_host_name(self.ssl_options['server_hostname'].encode('ascii'))
 
+        # Apply cached TLS session for resumption (PyOpenSSL)
+        if self.tls_session_cache:
+            cached_session = self.tls_session_cache.get_session(self.endpoint)
+            if cached_session:
+                self._socket.set_session(cached_session)
+                log.debug("Using cached TLS session for %s", self.endpoint)
+
     def _initiate_connection(self, sockaddr):
         if self.uses_legacy_ssl_options:
             super(EventletConnection, self)._initiate_connection(sockaddr)
@@ -116,6 +123,13 @@ class EventletConnection(Connection):
             self._socket.connect(sockaddr)
             if self.ssl_context or self.ssl_options:
                 self._socket.do_handshake()
+                # Store TLS session after successful handshake (PyOpenSSL)
+                if self.tls_session_cache:
+                    session = self._socket.get_session()
+                    if session:
+                        self.tls_session_cache.set_session(self.endpoint, session)
+                        if self._socket.session_reused():
+                            log.debug("TLS session was reused for %s", self.endpoint)
 
     def _match_hostname(self):
         if self.uses_legacy_ssl_options:
