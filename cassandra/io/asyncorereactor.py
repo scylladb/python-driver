@@ -385,12 +385,14 @@ class AsyncoreConnection(Connection, asyncore.dispatcher):
         log.debug("Closed socket to %s", self.endpoint)
 
         if not self.is_defunct:
-            self.error_all_requests(
-                ConnectionShutdown("Connection to %s was closed" % self.endpoint))
+            msg = "Connection to %s was closed" % self.endpoint
+            if self.last_error:
+                msg += ": %s" % (self.last_error,)
+            self.error_all_requests(ConnectionShutdown(msg))
 
             #This happens when the connection is shutdown while waiting for the ReadyMessage
             if not self.connected_event.is_set():
-                self.last_error = ConnectionShutdown("Connection to %s was closed" % self.endpoint)
+                self.last_error = ConnectionShutdown(msg)
 
             # don't leave in-progress operations hanging
             self.connected_event.set()

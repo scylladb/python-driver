@@ -297,8 +297,10 @@ class LibevConnection(Connection):
 
         # don't leave in-progress operations hanging
         if not self.is_defunct:
-            self.error_all_requests(
-                ConnectionShutdown("Connection to %s was closed" % self.endpoint))
+            msg = "Connection to %s was closed" % self.endpoint
+            if self.last_error:
+                msg += ": %s" % (self.last_error,)
+            self.error_all_requests(ConnectionShutdown(msg))
             self.connected_event.set()
 
     def handle_write(self, watcher, revents, errno=None):
