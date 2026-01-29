@@ -908,16 +908,19 @@ class Cluster(object):
 
     tls_session_cache_options = None
     """
-    Advanced TLS session cache configuration. Set to an instance of
-    :class:`~cassandra.tls.TLSSessionCacheOptions` for fine-grained control over
-    session caching behavior (e.g., cache_by_host_only option).
+    Advanced TLS session cache configuration. Can be set to:
+
+    - An instance of :class:`~cassandra.tls.TLSSessionCacheOptions` for
+      fine-grained control over session caching behavior (e.g., cache_by_host_only option).
+    - An instance of :class:`~cassandra.tls.TLSSessionCache` (or a custom subclass)
+      for complete control over session caching implementation.
 
     If None (default), a cache is created using :attr:`~.tls_session_cache_size`
     and :attr:`~.tls_session_cache_ttl` when SSL/TLS is enabled.
 
     This option takes precedence over the individual tls_session_cache_* parameters.
 
-    Example::
+    Example with options::
 
         from cassandra.tls import TLSSessionCacheOptions
 
@@ -928,6 +931,16 @@ class Cluster(object):
             cache_by_host_only=True
         )
         cluster = Cluster(ssl_context=ssl_context, tls_session_cache_options=options)
+
+    Example with custom cache::
+
+        from cassandra.tls import TLSSessionCache
+
+        class MyCustomCache(TLSSessionCache):
+            # Custom implementation
+            pass
+
+        cluster = Cluster(ssl_context=ssl_context, tls_session_cache_options=MyCustomCache())
 
     .. versionadded:: 3.30.0
     """
@@ -1489,19 +1502,24 @@ class Cluster(object):
         # Initialize TLS session cache if SSL is enabled and caching is enabled
         self._tls_session_cache = None
         if (ssl_context or ssl_options) and tls_session_cache_enabled:
-            from cassandra.tls import TLSSessionCacheOptions
+            from cassandra.tls import TLSSessionCache, TLSSessionCacheOptions
 
-            # Use provided options object or create one from individual parameters
             if tls_session_cache_options is not None:
-                cache_options = tls_session_cache_options
+                # Check if it's a TLSSessionCache instance (use directly)
+                # or TLSSessionCacheOptions (use create_cache())
+                if isinstance(tls_session_cache_options, TLSSessionCache):
+                    self._tls_session_cache = tls_session_cache_options
+                else:
+                    # Assume it's TLSSessionCacheOptions
+                    self._tls_session_cache = tls_session_cache_options.create_cache()
             else:
+                # Create default cache from individual parameters
                 cache_options = TLSSessionCacheOptions(
                     max_size=tls_session_cache_size,
                     ttl=tls_session_cache_ttl,
                     cache_by_host_only=False
                 )
-
-            self._tls_session_cache = cache_options.create_cache()
+                self._tls_session_cache = cache_options.create_cache()
 
         self.sockopts = sockopts
         self.cql_version = cql_version

@@ -26,6 +26,10 @@ class MockEndPoint:
         self.address = address
         self.port = port
 
+    @property
+    def tls_session_cache_key(self):
+        return (self.address, self.port)
+
 
 class TLSSessionCacheTest(unittest.TestCase):
     """Test the TLSSessionCache implementation."""
@@ -256,6 +260,32 @@ class TLSSessionCacheTest(unittest.TestCase):
         
         # Cache should still have size 1
         self.assertEqual(cache.size(), 1)
+
+    def test_automatic_expired_cleanup(self):
+        """Test that expired sessions are cleaned up automatically during set_session."""
+        cache = DefaultTLSSessionCache(max_size=10, ttl=1)
+        # Override cleanup interval for testing
+        cache._EXPIRY_CLEANUP_INTERVAL = 5
+
+        # Add some sessions that will expire
+        for i in range(3):
+            endpoint = MockEndPoint(f'host{i}', 9042)
+            cache.set_session(endpoint, Mock(name=f'session{i}'))
+
+        self.assertEqual(cache.size(), 3)
+
+        # Wait for sessions to expire
+        time.sleep(1.1)
+
+        # Add sessions until cleanup is triggered (5 operations)
+        for i in range(5):
+            endpoint = MockEndPoint(f'newhost{i}', 9042)
+            cache.set_session(endpoint, Mock(name=f'newsession{i}'))
+
+        # Expired sessions should have been cleaned up
+        # The 3 expired sessions should be removed
+        # Only the 5 new sessions should remain
+        self.assertEqual(cache.size(), 5)
 
 
 if __name__ == '__main__':
