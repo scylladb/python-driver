@@ -1087,9 +1087,15 @@ class Connection(object):
 
     def send_msg(self, msg, request_id, cb, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=None):
         if self.is_defunct:
-            raise ConnectionShutdown("Connection to %s is defunct" % self.endpoint)
+            msg = "Connection to %s is defunct" % self.endpoint
+            if self.last_error:
+                msg += ": %s" % (self.last_error,)
+            raise ConnectionShutdown(msg)
         elif self.is_closed:
-            raise ConnectionShutdown("Connection to %s is closed" % self.endpoint)
+            msg = "Connection to %s is closed" % self.endpoint
+            if self.last_error:
+                msg += ": %s" % (self.last_error,)
+            raise ConnectionShutdown(msg)
         elif not self._socket_writable:
             raise ConnectionBusy("Connection %s is overloaded" % self.endpoint)
 
@@ -1120,7 +1126,10 @@ class Connection(object):
         failed, the corresponding Exception will be raised.
         """
         if self.is_closed or self.is_defunct:
-            raise ConnectionShutdown("Connection %s is already closed" % (self, ))
+            msg = "Connection %s is already closed" % (self,)
+            if self.last_error:
+                msg += ": %s" % (self.last_error,)
+            raise ConnectionShutdown(msg)
         timeout = kwargs.get('timeout')
         fail_on_error = kwargs.get('fail_on_error', True)
         waiter = ResponseWaiter(self, len(msgs), fail_on_error)

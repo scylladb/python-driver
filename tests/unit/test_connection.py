@@ -22,7 +22,7 @@ from cassandra import OperationTimedOut
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, _Frame, Timer, TimerManager,
-                                  ConnectionException, DefaultEndPoint, ShardAwarePortGenerator)
+                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 SupportedMessage, ProtocolHandler)
@@ -259,6 +259,74 @@ class ConnectionTest(unittest.TestCase):
     def test_set_connection_class(self):
         cluster = Cluster(connection_class='test')
         assert 'test' == cluster.connection_class
+
+    def test_connection_shutdown_includes_last_error(self):
+        """
+        Test that ConnectionShutdown exceptions include the last_error when available.
+        This helps debug issues like "Bad file descriptor" by showing the original cause.
+        See https://github.com/scylladb/python-driver/issues/614
+        """
+        c = self.make_connection()
+        c.lock = Lock()
+        c._requests = {}
+
+        # Simulate the connection becoming defunct with a specific error
+        original_error = OSError(9, "Bad file descriptor")
+        c.is_defunct = True
+        c.last_error = original_error
+
+        # send_msg should raise ConnectionShutdown that includes the last_error
+        with pytest.raises(ConnectionShutdown) as exc_info:
+            c.send_msg(Mock(), 1, Mock())
+
+        # Verify the error message includes the original error
+        error_message = str(exc_info.value)
+        assert "is defunct" in error_message
+        assert "Bad file descriptor" in error_message
+
+    def test_connection_shutdown_closed_includes_last_error(self):
+        """
+        Test that ConnectionShutdown exceptions for closed connections include last_error.
+        """
+        c = self.make_connection()
+        c.lock = Lock()
+        c._requests = {}
+
+        # Simulate the connection being closed with a specific error
+        original_error = OSError(9, "Bad file descriptor")
+        c.is_closed = True
+        c.last_error = original_error
+
+        # send_msg should raise ConnectionShutdown that includes the last_error
+        with pytest.raises(ConnectionShutdown) as exc_info:
+            c.send_msg(Mock(), 1, Mock())
+
+        # Verify the error message includes the original error
+        error_message = str(exc_info.value)
+        assert "is closed" in error_message
+        assert "Bad file descriptor" in error_message
+
+    def test_wait_for_responses_shutdown_includes_last_error(self):
+        """
+        Test that wait_for_responses raises ConnectionShutdown with last_error.
+        """
+        c = self.make_connection()
+        c.lock = Lock()
+        c._requests = {}
+
+        # Simulate the connection being defunct with a specific error
+        original_error = OSError(9, "Bad file descriptor")
+        c.is_defunct = True
+        c.last_error = original_error
+
+        # wait_for_responses should raise ConnectionShutdown that includes the last_error
+        with pytest.raises(ConnectionShutdown) as exc_info:
+            c.wait_for_responses(Mock())
+
+        # Verify the error message includes the original error
+        error_message = str(exc_info.value)
+        assert "already closed" in error_message
+        assert "Bad file descriptor" in error_message
 
 
 @patch('cassandra.connection.ConnectionHeartbeat._raise_if_stopped')

@@ -283,8 +283,10 @@ class TwistedConnection(Connection):
         log.debug("Closed socket to %s", self.endpoint)
 
         if not self.is_defunct:
-            self.error_all_requests(
-                ConnectionShutdown("Connection to %s was closed" % self.endpoint))
+            msg = "Connection to %s was closed" % self.endpoint
+            if self.last_error:
+                msg += ": %s" % (self.last_error,)
+            self.error_all_requests(ConnectionShutdown(msg))
             # don't leave in-progress operations hanging
             self.connected_event.set()
 
