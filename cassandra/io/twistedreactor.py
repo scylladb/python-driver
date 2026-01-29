@@ -139,11 +139,12 @@ class TwistedLoop(object):
 
 @implementer(IOpenSSLClientConnectionCreator)
 class _SSLCreator(object):
-    def __init__(self, endpoint, ssl_context, ssl_options, check_hostname, timeout):
+    def __init__(self, endpoint, ssl_context, ssl_options, check_hostname, timeout, tls_session_cache=None):
         self.endpoint = endpoint
         self.ssl_options = ssl_options
         self.check_hostname = check_hostname
         self.timeout = timeout
+        self.tls_session_cache = tls_session_cache
 
         if ssl_context:
             self.context = ssl_context
@@ -171,11 +172,27 @@ class _SSLCreator(object):
                 transport = connection.get_app_data()
                 transport.failVerification(Failure(ConnectionException("Hostname verification failed", self.endpoint)))
 
+            # Store TLS session after successful handshake (PyOpenSSL)
+            if self.tls_session_cache:
+                session = connection.get_session()
+                if session:
+                    self.tls_session_cache.set_session(self.endpoint, session)
+                    if connection.session_reused():
+                        log.debug("TLS session was reused for %s", self.endpoint)
+
     def clientConnectionForTLS(self, tlsProtocol):
         connection = SSL.Connection(self.context, None)
         connection.set_app_data(tlsProtocol)
         if self.ssl_options and "server_hostname" in self.ssl_options:
             connection.set_tlsext_host_name(self.ssl_options['server_hostname'].encode('ascii'))
+
+        # Apply cached TLS session for resumption (PyOpenSSL)
+        if self.tls_session_cache:
+            cached_session = self.tls_session_cache.get_session(self.endpoint)
+            if cached_session:
+                connection.set_session(cached_session)
+                log.debug("Using cached TLS session for %s", self.endpoint)
+
         return connection
 
 
@@ -241,6 +258,7 @@ class TwistedConnection(Connection):
                 self.ssl_options,
                 self._check_hostname,
                 self.connect_timeout,
+                tls_session_cache=self.tls_session_cache,
             )
 
             endpoint = SSL4ClientEndpoint(
