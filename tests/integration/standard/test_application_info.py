@@ -75,7 +75,14 @@ class ApplicationInfoTest(unittest.TestCase):
                         ))
 
                     found = False
-                    for row in cluster.connect().execute("select client_options from system.clients"):
+                    session = cluster.connect()
+
+                    try:
+                        rows = list(session.execute("SELECT client_options FROM system.clients"))
+                    except Exception:
+                        rows = list(session.execute("SELECT client_options FROM system_views.clients"))
+
+                    for row in rows:
                         if not row[0]:
                             continue
                         for attribute_key, startup_key in self.attribute_to_startup_key.items():
