@@ -16,21 +16,15 @@
 import os
 import select
 import socket
-try:
-    import thread
-    import Queue
-    import __builtin__
-    #For python3 compatibility
-except ImportError:
-    import _thread as thread
-    import queue as Queue
-    import builtins as __builtin__
+import _thread as thread
+import queue as Queue
+import builtins as __builtin__
 
 import threading
 import ssl
 import time
 import eventlet
-from imp import reload
+from importlib import reload
 
 def eventlet_un_patch_all():
     """
