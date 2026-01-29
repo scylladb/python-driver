@@ -110,6 +110,7 @@ class CythonProtocolHandlerTest(unittest.TestCase):
         results = session.execute("SELECT * FROM test_table")
 
         assert results.has_more_pages
+        count = 0
         for count, page in enumerate(results, 1):
             assert isinstance(page, dict)
             for colname, arr in page.items():
