@@ -712,6 +712,7 @@ class Connection(object):
     endpoint = None
     ssl_options = None
     ssl_context = None
+    tls_session_cache = None
     last_error = None
 
     # The current number of operations that are in flight. More precisely,
@@ -788,7 +789,7 @@ class Connection(object):
                  ssl_options=None, sockopts=None, compression: Union[bool, str] = True,
                  cql_version=None, protocol_version=ProtocolVersion.MAX_SUPPORTED, is_control_connection=False,
                  user_type_map=None, connect_timeout=None, allow_beta_protocol_version=False, no_compact=False,
-                 ssl_context=None, owning_pool=None, shard_id=None, total_shards=None,
+                 ssl_context=None, tls_session_cache=None, owning_pool=None, shard_id=None, total_shards=None,
                  on_orphaned_stream_released=None, application_info: Optional[ApplicationInfoBase] = None):
         # TODO next major rename host to endpoint and remove port kwarg.
         self.endpoint = host if isinstance(host, EndPoint) else DefaultEndPoint(host, port)
@@ -796,6 +797,7 @@ class Connection(object):
         self.authenticator = authenticator
         self.ssl_options = ssl_options.copy() if ssl_options else {}
         self.ssl_context = ssl_context
+        self.tls_session_cache = tls_session_cache
         self.sockopts = sockopts
         self.compression = compression
         self.cql_version = cql_version
@@ -938,7 +940,21 @@ class Connection(object):
             server_hostname = self.endpoint.address
             opts['server_hostname'] = server_hostname
 
-        return self.ssl_context.wrap_socket(self._socket, **opts)
+        # Try to get a cached TLS session for resumption
+        # Note: Session resumption works with both TLS 1.2 and TLS 1.3
+        # Python's ssl module handles both transparently via SSLSession objects
+        if self.tls_session_cache:
+            cached_session = self.tls_session_cache.get_session(self.endpoint)
+            if cached_session:
+                opts['session'] = cached_session
+                log.debug("Using cached TLS session for %s", self.endpoint)
+
+        ssl_socket = self.ssl_context.wrap_socket(self._socket, **opts)
+        
+        # Note: Session is NOT stored here - it will be stored after successful connection
+        # in _connect_socket() to ensure we only cache sessions for successful connections
+        
+        return ssl_socket
 
     def _initiate_connection(self, sockaddr):
         if self.features.shard_id is not None:
@@ -993,6 +1009,15 @@ class Connection(object):
                 # run that here.
                 if self._check_hostname:
                     self._validate_hostname()
+                
+                # Store the TLS session after successful connection
+                # This ensures we only cache sessions for connections that actually succeeded
+                if self.tls_session_cache and self.ssl_context and hasattr(self._socket, 'session'):
+                    if self._socket.session:
+                        self.tls_session_cache.set_session(self.endpoint, self._socket.session)
+                        if hasattr(self._socket, 'session_reused') and self._socket.session_reused:
+                            log.debug("TLS session was reused for %s", self.endpoint)
+                
                 sockerr = None
                 break
             except socket.error as err:
