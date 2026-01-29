@@ -15,7 +15,7 @@
 import unittest
 
 from cassandra.application_info import ApplicationInfo
-from tests.integration import TestCluster, use_single_node, remove_cluster, xfail_scylla
+from tests.integration import TestCluster, use_single_node, remove_cluster, xfail_scylla_version_lt
 
 
 def setup_module():
@@ -26,7 +26,8 @@ def teardown_module():
     remove_cluster()
 
 
-@xfail_scylla("#scylladb/scylla-enterprise#5467 - not released yet")
+@xfail_scylla_version_lt(reason='scylladb/scylla-enterprise#5467 - system.client_options is not yet supported',
+                             oss_scylla_version="7.0", ent_scylla_version="2026.1.0")
 class ApplicationInfoTest(unittest.TestCase):
     attribute_to_startup_key = {
         'application_name': 'APPLICATION_NAME',
@@ -74,7 +75,7 @@ class ApplicationInfoTest(unittest.TestCase):
                         ))
 
                     found = False
-                    for row in cluster.connect().execute("select client_options from system_views.clients"):
+                    for row in cluster.connect().execute("select client_options from system.clients"):
                         if not row[0]:
                             continue
                         for attribute_key, startup_key in self.attribute_to_startup_key.items():
