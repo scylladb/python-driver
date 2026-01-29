@@ -74,22 +74,6 @@ class TLSSessionCache(ABC):
         pass
 
 
-class TLSSessionCacheOptions(ABC):
-    """
-    Abstract base class for TLS session cache configuration options.
-    """
-    
-    @abstractmethod
-    def create_cache(self):
-        """
-        Build and return a TLSSessionCache implementation.
-        
-        Returns:
-            TLSSessionCache: A configured session cache instance
-        """
-        pass
-
-
 class DefaultTLSSessionCache(TLSSessionCache):
     """
     Default implementation of TLS session caching.

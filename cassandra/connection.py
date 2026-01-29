@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from __future__ import absolute_import  # to enable import io from stdlib
-from collections import defaultdict, deque, OrderedDict, namedtuple
+from collections import defaultdict, deque
 import errno
 from functools import wraps, partial, total_ordering
 from heapq import heappush, heappop
@@ -126,7 +126,6 @@ DEFAULT_LOCAL_PORT_LOW = 49152
 DEFAULT_LOCAL_PORT_HIGH = 65535
 
 frame_header_v3 = struct.Struct('>BhBi')
-
 
 
 class EndPoint(object):
