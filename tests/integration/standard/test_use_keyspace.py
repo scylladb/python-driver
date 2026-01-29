@@ -2,10 +2,7 @@ import os
 import time
 import logging
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 from unittest.mock import patch
 

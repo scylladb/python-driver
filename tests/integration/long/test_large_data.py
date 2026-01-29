@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-try:
-    from Queue import Queue, Empty
-except ImportError:
-    from queue import Queue, Empty  # noqa
+from queue import Queue, Empty
 
 from struct import pack
 import logging, sys, traceback, time

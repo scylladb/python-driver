@@ -17,15 +17,9 @@ import random
 from subprocess import run
 import logging
 
-try:
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-except ImportError:
-    from futures import ThreadPoolExecutor, as_completed  # noqa
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 import pytest
 
 from cassandra.cluster import Cluster
