@@ -161,6 +161,15 @@ class EndPoint(object):
         """
         return socket.AF_UNSPEC
 
+    @property
+    def tls_session_cache_key(self):
+        """
+        Returns the cache key components for TLS session caching.
+        This is a tuple that uniquely identifies this endpoint for TLS session purposes.
+        Subclasses may override this to include additional components (e.g., SNI server name).
+        """
+        return (self.address, self.port)
+
     def resolve(self):
         """
         Resolve the endpoint to an address/port. This is called
@@ -275,6 +284,14 @@ class SniEndPoint(EndPoint):
     def ssl_options(self):
         return self._ssl_options
 
+    @property
+    def tls_session_cache_key(self):
+        """
+        Returns the cache key including server_name for SNI endpoints.
+        This prevents cache collisions when multiple SNI endpoints use the same proxy.
+        """
+        return (self.address, self.port, self._server_name)
+
     def resolve(self):
         try:
             resolved_addresses = socket.getaddrinfo(self._proxy_address, self._port,
@@ -348,6 +365,14 @@ class UnixSocketEndPoint(EndPoint):
     @property
     def socket_family(self):
         return socket.AF_UNIX
+
+    @property
+    def tls_session_cache_key(self):
+        """
+        Returns the cache key for Unix socket endpoints.
+        Since Unix sockets don't have a port, only the path is used.
+        """
+        return (self._unix_socket_path,)
 
     def resolve(self):
         return self.address, None
