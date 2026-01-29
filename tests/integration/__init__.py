@@ -690,8 +690,8 @@ def xfail_scylla_version_lt(reason, oss_scylla_version, ent_scylla_version, *arg
     :param oss_scylla_version: str, oss version from which test supposed to succeed
     :param ent_scylla_version: str, enterprise version from which test supposed to succeed
     """
-    if not reason.startswith("scylladb/scylladb#"):
-        raise ValueError('reason should start with scylladb/scylladb#<issue-id> to reference issue in scylla repo')
+    if not (reason.startswith("scylladb/scylladb#") or reason.startswith("scylladb/scylla-enterprise#")):
+        raise ValueError('reason should start with scylladb/scylladb#<issue-id> or scylladb/scylla-enterprise#<issue-id> to reference issue in scylla repo')
 
     if not isinstance(ent_scylla_version, str):
         raise ValueError('ent_scylla_version should be a str')
