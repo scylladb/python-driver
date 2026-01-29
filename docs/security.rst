@@ -308,3 +308,115 @@ SSL with Twisted
 
 In case the twisted event loop is used pyOpenSSL must be installed or an exception will be risen. Also
 to set the ``ssl_version`` and ``cert_reqs`` in ``ssl_opts`` the appropriate constants from pyOpenSSL are expected.
+
+TLS Session Resumption
+----------------------
+
+.. versionadded:: 3.30.0
+
+The driver automatically caches TLS sessions to enable session resumption for faster reconnections.
+When a TLS connection is established, the session is cached and can be reused for subsequent
+connections to the same endpoint, reducing handshake latency and CPU usage.
+
+**TLS Version Support**: Session resumption works with both TLS 1.2 and TLS 1.3. TLS 1.2 uses
+Session IDs and optionally Session Tickets (RFC 5077), while TLS 1.3 uses Session Tickets (RFC 8446)
+as the primary mechanism. Python's ``ssl.SSLSession`` API handles both versions transparently.
+
+Session caching is **enabled by default** when SSL/TLS is configured and applies to the following
+connection classes:
+
+* :class:`~cassandra.io.asyncorereactor.AsyncoreConnection` (default)
+* :class:`~cassandra.io.libevreactor.LibevConnection`
+* :class:`~cassandra.io.asyncioreactor.AsyncioConnection`
+* :class:`~cassandra.io.geventreactor.GeventConnection` (when not using SSL)
+
+.. note::
+    Session caching is not currently supported for PyOpenSSL-based reactors
+    (:class:`~cassandra.io.twistedreactor.TwistedConnection`,
+    :class:`~cassandra.io.eventletreactor.EventletConnection`) but may be added in a future release.
+
+Configuration
+^^^^^^^^^^^^^
+
+TLS session caching is controlled by three cluster-level parameters:
+
+* :attr:`~.Cluster.tls_session_cache_enabled` - Enable or disable session caching (default: ``True``)
+* :attr:`~.Cluster.tls_session_cache_size` - Maximum number of sessions to cache (default: ``100``)
+* :attr:`~.Cluster.tls_session_cache_ttl` - Time-to-live for cached sessions in seconds (default: ``3600``)
+
+Example with default settings (session caching enabled):
+
+.. code-block:: python
+
+    from cassandra.cluster import Cluster
+    import ssl
+
+    ssl_context = ssl.create_default_context(cafile='/path/to/ca.crt')
+    cluster = Cluster(
+        contact_points=['127.0.0.1'],
+        ssl_context=ssl_context
+    )
+    session = cluster.connect()
+
+Example with custom cache settings:
+
+.. code-block:: python
+
+    from cassandra.cluster import Cluster
+    import ssl
+
+    ssl_context = ssl.create_default_context(cafile='/path/to/ca.crt')
+    cluster = Cluster(
+        contact_points=['127.0.0.1'],
+        ssl_context=ssl_context,
+        tls_session_cache_size=200,  # Cache up to 200 sessions
+        tls_session_cache_ttl=7200   # Sessions expire after 2 hours
+    )
+    session = cluster.connect()
+
+Example with session caching disabled:
+
+.. code-block:: python
+
+    from cassandra.cluster import Cluster
+    import ssl
+
+    ssl_context = ssl.create_default_context(cafile='/path/to/ca.crt')
+    cluster = Cluster(
+        contact_points=['127.0.0.1'],
+        ssl_context=ssl_context,
+        tls_session_cache_enabled=False
+    )
+    session = cluster.connect()
+
+How It Works
+^^^^^^^^^^^^
+
+When session caching is enabled:
+
+1. The first connection to an endpoint establishes a new TLS session and caches it
+2. Subsequent connections to the same endpoint reuse the cached session
+3. Sessions are cached per endpoint (host:port combination)
+4. Sessions expire after the configured TTL
+5. When the cache reaches max size, the least recently used session is evicted
+
+Performance Benefits
+^^^^^^^^^^^^^^^^^^^^
+
+TLS session resumption is a standard TLS feature that provides performance benefits:
+
+* **Faster reconnection times** - Reduced handshake latency by reusing cached sessions
+* **Lower CPU usage** - Fewer cryptographic operations during reconnection
+* **Better overall throughput** - Especially beneficial for workloads with frequent reconnections
+
+The actual performance improvement depends on various factors including network latency,
+server configuration, and workload characteristics.
+
+Security Considerations
+^^^^^^^^^^^^^^^^^^^^^^^
+
+* Sessions are stored in memory only and never persisted to disk
+* Sessions are cached per cluster and not shared across different cluster instances
+* Sessions for one endpoint are never used for a different endpoint
+* Hostname verification still occurs on each connection, even when reusing sessions
+* Sessions automatically expire after the configured TTL
