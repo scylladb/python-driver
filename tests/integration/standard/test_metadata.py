@@ -57,8 +57,6 @@ def setup_module():
 
 
 class HostMetaDataTests(BasicExistingKeyspaceUnitTestCase):
-    # TODO: enable after https://github.com/scylladb/python-driver/issues/121 is fixed
-    @unittest.skip('Fails on scylla due to the broadcast_rpc_port is None')
     @local
     def test_host_addresses(self):
         """
@@ -85,8 +83,10 @@ class HostMetaDataTests(BasicExistingKeyspaceUnitTestCase):
         local_host = con.host
 
         # The control connection node should have the listen address set.
-        listen_addrs = [host.listen_address for host in self.cluster.metadata.all_hosts()]
-        assert local_host in listen_addrs
+        # Note: Scylla does not populate listen_address in system.local
+        if SCYLLA_VERSION is None:
+            listen_addrs = [host.listen_address for host in self.cluster.metadata.all_hosts()]
+            assert local_host in listen_addrs
 
         # The control connection node should have the broadcast_rpc_address set.
         rpc_addrs = [host.broadcast_rpc_address for host in self.cluster.metadata.all_hosts()]
