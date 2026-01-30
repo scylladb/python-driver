@@ -44,7 +44,7 @@ class PreparedStatementTests(unittest.TestCase):
         cls.cass_version = get_server_versions()
 
     def setUp(self):
-        self.cluster = TestCluster(metrics_enabled=True, allow_beta_protocol_version=True)
+        self.cluster = TestCluster(metrics_enabled=True, allow_beta_protocol_version=True, protocol_version=PROTOCOL_VERSION)
         self.session = self.cluster.connect()
 
     def tearDown(self):
