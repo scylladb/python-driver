@@ -188,3 +188,239 @@ class TestTwistedConnection(unittest.TestCase):
         self.obj_ut.push('123 pickup')
         self.mock_reactor_cft.assert_called_with(
             transport_mock.write, '123 pickup')
+
+
+try:
+    from OpenSSL import SSL as PyOpenSSL
+    _HAS_PYOPENSSL = True
+except ImportError:
+    _HAS_PYOPENSSL = False
+
+
+@unittest.skipIf(twistedreactor is None, "Twisted libraries not available")
+@unittest.skipIf(not _HAS_PYOPENSSL, "PyOpenSSL not available")
+class TestSSLCreatorTLSSessionCache(unittest.TestCase):
+    """Test TLS session caching for _SSLCreator with PyOpenSSL."""
+
+    def setUp(self):
+        twistedreactor.TwistedConnection.initialize_reactor()
+
+    def tearDown(self):
+        loop = twistedreactor.TwistedConnection._loop
+        if loop and not loop._reactor_stopped():
+            loop._cleanup()
+
+    def test_client_connection_applies_cached_session(self):
+        """Test that clientConnectionForTLS applies cached TLS session."""
+        mock_cache = Mock()
+        mock_session = Mock()
+        mock_cache.get_session.return_value = mock_session
+
+        mock_ssl_context = Mock()
+        mock_ssl_connection = Mock()
+
+        endpoint = DefaultEndPoint('127.0.0.1', 9042)
+
+        with patch('cassandra.io.twistedreactor.SSL.Connection', return_value=mock_ssl_connection):
+            creator = twistedreactor._SSLCreator(
+                endpoint=endpoint,
+                ssl_context=mock_ssl_context,
+                ssl_options={},
+                check_hostname=False,
+                timeout=5,
+                tls_session_cache=mock_cache
+            )
+
+            mock_tls_protocol = Mock()
+            creator.clientConnectionForTLS(mock_tls_protocol)
+
+            # Verify get_session was called with endpoint
+            mock_cache.get_session.assert_called_once_with(endpoint)
+
+            # Verify set_session was called on the SSL connection
+            mock_ssl_connection.set_session.assert_called_once_with(mock_session)
+
+    def test_client_connection_no_session_when_cache_empty(self):
+        """Test that clientConnectionForTLS handles empty cache."""
+        mock_cache = Mock()
+        mock_cache.get_session.return_value = None  # No cached session
+
+        mock_ssl_context = Mock()
+        mock_ssl_connection = Mock()
+
+        endpoint = DefaultEndPoint('127.0.0.1', 9042)
+
+        with patch('cassandra.io.twistedreactor.SSL.Connection', return_value=mock_ssl_connection):
+            creator = twistedreactor._SSLCreator(
+                endpoint=endpoint,
+                ssl_context=mock_ssl_context,
+                ssl_options={},
+                check_hostname=False,
+                timeout=5,
+                tls_session_cache=mock_cache
+            )
+
+            mock_tls_protocol = Mock()
+            creator.clientConnectionForTLS(mock_tls_protocol)
+
+            # Verify get_session was called
+            mock_cache.get_session.assert_called_once_with(endpoint)
+
+            # Verify set_session was NOT called on SSL connection
+            mock_ssl_connection.set_session.assert_not_called()
+
+    def test_client_connection_no_cache_configured(self):
+        """Test that clientConnectionForTLS works without a cache."""
+        mock_ssl_context = Mock()
+        mock_ssl_connection = Mock()
+
+        endpoint = DefaultEndPoint('127.0.0.1', 9042)
+
+        with patch('cassandra.io.twistedreactor.SSL.Connection', return_value=mock_ssl_connection):
+            creator = twistedreactor._SSLCreator(
+                endpoint=endpoint,
+                ssl_context=mock_ssl_context,
+                ssl_options={},
+                check_hostname=False,
+                timeout=5,
+                tls_session_cache=None  # No cache
+            )
+
+            mock_tls_protocol = Mock()
+            result = creator.clientConnectionForTLS(mock_tls_protocol)
+
+            # Should return the connection without errors
+            self.assertEqual(result, mock_ssl_connection)
+
+            # Verify set_session was NOT called
+            mock_ssl_connection.set_session.assert_not_called()
+
+    def test_info_callback_stores_session_after_handshake(self):
+        """Test that info_callback stores session after handshake."""
+        mock_cache = Mock()
+        mock_session = Mock()
+
+        mock_ssl_context = Mock()
+        mock_ssl_connection = Mock()
+        mock_ssl_connection.get_session.return_value = mock_session
+        mock_ssl_connection.session_reused.return_value = False
+        mock_ssl_connection.get_peer_certificate.return_value.get_subject.return_value.commonName = '127.0.0.1'
+
+        endpoint = DefaultEndPoint('127.0.0.1', 9042)
+
+        with patch('cassandra.io.twistedreactor.SSL.Connection', return_value=mock_ssl_connection):
+            creator = twistedreactor._SSLCreator(
+                endpoint=endpoint,
+                ssl_context=mock_ssl_context,
+                ssl_options={},
+                check_hostname=False,
+                timeout=5,
+                tls_session_cache=mock_cache
+            )
+
+            # Simulate handshake completion
+            creator.info_callback(mock_ssl_connection, PyOpenSSL.SSL_CB_HANDSHAKE_DONE, 0)
+
+            # Verify session was retrieved and stored
+            mock_ssl_connection.get_session.assert_called_once()
+            mock_cache.set_session.assert_called_once_with(endpoint, mock_session)
+
+    def test_info_callback_logs_session_reuse(self):
+        """Test that info_callback logs when session is reused."""
+        mock_cache = Mock()
+        mock_session = Mock()
+
+        mock_ssl_context = Mock()
+        mock_ssl_connection = Mock()
+        mock_ssl_connection.get_session.return_value = mock_session
+        mock_ssl_connection.session_reused.return_value = True  # Session was reused
+        mock_ssl_connection.get_peer_certificate.return_value.get_subject.return_value.commonName = '127.0.0.1'
+
+        endpoint = DefaultEndPoint('127.0.0.1', 9042)
+
+        with patch('cassandra.io.twistedreactor.SSL.Connection', return_value=mock_ssl_connection):
+            creator = twistedreactor._SSLCreator(
+                endpoint=endpoint,
+                ssl_context=mock_ssl_context,
+                ssl_options={},
+                check_hostname=False,
+                timeout=5,
+                tls_session_cache=mock_cache
+            )
+
+            with patch('cassandra.io.twistedreactor.log') as mock_log:
+                creator.info_callback(mock_ssl_connection, PyOpenSSL.SSL_CB_HANDSHAKE_DONE, 0)
+
+                # Verify session_reused was checked
+                mock_ssl_connection.session_reused.assert_called_once()
+
+                # Verify debug log was called for session reuse
+                mock_log.debug.assert_called()
+
+    def test_info_callback_no_session_store_when_no_cache(self):
+        """Test that info_callback doesn't store session when no cache configured."""
+        mock_ssl_context = Mock()
+        mock_ssl_connection = Mock()
+        mock_ssl_connection.get_peer_certificate.return_value.get_subject.return_value.commonName = '127.0.0.1'
+
+        endpoint = DefaultEndPoint('127.0.0.1', 9042)
+
+        with patch('cassandra.io.twistedreactor.SSL.Connection', return_value=mock_ssl_connection):
+            creator = twistedreactor._SSLCreator(
+                endpoint=endpoint,
+                ssl_context=mock_ssl_context,
+                ssl_options={},
+                check_hostname=False,
+                timeout=5,
+                tls_session_cache=None  # No cache
+            )
+
+            creator.info_callback(mock_ssl_connection, PyOpenSSL.SSL_CB_HANDSHAKE_DONE, 0)
+
+            # Verify get_session was NOT called
+            mock_ssl_connection.get_session.assert_not_called()
+
+
+@unittest.skipIf(twistedreactor is None, "Twisted libraries not available")
+@unittest.skipIf(not _HAS_PYOPENSSL, "PyOpenSSL not available")
+class TestTwistedConnectionTLSSessionCache(unittest.TestCase):
+    """Test TLS session caching integration in TwistedConnection."""
+
+    def setUp(self):
+        if twistedreactor.TwistedConnection._loop:
+            twistedreactor.TwistedConnection._loop._cleanup()
+        twistedreactor.TwistedConnection.initialize_reactor()
+        self.reactor_cft_patcher = patch('twisted.internet.reactor.callFromThread')
+        self.reactor_run_patcher = patch('twisted.internet.reactor.run')
+        self.mock_reactor_cft = self.reactor_cft_patcher.start()
+        self.mock_reactor_run = self.reactor_run_patcher.start()
+
+    def tearDown(self):
+        self.reactor_cft_patcher.stop()
+        self.reactor_run_patcher.stop()
+
+    def test_add_connection_passes_tls_session_cache(self):
+        """Test that add_connection passes tls_session_cache to _SSLCreator."""
+        mock_cache = Mock()
+        mock_ssl_context = Mock()
+
+        endpoint = DefaultEndPoint('127.0.0.1', 9042)
+
+        conn = twistedreactor.TwistedConnection(
+            endpoint,
+            cql_version='3.0.1',
+            connect_timeout=5
+        )
+        conn.ssl_context = mock_ssl_context
+        conn.ssl_options = {}
+        conn.tls_session_cache = mock_cache
+
+        with patch('cassandra.io.twistedreactor._SSLCreator') as mock_creator_class:
+            with patch('cassandra.io.twistedreactor.SSL4ClientEndpoint'):
+                with patch('cassandra.io.twistedreactor.connectProtocol'):
+                    conn.add_connection()
+
+                    # Verify _SSLCreator was called with tls_session_cache
+                    mock_creator_class.assert_called_once()
+                    call_kwargs = mock_creator_class.call_args
+                    self.assertEqual(call_kwargs.kwargs.get('tls_session_cache'), mock_cache)
