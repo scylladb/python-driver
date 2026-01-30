@@ -70,6 +70,9 @@ docs/geo_types.rst
 docs/graph.rst
 docs/graph_fluent.rst
 
+# Personal list of items to do
+TODO.md
+
 # Codex - AI assistant metadata
 .codex/
 .codex-cache/
