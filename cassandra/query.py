@@ -214,88 +214,74 @@ class Statement(object):
     An abstract class representing a single query. There are three subclasses:
     :class:`.SimpleStatement`, :class:`.BoundStatement`, and :class:`.BatchStatement`.
     These can be passed to :meth:`.Session.execute()`.
+
+    Attributes
+    ----------
+    retry_policy : RetryPolicy or None
+        An instance of a :class:`cassandra.policies.RetryPolicy` or one of its
+        subclasses.  This controls when a query will be retried and how it
+        will be retried.
+
+    consistency_level : ConsistencyLevel or None
+        The :class:`.ConsistencyLevel` to be used for this operation.  Defaults
+        to :const:`None`, which means that the default consistency level for
+        the Session this is executed in will be used.
+
+    fetch_size : int
+        How many rows will be fetched at a time.  This overrides the default
+        of :attr:`.Session.default_fetch_size`
+
+        This only takes effect when protocol version 2 or higher is used.
+        See :attr:`.Cluster.protocol_version` for details.
+
+        .. versionadded:: 2.0.0
+
+    keyspace : str or None
+        The string name of the keyspace this query acts on. This is used when
+        :class:`~.TokenAwarePolicy` is configured in the profile load balancing policy.
+
+        It is set implicitly on :class:`.BoundStatement`, and :class:`.BatchStatement`,
+        but must be set explicitly on :class:`.SimpleStatement`.
+
+        .. versionadded:: 2.1.3
+
+    table : str or None
+        The string name of the table this query acts on. This is used when the tablet
+        feature is enabled and in the same time :class`~.TokenAwarePolicy` is configured
+        in the profile load balancing policy.
+
+    custom_payload : dict or None
+        :ref:`custom_payload` to be passed to the server.
+
+        These are only allowed when using protocol version 4 or higher.
+
+        .. versionadded:: 2.6.0
+
+    is_idempotent : bool
+        Flag indicating whether this statement is safe to run multiple times in speculative execution.
     """
 
-    retry_policy = None
-    """
-    An instance of a :class:`cassandra.policies.RetryPolicy` or one of its
-    subclasses.  This controls when a query will be retried and how it
-    will be retried.
-    """
-
-    consistency_level = None
-    """
-    The :class:`.ConsistencyLevel` to be used for this operation.  Defaults
-    to :const:`None`, which means that the default consistency level for
-    the Session this is executed in will be used.
-    """
-
-    fetch_size = FETCH_SIZE_UNSET
-    """
-    How many rows will be fetched at a time.  This overrides the default
-    of :attr:`.Session.default_fetch_size`
-
-    This only takes effect when protocol version 2 or higher is used.
-    See :attr:`.Cluster.protocol_version` for details.
-
-    .. versionadded:: 2.0.0
-    """
-
-    keyspace = None
-    """
-    The string name of the keyspace this query acts on. This is used when
-    :class:`~.TokenAwarePolicy` is configured in the profile load balancing policy.
-
-    It is set implicitly on :class:`.BoundStatement`, and :class:`.BatchStatement`,
-    but must be set explicitly on :class:`.SimpleStatement`.
-
-    .. versionadded:: 2.1.3
-    """
-
-    table = None
-    """
-    The string name of the table this query acts on. This is used when the tablet
-    feature is enabled and in the same time :class`~.TokenAwarePolicy` is configured
-    in the profile load balancing policy.
-    """
-
-    custom_payload = None
-    """
-    :ref:`custom_payload` to be passed to the server.
-
-    These are only allowed when using protocol version 4 or higher.
-
-    .. versionadded:: 2.6.0
-    """
-
-    is_idempotent = False
-    """
-    Flag indicating whether this statement is safe to run multiple times in speculative execution.
-    """
-
-    _serial_consistency_level = None
-    _routing_key = None
+    __slots__ = (
+        'retry_policy', 'consistency_level', 'fetch_size', 'keyspace', 'table',
+        'custom_payload', 'is_idempotent', '_serial_consistency_level', '_routing_key'
+    )
 
     def __init__(self, retry_policy=None, consistency_level=None, routing_key=None,
                  serial_consistency_level=None, fetch_size=FETCH_SIZE_UNSET, keyspace=None, custom_payload=None,
                  is_idempotent=False, table=None):
         if retry_policy and not hasattr(retry_policy, 'on_read_timeout'):  # just checking one method to detect positional parameter errors
             raise ValueError('retry_policy should implement cassandra.policies.RetryPolicy')
-        if retry_policy is not None:
-            self.retry_policy = retry_policy
-        if consistency_level is not None:
-            self.consistency_level = consistency_level
+        # Initialize all attributes (required for __slots__)
+        self.retry_policy = retry_policy
+        self.consistency_level = consistency_level
         self._routing_key = routing_key
+        self._serial_consistency_level = None
         if serial_consistency_level is not None:
             self.serial_consistency_level = serial_consistency_level
-        if fetch_size is not FETCH_SIZE_UNSET:
-            self.fetch_size = fetch_size
-        if keyspace is not None:
-            self.keyspace = keyspace
-        if table is not None:
-            self.table = table
-        if custom_payload is not None:
-            self.custom_payload = custom_payload
+        self.fetch_size = fetch_size
+        self.keyspace = keyspace
+        self.table = table
+        self.custom_payload = custom_payload
         self.is_idempotent = is_idempotent
 
     def _key_parts_packed(self, parts):
@@ -391,6 +377,8 @@ class SimpleStatement(Statement):
     """
     A simple, un-prepared query.
     """
+
+    __slots__ = ('_query_string',)
 
     def __init__(self, query_string, retry_policy=None, consistency_level=None, routing_key=None,
                  serial_consistency_level=None, fetch_size=FETCH_SIZE_UNSET, keyspace=None,
@@ -536,17 +524,17 @@ class BoundStatement(Statement):
     """
     A prepared statement that has been bound to a particular set of values.
     These may be created directly or through :meth:`.PreparedStatement.bind()`.
+
+    Attributes
+    ----------
+    prepared_statement : PreparedStatement or None
+        The :class:`PreparedStatement` instance that this was created from.
+
+    values : list or None
+        The sequence of values that were bound to the prepared statement.
     """
 
-    prepared_statement = None
-    """
-    The :class:`PreparedStatement` instance that this was created from.
-    """
-
-    values = None
-    """
-    The sequence of values that were bound to the prepared statement.
-    """
+    __slots__ = ('prepared_statement', 'values', 'raw_values')
 
     def __init__(self, prepared_statement, retry_policy=None, consistency_level=None, routing_key=None,
                  serial_consistency_level=None, fetch_size=FETCH_SIZE_UNSET, keyspace=None,
@@ -557,23 +545,32 @@ class BoundStatement(Statement):
         See :class:`Statement` attributes for a description of the other parameters.
         """
         self.prepared_statement = prepared_statement
-
-        self.retry_policy = prepared_statement.retry_policy
-        self.consistency_level = prepared_statement.consistency_level
-        self.serial_consistency_level = prepared_statement.serial_consistency_level
-        self.fetch_size = prepared_statement.fetch_size
-        self.custom_payload = prepared_statement.custom_payload
-        self.is_idempotent = prepared_statement.is_idempotent
         self.values = []
 
-        meta = prepared_statement.column_metadata
-        if meta:
-            self.keyspace = meta[0].keyspace_name
-            self.table = meta[0].table_name
+        # Use prepared statement values as defaults if parameters not provided
+        if retry_policy is None:
+            retry_policy = prepared_statement.retry_policy
+        if consistency_level is None:
+            consistency_level = prepared_statement.consistency_level
+        if serial_consistency_level is None:
+            serial_consistency_level = prepared_statement.serial_consistency_level
+        if fetch_size is FETCH_SIZE_UNSET:
+            fetch_size = prepared_statement.fetch_size
+        if custom_payload is None:
+            custom_payload = prepared_statement.custom_payload
 
+        # Get keyspace and table from metadata if available
+        meta = prepared_statement.column_metadata
+        table = None
+        if meta:
+            if keyspace is None:
+                keyspace = meta[0].keyspace_name
+            table = meta[0].table_name
+
+        # Call parent __init__ with merged parameters
         Statement.__init__(self, retry_policy, consistency_level, routing_key,
                            serial_consistency_level, fetch_size, keyspace, custom_payload,
-                           prepared_statement.is_idempotent)
+                           prepared_statement.is_idempotent, table)
 
     def bind(self, values):
         """
@@ -745,23 +742,19 @@ class BatchStatement(Statement):
     by default.
 
     .. versionadded:: 2.0.0
+
+    Attributes
+    ----------
+    batch_type : BatchType
+        The :class:`.BatchType` for the batch operation.  Defaults to
+        :attr:`.BatchType.LOGGED`.
+
+    serial_consistency_level : ConsistencyLevel or None
+        The same as :attr:`.Statement.serial_consistency_level`, but is only
+        supported when using protocol version 3 or higher.
     """
 
-    batch_type = None
-    """
-    The :class:`.BatchType` for the batch operation.  Defaults to
-    :attr:`.BatchType.LOGGED`.
-    """
-
-    serial_consistency_level = None
-    """
-    The same as :attr:`.Statement.serial_consistency_level`, but is only
-    supported when using protocol version 3 or higher.
-    """
-
-    _statements_and_parameters = None
-    _session = None
-    _is_lwt = False
+    __slots__ = ('batch_type', '_statements_and_parameters', '_session', '_is_lwt')
 
     def __init__(self, batch_type=BatchType.LOGGED, retry_policy=None,
                  consistency_level=None, serial_consistency_level=None,
@@ -813,6 +806,7 @@ class BatchStatement(Statement):
         self.batch_type = batch_type
         self._statements_and_parameters = []
         self._session = session
+        self._is_lwt = False
         Statement.__init__(self, retry_policy=retry_policy, consistency_level=consistency_level,
                            serial_consistency_level=serial_consistency_level, custom_payload=custom_payload)
 
