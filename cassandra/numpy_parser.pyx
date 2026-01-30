@@ -181,5 +181,6 @@ def make_native_byteorder(arr):
         # accordingly (e.g. from '>i8' to '<i8')
         #
         # Ignore any object arrays of dtype('O')
-        return arr.byteswap().newbyteorder()
+        # Note: arr.newbyteorder() was removed in NumPy 2.0, use view() instead
+        return arr.byteswap().view(arr.dtype.newbyteorder())
     return arr
