@@ -282,7 +282,11 @@ def _sync_table(model, connection=None):
 
         qs = ['CREATE INDEX']
         qs += ['ON {0}'.format(cf_name)]
-        qs += ['("{0}")'.format(column.db_field_name)]
+        # Use FULL index for frozen collections, VALUES index (implicit) for non-frozen
+        if isinstance(column, columns.BaseContainerColumn) and column.frozen:
+            qs += ['(FULL("{0}"))'.format(column.db_field_name)]
+        else:
+            qs += ['("{0}")'.format(column.db_field_name)]
         qs = ' '.join(qs)
         execute(qs, connection=connection)
 
