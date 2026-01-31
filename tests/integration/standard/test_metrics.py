@@ -25,7 +25,7 @@ from cassandra.protocol import SyntaxException
 
 from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from tests.integration import get_cluster, get_node, use_singledc, execute_until_pass, TestCluster
-from greplin import scales
+from cassandra import metrics
 from tests.integration import BasicSharedKeyspaceUnitTestCaseRF3WM, BasicExistingKeyspaceUnitTestCase, local
 
 import pprint as pp
@@ -223,7 +223,7 @@ class MetricsNamespaceTest(BasicSharedKeyspaceUnitTestCaseRF3WM):
         finally:
             get_node(1).resume()
 
-        # Change the scales stats_name of the cluster2
+        # Change the stats_name of the cluster2
         cluster2.metrics.set_stats_name('cluster2-metrics')
 
         stats_cluster1 = self.cluster.metrics.get_stats()
@@ -242,7 +242,7 @@ class MetricsNamespaceTest(BasicSharedKeyspaceUnitTestCaseRF3WM):
         assert 0.0 == stats_cluster2['request_timer']['mean']
 
         # Test access by stats_name
-        assert 0.0 == scales.getStats()['cluster2-metrics']['request_timer']['mean']
+        assert 0.0 == metrics.getStats()['cluster2-metrics']['request_timer']['mean']
 
         cluster2.shutdown()
 
@@ -289,9 +289,9 @@ class MetricsNamespaceTest(BasicSharedKeyspaceUnitTestCaseRF3WM):
         assert cluster2.metrics.get_stats()['request_timer']['count'] == 10
         assert cluster3.metrics.get_stats()['request_timer']['count'] == 5
 
-        # Check scales to ensure they are appropriately named
-        assert "appcluster" in scales._Stats.stats.keys()
-        assert "devops" in scales._Stats.stats.keys()
+        # Check registry to ensure they are appropriately named
+        assert "appcluster" in metrics._stats_registry.keys()
+        assert "devops" in metrics._stats_registry.keys()
 
         cluster2.shutdown()
         cluster3.shutdown()
@@ -303,15 +303,15 @@ class RequestAnalyzer(object):
     Also computes statistics on encoded request size.
     """
 
-    requests = scales.PmfStat('request size')
-    errors = scales.IntStat('errors')
-    successful = scales.IntStat("success")
+    requests = metrics.PmfStat('request size')
+    errors = metrics.IntStat('errors')
+    successful = metrics.IntStat("success")
     # Throw exceptions when invoked.
     throw_on_success = False
     throw_on_fail = False
 
     def __init__(self, session, throw_on_success=False, throw_on_fail=False):
-        scales.init(self, '/request')
+        metrics.init(self, '/request')
         # each instance will be registered with a session, and receive a callback for each request generated
         session.add_request_init_listener(self.on_request)
         self.throw_on_fail = throw_on_fail
