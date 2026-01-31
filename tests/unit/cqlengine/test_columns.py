@@ -14,7 +14,7 @@
 
 import unittest
 
-from cassandra.cqlengine.columns import Column
+from cassandra.cqlengine.columns import Column, List, Set, Map, Text, Integer
 
 
 class ColumnTest(unittest.TestCase):
@@ -65,4 +65,45 @@ class ColumnTest(unittest.TestCase):
     def test_hash(self):
         c0 = Column()
         assert id(c0) == c0.__hash__()
+
+
+class FrozenCollectionTest(unittest.TestCase):
+    """Test frozen parameter for collection columns (List, Set, Map)."""
+
+    def test_list_default_not_frozen(self):
+        col = List(Text)
+        assert col.frozen is False
+        assert col.db_type == 'list<text>'
+
+    def test_list_frozen_true(self):
+        col = List(Text, frozen=True)
+        assert col.frozen is True
+        assert col.db_type == 'frozen<list<text>>'
+
+    def test_set_default_not_frozen(self):
+        col = Set(Text)
+        assert col.frozen is False
+        assert col.db_type == 'set<text>'
+
+    def test_set_frozen_true(self):
+        col = Set(Text, frozen=True)
+        assert col.frozen is True
+        assert col.db_type == 'frozen<set<text>>'
+
+    def test_map_default_not_frozen(self):
+        col = Map(Text, Integer)
+        assert col.frozen is False
+        assert col.db_type == 'map<text, int>'
+
+    def test_map_frozen_true(self):
+        col = Map(Text, Integer, frozen=True)
+        assert col.frozen is True
+        assert col.db_type == 'frozen<map<text, int>>'
+
+    def test_frozen_with_index(self):
+        """Test that frozen collections can be created with index=True."""
+        col = List(Text, frozen=True, index=True)
+        assert col.frozen is True
+        assert col.index is True
+        assert col.db_type == 'frozen<list<text>>'
 

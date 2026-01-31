@@ -837,7 +837,30 @@ class Tuple(BaseCollectionColumn):
 
 
 class BaseContainerColumn(BaseCollectionColumn):
-    pass
+    """
+    Base class for container columns (Set, List, Map).
+
+    Supports optional freezing for immutable collections.
+    """
+
+    frozen = False
+    """
+    bool flag, indicates this collection should be frozen (immutable).
+    Frozen collections use FULL indexes instead of VALUES indexes.
+    """
+
+    def __init__(self, types, frozen=False, **kwargs):
+        """
+        :param types: a sequence of sub types in this collection
+        :param frozen: if True, the collection will be frozen (immutable)
+        """
+        self.frozen = frozen
+        super(BaseContainerColumn, self).__init__(types, **kwargs)
+
+    def _apply_frozen(self):
+        """Apply frozen wrapper to db_type if frozen=True."""
+        if self.frozen:
+            self._freeze_db_type()
 
 
 class Set(BaseContainerColumn):
@@ -849,18 +872,21 @@ class Set(BaseContainerColumn):
 
     _python_type_hashable = False
 
-    def __init__(self, value_type, strict=True, default=set, **kwargs):
+    def __init__(self, value_type, strict=True, default=set, frozen=False, **kwargs):
         """
         :param value_type: a column class indicating the types of the value
         :param strict: sets whether non set values will be coerced to set
             type on validation, or raise a validation error, defaults to True
+        :param frozen: if True, the collection will be frozen (immutable) and
+            use FULL indexes instead of VALUES indexes
         """
         self.strict = strict
-        super(Set, self).__init__((value_type,), default=default, **kwargs)
+        super(Set, self).__init__((value_type,), frozen=frozen, default=default, **kwargs)
         self.value_col = self.types[0]
         if not self.value_col._python_type_hashable:
             raise ValidationError("Cannot create a Set with unhashable value type (see PYTHON-494)")
         self.db_type = 'set<{0}>'.format(self.value_col.db_type)
+        self._apply_frozen()
 
     def validate(self, value):
         val = super(Set, self).validate(value)
@@ -899,13 +925,16 @@ class List(BaseContainerColumn):
 
     _python_type_hashable = False
 
-    def __init__(self, value_type, default=list, **kwargs):
+    def __init__(self, value_type, default=list, frozen=False, **kwargs):
         """
         :param value_type: a column class indicating the types of the value
+        :param frozen: if True, the collection will be frozen (immutable) and
+            use FULL indexes instead of VALUES indexes
         """
-        super(List, self).__init__((value_type,), default=default, **kwargs)
+        super(List, self).__init__((value_type,), frozen=frozen, default=default, **kwargs)
         self.value_col = self.types[0]
         self.db_type = 'list<{0}>'.format(self.value_col.db_type)
+        self._apply_frozen()
 
     def validate(self, value):
         val = super(List, self).validate(value)
@@ -937,12 +966,14 @@ class Map(BaseContainerColumn):
 
     _python_type_hashable = False
 
-    def __init__(self, key_type, value_type, default=dict, **kwargs):
+    def __init__(self, key_type, value_type, default=dict, frozen=False, **kwargs):
         """
         :param key_type: a column class indicating the types of the key
         :param value_type: a column class indicating the types of the value
+        :param frozen: if True, the collection will be frozen (immutable) and
+            use FULL indexes instead of VALUES indexes
         """
-        super(Map, self).__init__((key_type, value_type), default=default, **kwargs)
+        super(Map, self).__init__((key_type, value_type), frozen=frozen, default=default, **kwargs)
         self.key_col = self.types[0]
         self.value_col = self.types[1]
 
@@ -950,6 +981,7 @@ class Map(BaseContainerColumn):
             raise ValidationError("Cannot create a Map with unhashable key type (see PYTHON-494)")
 
         self.db_type = 'map<{0}, {1}>'.format(self.key_col.db_type, self.value_col.db_type)
+        self._apply_frozen()
 
     def validate(self, value):
         val = super(Map, self).validate(value)
