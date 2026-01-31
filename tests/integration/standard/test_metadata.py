@@ -36,7 +36,7 @@ from cassandra.metadata import (IndexMetadata, Token, murmur3, Function, Aggrega
 from cassandra.protocol import QueryMessage, ProtocolHandler
 from cassandra.util import SortedSet
 
-from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, execute_until_pass,
+from tests.integration import (get_cluster, use_singledc, execute_until_pass,
                                BasicSegregatedKeyspaceUnitTestCase, BasicSharedKeyspaceUnitTestCase,
                                BasicExistingKeyspaceUnitTestCase, drop_keyspace_shutdown_cluster, CASSANDRA_VERSION,
                                greaterthanorequalcass30, lessthancass30, local,
@@ -623,34 +623,32 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         cluster2.refresh_schema_metadata()
         assert "c" in cluster2.metadata.keyspaces[self.keyspace_name].tables[table_name].columns
 
-        if PROTOCOL_VERSION >= 3:
-            # UDT metadata modification
-            self.session.execute("CREATE TYPE {0}.user (age int, name text)".format(self.keyspace_name))
-            assert cluster2.metadata.keyspaces[self.keyspace_name].user_types == {}
-            cluster2.refresh_schema_metadata()
-            assert "user" in cluster2.metadata.keyspaces[self.keyspace_name].user_types
+        # UDT metadata modification
+        self.session.execute("CREATE TYPE {0}.user (age int, name text)".format(self.keyspace_name))
+        assert cluster2.metadata.keyspaces[self.keyspace_name].user_types == {}
+        cluster2.refresh_schema_metadata()
+        assert "user" in cluster2.metadata.keyspaces[self.keyspace_name].user_types
 
-        if PROTOCOL_VERSION >= 4:
-            # UDF metadata modification
-            self.session.execute("""CREATE FUNCTION {0}.sum_int(key int, val int)
-                                RETURNS NULL ON NULL INPUT
-                                RETURNS int
-                                LANGUAGE java AS 'return key+val;';""".format(self.keyspace_name))
+        # UDF metadata modification
+        self.session.execute("""CREATE FUNCTION {0}.sum_int(key int, val int)
+                            RETURNS NULL ON NULL INPUT
+                            RETURNS int
+                            LANGUAGE java AS 'return key+val;';""".format(self.keyspace_name))
 
-            assert cluster2.metadata.keyspaces[self.keyspace_name].functions == {}
-            cluster2.refresh_schema_metadata()
-            assert "sum_int(int,int)" in cluster2.metadata.keyspaces[self.keyspace_name].functions
+        assert cluster2.metadata.keyspaces[self.keyspace_name].functions == {}
+        cluster2.refresh_schema_metadata()
+        assert "sum_int(int,int)" in cluster2.metadata.keyspaces[self.keyspace_name].functions
 
-            # UDA metadata modification
-            self.session.execute("""CREATE AGGREGATE {0}.sum_agg(int)
-                                 SFUNC sum_int
-                                 STYPE int
-                                 INITCOND 0"""
-                                 .format(self.keyspace_name))
+        # UDA metadata modification
+        self.session.execute("""CREATE AGGREGATE {0}.sum_agg(int)
+                             SFUNC sum_int
+                             STYPE int
+                             INITCOND 0"""
+                             .format(self.keyspace_name))
 
-            assert cluster2.metadata.keyspaces[self.keyspace_name].aggregates == {}
-            cluster2.refresh_schema_metadata()
-            assert "sum_agg(int)" in cluster2.metadata.keyspaces[self.keyspace_name].aggregates
+        assert cluster2.metadata.keyspaces[self.keyspace_name].aggregates == {}
+        cluster2.refresh_schema_metadata()
+        assert "sum_agg(int)" in cluster2.metadata.keyspaces[self.keyspace_name].aggregates
 
         # Cluster metadata modification
         self.session.execute("DROP KEYSPACE new_keyspace")
@@ -799,9 +797,6 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         @test_category metadata
         """
 
-        if PROTOCOL_VERSION < 3:
-            raise unittest.SkipTest("Protocol 3+ is required for UDTs, currently testing against {0}".format(PROTOCOL_VERSION))
-
         cluster2 = TestCluster(schema_event_refresh_window=-1)
         cluster2.connect()
 
@@ -868,9 +863,6 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         @test_category metadata
         """
 
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Protocol 4+ is required for UDFs, currently testing against {0}".format(PROTOCOL_VERSION))
-
         cluster2 = TestCluster(schema_event_refresh_window=-1)
         cluster2.connect()
 
@@ -904,9 +896,6 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
         @test_category metadata
         """
-
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Protocol 4+ is required for UDAs, currently testing against {0}".format(PROTOCOL_VERSION))
 
         cluster2 = TestCluster(schema_event_refresh_window=-1)
         cluster2.connect()
@@ -1124,11 +1113,6 @@ class TestCodeCoverage(unittest.TestCase):
         """
         Test udt exports
         """
-
-        if PROTOCOL_VERSION < 3:
-            raise unittest.SkipTest(
-                "Protocol 3.0+ is required for UDT change events, currently testing against %r"
-                % (PROTOCOL_VERSION,))
 
         if sys.version_info[0:2] != (2, 7):
             raise unittest.SkipTest('This test compares static strings generated from dict items, which may change orders. Test with 2.7.')
@@ -1523,12 +1507,7 @@ class FunctionTest(unittest.TestCase):
     """
 
     def setUp(self):
-        """
-        Tests are skipped if run with native protocol version < 4
-        """
-
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Function metadata requires native protocol version 4+")
+        pass
 
     @property
     def function_name(self):
@@ -1536,20 +1515,18 @@ class FunctionTest(unittest.TestCase):
 
     @classmethod
     def setup_class(cls):
-        if PROTOCOL_VERSION >= 4:
-            cls.cluster = TestCluster()
-            cls.keyspace_name = cls.__name__.lower()
-            cls.session = cls.cluster.connect()
-            cls.session.execute("CREATE KEYSPACE IF NOT EXISTS %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}" % cls.keyspace_name)
-            cls.session.set_keyspace(cls.keyspace_name)
-            cls.keyspace_function_meta = cls.cluster.metadata.keyspaces[cls.keyspace_name].functions
-            cls.keyspace_aggregate_meta = cls.cluster.metadata.keyspaces[cls.keyspace_name].aggregates
+        cls.cluster = TestCluster()
+        cls.keyspace_name = cls.__name__.lower()
+        cls.session = cls.cluster.connect()
+        cls.session.execute("CREATE KEYSPACE IF NOT EXISTS %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}" % cls.keyspace_name)
+        cls.session.set_keyspace(cls.keyspace_name)
+        cls.keyspace_function_meta = cls.cluster.metadata.keyspaces[cls.keyspace_name].functions
+        cls.keyspace_aggregate_meta = cls.cluster.metadata.keyspaces[cls.keyspace_name].aggregates
 
     @classmethod
     def teardown_class(cls):
-        if PROTOCOL_VERSION >= 4:
-            cls.session.execute("DROP KEYSPACE IF EXISTS %s" % cls.keyspace_name)
-            cls.cluster.shutdown()
+        cls.session.execute("DROP KEYSPACE IF EXISTS %s" % cls.keyspace_name)
+        cls.cluster.shutdown()
 
     class Verified(object):
 
@@ -1749,34 +1726,33 @@ class AggregateMetadata(FunctionTest):
 
     @classmethod
     def setup_class(cls):
-        if PROTOCOL_VERSION >= 4:
-            super(AggregateMetadata, cls).setup_class()
+        super(AggregateMetadata, cls).setup_class()
 
-            cls.session.execute("""CREATE OR REPLACE FUNCTION sum_int(s int, i int)
+        cls.session.execute("""CREATE OR REPLACE FUNCTION sum_int(s int, i int)
                                    RETURNS NULL ON NULL INPUT
                                    RETURNS int
                                    LANGUAGE java AS 'return s + i;';""")
-            cls.session.execute("""CREATE OR REPLACE FUNCTION sum_int_two(s int, i int, j int)
+        cls.session.execute("""CREATE OR REPLACE FUNCTION sum_int_two(s int, i int, j int)
                                    RETURNS NULL ON NULL INPUT
                                    RETURNS int
                                    LANGUAGE java AS 'return s + i + j;';""")
-            cls.session.execute("""CREATE OR REPLACE FUNCTION "List_As_String"(l list<text>)
+        cls.session.execute("""CREATE OR REPLACE FUNCTION "List_As_String"(l list<text>)
                                    RETURNS NULL ON NULL INPUT
                                    RETURNS int
                                    LANGUAGE java AS 'return l.size();';""")
-            cls.session.execute("""CREATE OR REPLACE FUNCTION extend_list(s list<text>, i int)
+        cls.session.execute("""CREATE OR REPLACE FUNCTION extend_list(s list<text>, i int)
                                    CALLED ON NULL INPUT
                                    RETURNS list<text>
                                    LANGUAGE java AS 'if (i != null) s.add(i.toString()); return s;';""")
-            cls.session.execute("""CREATE OR REPLACE FUNCTION update_map(s map<int, int>, i int)
+        cls.session.execute("""CREATE OR REPLACE FUNCTION update_map(s map<int, int>, i int)
                                    RETURNS NULL ON NULL INPUT
                                    RETURNS map<int, int>
                                    LANGUAGE java AS 's.put(new Integer(i), new Integer(i)); return s;';""")
-            cls.session.execute("""CREATE TABLE IF NOT EXISTS t
+        cls.session.execute("""CREATE TABLE IF NOT EXISTS t
                                    (k int PRIMARY KEY, v int)""")
-            for x in range(4):
-                cls.session.execute("INSERT INTO t (k,v) VALUES (%s, %s)", (x, x))
-            cls.session.execute("INSERT INTO t (k) VALUES (%s)", (4,))
+        for x in range(4):
+            cls.session.execute("INSERT INTO t (k,v) VALUES (%s, %s)", (x, x))
+        cls.session.execute("INSERT INTO t (k) VALUES (%s)", (4,))
 
     def make_aggregate_kwargs(self, state_func, state_type, final_func=None, init_cond=None):
         return {'keyspace': self.keyspace_name,

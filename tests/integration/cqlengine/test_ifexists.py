@@ -21,7 +21,6 @@ from cassandra.cqlengine.models import Model
 from cassandra.cqlengine.query import BatchQuery, BatchType, LWTException, IfExistsWithCounterColumn
 
 from tests.integration.cqlengine.base import BaseCassEngTestCase
-from tests.integration import PROTOCOL_VERSION
 import pytest
 
 
@@ -78,7 +77,6 @@ class BaseIfExistsWithCounterTest(BaseCassEngTestCase):
 
 class IfExistsUpdateTests(BaseIfExistsTest):
 
-    @unittest.skipUnless(PROTOCOL_VERSION >= 2, "only runs against the cql3 protocol v2.0")
     def test_update_if_exists(self):
         """
         Tests that update with if_exists work as expected
@@ -116,7 +114,6 @@ class IfExistsUpdateTests(BaseIfExistsTest):
 
         assert assertion.value.existing.get('[applied]') == False
 
-    @unittest.skipUnless(PROTOCOL_VERSION >= 2, "only runs against the cql3 protocol v2.0")
     def test_batch_update_if_exists_success(self):
         """
         Tests that batch update with if_exists work as expected
@@ -150,7 +147,6 @@ class IfExistsUpdateTests(BaseIfExistsTest):
         assert tm.count == 8
         assert tm.text == '111111111'
 
-    @unittest.skipUnless(PROTOCOL_VERSION >= 2, "only runs against the cql3 protocol v2.0")
     def test_batch_mixed_update_if_exists_success(self):
         """
         Tests that batch update with with one bad query will still fail with LWTException
@@ -172,7 +168,6 @@ class IfExistsUpdateTests(BaseIfExistsTest):
 
         assert assertion.value.existing.get('[applied]') == False
 
-    @unittest.skipUnless(PROTOCOL_VERSION >= 2, "only runs against the cql3 protocol v2.0")
     def test_delete_if_exists(self):
         """
         Tests that delete with if_exists work, and throw proper LWT exception when they are are not applied
@@ -203,7 +198,6 @@ class IfExistsUpdateTests(BaseIfExistsTest):
 
         assert assertion.value.existing.get('[applied]') == False
 
-    @unittest.skipUnless(PROTOCOL_VERSION >= 2, "only runs against the cql3 protocol v2.0")
     def test_batch_delete_if_exists_success(self):
         """
         Tests that batch deletes with if_exists work, and throw proper LWTException when they are are not applied
@@ -232,7 +226,6 @@ class IfExistsUpdateTests(BaseIfExistsTest):
 
         assert assertion.value.existing.get('[applied]') == False
 
-    @unittest.skipUnless(PROTOCOL_VERSION >= 2, "only runs against the cql3 protocol v2.0")
     def test_batch_delete_mixed(self):
         """
         Tests that batch deletes  with multiple queries and throw proper LWTException when they are are not all applicable

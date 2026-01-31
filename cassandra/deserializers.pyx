@@ -36,12 +36,12 @@ cdef class Deserializer:
         self.cqltype = cqltype
         self.empty_binary_ok = cqltype.empty_binary_ok
 
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         raise NotImplementedError
 
 
 cdef class DesBytesType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         if buf.size == 0:
             return b""
         return to_bytes(buf)
@@ -50,14 +50,14 @@ cdef class DesBytesType(Deserializer):
 # It is switched in by simply overwriting DesBytesType:
 # deserializers.DesBytesType = deserializers.DesBytesTypeByteArray
 cdef class DesBytesTypeByteArray(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         if buf.size == 0:
             return bytearray()
         return bytearray(buf.ptr[:buf.size])
 
 # TODO: Use libmpdec: http://www.bytereef.org/mpdecimal/index.html
 cdef class DesDecimalType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         cdef Buffer varint_buf
         slice_buffer(buf, &varint_buf, 4, buf.size - 4)
 
@@ -68,56 +68,56 @@ cdef class DesDecimalType(Deserializer):
 
 
 cdef class DesUUIDType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         return UUID(bytes=to_bytes(buf))
 
 
 cdef class DesBooleanType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         if unpack_num[int8_t](buf):
             return True
         return False
 
 
 cdef class DesByteType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         return unpack_num[int8_t](buf)
 
 
 cdef class DesAsciiType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         if buf.size == 0:
             return ""
         return to_bytes(buf).decode('ascii')
 
 
 cdef class DesFloatType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         return unpack_num[float](buf)
 
 
 cdef class DesDoubleType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         return unpack_num[double](buf)
 
 
 cdef class DesLongType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         return unpack_num[int64_t](buf)
 
 
 cdef class DesInt32Type(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         return unpack_num[int32_t](buf)
 
 
 cdef class DesIntegerType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         return varint_unpack(buf)
 
 
 cdef class DesInetAddressType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         cdef bytes byts = to_bytes(buf)
 
         # TODO: optimize inet_ntop, inet_ntoa
@@ -134,7 +134,7 @@ cdef class DesCounterColumnType(DesLongType):
 
 
 cdef class DesDateType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         cdef double timestamp = unpack_num[int64_t](buf) / 1000.0
         return datetime_from_timestamp(timestamp)
 
@@ -144,7 +144,7 @@ cdef class TimestampType(DesDateType):
 
 
 cdef class TimeUUIDType(DesDateType):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         return UUID(bytes=to_bytes(buf))
 
 
@@ -154,23 +154,23 @@ cdef class TimeUUIDType(DesDateType):
 EPOCH_OFFSET_DAYS = 2 ** 31
 
 cdef class DesSimpleDateType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         days = unpack_num[uint32_t](buf) - EPOCH_OFFSET_DAYS
         return util.Date(days)
 
 
 cdef class DesShortType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         return unpack_num[int16_t](buf)
 
 
 cdef class DesTimeType(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         return util.Time(unpack_num[int64_t](buf))
 
 
 cdef class DesUTF8Type(Deserializer):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         if buf.size == 0:
             return ""
         cdef val = to_bytes(buf)
@@ -207,19 +207,19 @@ cdef class _DesSingleParamType(_DesParameterizedType):
 # List and set deserialization
 
 cdef class DesListType(_DesSingleParamType):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
 
         result = _deserialize_list_or_set(
-            buf, protocol_version, self.deserializer)
+            buf, self.deserializer)
 
         return result
 
 cdef class DesSetType(DesListType):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
-        return util.sortedset(DesListType.deserialize(self, buf, protocol_version))
+    cdef deserialize(self, Buffer *buf):
+        return util.sortedset(DesListType.deserialize(self, buf))
 
 
-cdef list _deserialize_list_or_set(Buffer *buf, int protocol_version,
+cdef list _deserialize_list_or_set(Buffer *buf,
                                    Deserializer deserializer):
     """
     Deserialize a list or set.
@@ -233,10 +233,9 @@ cdef list _deserialize_list_or_set(Buffer *buf, int protocol_version,
 
     _unpack_len(buf, 0, &numelements)
     offset = sizeof(int32_t)
-    protocol_version = max(3, protocol_version)
     for _ in range(numelements):
         subelem(buf, &elem_buf, &offset)
-        result.append(from_binary(deserializer, &elem_buf, protocol_version))
+        result.append(from_binary(deserializer, &elem_buf))
 
     return result
 
@@ -277,20 +276,20 @@ cdef class DesMapType(_DesParameterizedType):
         self.key_deserializer = self.deserializers[0]
         self.val_deserializer = self.deserializers[1]
 
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         key_type, val_type = self.cqltype.subtypes
 
         result = _deserialize_map(
-            buf, protocol_version,
+            buf,
             self.key_deserializer, self.val_deserializer,
-            key_type, val_type)
+            key_type)
 
         return result
 
 
-cdef _deserialize_map(Buffer *buf, int protocol_version,
+cdef _deserialize_map(Buffer *buf,
                       Deserializer key_deserializer, Deserializer val_deserializer,
-                      key_type, val_type):
+                      key_type):
     cdef Buffer key_buf, val_buf
     cdef Buffer itemlen_buf
 
@@ -300,13 +299,12 @@ cdef _deserialize_map(Buffer *buf, int protocol_version,
 
     _unpack_len(buf, 0, &numelements)
     offset = sizeof(int32_t)
-    themap = util.OrderedMapSerializedKey(key_type, protocol_version)
-    protocol_version = max(3, protocol_version)
+    themap = util.OrderedMapSerializedKey(key_type)
     for _ in range(numelements):
         subelem(buf, &key_buf, &offset)
         subelem(buf, &val_buf, &offset)
-        key = from_binary(key_deserializer, &key_buf, protocol_version)
-        val = from_binary(val_deserializer, &val_buf, protocol_version)
+        key = from_binary(key_deserializer, &key_buf)
+        val = from_binary(val_deserializer, &val_buf)
         themap._insert_unchecked(key, to_bytes(&key_buf), val)
 
     return themap
@@ -317,17 +315,13 @@ cdef class DesTupleType(_DesParameterizedType):
 
     # TODO: Use TupleRowParser to parse these tuples
 
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         cdef Py_ssize_t i, p
         cdef int32_t itemlen
         cdef tuple res = tuple_new(self.subtypes_len)
         cdef Buffer item_buf
         cdef Buffer itemlen_buf
         cdef Deserializer deserializer
-
-        # collections inside UDTs are always encoded with at least the
-        # version 3 format
-        protocol_version = max(3, protocol_version)
 
         p = 0
         values = []
@@ -342,7 +336,7 @@ cdef class DesTupleType(_DesParameterizedType):
                     p += itemlen
 
                     deserializer = self.deserializers[i]
-                    item = from_binary(deserializer, &item_buf, protocol_version)
+                    item = from_binary(deserializer, &item_buf)
 
             tuple_set(res, i, item)
 
@@ -350,9 +344,9 @@ cdef class DesTupleType(_DesParameterizedType):
 
 
 cdef class DesUserType(DesTupleType):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         typ = self.cqltype
-        values = DesTupleType.deserialize(self, buf, protocol_version)
+        values = DesTupleType.deserialize(self, buf)
         if typ.mapped_class:
             return typ.mapped_class(**dict(zip(typ.fieldnames, values)))
         elif typ.tuple_type:
@@ -362,7 +356,7 @@ cdef class DesUserType(DesTupleType):
 
 
 cdef class DesCompositeType(_DesParameterizedType):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
+    cdef deserialize(self, Buffer *buf):
         cdef Py_ssize_t i, idx, start
         cdef Buffer elem_buf
         cdef int16_t element_length
@@ -387,7 +381,7 @@ cdef class DesCompositeType(_DesParameterizedType):
             slice_buffer(buf, &elem_buf, 2, element_length)
 
             deserializer = self.deserializers[i]
-            item = from_binary(deserializer, &elem_buf, protocol_version)
+            item = from_binary(deserializer, &elem_buf)
             tuple_set(res, i, item)
 
             # skip element length, element, and the EOC (one byte)
@@ -401,13 +395,13 @@ DesDynamicCompositeType = DesCompositeType
 
 
 cdef class DesReversedType(_DesSingleParamType):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
-        return from_binary(self.deserializer, buf, protocol_version)
+    cdef deserialize(self, Buffer *buf):
+        return from_binary(self.deserializer, buf)
 
 
 cdef class DesFrozenType(_DesSingleParamType):
-    cdef deserialize(self, Buffer *buf, int protocol_version):
-        return from_binary(self.deserializer, buf, protocol_version)
+    cdef deserialize(self, Buffer *buf):
+        return from_binary(self.deserializer, buf)
 
 #--------------------------------------------------------------------------
 
@@ -431,8 +425,8 @@ cdef class GenericDeserializer(Deserializer):
     Wrap a generic datatype for deserialization
     """
 
-    cdef deserialize(self, Buffer *buf, int protocol_version):
-        return self.cqltype.deserialize(to_bytes(buf), protocol_version)
+    cdef deserialize(self, Buffer *buf):
+        return self.cqltype.deserialize(to_bytes(buf))
 
     def __repr__(self):
         return "GenericDeserializer(%s)" % (self.cqltype,)

@@ -14,7 +14,6 @@
 
 from itertools import chain
 
-from tests.integration import PROTOCOL_VERSION
 import time
 
 
@@ -53,5 +52,3 @@ def assert_quiescent_pool_state(cluster, wait=None):
             assert len(req_ids) == len(set(req_ids))
             assert connection.highest_request_id == len(req_ids) + len(orphan_ids) - 1
             assert connection.highest_request_id == max(chain(req_ids, orphan_ids))
-            if PROTOCOL_VERSION < 3:
-                assert connection.highest_request_id == connection.max_request_id

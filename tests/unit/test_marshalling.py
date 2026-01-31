@@ -75,7 +75,7 @@ marshalled_value_pairs = (
     (b'', 'MapType(AsciiType, BooleanType)', None),
     (b'', 'ListType(FloatType)', None),
     (b'', 'SetType(LongType)', None),
-    (b'\x00\x00\x00\x00', 'MapType(DecimalType, BooleanType)', OrderedMapSerializedKey(DecimalType, 3)),
+    (b'\x00\x00\x00\x00', 'MapType(DecimalType, BooleanType)', OrderedMapSerializedKey(DecimalType)),
     (b'\x00\x00\x00\x00', 'ListType(FloatType)', []),
     (b'\x00\x00\x00\x00', 'SetType(IntegerType)', sortedset()),
     (b'\x00\x00\x00\x01\x00\x00\x00\x10\xafYC\xa3\xea<\x11\xe1\xabc\xc4,\x03"y\xf0', 'ListType(TimeUUIDType)', [UUID(bytes=b'\xafYC\xa3\xea<\x11\xe1\xabc\xc4,\x03"y\xf0')]),
@@ -88,7 +88,7 @@ marshalled_value_pairs = (
     (b'\x80\x00', 'ShortType', -32768)
 )
 
-ordered_map_value = OrderedMapSerializedKey(UTF8Type, 3)
+ordered_map_value = OrderedMapSerializedKey(UTF8Type)
 ordered_map_value._insert(u'\u307fbob', 199)
 ordered_map_value._insert(u'', -1)
 ordered_map_value._insert(u'\\', 0)
@@ -111,27 +111,26 @@ class UnmarshalTest(unittest.TestCase):
     def test_unmarshalling(self):
         for serializedval, valtype, nativeval in marshalled_value_pairs:
             unmarshaller = lookup_casstype(valtype)
-            whatwegot = unmarshaller.from_binary(serializedval, 3)
+            whatwegot = unmarshaller.from_binary(serializedval)
             assert whatwegot == nativeval, 'Unmarshaller for %s (%s) failed: unmarshal(%r) got %r instead of %r' % (valtype, unmarshaller, serializedval, whatwegot, nativeval)
             assert type(whatwegot) == type(nativeval), 'Unmarshaller for %s (%s) gave wrong type (%s instead of %s)' % (valtype, unmarshaller, type(whatwegot), type(nativeval))
 
     def test_marshalling(self):
         for serializedval, valtype, nativeval in marshalled_value_pairs:
             marshaller = lookup_casstype(valtype)
-            whatwegot = marshaller.to_binary(nativeval, 3)
+            whatwegot = marshaller.to_binary(nativeval)
             assert whatwegot == serializedval, 'Marshaller for %s (%s) failed: marshal(%r) got %r instead of %r' % (valtype, marshaller, nativeval, whatwegot, serializedval)
             assert type(whatwegot) == type(serializedval), 'Marshaller for %s (%s) gave wrong type (%s instead of %s)' % (valtype, marshaller, type(whatwegot), type(serializedval))
 
     def test_date(self):
         # separate test because it will deserialize as datetime
-        assert DateType.from_binary(DateType.to_binary(date(2015, 11, 2), 3), 3) == datetime(2015, 11, 2)
+        assert DateType.from_binary(DateType.to_binary(date(2015, 11, 2))) == datetime(2015, 11, 2)
 
     def test_decimal(self):
         # testing implicit numeric conversion
         # int, tuple(sign, digits, exp), float
         converted_types = (10001, (0, (1, 0, 0, 0, 0, 1), -3), 100.1, -87.629798)
 
-        for proto_ver in range(3, ProtocolVersion.MAX_SUPPORTED + 1):
-            for n in converted_types:
-                expected = Decimal(n)
-                assert DecimalType.from_binary(DecimalType.to_binary(n, proto_ver), proto_ver) == expected
+        for n in converted_types:
+            expected = Decimal(n)
+            assert DecimalType.from_binary(DecimalType.to_binary(n)) == expected

@@ -23,7 +23,7 @@ from cassandra.cqlengine.management import _get_table_metadata, sync_table, drop
 from cassandra.cqlengine.models import Model
 from cassandra.cqlengine import columns
 
-from tests.integration import PROTOCOL_VERSION, greaterthancass20, requires_collection_indexes, \
+from tests.integration import greaterthancass20, requires_collection_indexes, \
     MockLoggingHandler, CASSANDRA_VERSION, SCYLLA_VERSION, xfail_scylla
 from tests.integration.cqlengine.base import BaseCassEngTestCase
 from tests.integration.cqlengine.query.test_queryset import TestModel
@@ -464,9 +464,6 @@ class NonModelFailureTest(BaseCassEngTestCase):
 
 class StaticColumnTests(BaseCassEngTestCase):
     def test_static_columns(self):
-        if PROTOCOL_VERSION < 2:
-            raise unittest.SkipTest("Native protocol 2+ required, currently using: {0}".format(PROTOCOL_VERSION))
-
         class StaticModel(Model):
             id = columns.Integer(primary_key=True)
             c = columns.Integer(primary_key=True)

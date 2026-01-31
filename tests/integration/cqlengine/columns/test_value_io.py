@@ -24,7 +24,6 @@ from cassandra.cqlengine.models import Model
 
 from cassandra.util import Date, Time
 
-from tests.integration import PROTOCOL_VERSION
 from tests.integration.cqlengine.base import BaseCassEngTestCase
 
 
@@ -201,20 +200,15 @@ class ProtocolV4Test(BaseColumnIOTest):
 
     @classmethod
     def setUpClass(cls):
-        if PROTOCOL_VERSION >= 4:
-            super(ProtocolV4Test, cls).setUpClass()
+        super(ProtocolV4Test, cls).setUpClass()
 
     @classmethod
     def tearDownClass(cls):
-        if PROTOCOL_VERSION >= 4:
-            super(ProtocolV4Test, cls).tearDownClass()
+        super(ProtocolV4Test, cls).tearDownClass()
 
 class TestDate(ProtocolV4Test):
 
     def setUp(self):
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Protocol v4 datatypes require native protocol 4+, currently using: {0}".format(PROTOCOL_VERSION))
-
         super(TestDate, self).setUp()
 
     column = columns.Date
@@ -227,9 +221,6 @@ class TestDate(ProtocolV4Test):
 class TestTime(ProtocolV4Test):
 
     def setUp(self):
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Protocol v4 datatypes require native protocol 4+, currently using: {0}".format(PROTOCOL_VERSION))
-
         super(TestTime, self).setUp()
 
     column = columns.Time
@@ -241,9 +232,6 @@ class TestTime(ProtocolV4Test):
 class TestSmallInt(ProtocolV4Test):
 
     def setUp(self):
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Protocol v4 datatypes require native protocol 4+, currently using: {0}".format(PROTOCOL_VERSION))
-
         super(TestSmallInt, self).setUp()
 
     column = columns.SmallInt
@@ -255,9 +243,6 @@ class TestSmallInt(ProtocolV4Test):
 class TestTinyInt(ProtocolV4Test):
 
     def setUp(self):
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Protocol v4 datatypes require native protocol 4+, currently using: {0}".format(PROTOCOL_VERSION))
-
         super(TestTinyInt, self).setUp()
 
     column = columns.TinyInt

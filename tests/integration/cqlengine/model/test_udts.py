@@ -25,7 +25,6 @@ from cassandra.cqlengine.management import sync_table, drop_table, sync_type, cr
 from cassandra.cqlengine import ValidationError
 from cassandra.util import Date, Time
 
-from tests.integration import PROTOCOL_VERSION
 from tests.integration.cqlengine.base import BaseCassEngTestCase
 from tests.integration.cqlengine import DEFAULT_KEYSPACE
 import pytest
@@ -64,10 +63,6 @@ class AllDatatypesModel(Model):
 
 
 class UserDefinedTypeTests(BaseCassEngTestCase):
-
-    def setUp(self):
-        if PROTOCOL_VERSION < 3:
-            raise unittest.SkipTest("UDTs require native protocol 3+, currently using: {0}".format(PROTOCOL_VERSION))
 
     def test_can_create_udts(self):
         class User(UserType):
@@ -301,9 +296,6 @@ class UserDefinedTypeTests(BaseCassEngTestCase):
 
         @test_category data_types:udt
         """
-
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Protocol v4 datatypes in UDTs require native protocol 4+, currently using: {0}".format(PROTOCOL_VERSION))
 
         class Allv4Datatypes(UserType):
             a = columns.Date()

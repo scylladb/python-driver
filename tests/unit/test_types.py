@@ -218,28 +218,28 @@ class TypeTests(unittest.TestCase):
         now_timestamp = now_time_seconds * 1e3
 
         # same results serialized
-        assert DateType.serialize(now_datetime, 0) == DateType.serialize(now_timestamp, 0)
+        assert DateType.serialize(now_datetime) == DateType.serialize(now_timestamp)
 
         # deserialize
         # epoc
         expected = 0
-        assert DateType.deserialize(int64_pack(1000 * expected), 0) == datetime.datetime.fromtimestamp(expected, tz=datetime.timezone.utc).replace(tzinfo=None)
+        assert DateType.deserialize(int64_pack(1000 * expected)) == datetime.datetime.fromtimestamp(expected, tz=datetime.timezone.utc).replace(tzinfo=None)
 
         # beyond 32b
         expected = 2 ** 33
-        assert DateType.deserialize(int64_pack(1000 * expected), 0) == datetime.datetime(2242, 3, 16, 12, 56, 32, tzinfo=datetime.timezone.utc).replace(tzinfo=None)
+        assert DateType.deserialize(int64_pack(1000 * expected)) == datetime.datetime(2242, 3, 16, 12, 56, 32, tzinfo=datetime.timezone.utc).replace(tzinfo=None)
 
         # less than epoc (PYTHON-119)
         expected = -770172256
-        assert DateType.deserialize(int64_pack(1000 * expected), 0) == datetime.datetime(1945, 8, 5, 23, 15, 44, tzinfo=datetime.timezone.utc).replace(tzinfo=None)
+        assert DateType.deserialize(int64_pack(1000 * expected)) == datetime.datetime(1945, 8, 5, 23, 15, 44, tzinfo=datetime.timezone.utc).replace(tzinfo=None)
 
         # work around rounding difference among Python versions (PYTHON-230)
         expected = 1424817268.274
-        assert DateType.deserialize(int64_pack(int(1000 * expected)), 0) == datetime.datetime(2015, 2, 24, 22, 34, 28, 274000, tzinfo=datetime.timezone.utc).replace(tzinfo=None)
+        assert DateType.deserialize(int64_pack(int(1000 * expected))) == datetime.datetime(2015, 2, 24, 22, 34, 28, 274000, tzinfo=datetime.timezone.utc).replace(tzinfo=None)
 
         # Large date overflow (PYTHON-452)
         expected = 2177403010.123
-        assert DateType.deserialize(int64_pack(int(1000 * expected)), 0) == datetime.datetime(2038, 12, 31, 10, 10, 10, 123000, tzinfo=datetime.timezone.utc).replace(tzinfo=None)
+        assert DateType.deserialize(int64_pack(int(1000 * expected))) == datetime.datetime(2038, 12, 31, 10, 10, 10, 123000, tzinfo=datetime.timezone.utc).replace(tzinfo=None)
 
     def test_collection_null_support(self):
         """
@@ -254,10 +254,10 @@ class TypeTests(unittest.TestCase):
                 int32_pack(4) +  # size of item2
                 int32_pack(42)  # item2
         )
-        assert [None, 42] == int_list.deserialize(value, 3)
+        assert [None, 42] == int_list.deserialize(value)
 
         set_list = SetType.apply_parameters([Int32Type])
-        assert {None, 42} == set(set_list.deserialize(value, 3))
+        assert {None, 42} == set(set_list.deserialize(value))
 
         value = (
                 int32_pack(2) +  # num items
@@ -271,7 +271,7 @@ class TypeTests(unittest.TestCase):
 
         map_list = MapType.apply_parameters([Int32Type, Int32Type])
 
-        assert [(42, None), (None, 42)] == map_list.deserialize(value, 3)._items  # OrderedMapSerializedKey
+        assert [(42, None), (None, 42)] == map_list.deserialize(value)._items  # OrderedMapSerializedKey
 
     def test_write_read_string(self):
         with tempfile.TemporaryFile() as f:
@@ -340,11 +340,11 @@ class VectorTests(unittest.TestCase):
 
     def _round_trip_test(self, data, ctype_str):
         ctype = parse_casstype_args(ctype_str)
-        data_bytes = ctype.serialize(data, 0)
+        data_bytes = ctype.serialize(data)
         serialized_size = ctype.subtype.serial_size()
         if serialized_size:
             assert serialized_size * len(data) == len(data_bytes)
-        result = ctype.deserialize(data_bytes, 0)
+        result = ctype.deserialize(data_bytes)
         assert len(data) == len(result)
         for idx in range(0,len(data)):
             self._round_trip_compare_fn(data[idx], result[idx])
@@ -464,50 +464,50 @@ class VectorTests(unittest.TestCase):
     def test_serialization_fixed_size_too_small(self):
         ctype = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.FloatType, 5)")
         with pytest.raises(ValueError, match="Expected sequence of size 5 for vector of type float and dimension 5, observed sequence of length 4"):
-            ctype.serialize([1.2, 3.4, 5.6, 7.8], 0)
+            ctype.serialize([1.2, 3.4, 5.6, 7.8])
 
     def test_serialization_fixed_size_too_big(self):
         ctype = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.FloatType, 4)")
         with pytest.raises(ValueError, match="Expected sequence of size 4 for vector of type float and dimension 4, observed sequence of length 5"):
-            ctype.serialize([1.2, 3.4, 5.6, 7.8, 9.10], 0)
+            ctype.serialize([1.2, 3.4, 5.6, 7.8, 9.10])
 
     def test_serialization_variable_size_too_small(self):
         ctype = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.IntegerType, 5)")
         with pytest.raises(ValueError, match="Expected sequence of size 5 for vector of type varint and dimension 5, observed sequence of length 4"):
-            ctype.serialize([1, 2, 3, 4], 0)
+            ctype.serialize([1, 2, 3, 4])
 
     def test_serialization_variable_size_too_big(self):
         ctype = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.IntegerType, 4)")
         with pytest.raises(ValueError, match="Expected sequence of size 4 for vector of type varint and dimension 4, observed sequence of length 5"):
-            ctype.serialize([1, 2, 3, 4, 5], 0)
+            ctype.serialize([1, 2, 3, 4, 5])
 
     def test_deserialization_fixed_size_too_small(self):
         ctype_four = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.FloatType, 4)")
-        ctype_four_bytes = ctype_four.serialize([1.2, 3.4, 5.6, 7.8], 0)
+        ctype_four_bytes = ctype_four.serialize([1.2, 3.4, 5.6, 7.8])
         ctype_five = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.FloatType, 5)")
         with pytest.raises(ValueError, match="Expected vector of type float and dimension 5 to have serialized size 20; observed serialized size of 16 instead"):
-            ctype_five.deserialize(ctype_four_bytes, 0)
+            ctype_five.deserialize(ctype_four_bytes)
 
     def test_deserialization_fixed_size_too_big(self):
         ctype_five = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.FloatType, 5)")
-        ctype_five_bytes = ctype_five.serialize([1.2, 3.4, 5.6, 7.8, 9.10], 0)
+        ctype_five_bytes = ctype_five.serialize([1.2, 3.4, 5.6, 7.8, 9.10])
         ctype_four = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.FloatType, 4)")
         with pytest.raises(ValueError, match="Expected vector of type float and dimension 4 to have serialized size 16; observed serialized size of 20 instead"):
-            ctype_four.deserialize(ctype_five_bytes, 0)
+            ctype_four.deserialize(ctype_five_bytes)
 
     def test_deserialization_variable_size_too_small(self):
         ctype_four = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.IntegerType, 4)")
-        ctype_four_bytes = ctype_four.serialize([1, 2, 3, 4], 0)
+        ctype_four_bytes = ctype_four.serialize([1, 2, 3, 4])
         ctype_five = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.IntegerType, 5)")
         with pytest.raises(ValueError, match="Error reading additional data during vector deserialization after successfully adding 4 elements"):
-            ctype_five.deserialize(ctype_four_bytes, 0)
+            ctype_five.deserialize(ctype_four_bytes)
 
     def test_deserialization_variable_size_too_big(self):
         ctype_five = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.IntegerType, 5)")
-        ctype_five_bytes = ctype_five.serialize([1, 2, 3, 4, 5], 0)
+        ctype_five_bytes = ctype_five.serialize([1, 2, 3, 4, 5])
         ctype_four = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.IntegerType, 4)")
         with pytest.raises(ValueError, match="Additional bytes remaining after vector deserialization completed"):
-            ctype_four.deserialize(ctype_five_bytes, 0)
+            ctype_four.deserialize(ctype_five_bytes)
 
 
 ZERO = datetime.timedelta(0)
@@ -575,7 +575,7 @@ class DateRangeTypeTests(unittest.TestCase):
         serialized = (int8_pack(0) +
                       int64_pack(self.timestamp) +
                       int8_pack(3))
-        assert DateRangeType.deserialize(serialized, 5) == util.DateRange(value=util.DateRangeBound(
+        assert DateRangeType.deserialize(serialized) == util.DateRange(value=util.DateRangeBound(
             value=datetime.datetime(2017, 2, 1, 15, 42, 12, 404000),
             precision='HOUR')
         )
@@ -586,7 +586,7 @@ class DateRangeTypeTests(unittest.TestCase):
                       int8_pack(2) +
                       int64_pack(self.timestamp) +
                       int8_pack(6))
-        assert DateRangeType.deserialize(serialized, 5) == util.DateRange(
+        assert DateRangeType.deserialize(serialized) == util.DateRange(
             lower_bound=util.DateRangeBound(
                 value=datetime.datetime(2017, 2, 1, 0, 0),
                 precision='DAY'
@@ -601,7 +601,7 @@ class DateRangeTypeTests(unittest.TestCase):
         serialized = (int8_pack(2) +
                       int64_pack(self.timestamp) +
                       int8_pack(3))
-        deserialized = DateRangeType.deserialize(serialized, 5)
+        deserialized = DateRangeType.deserialize(serialized)
         assert deserialized == util.DateRange(
             lower_bound=util.DateRangeBound(
                 value=datetime.datetime(2017, 2, 1, 15, 0),
@@ -614,7 +614,7 @@ class DateRangeTypeTests(unittest.TestCase):
         serialized = (int8_pack(3) +
                       int64_pack(self.timestamp) +
                       int8_pack(4))
-        deserialized = DateRangeType.deserialize(serialized, 5)
+        deserialized = DateRangeType.deserialize(serialized)
         assert deserialized == util.DateRange(
             lower_bound=util.OPEN_BOUND,
             upper_bound=util.DateRangeBound(
@@ -624,13 +624,13 @@ class DateRangeTypeTests(unittest.TestCase):
         )
 
     def test_deserialize_single_open(self):
-        assert util.DateRange(value=util.OPEN_BOUND) == DateRangeType.deserialize(int8_pack(5), 5)
+        assert util.DateRange(value=util.OPEN_BOUND) == DateRangeType.deserialize(int8_pack(5))
 
     def test_serialize_single_value(self):
         serialized = (int8_pack(0) +
                       int64_pack(self.timestamp) +
                       int8_pack(5))
-        deserialized = DateRangeType.deserialize(serialized, 5)
+        deserialized = DateRangeType.deserialize(serialized)
         assert deserialized == util.DateRange(
             value=util.DateRangeBound(
                 value=datetime.datetime(2017, 2, 1, 15, 42, 12),
@@ -644,7 +644,7 @@ class DateRangeTypeTests(unittest.TestCase):
                       int8_pack(5) +
                       int64_pack(self.timestamp) +
                       int8_pack(0))
-        deserialized = DateRangeType.deserialize(serialized, 5)
+        deserialized = DateRangeType.deserialize(serialized)
         assert deserialized == util.DateRange(
             lower_bound=util.DateRangeBound(
                 value=datetime.datetime(2017, 2, 1, 15, 42, 12),
@@ -660,7 +660,7 @@ class DateRangeTypeTests(unittest.TestCase):
         serialized = (int8_pack(2) +
                       int64_pack(self.timestamp) +
                       int8_pack(2))
-        deserialized = DateRangeType.deserialize(serialized, 5)
+        deserialized = DateRangeType.deserialize(serialized)
         assert deserialized == util.DateRange(
             lower_bound=util.DateRangeBound(
                 value=datetime.datetime(2017, 2, 1),
@@ -673,7 +673,7 @@ class DateRangeTypeTests(unittest.TestCase):
         serialized = (int8_pack(2) +
                       int64_pack(self.timestamp) +
                       int8_pack(3))
-        deserialized = DateRangeType.deserialize(serialized, 5)
+        deserialized = DateRangeType.deserialize(serialized)
         assert deserialized == util.DateRange(
             lower_bound=util.DateRangeBound(
                 value=datetime.datetime(2017, 2, 1, 15),
@@ -684,7 +684,7 @@ class DateRangeTypeTests(unittest.TestCase):
 
     def test_deserialize_both_open(self):
         serialized = (int8_pack(4))
-        deserialized = DateRangeType.deserialize(serialized, 5)
+        deserialized = DateRangeType.deserialize(serialized)
         assert deserialized == util.DateRange(
             lower_bound=util.OPEN_BOUND,
             upper_bound=util.OPEN_BOUND
@@ -693,31 +693,31 @@ class DateRangeTypeTests(unittest.TestCase):
     def test_serialize_single_open(self):
         serialized = DateRangeType.serialize(util.DateRange(
             value=util.OPEN_BOUND,
-        ), 5)
+        ))
         assert int8_pack(5) == serialized
 
     def test_serialize_both_open(self):
         serialized = DateRangeType.serialize(util.DateRange(
             lower_bound=util.OPEN_BOUND,
             upper_bound=util.OPEN_BOUND
-        ), 5)
+        ))
         assert int8_pack(4) == serialized
 
     def test_failure_to_serialize_no_value_object(self):
         with pytest.raises(ValueError):
-            DateRangeType.serialize(object(), 5)
+            DateRangeType.serialize(object())
 
     def test_failure_to_serialize_no_bounds_object(self):
         class no_bounds_object(object):
             value = lower_bound = None
         with pytest.raises(ValueError):
-            DateRangeType.serialize(no_bounds_object, 5)
+            DateRangeType.serialize(no_bounds_object)
 
     def test_serialized_value_round_trip(self):
         vals = [b'\x01\x00\x00\x01%\xe9a\xf9\xd1\x06\x00\x00\x01v\xbb>o\xff\x00',
                 b'\x01\x00\x00\x00\xdcm\x03-\xd1\x06\x00\x00\x01v\xbb>o\xff\x00']
         for serialized in vals:
-            assert serialized == DateRangeType.serialize(DateRangeType.deserialize(serialized, 0), 0)
+            assert serialized == DateRangeType.serialize(DateRangeType.deserialize(serialized))
 
     def test_serialize_zero_datetime(self):
         """
@@ -734,7 +734,7 @@ class DateRangeTypeTests(unittest.TestCase):
         DateRangeType.serialize(util.DateRange(
             lower_bound=(datetime.datetime(1970, 1, 1), 'YEAR'),
             upper_bound=(datetime.datetime(1970, 1, 1), 'YEAR')
-        ), 5)
+        ))
 
     def test_deserialize_zero_datetime(self):
         """
@@ -751,8 +751,7 @@ class DateRangeTypeTests(unittest.TestCase):
         DateRangeType.deserialize(
             (int8_pack(1) +
              int64_pack(0) + int8_pack(0) +
-             int64_pack(0) + int8_pack(0)),
-            5
+             int64_pack(0) + int8_pack(0))
         )
 
 

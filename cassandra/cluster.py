@@ -735,12 +735,7 @@ class Cluster(object):
         try:
             self._auth_provider_callable = value.new_authenticator
         except AttributeError:
-            if self.protocol_version > 1:
-                raise TypeError("auth_provider must implement the cassandra.auth.AuthProvider "
-                                "interface when protocol_version >= 2")
-            elif not callable(value):
-                raise TypeError("auth_provider must be callable when protocol_version == 1")
-            self._auth_provider_callable = value
+            raise TypeError("auth_provider must implement the cassandra.auth.AuthProvider interface")
 
         self._auth_provider = value
 
@@ -1557,7 +1552,7 @@ class Cluster(object):
 
         Example::
 
-            cluster = Cluster(protocol_version=3)
+            cluster = Cluster()
             session = cluster.connect()
             session.set_keyspace('mykeyspace')
             session.execute("CREATE TYPE address (street text, zipcode int)")
@@ -1582,11 +1577,6 @@ class Cluster(object):
             print(row.id, row.location.street, row.location.zipcode)
 
         """
-        if self.protocol_version < 3:
-            log.warning("User Type serialization is only supported in native protocol version 3+ (%d in use). "
-                        "CQL encoding for simple statements will still work, but named tuples will "
-                        "be returned when reading type %s.%s.", self.protocol_version, keyspace, user_type)
-
         self._user_types[keyspace][user_type] = klass
         for session in tuple(self.sessions):
             session.user_type_registered(keyspace, user_type, klass)
@@ -2442,8 +2432,6 @@ class Session(object):
         The default :class:`~ConsistencyLevel` for serial phase of  conditional updates executed through
         this session.  This default may be overridden by setting the
         :attr:`~.Statement.serial_consistency_level` on individual statements.
-
-        Only valid for ``protocol_version >= 2``.
         """
         return self._default_serial_consistency_level
 
@@ -2954,11 +2942,6 @@ class Session(object):
                 continuous_paging_options=continuous_paging_options,
                 result_metadata_id=prepared_statement.result_metadata_id)
         elif isinstance(query, BatchStatement):
-            if self._protocol_version < 2:
-                raise UnsupportedOperation(
-                    "BatchStatement execution is only supported with protocol version "
-                    "2 or higher (supported in Cassandra 2.0 and higher).  Consider "
-                    "setting Cluster.protocol_version to 2 to support this operation.")
             statement_keyspace = query.keyspace if ProtocolVersion.uses_keyspace_flag(self._protocol_version) else None
             message = BatchMessage(
                 query.batch_type, query._statements_and_parameters, cl,
@@ -3097,7 +3080,7 @@ class Session(object):
         prepared_keyspace = keyspace if keyspace else None
         prepared_statement = PreparedStatement.from_message(
             response.query_id, response.bind_metadata, response.pk_indexes, self.cluster.metadata, query, prepared_keyspace,
-            self._protocol_version, response.column_metadata, response.result_metadata_id, response.is_lwt, self.cluster.column_encryption_policy)
+            response.column_metadata, response.result_metadata_id, response.is_lwt, self.cluster.column_encryption_policy)
         prepared_statement.custom_payload = future.custom_payload
 
         self.cluster.add_prepared(response.query_id, prepared_statement)
@@ -4637,10 +4620,9 @@ class ResponseFuture(object):
             self._custom_payload = getattr(response, 'custom_payload', None)
 
             if self._custom_payload and self.session.cluster.control_connection._tablets_routing_v1 and 'tablets-routing-v1' in self._custom_payload:
-                protocol = self.session.cluster.protocol_version
                 info = self._custom_payload.get('tablets-routing-v1')
                 ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
-                tablet_routing_info = ctype.from_binary(info, protocol)
+                tablet_routing_info = ctype.from_binary(info)
                 first_token = tablet_routing_info[0]
                 last_token = tablet_routing_info[1]
                 tablet_replicas = tablet_routing_info[2]

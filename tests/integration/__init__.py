@@ -268,7 +268,6 @@ def xfail_scylla_version(filter: Callable[[Version], bool], reason: str, *args, 
 
 local = local_decorator_creator()
 notprotocolv1 = unittest.skipUnless(PROTOCOL_VERSION > 1, 'Protocol v1 not supported')
-greaterthanprotocolv3 = unittest.skipUnless(PROTOCOL_VERSION >= 4, 'Protocol versions less than 4 are not supported')
 
 greaterthancass20 = unittest.skipUnless(CASSANDRA_VERSION >= Version('2.1'), 'Cassandra version 2.1 or greater required')
 greaterthancass21 = unittest.skipUnless(CASSANDRA_VERSION >= Version('2.2'), 'Cassandra version 2.2 or greater required')
@@ -295,8 +294,8 @@ requires_java_udf = pytest.mark.skipif(SCYLLA_VERSION is not None,
                                     reason='Scylla does not support UDFs written in Java')
 requires_composite_type = pytest.mark.skipif(SCYLLA_VERSION is not None,
                                             reason='Scylla does not support composite types')
-requires_custom_payload = pytest.mark.skipif(SCYLLA_VERSION is not None or PROTOCOL_VERSION < 4,
-                                            reason='Scylla does not support custom payloads. Cassandra requires native protocol v4.0+')
+requires_custom_payload = pytest.mark.skipif(SCYLLA_VERSION is not None,
+                                            reason='Scylla does not support custom payloads')
 xfail_scylla = lambda reason, *args, **kwargs: pytest.mark.xfail(SCYLLA_VERSION is not None, reason=reason, *args, **kwargs)
 incorrect_test = lambda reason='This test seems to be incorrect and should be fixed', *args, **kwargs: pytest.mark.xfail(reason=reason, *args, **kwargs)
 
@@ -508,7 +507,7 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
         if 'graph' in workloads:
             jvm_args += ['-Xms1500M', '-Xmx1500M']
         else:
-            if PROTOCOL_VERSION >= 4 and not SCYLLA_VERSION:
+            if not SCYLLA_VERSION:
                 jvm_args = [" -Dcassandra.custom_query_handler_class=org.apache.cassandra.cql3.CustomPayloadMirroringQueryHandler"]
         if len(workloads) > 0:
             for node in CCM_CLUSTER.nodes.values():

@@ -235,9 +235,6 @@ class Statement(object):
     How many rows will be fetched at a time.  This overrides the default
     of :attr:`.Session.default_fetch_size`
 
-    This only takes effect when protocol version 2 or higher is used.
-    See :attr:`.Cluster.protocol_version` for details.
-
     .. versionadded:: 2.0.0
     """
 
@@ -448,7 +445,6 @@ class PreparedStatement(object):
     custom_payload = None
     fetch_size = FETCH_SIZE_UNSET
     keyspace = None  # change to prepared_keyspace in major release
-    protocol_version = None
     query_id = None
     query_string = None
     result_metadata = None
@@ -460,14 +456,13 @@ class PreparedStatement(object):
     _is_lwt = False
 
     def __init__(self, column_metadata, query_id, routing_key_indexes, query,
-                 keyspace, protocol_version, result_metadata, result_metadata_id,
+                 keyspace, result_metadata, result_metadata_id,
                  is_lwt=False, column_encryption_policy=None):
         self.column_metadata = column_metadata
         self.query_id = query_id
         self.routing_key_indexes = routing_key_indexes
         self.query_string = query
         self.keyspace = keyspace
-        self.protocol_version = protocol_version
         self.result_metadata = result_metadata
         self.result_metadata_id = result_metadata_id
         self.column_encryption_policy = column_encryption_policy
@@ -476,11 +471,11 @@ class PreparedStatement(object):
 
     @classmethod
     def from_message(cls, query_id, column_metadata, pk_indexes, cluster_metadata,
-                     query, prepared_keyspace, protocol_version, result_metadata,
+                     query, prepared_keyspace, result_metadata,
                      result_metadata_id, is_lwt, column_encryption_policy=None):
         if not column_metadata:
             return PreparedStatement(column_metadata, query_id, None,
-                                     query, prepared_keyspace, protocol_version, result_metadata,
+                                     query, prepared_keyspace, result_metadata,
                                      result_metadata_id, is_lwt, column_encryption_policy)
 
         if pk_indexes:
@@ -506,7 +501,7 @@ class PreparedStatement(object):
                         pass          # statement; just leave routing_key_indexes as None
 
         return PreparedStatement(column_metadata, query_id, routing_key_indexes,
-                                 query, prepared_keyspace, protocol_version, result_metadata,
+                                 query, prepared_keyspace, result_metadata,
                                  result_metadata_id, is_lwt, column_encryption_policy)
 
     def bind(self, values):
@@ -597,7 +592,6 @@ class BoundStatement(Statement):
         """
         if values is None:
             values = ()
-        proto_version = self.prepared_statement.protocol_version
         col_meta = self.prepared_statement.column_metadata
         ce_policy = self.prepared_statement.column_encryption_policy
 
@@ -611,12 +605,7 @@ class BoundStatement(Statement):
                 try:
                     values.append(values_dict[col.name])
                 except KeyError:
-                    if proto_version >= 4:
-                        values.append(UNSET_VALUE)
-                    else:
-                        raise KeyError(
-                            'Column name `%s` not found in bound dict.' %
-                            (col.name))
+                    values.append(UNSET_VALUE)
 
         value_len = len(values)
         col_meta_len = len(col_meta)
@@ -626,30 +615,19 @@ class BoundStatement(Statement):
                 "Too many arguments provided to bind() (got %d, expected %d)" %
                 (len(values), len(col_meta)))
 
-        # this is fail-fast for clarity pre-v4. When v4 can be assumed,
-        # the error will be better reported when UNSET_VALUE is implicitly added.
-        if proto_version < 4 and self.prepared_statement.routing_key_indexes and \
-           value_len < len(self.prepared_statement.routing_key_indexes):
-            raise ValueError(
-                "Too few arguments provided to bind() (got %d, required %d for routing key)" %
-                (value_len, len(self.prepared_statement.routing_key_indexes)))
-
         self.raw_values = values
         self.values = []
         for value, col_spec in zip(values, col_meta):
             if value is None:
                 self.values.append(None)
             elif value is UNSET_VALUE:
-                if proto_version >= 4:
-                    self._append_unset_value()
-                else:
-                    raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
+                self._append_unset_value()
             else:
                 try:
                     col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
                     uses_ce = ce_policy and ce_policy.contains_column(col_desc)
                     col_type = ce_policy.column_type(col_desc) if uses_ce else col_spec.type
-                    col_bytes = col_type.serialize(value, proto_version)
+                    col_bytes = col_type.serialize(value)
                     if uses_ce:
                         col_bytes = ce_policy.encrypt(col_desc, col_bytes)
                     self.values.append(col_bytes)
@@ -659,11 +637,10 @@ class BoundStatement(Statement):
                                'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
                     raise TypeError(message)
 
-        if proto_version >= 4:
-            diff = col_meta_len - len(self.values)
-            if diff:
-                for _ in range(diff):
-                    self._append_unset_value()
+        diff = col_meta_len - len(self.values)
+        if diff:
+            for _ in range(diff):
+                self._append_unset_value()
 
         return self
 

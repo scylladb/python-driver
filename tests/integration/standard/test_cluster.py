@@ -462,10 +462,6 @@ class ClusterTests(unittest.TestCase):
         if get_server_versions()[0] < (2, 1, 0):
             raise unittest.SkipTest('UDTs were introduced in Cassandra 2.1')
 
-        if PROTOCOL_VERSION < 3:
-            raise unittest.SkipTest('UDTs are not specified in change events for protocol v2')
-            # We may want to refresh types on keyspace change events in that case(?)
-
         cluster = TestCluster()
         session = cluster.connect()
 
@@ -1093,21 +1089,21 @@ class ClusterTests(unittest.TestCase):
         Originates from https://github.com/scylladb/python-driver/issues/120
         """
         for _ in range(10):
-            with TestCluster(protocol_version=3) as cluster:
+            with TestCluster(protocol_version=4) as cluster:
                 cluster.connect().execute("SELECT * FROM system_schema.keyspaces")
                 time.sleep(1)
 
-            with TestCluster(protocol_version=3) as cluster:
+            with TestCluster(protocol_version=4) as cluster:
                 session = cluster.connect()
                 for _ in range(5):
                     session.execute("SELECT * FROM system_schema.keyspaces")
 
             for _ in range(10):
-                with TestCluster(protocol_version=3) as cluster:
+                with TestCluster(protocol_version=4) as cluster:
                     cluster.connect().execute("SELECT * FROM system_schema.keyspaces")
 
             for _ in range(10):
-                with TestCluster(protocol_version=3) as cluster:
+                with TestCluster(protocol_version=4) as cluster:
                     cluster.connect()
 
             result = subprocess.run(["lsof -nP | awk '$3 ~ \":9042\" {print $0}' | grep ''"], shell=True, capture_output=True)

@@ -31,7 +31,10 @@ cdef class ListParser(ColumnParser):
         cdef Py_ssize_t i, rowcount
         rowcount = read_int(reader)
         cdef RowParser rowparser = TupleRowParser()
-        return [rowparser.unpack_row(reader, desc) for i in range(rowcount)]
+        if desc.column_encryption_policy:
+            return [rowparser.unpack_col_encrypted_row(reader, desc) for i in range(rowcount)]
+        else:
+            return [rowparser.unpack_plain_row(reader, desc) for i in range(rowcount)]
 
 
 cdef class LazyParser(ColumnParser):
@@ -47,7 +50,10 @@ def parse_rows_lazy(BytesIOReader reader, ParseDesc desc):
     cdef Py_ssize_t i, rowcount
     rowcount = read_int(reader)
     cdef RowParser rowparser = TupleRowParser()
-    return (rowparser.unpack_row(reader, desc) for i in range(rowcount))
+    if desc.column_encryption_policy:
+        return (rowparser.unpack_col_encrypted_row(reader, desc) for i in range(rowcount))
+    else:
+        return (rowparser.unpack_plain_row(reader, desc) for i in range(rowcount))
 
 
 cdef class TupleRowParser(RowParser):
@@ -55,9 +61,11 @@ cdef class TupleRowParser(RowParser):
     Parse a single returned row into a tuple of objects:
 
         (obj1, ..., objN)
+    If CE (Column encryption) policy is enabled - use unpack_col_encrypted_row(),
+    otherwsise use unpack_plain_row()
     """
 
-    cpdef unpack_row(self, BytesIOReader reader, ParseDesc desc):
+    cpdef unpack_col_encrypted_row(self, BytesIOReader reader, ParseDesc desc):
         assert desc.rowsize >= 0
 
         cdef Buffer buf
@@ -67,28 +75,53 @@ cdef class TupleRowParser(RowParser):
         cdef tuple res = tuple_new(desc.rowsize)
 
         ce_policy = desc.column_encryption_policy
-        for i in range(rowsize):
-            # Read the next few bytes
-            get_buf(reader, &buf)
+        try:
+            for i in range(rowsize):
+                # Read the next few bytes
+                get_buf(reader, &buf)
 
-            # Deserialize bytes to python object
-            deserializer = desc.deserializers[i]
-            coldesc = desc.coldescs[i]
-            uses_ce = ce_policy and ce_policy.contains_column(coldesc)
-            try:
+                # Deserialize bytes to python object
+                deserializer = desc.deserializers[i]
+                coldesc = desc.coldescs[i]
+                uses_ce = ce_policy.contains_column(coldesc)
                 if uses_ce:
                     col_type = ce_policy.column_type(coldesc)
                     decrypted_bytes = ce_policy.decrypt(coldesc, to_bytes(&buf))
                     PyBytes_AsStringAndSize(decrypted_bytes, &newbuf.ptr, &newbuf.size)
                     deserializer = find_deserializer(ce_policy.column_type(coldesc))
-                    val = from_binary(deserializer, &newbuf, desc.protocol_version)
+                    val = from_binary(deserializer, &newbuf)
                 else:
-                    val = from_binary(deserializer, &buf, desc.protocol_version)
-            except Exception as e:
-                raise DriverException('Failed decoding result column "%s" of type %s: %s' % (desc.colnames[i],
-                                                                                             desc.coltypes[i].cql_parameterized_type(),
-                                                                                             str(e)))
-            # Insert new object into tuple
-            tuple_set(res, i, val)
+                    val = from_binary(deserializer, &buf)
+                # Insert new object into tuple
+                tuple_set(res, i, val)
+        except Exception as e:
+            raise DriverException('Failed decoding result column "%s" of type %s: %s' % (desc.colnames[i],
+                                                                                         desc.coltypes[i].cql_parameterized_type(),
+                                                                                         str(e)))
+
+        return res
+
+    cpdef unpack_plain_row(self, BytesIOReader reader, ParseDesc desc):
+        assert desc.rowsize >= 0
+
+        cdef Buffer buf
+        cdef Py_ssize_t i, rowsize = desc.rowsize
+        cdef Deserializer deserializer
+        cdef tuple res = tuple_new(desc.rowsize)
+
+        try:
+            for i in range(rowsize):
+                # Read the next few bytes
+                get_buf(reader, &buf)
+
+                # Deserialize bytes to python object
+                deserializer = desc.deserializers[i]
+                val = from_binary(deserializer, &buf)
+                # Insert new object into tuple
+                tuple_set(res, i, val)
+        except Exception as e:
+            raise DriverException('Failed decoding result column "%s" of type %s: %s' % (desc.colnames[i],
+                                                                                         desc.coltypes[i].cql_parameterized_type(),
+                                                                                         str(e)))
 
         return res

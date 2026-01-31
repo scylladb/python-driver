@@ -71,9 +71,7 @@ class ParamBindingTest(unittest.TestCase):
         f = 3.4028234663852886e+38
         assert float(bind_params("%s", (f,), Encoder())) == f
 
-class BoundStatementTestV3(unittest.TestCase):
-
-    protocol_version = 3
+class BoundStatementTestV4(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
@@ -86,7 +84,7 @@ class BoundStatementTestV3(unittest.TestCase):
                                          routing_key_indexes=[1, 0],
                                          query=None,
                                          keyspace='keyspace',
-                                         protocol_version=cls.protocol_version, result_metadata=None,
+                                         result_metadata=None,
                                          result_metadata_id=None)
         cls.bound = BoundStatement(prepared_statement=cls.prepared)
 
@@ -122,7 +120,6 @@ class BoundStatementTestV3(unittest.TestCase):
                                                routing_key_indexes=[],
                                                query=None,
                                                keyspace=keyspace,
-                                               protocol_version=self.protocol_version,
                                                result_metadata=None,
                                                result_metadata_id=None)
         prepared_statement.fetch_size = 1234
@@ -135,58 +132,6 @@ class BoundStatementTestV3(unittest.TestCase):
 
         bound = self.prepared.bind((1, 2))
         assert bound.keyspace == 'keyspace'
-
-    def test_dict_missing_routing_key(self):
-        with pytest.raises(KeyError):
-            self.bound.bind({'rk0': 0, 'ck0': 0, 'v0': 0})
-        with pytest.raises(KeyError):
-            self.bound.bind({'rk1': 0, 'ck0': 0, 'v0': 0})
-
-    def test_missing_value(self):
-        with pytest.raises(KeyError):
-            self.bound.bind({'rk0': 0, 'rk1': 0, 'ck0': 0})
-
-    def test_extra_value(self):
-        self.bound.bind({'rk0': 0, 'rk1': 0, 'ck0': 0, 'v0': 0, 'should_not_be_here': 123})  # okay to have extra keys in dict
-        assert self.bound.values == [b'\x00' * 4] * 4  # four encoded zeros
-        with pytest.raises(ValueError):
-            self.bound.bind((0, 0, 0, 0, 123))
-
-    def test_values_none(self):
-        # should have values
-        with pytest.raises(ValueError):
-            self.bound.bind(None)
-
-        # prepared statement with no values
-        prepared_statement = PreparedStatement(column_metadata=[],
-                                               query_id=None,
-                                               routing_key_indexes=[],
-                                               query=None,
-                                               keyspace='whatever',
-                                               protocol_version=self.protocol_version,
-                                               result_metadata=None,
-                                               result_metadata_id=None)
-        bound = prepared_statement.bind(None)
-        assertListEqual(bound.values, [])
-
-    def test_bind_none(self):
-        self.bound.bind({'rk0': 0, 'rk1': 0, 'ck0': 0, 'v0': None})
-        assert self.bound.values[-1] == None
-
-        old_values = self.bound.values
-        self.bound.bind((0, 0, 0, None))
-        assert self.bound.values is not old_values
-        assert self.bound.values[-1] == None
-
-    def test_unset_value(self):
-        with pytest.raises(ValueError):
-            self.bound.bind({'rk0': 0, 'rk1': 0, 'ck0': 0, 'v0': UNSET_VALUE})
-        with pytest.raises(ValueError):
-            self.bound.bind((0, 0, 0, UNSET_VALUE))
-
-
-class BoundStatementTestV4(BoundStatementTestV3):
-    protocol_version = 4
 
     def test_dict_missing_routing_key(self):
         # in v4 it implicitly binds UNSET_VALUE for missing items,
@@ -206,6 +151,37 @@ class BoundStatementTestV4(BoundStatementTestV3):
         assert self.bound.values is not old_values
         assert self.bound.values[-1] == UNSET_VALUE
 
+    def test_extra_value(self):
+        self.bound.bind({'rk0': 0, 'rk1': 0, 'ck0': 0, 'v0': 0, 'should_not_be_here': 123})  # okay to have extra keys in dict
+        assert self.bound.values == [b'\x00' * 4] * 4  # four encoded zeros
+        with pytest.raises(ValueError):
+            self.bound.bind((0, 0, 0, 0, 123))
+
+    def test_values_none(self):
+        # should have values
+        with pytest.raises(ValueError):
+            self.bound.bind(None)
+
+        # prepared statement with no values
+        prepared_statement = PreparedStatement(column_metadata=[],
+                                               query_id=None,
+                                               routing_key_indexes=[],
+                                               query=None,
+                                               keyspace='whatever',
+                                               result_metadata=None,
+                                               result_metadata_id=None)
+        bound = prepared_statement.bind(None)
+        assertListEqual(bound.values, [])
+
+    def test_bind_none(self):
+        self.bound.bind({'rk0': 0, 'rk1': 0, 'ck0': 0, 'v0': None})
+        assert self.bound.values[-1] == None
+
+        old_values = self.bound.values
+        self.bound.bind((0, 0, 0, None))
+        assert self.bound.values is not old_values
+        assert self.bound.values[-1] == None
+
     def test_unset_value(self):
         self.bound.bind({'rk0': 0, 'rk1': 0, 'ck0': 0, 'v0': UNSET_VALUE})
         assert self.bound.values[-1] == UNSET_VALUE
@@ -213,6 +189,3 @@ class BoundStatementTestV4(BoundStatementTestV3):
         self.bound.bind((0, 0, 0, UNSET_VALUE))
         assert self.bound.values[-1] == UNSET_VALUE
 
-
-class BoundStatementTestV5(BoundStatementTestV4):
-    protocol_version = 5
