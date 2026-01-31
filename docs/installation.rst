@@ -113,7 +113,7 @@ Manual Installation
 You can always install the driver directly from a source checkout or tarball.
 When installing manually, ensure the python dependencies are already
 installed. You can find the list of dependencies in
-`requirements.txt <https://github.com/datastax/python-driver/blob/master/requirements.txt>`_.
+`pyproject.toml <https://github.com/scylladb/python-driver/blob/master/pyproject.toml>`_.
 
 Once the dependencies are installed, simply run::
 
@@ -228,5 +228,4 @@ the libev event loop by doing the following:
 
 (*Optional*) Configuring SSL
 -----------------------------
-Andrew Mussey has published a thorough guide on
-`Using SSL with the DataStax Python driver <http://blog.amussey.com/post/64036730812/cassandra-2-0-client-server-ssl-with-datastax-python>`_.
+See the :ref:`security` section for details on configuring SSL.

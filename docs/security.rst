@@ -60,14 +60,10 @@ as described in the following examples or implement your own :class:`~.connectio
 :class:`~.connection.EndPointFactory`.
 
 
-The following examples assume you have generated your Cassandra certificate and
-keystore files with these intructions:
+The following examples assume you have generated your Scylla certificate and
+keystore files with these instructions:
 
-* `Setup SSL Cert <https://docs.datastax.com/en/dse/6.7/dse-admin/datastax_enterprise/security/secSetUpSSLCert.html>`_
-
-It might be also useful to learn about the different levels of identity verification to understand the examples:
-
-* `Using SSL in DSE drivers <https://docs.datastax.com/en/dse/6.7/dse-dev/datastax_enterprise/appDevGuide/sslDrivers.html>`_
+* `Scylla TLS/SSL Guide <https://opensource.docs.scylladb.com/stable/operating-scylla/security/client-node-encryption.html>`_
 
 SSL with Twisted or Eventlet
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -170,7 +166,7 @@ The cassandra configuration::
       keystore: /path/to/127.0.0.1.keystore
       keystore_password: myStorePass
       require_client_auth: true
-      truststore: /path/to/dse-truststore.jks
+      truststore: /path/to/truststore.jks
       truststore_password: myStorePass
 
 The Python ``ssl`` APIs require the certificate in PEM format. First, create a certificate
@@ -304,101 +300,11 @@ For example:
     cluster = Cluster(ssl_options=ssl_opts)
 
 This is only an example to show how to pass the ssl parameters. Consider reading
-the `python ssl documentation <https://docs.python.org/2/library/ssl.html#ssl.wrap_socket>`__ for
-your configuration. For further reading, Andrew Mussey has published a thorough guide on
-`Using SSL with the DataStax Python driver <http://blog.amussey.com/post/64036730812/cassandra-2-0-client-server-ssl-with-datastax-python>`_.
+the `python ssl documentation <https://docs.python.org/3/library/ssl.html#ssl.wrap_socket>`__ for
+your configuration.
 
 SSL with Twisted
 ++++++++++++++++
 
 In case the twisted event loop is used pyOpenSSL must be installed or an exception will be risen. Also
 to set the ``ssl_version`` and ``cert_reqs`` in ``ssl_opts`` the appropriate constants from pyOpenSSL are expected.
-
-DSE Authentication
-------------------
-When authenticating against DSE, the Cassandra driver provides two auth providers that work both with legacy kerberos and Cassandra authenticators,
-as well as the new DSE Unified Authentication. This allows client to configure this auth provider independently,
-and in advance of any server upgrade. These auth providers are configured in the same way as any previous implementation::
-
-    from cassandra.auth import DSEGSSAPIAuthProvider
-    auth_provider = DSEGSSAPIAuthProvider(service='dse', qops=["auth"])
-    cluster = Cluster(auth_provider=auth_provider)
-    session = cluster.connect()
-
-Implementations are :attr:`.DSEPlainTextAuthProvider`, :class:`.DSEGSSAPIAuthProvider` and :class:`.SaslAuthProvider`.
-
-DSE Unified Authentication
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-With DSE (>=5.1), unified Authentication allows you to:
-
-* Proxy Login: Authenticate using a fixed set of authentication credentials but allow authorization of resources based another user id.
-* Proxy Execute: Authenticate using a fixed set of authentication credentials but execute requests based on another user id.
-
-Proxy Login
-+++++++++++
-
-Proxy login allows you to authenticate with a user but act as another one. You need to ensure the authenticated user has the permission to use the authorization of resources of the other user. ie. this example will allow the `server` user to authenticate as usual but use the authorization of `user1`:
-
-.. code-block:: text
-
-    GRANT PROXY.LOGIN on role user1 to server
-
-then you can do the proxy authentication....
-
-.. code-block:: python
-
-    from cassandra.cluster import Cluster
-    from cassandra.auth import SaslAuthProvider
-
-    sasl_kwargs = {
-      "service": 'dse',
-      "mechanism":"PLAIN",
-      "username": 'server',
-      'password': 'server',
-      'authorization_id': 'user1'
-    }
-
-    auth_provider = SaslAuthProvider(**sasl_kwargs)
-    c = Cluster(auth_provider=auth_provider)
-    s = c.connect()
-    s.execute(...)  # all requests will be executed as 'user1'
-
-If you are using kerberos, you can use directly :class:`.DSEGSSAPIAuthProvider` and pass the authorization_id, like this:
-
-.. code-block:: python
-
-    from cassandra.cluster import Cluster
-    from cassandra.auth import DSEGSSAPIAuthProvider
-
-    # Ensure the kerberos ticket of the server user is set with the kinit utility.
-    auth_provider = DSEGSSAPIAuthProvider(service='dse', qops=["auth"], principal="server@DATASTAX.COM",
-                                          authorization_id='user1@DATASTAX.COM')
-    c = Cluster(auth_provider=auth_provider)
-    s = c.connect()
-    s.execute(...)  # all requests will be executed as 'user1'
-
-
-Proxy Execute
-+++++++++++++
-
-Proxy execute allows you to execute requests as another user than the authenticated one. You need to ensure the authenticated user has the permission to use the authorization of resources of the specified user. ie. this example will allow the `server` user to execute requests as `user1`:
-
-.. code-block:: text
-
-    GRANT PROXY.EXECUTE on role user1 to server
-
-then you can do a proxy execute...
-
-.. code-block:: python
-
-    from cassandra.cluster import Cluster
-    from cassandra.auth import DSEPlainTextAuthProvider,
-
-    auth_provider = DSEPlainTextAuthProvider('server', 'server')
-
-    c = Cluster(auth_provider=auth_provider)
-    s = c.connect()
-    s.execute('select * from k.t;', execute_as='user1')  # the request will be executed as 'user1'
-
-Please see the `official documentation <https://docs.datastax.com/en/latest-dse/datastax_enterprise/unifiedAuth/unifiedAuthTOC.html>`_ for more details on the feature and configuration process.
