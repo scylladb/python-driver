@@ -207,6 +207,120 @@ def verify_iterator_data(results):
     return count
 
 
+class NumpyWideTableTest(unittest.TestCase):
+    """
+    Test NumpyProtocolHandler with wide tables (many columns).
+
+    ScyllaDB has a built-in 1MB page size limit that can cause fewer rows
+    per page than requested when working with wide tables.
+
+    See: https://github.com/scylladb/python-driver/issues/65
+    """
+
+    N_COLUMNS = 200  # Number of int columns (plus primary key columns)
+    N_ROWS = 100
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cluster = TestCluster()
+        cls.session = cls.cluster.connect()
+        cls.session.execute("CREATE KEYSPACE IF NOT EXISTS test_wide_table WITH replication = "
+                            "{ 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
+        cls.session.set_keyspace("test_wide_table")
+
+        # Create a wide table with many int columns
+        columns = ["pk int", "ck int"]
+        columns += ["col{0} int".format(i) for i in range(cls.N_COLUMNS)]
+        cls.session.execute(
+            "CREATE TABLE wide_table ({0}, PRIMARY KEY (pk, ck))".format(", ".join(columns)),
+            timeout=120
+        )
+
+        # Insert test data
+        col_names = ["pk", "ck"] + ["col{0}".format(i) for i in range(cls.N_COLUMNS)]
+        placeholders = ", ".join(["%s"] * len(col_names))
+        insert_cql = "INSERT INTO wide_table ({0}) VALUES ({1})".format(
+            ", ".join(col_names), placeholders
+        )
+
+        for row_idx in range(cls.N_ROWS):
+            values = [0, row_idx] + [row_idx * 1000 + i for i in range(cls.N_COLUMNS)]
+            cls.session.execute(insert_cql, values, timeout=120)
+
+    @classmethod
+    def tearDownClass(cls):
+        drop_keyspace_shutdown_cluster("test_wide_table", cls.session, cls.cluster)
+
+    @notprotocolv1
+    @numpytest
+    def test_numpy_wide_table_paging(self):
+        """
+        Test that NumpyProtocolHandler works with wide tables.
+
+        With ScyllaDB's 1MB page size limit, wide tables may return fewer
+        rows per page than the fetch_size requests. This test verifies
+        that all data is still returned correctly across multiple pages.
+        """
+        cluster = TestCluster(
+            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+        )
+        session = cluster.connect(keyspace="test_wide_table")
+        session.client_protocol_handler = NumpyProtocolHandler
+        session.default_fetch_size = 1000  # Request many rows per page
+
+        results = session.execute("SELECT * FROM wide_table")
+
+        # Count total rows across all pages
+        total_rows = 0
+        page_count = 0
+        for page in results:
+            page_count += 1
+            # Get row count from first column array
+            arr = page.get('pk')
+            if arr is not None:
+                total_rows += len(arr)
+
+        # Verify all rows were returned
+        self.assertEqual(total_rows, self.N_ROWS,
+                         "Expected {0} rows total, got {1} across {2} pages".format(
+                             self.N_ROWS, total_rows, page_count))
+
+        cluster.shutdown()
+
+    @notprotocolv1
+    @numpytest
+    def test_numpy_wide_table_no_fetch_size(self):
+        """
+        Test that setting fetch_size=None allows ScyllaDB to control page sizes.
+
+        This is the recommended workaround for getting larger pages with wide tables.
+        """
+        cluster = TestCluster(
+            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+        )
+        session = cluster.connect(keyspace="test_wide_table")
+        session.client_protocol_handler = NumpyProtocolHandler
+        session.default_fetch_size = None  # Let server control page sizes
+
+        results = session.execute("SELECT * FROM wide_table")
+
+        # Count total rows across all pages
+        total_rows = 0
+        page_count = 0
+        for page in results:
+            page_count += 1
+            arr = page.get('pk')
+            if arr is not None:
+                total_rows += len(arr)
+
+        # Verify all rows were returned
+        self.assertEqual(total_rows, self.N_ROWS,
+                         "Expected {0} rows total, got {1} across {2} pages".format(
+                             self.N_ROWS, total_rows, page_count))
+
+        cluster.shutdown()
+
+
 class NumpyNullTest(BasicSharedKeyspaceUnitTestCase):
 
     @classmethod

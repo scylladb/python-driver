@@ -111,6 +111,40 @@ New Error Types
         raise
 
 
+Paging Differences
+------------------
+
+ScyllaDB has a built-in 1MB page size limit that Cassandra does not have. This means that even if you set a high ``fetch_size`` (e.g., 10000 rows), ScyllaDB may return fewer rows per page if the total response size exceeds 1MB.
+
+This behavior is particularly noticeable when:
+
+* Working with wide tables (many columns)
+* Using ``NumpyProtocolHandler`` where you want large arrays per page
+* Columns contain large values (blobs, long strings, etc.)
+
+For example, with a table containing 1000 columns, you might receive only 30-50 rows per page even with ``fetch_size=10000``.
+
+**Workaround:** If you need to receive more rows per page (up to ScyllaDB's 1MB limit), set ``default_fetch_size`` to ``None``:
+
+.. code:: python
+
+    from cassandra.cluster import Cluster
+    from cassandra.protocol import NumpyProtocolHandler
+    from cassandra.query import tuple_factory
+
+    cluster = Cluster()
+    session = cluster.connect(keyspace="mykeyspace")
+    session.row_factory = tuple_factory
+    session.client_protocol_handler = NumpyProtocolHandler
+    session.default_fetch_size = None  # Let ScyllaDB control page sizes
+
+    results = session.execute("SELECT * FROM wide_table")
+
+With ``default_fetch_size = None``, the driver won't request a specific page size, allowing ScyllaDB to fill pages up to its 1MB limit. This results in larger arrays when using ``NumpyProtocolHandler``.
+
+For more details on paging, see :ref:`query-paging`.
+
+
 Tablet Awareness
 ----------------
 
