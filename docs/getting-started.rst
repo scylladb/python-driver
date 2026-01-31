@@ -5,15 +5,15 @@ First, make sure you have the driver properly :doc:`installed <installation>`.
 
 Connecting to a Cluster
 -----------------------
-Before we can start executing any queries against a Cassandra cluster we need to setup
+Before we can start executing any queries against a Scylla cluster we need to setup
 an instance of :class:`~.Cluster`. As the name suggests, you will typically have one
-instance of :class:`~.Cluster` for each Cassandra cluster you want to interact
+instance of :class:`~.Cluster` for each Scylla cluster you want to interact
 with.
 
-First, make sure you have the Cassandra driver properly :doc:`installed <installation>`.
+First, make sure you have the Scylla driver properly :doc:`installed <installation>`.
 
-Connecting to Cassandra
-+++++++++++++++++++++++
+Connecting to Scylla
+++++++++++++++++++++
 The simplest way to create a :class:`~.Cluster` is like this:
 
 .. code-block:: python
@@ -22,7 +22,7 @@ The simplest way to create a :class:`~.Cluster` is like this:
 
     cluster = Cluster()
 
-This will attempt to connection to a Cassandra instance on your
+This will attempt to connect to a Scylla instance on your
 local machine (127.0.0.1).  You can also specify a list of IP
 addresses for nodes in your cluster:
 
@@ -121,7 +121,7 @@ way to execute a query is to use :meth:`~.Session.execute()`:
     for user_row in rows:
         print(user_row.name, user_row.age, user_row.email)
 
-This will transparently pick a Cassandra node to execute the query against
+This will transparently pick a Scylla node to execute the query against
 and handle any retries that are necessary if the operation fails.
 
 By default, each row in the result set will be a
@@ -160,10 +160,10 @@ frequently run queries.
 
 Prepared Statements
 -------------------
-Prepared statements are queries that are parsed by Cassandra and then saved
+Prepared statements are queries that are parsed by Scylla and then saved
 for later use.  When the driver uses a prepared statement, it only needs to
 send the values of parameters to bind.  This lowers network traffic
-and CPU utilization within Cassandra because Cassandra does not have to
+and CPU utilization within Scylla because Scylla does not have to
 re-parse the query each time.
 
 To prepare a query, use :meth:`.Session.prepare()`:
