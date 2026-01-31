@@ -8,10 +8,10 @@ timestamps (Cassandra DateType)
 -------------------------------
 
 Timestamps in Cassandra are timezone-naive timestamps encoded as millseconds since UNIX epoch. Clients working with
-timestamps in this database usually find it easiest to reason about them if they are always assumed to be UTC. To quote the
-pytz documentation, "The preferred way of dealing with times is to always work in UTC, converting to localtime only when
-generating output to be read by humans." The driver adheres to this tenant, and assumes UTC is always in the database. The
-driver attempts to make this correct on the way in, and assumes no timezone on the way out.
+timestamps in this database usually find it easiest to reason about them if they are always assumed to be UTC. The
+preferred way of dealing with times is to always work in UTC, converting to localtime only when generating output to
+be read by humans. The driver adheres to this tenet, and assumes UTC is always in the database. The driver attempts
+to make this correct on the way in, and assumes no timezone on the way out.
 
 Write Path
 ~~~~~~~~~~
@@ -45,12 +45,15 @@ saving time, and the defacto package for handling this is a third-party package 
 and not make decisions for the integrator).
 
 The decision for how to handle timezones is left to the application. For the most part it is straightforward to apply
-localization to the ``datetime``\s returned by queries. One prevalent method is to use pytz for localization::
+localization to the ``datetime``\s returned by queries. Use the standard library ``zoneinfo`` module (available since
+Python 3.9) for localization::
 
-    import pytz
-    user_tz = pytz.timezone('US/Central')
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
+
+    user_tz = ZoneInfo('US/Central')
     timestamp_naive = row.ts
-    timestamp_utc = pytz.utc.localize(timestamp_naive)
+    timestamp_utc = timestamp_naive.replace(tzinfo=timezone.utc)
     timestamp_presented = timestamp_utc.astimezone(user_tz)
 
 This is the most robust approach (likely refactored into a function). If it is deemed too cumbersome to apply for all call

@@ -405,14 +405,10 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         Ensure timezone-aware datetimes are converted to timestamps correctly
         """
 
-        try:
-            import pytz
-        except ImportError as exc:
-            raise unittest.SkipTest('pytz is not available: %r' % (exc,))
+        from zoneinfo import ZoneInfo
 
-        dt = datetime(1997, 8, 29, 11, 14)
-        eastern_tz = pytz.timezone('US/Eastern')
-        eastern_tz.localize(dt)
+        eastern_tz = ZoneInfo('US/Eastern')
+        dt = datetime(1997, 8, 29, 11, 14, tzinfo=eastern_tz)
 
         s = self.session
 
