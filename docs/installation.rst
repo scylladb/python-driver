@@ -47,15 +47,6 @@ For snappy support::
 (If using a Debian Linux derivative such as Ubuntu, it may be easier to
 just run ``apt-get install python-snappy``.)
 
-(*Optional*) Metrics Support
-----------------------------
-The driver has built-in support for capturing :attr:`.Cluster.metrics` about
-the queries you run.  However, the ``scales`` library is required to
-support this::
-
-    pip install scales
-
-
 Speeding Up Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^
 

@@ -21,7 +21,7 @@ import time
 from optparse import OptionParser
 import uuid
 
-from greplin import scales
+from cassandra.metrics import getStats
 
 dirname = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(dirname)
@@ -192,7 +192,7 @@ def benchmark(thread_class):
         log.info("Total time: %0.2fs" % total)
         log.info("Average throughput: %0.2f/sec" % (options.num_ops / total))
         if options.enable_metrics:
-            stats = scales.getStats()['cassandra']
+            stats = getStats()['cassandra']
             log.info("Connection errors: %d", stats['connection_errors'])
             log.info("Write timeouts: %d", stats['write_timeouts'])
             log.info("Read timeouts: %d", stats['read_timeouts'])

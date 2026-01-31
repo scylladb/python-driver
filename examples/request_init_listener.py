@@ -19,7 +19,7 @@
 # this is just demonstrating a way to track a few custom attributes.
 
 from cassandra.cluster import Cluster
-from greplin import scales
+from cassandra.metrics import PmfStat, IntStat, init
 
 import pprint
 pp = pprint.PrettyPrinter(indent=2)
@@ -32,11 +32,11 @@ class RequestAnalyzer(object):
     Also computes statistics on encoded request size.
     """
 
-    requests = scales.PmfStat('request size')
-    errors = scales.IntStat('errors')
+    requests = PmfStat('request size')
+    errors = IntStat('errors')
 
     def __init__(self, session):
-        scales.init(self, '/cassandra')
+        init(self, '/cassandra')
         # each instance will be registered with a session, and receive a callback for each request generated
         session.add_request_init_listener(self.on_request)
 
@@ -91,7 +91,7 @@ except Exception as e:
     pass
 
 print()
-print(ra)  # note: the counts are updated, but the stats are not because scales only updates every 20s
+print(ra)
 # 3 requests (1 errors)
 # Request size statistics:
 # { '75percentile': 74,
