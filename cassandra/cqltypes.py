@@ -642,25 +642,26 @@ class DateType(_CassandraType):
 
     @staticmethod
     def deserialize(byts, protocol_version):
-        timestamp = int64_unpack(byts) / 1000.0
-        return util.datetime_from_timestamp(timestamp)
+        timestamp_ms = int64_unpack(byts)
+        return util.datetime_from_timestamp_ms(timestamp_ms)
 
     @staticmethod
     def serialize(v, protocol_version):
         try:
             # v is datetime
             timestamp_seconds = calendar.timegm(v.utctimetuple())
-            timestamp = timestamp_seconds * 1e3 + getattr(v, 'microsecond', 0) / 1e3
+            # Use integer arithmetic to preserve precision
+            timestamp_ms = timestamp_seconds * 1000 + getattr(v, 'microsecond', 0) // 1000
         except AttributeError:
             try:
-                timestamp = calendar.timegm(v.timetuple()) * 1e3
+                timestamp_ms = calendar.timegm(v.timetuple()) * 1000
             except AttributeError:
                 # Ints and floats are valid timestamps too
                 if type(v) not in _number_types:
                     raise TypeError('DateType arguments must be a datetime, date, or timestamp')
-                timestamp = v
+                timestamp_ms = v
 
-        return int64_pack(int(timestamp))
+        return int64_pack(int(timestamp_ms))
 
     @classmethod
     def serial_size(cls):
