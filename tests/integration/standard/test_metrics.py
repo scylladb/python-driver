@@ -355,10 +355,10 @@ class MetricsRequestSize(BasicExistingKeyspaceUnitTestCase):
     def wait_for_count(self, ra, expected_count, error=False):
         for _ in range(10):
             if not error:
-                if ra.successful is expected_count:
+                if ra.successful == expected_count:
                     return True
             else:
-                if ra.errors is expected_count:
+                if ra.errors == expected_count:
                     return True
             time.sleep(.01)
         return False

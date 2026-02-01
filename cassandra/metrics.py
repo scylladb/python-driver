@@ -61,6 +61,37 @@ class IntStat:
     def __int__(self):
         return self._value
 
+    def __eq__(self, other):
+        if isinstance(other, IntStat):
+            return self._value == other._value
+        return self._value == other
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __lt__(self, other):
+        if isinstance(other, IntStat):
+            return self._value < other._value
+        return self._value < other
+
+    def __le__(self, other):
+        if isinstance(other, IntStat):
+            return self._value <= other._value
+        return self._value <= other
+
+    def __gt__(self, other):
+        if isinstance(other, IntStat):
+            return self._value > other._value
+        return self._value > other
+
+    def __ge__(self, other):
+        if isinstance(other, IntStat):
+            return self._value >= other._value
+        return self._value >= other
+
+    def __hash__(self):
+        return hash(self._value)
+
     def __repr__(self):
         return f"IntStat({self.name}={self._value})"
 
@@ -477,3 +508,15 @@ class Metrics(object):
             del _stats_registry[self.stats_name]
             self.stats_name = stats_name
             _stats_registry[self.stats_name] = stats
+
+    def shutdown(self):
+        """
+        Remove this metrics instance from the global registry.
+        Called when the cluster is shutdown to prevent stale references.
+        """
+        with _registry_lock:
+            if self.stats_name in _stats_registry:
+                del _stats_registry[self.stats_name]
+            # Also clean up the legacy 'cassandra' entry if it points to our stats
+            if _stats_registry.get('cassandra') is self.stats:
+                del _stats_registry['cassandra']

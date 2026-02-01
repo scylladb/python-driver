@@ -63,6 +63,35 @@ class IntStatTest(unittest.TestCase):
         stat += 42
         self.assertEqual(repr(stat), "IntStat(my_counter=42)")
 
+    def test_equality(self):
+        stat = IntStat('test')
+        stat += 5
+        self.assertEqual(stat, 5)
+        self.assertEqual(5, stat)
+        self.assertNotEqual(stat, 3)
+        self.assertNotEqual(stat, 10)
+
+    def test_comparison_operators(self):
+        stat = IntStat('test')
+        stat += 5
+        self.assertTrue(stat > 0)
+        self.assertTrue(stat >= 5)
+        self.assertTrue(stat < 10)
+        self.assertTrue(stat <= 5)
+        self.assertFalse(stat > 5)
+        self.assertFalse(stat < 5)
+
+    def test_comparison_with_intstat(self):
+        stat1 = IntStat('test1')
+        stat2 = IntStat('test2')
+        stat1 += 5
+        stat2 += 5
+        self.assertEqual(stat1, stat2)
+        stat2 += 1
+        self.assertNotEqual(stat1, stat2)
+        self.assertTrue(stat1 < stat2)
+        self.assertTrue(stat2 > stat1)
+
 
 class StatTest(unittest.TestCase):
     """Tests for Stat (gauge) class."""
@@ -298,6 +327,59 @@ class InitFunctionTest(unittest.TestCase):
         with _registry_lock:
             self.assertIn('test_path', _stats_registry)
             self.assertNotIn('/test_path', _stats_registry)
+
+
+class MetricsShutdownTest(unittest.TestCase):
+    """Tests for Metrics shutdown functionality."""
+
+    def setUp(self):
+        # Clean up registry before each test
+        with _registry_lock:
+            keys_to_remove = [k for k in _stats_registry.keys()
+                              if k.startswith('cassandra')]
+            for k in keys_to_remove:
+                del _stats_registry[k]
+
+    def test_shutdown_removes_from_registry(self):
+        import weakref
+        from cassandra.metrics import Metrics
+
+        class MockCluster:
+            def __init__(self):
+                self.metadata = type('obj', (object,), {'all_hosts': lambda: []})()
+                self.sessions = []
+
+        cluster = MockCluster()
+        proxy = weakref.proxy(cluster)
+
+        metrics = Metrics(proxy)
+        stats_name = metrics.stats_name
+
+        with _registry_lock:
+            self.assertIn(stats_name, _stats_registry)
+
+        metrics.shutdown()
+
+        with _registry_lock:
+            self.assertNotIn(stats_name, _stats_registry)
+
+    def test_shutdown_is_idempotent(self):
+        import weakref
+        from cassandra.metrics import Metrics
+
+        class MockCluster:
+            def __init__(self):
+                self.metadata = type('obj', (object,), {'all_hosts': lambda: []})()
+                self.sessions = []
+
+        cluster = MockCluster()
+        proxy = weakref.proxy(cluster)
+
+        metrics = Metrics(proxy)
+
+        # Should not raise even if called multiple times
+        metrics.shutdown()
+        metrics.shutdown()
 
 
 if __name__ == '__main__':
