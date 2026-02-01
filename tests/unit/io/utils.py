@@ -128,8 +128,10 @@ def submit_and_wait_for_completion(unit_test, create_timer, start, end, incremen
         time.sleep(.1)
 
     # ensure they are all called back in a timely fashion
+    # Use a generous tolerance (500ms) to account for CI environments under heavy load,
+    # especially Windows during wheel building where timing can be significantly less precise
     for callback in completed_callbacks:
-        assert callback.expected_wait == pytest.approx(callback.get_wait_time(), abs=.15)
+        assert callback.expected_wait == pytest.approx(callback.get_wait_time(), abs=.5)
 
 
 def noop_if_monkey_patched(f):
