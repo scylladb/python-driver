@@ -1795,6 +1795,9 @@ class Cluster(object):
 
         self.executor.shutdown()
 
+        if self.metrics_enabled and self.metrics:
+            self.metrics.shutdown()
+
         _discard_cluster_shutdown(self)
 
     def __enter__(self):
