@@ -52,7 +52,6 @@ dev = [
     "cython>=3.2",
     "packaging>=25.0",
     "futurist",
-    "asynctest",
     "pyyaml",
     "numpy",
     "objgraph",
