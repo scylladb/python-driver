@@ -163,8 +163,6 @@ class SaslAuthenticatorTests(AuthenticationTests):
     def setUp(self):
         if PROTOCOL_VERSION < 2:
             raise unittest.SkipTest('Sasl authentication not available for protocol v1')
-        if SASLClient is None:
-            raise unittest.SkipTest('pure-sasl is not installed')
 
     def get_authentication_provider(self, username, password):
         sasl_kwargs = {'service': 'cassandra',
