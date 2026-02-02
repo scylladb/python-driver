@@ -22,7 +22,7 @@ from cassandra.query import dict_factory
 from cassandra.util import OrderedMap
 
 from tests.integration import use_singledc, execute_until_pass, \
-    BasicSegregatedKeyspaceUnitTestCase, greaterthancass20, lessthancass30, greaterthanorequalcass36, TestCluster
+    BasicSegregatedKeyspaceUnitTestCase, greaterthanorequalcass36, TestCluster
 from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES, PRIMITIVE_DATATYPES_KEYS, \
     COLLECTION_TYPES, get_sample, get_collection_sample
 import pytest
@@ -36,7 +36,6 @@ def setup_module():
     update_datatypes()
 
 
-@greaterthancass20
 class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
 
     @property
@@ -608,9 +607,6 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         Test for inserting various types of nested COLLECTION_TYPES into tables and UDTs
         """
 
-        if self.cass_version < (2, 1, 3):
-            raise unittest.SkipTest("Support for nested collections was introduced in Cassandra 2.1.3")
-
         c = TestCluster()
         s = c.connect(self.keyspace_name, wait_for_all_pools=True)
         s.encoder.mapping[tuple] = s.encoder.cql_encode_tuple
@@ -679,72 +675,3 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         assert k.__class__ != tuple  # should be the namedtuple type
         assert k[0] == 'alphanum'
         assert k.field_0_ == 'alphanum'  # named tuple with positional field name
-
-    @lessthancass30
-    def test_type_alteration(self):
-        """
-        Support for ALTER TYPE was removed in CASSANDRA-12443
-        """
-        s = self.session
-        type_name = "type_name"
-        assert type_name not in s.cluster.metadata.keyspaces['udttests'].user_types
-        s.execute('CREATE TYPE %s (v0 int)' % (type_name,))
-        assert type_name in s.cluster.metadata.keyspaces['udttests'].user_types
-
-        s.execute('CREATE TABLE %s (k int PRIMARY KEY, v frozen<%s>)' % (self.table_name, type_name))
-        s.execute('INSERT INTO %s (k, v) VALUES (0, {v0 : 1})' % (self.table_name,))
-
-        s.cluster.register_user_type('udttests', type_name, dict)
-
-        val = s.execute('SELECT v FROM %s' % self.table_name).one()[0]
-        assert val['v0'] == 1
-
-        # add field
-        s.execute('ALTER TYPE %s ADD v1 text' % (type_name,))
-        val = s.execute('SELECT v FROM %s' % self.table_name).one()[0]
-        assert val['v0'] == 1
-        assert val['v1'] is None
-        s.execute("INSERT INTO %s (k, v) VALUES (0, {v0 : 2, v1 : 'sometext'})" % (self.table_name,))
-        val = s.execute('SELECT v FROM %s' % self.table_name).one()[0]
-        assert val['v0'] == 2
-        assert val['v1'] == 'sometext'
-
-        # alter field type
-        s.execute('ALTER TYPE %s ALTER v1 TYPE blob' % (type_name,))
-        s.execute("INSERT INTO %s (k, v) VALUES (0, {v0 : 3, v1 : 0xdeadbeef})" % (self.table_name,))
-        val = s.execute('SELECT v FROM %s' % self.table_name).one()[0]
-        assert val['v0'] == 3
-        assert val['v1'] == b'\xde\xad\xbe\xef'
-
-    @lessthancass30
-    def test_alter_udt(self):
-        """
-        Test to ensure that altered UDT's are properly surfaced without needing to restart the underlying session.
-
-        @since 3.0.0
-        @jira_ticket PYTHON-226
-        @expected_result UDT's will reflect added columns without a session restart.
-
-        @test_category data_types, udt
-        """
-
-        # Create udt ensure it has the proper column names.
-        self.session.set_keyspace(self.keyspace_name)
-        self.session.execute("CREATE TYPE typetoalter (a int)")
-        typetoalter = namedtuple('typetoalter', ('a'))
-        self.session.execute("CREATE TABLE {0} (pk int primary key, typetoalter frozen<typetoalter>)".format(self.function_table_name))
-        insert_statement = self.session.prepare("INSERT INTO {0} (pk, typetoalter) VALUES (?, ?)".format(self.function_table_name))
-        self.session.execute(insert_statement, [1, typetoalter(1)])
-        results = self.session.execute("SELECT * from {0}".format(self.function_table_name))
-        for result in results:
-            assert hasattr(result.typetoalter, 'a')
-            assert not hasattr(result.typetoalter, 'b')
-
-        # Alter UDT and ensure the alter is honored in results
-        self.session.execute("ALTER TYPE typetoalter add b int")
-        typetoalter = namedtuple('typetoalter', ('a', 'b'))
-        self.session.execute(insert_statement, [2, typetoalter(2, 2)])
-        results = self.session.execute("SELECT * from {0}".format(self.function_table_name))
-        for result in results:
-            assert hasattr(result.typetoalter, 'a')
-            assert hasattr(result.typetoalter, 'b')

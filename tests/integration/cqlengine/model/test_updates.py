@@ -17,7 +17,6 @@ from uuid import uuid4
 
 from cassandra.cqlengine import ValidationError
 
-from tests.integration import greaterthancass21
 from tests.integration.cqlengine.base import BaseCassEngTestCase
 from cassandra.cqlengine.models import Model
 from cassandra.cqlengine import columns
@@ -178,7 +177,6 @@ class ModelWithDefaultCollection(Model):
     udt = columns.UserDefinedType(UDT)
     udt_default = columns.UserDefinedType(UDT, default=UDT(age=1, mf={2: 2}))
 
-@greaterthancass21
 class ModelWithDefaultTests(BaseCassEngTestCase):
 
     @classmethod

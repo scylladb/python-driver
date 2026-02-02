@@ -17,7 +17,6 @@ import unittest
 import struct
 import math
 from cassandra.cqltypes import lookup_casstype
-from cassandra.protocol import ProtocolVersion
 from cassandra.cqltypes import PointType, LineStringType, PolygonType, WKBGeometryType
 from cassandra.util import Point, LineString, Polygon, _LinearRing, Distance, _HAS_GEOMET
 import pytest
@@ -25,23 +24,19 @@ import pytest
 wkb_be = 0
 wkb_le = 1
 
-protocol_versions = ProtocolVersion.SUPPORTED_VERSIONS
-
 
 class GeoTypes(unittest.TestCase):
 
     samples = (Point(1, 2), LineString(((1, 2), (3, 4), (5, 6))), Polygon([(10.1, 10.0), (110.0, 10.0), (110., 110.0), (10., 110.0), (10., 10.0)], [[(20., 20.0), (20., 30.0), (30., 30.0), (30., 20.0), (20., 20.0)], [(40., 20.0), (40., 30.0), (50., 30.0), (50., 20.0), (40., 20.0)]]))
 
     def test_marshal_platform(self):
-        for proto_ver in protocol_versions:
-            for geo in self.samples:
-                cql_type = lookup_casstype(geo.__class__.__name__ + 'Type')
-                assert cql_type.from_binary(cql_type.to_binary(geo, proto_ver), proto_ver) == geo
+        for geo in self.samples:
+            cql_type = lookup_casstype(geo.__class__.__name__ + 'Type')
+            assert cql_type.from_binary(cql_type.to_binary(geo)) == geo
 
     def _verify_both_endian(self, typ, body_fmt, params, expected):
-        for proto_ver in protocol_versions:
-            assert typ.from_binary(struct.pack(">BI" + body_fmt, wkb_be, *params), proto_ver) == expected
-            assert typ.from_binary(struct.pack("<BI" + body_fmt, wkb_le, *params), proto_ver) == expected
+        assert typ.from_binary(struct.pack(">BI" + body_fmt, wkb_be, *params)) == expected
+        assert typ.from_binary(struct.pack("<BI" + body_fmt, wkb_le, *params)) == expected
 
     def test_both_endian(self):
         self._verify_both_endian(PointType, "dd", (WKBGeometryType.POINT, 1, 2), Point(1, 2))
@@ -52,8 +47,8 @@ class GeoTypes(unittest.TestCase):
         for cls in (LineString, Polygon):
             class_name = cls.__name__
             cql_type = lookup_casstype(class_name + 'Type')
-            assert str(cql_type.from_binary(cql_type.to_binary(cls(), 0), 0)) == class_name.upper() + " EMPTY"
-        assert str(PointType.from_binary(PointType.to_binary(Point(), 0), 0)) == "POINT (nan nan)"
+            assert str(cql_type.from_binary(cql_type.to_binary(cls()))) == class_name.upper() + " EMPTY"
+        assert str(PointType.from_binary(PointType.to_binary(Point()))) == "POINT (nan nan)"
 
     def test_str_wkt(self):
         assert str(Point(1., 2.)) == 'POINT (1.0 2.0)'

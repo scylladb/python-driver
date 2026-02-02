@@ -260,27 +260,9 @@ class ClusterTests(unittest.TestCase):
         if CASSANDRA_VERSION >= Version('4.0-beta5'):
             assert updated_protocol_version == cassandra.ProtocolVersion.V5
             assert updated_cluster_version == cassandra.ProtocolVersion.V5
-        elif CASSANDRA_VERSION >= Version('4.0-a'):
-            assert updated_protocol_version == cassandra.ProtocolVersion.V4
-            assert updated_cluster_version == cassandra.ProtocolVersion.V4
-        elif CASSANDRA_VERSION >= Version('3.11'):
-            assert updated_protocol_version == cassandra.ProtocolVersion.V4
-            assert updated_cluster_version == cassandra.ProtocolVersion.V4
-        elif CASSANDRA_VERSION >= Version('3.0'):
-            assert updated_protocol_version == cassandra.ProtocolVersion.V4
-            assert updated_cluster_version == cassandra.ProtocolVersion.V4
-        elif CASSANDRA_VERSION >= Version('2.2'):
-            assert updated_protocol_version == 4
-            assert updated_cluster_version == 4
-        elif CASSANDRA_VERSION >= Version('2.1'):
-            assert updated_protocol_version == 3
-            assert updated_cluster_version == 3
-        elif CASSANDRA_VERSION >= Version('2.0'):
-            assert updated_protocol_version == 2
-            assert updated_cluster_version == 2
         else:
-            assert updated_protocol_version == 1
-            assert updated_cluster_version == 1
+            assert updated_protocol_version == cassandra.ProtocolVersion.V4
+            assert updated_cluster_version == cassandra.ProtocolVersion.V4
 
         cluster.shutdown()
 
@@ -376,19 +358,19 @@ class ClusterTests(unittest.TestCase):
         Ensure that auth_providers are always callable
         """
         with pytest.raises(TypeError):
-            Cluster(auth_provider=1, protocol_version=1)
-        c = TestCluster(protocol_version=1)
+            Cluster(auth_provider=1, protocol_version=4)
+        c = TestCluster(protocol_version=4)
         with pytest.raises(TypeError):
             setattr(c, 'auth_provider', 1)
 
-    def test_v2_auth_provider(self):
+    def test_auth_provider(self):
         """
-        Check for v2 auth_provider compliance
+        Check for auth_provider compliance
         """
         bad_auth_provider = lambda x: {'username': 'foo', 'password': 'bar'}
         with pytest.raises(TypeError):
-            Cluster(auth_provider=bad_auth_provider, protocol_version=2)
-        c = TestCluster(protocol_version=2)
+            Cluster(auth_provider=bad_auth_provider, protocol_version=4)
+        c = TestCluster(protocol_version=4)
         with pytest.raises(TypeError):
             setattr(c, 'auth_provider', bad_auth_provider)
 
@@ -461,10 +443,6 @@ class ClusterTests(unittest.TestCase):
     def test_refresh_schema_type(self):
         if get_server_versions()[0] < (2, 1, 0):
             raise unittest.SkipTest('UDTs were introduced in Cassandra 2.1')
-
-        if PROTOCOL_VERSION < 3:
-            raise unittest.SkipTest('UDTs are not specified in change events for protocol v2')
-            # We may want to refresh types on keyspace change events in that case(?)
 
         cluster = TestCluster()
         session = cluster.connect()
@@ -1093,21 +1071,21 @@ class ClusterTests(unittest.TestCase):
         Originates from https://github.com/scylladb/python-driver/issues/120
         """
         for _ in range(10):
-            with TestCluster(protocol_version=3) as cluster:
+            with TestCluster() as cluster:
                 cluster.connect().execute("SELECT * FROM system_schema.keyspaces")
                 time.sleep(1)
 
-            with TestCluster(protocol_version=3) as cluster:
+            with TestCluster() as cluster:
                 session = cluster.connect()
                 for _ in range(5):
                     session.execute("SELECT * FROM system_schema.keyspaces")
 
             for _ in range(10):
-                with TestCluster(protocol_version=3) as cluster:
+                with TestCluster() as cluster:
                     cluster.connect().execute("SELECT * FROM system_schema.keyspaces")
 
             for _ in range(10):
-                with TestCluster(protocol_version=3) as cluster:
+                with TestCluster() as cluster:
                     cluster.connect()
 
             result = subprocess.run(["lsof -nP | awk '$3 ~ \":9042\" {print $0}' | grep ''"], shell=True, capture_output=True)

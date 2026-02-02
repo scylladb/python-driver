@@ -17,7 +17,7 @@ import unittest
 
 from cassandra.query import (SimpleStatement, BatchStatement, BatchType)
 
-from tests.integration import (use_singledc, PROTOCOL_VERSION, local, TestCluster,
+from tests.integration import (use_singledc, local, TestCluster,
                               requires_custom_payload)
 import pytest
 
