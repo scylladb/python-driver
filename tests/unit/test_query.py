@@ -78,10 +78,10 @@ class BatchStatementTest(unittest.TestCase):
             routing_key_indexes=[],
             query="INSERT INTO test.table (id) VALUES (1)",
             keyspace=None,
-            protocol_version=4,
             result_metadata=[],
             result_metadata_id=None,
             is_lwt=is_lwt,
+            column_encryption_policy=None,
         )
 
     def test_is_lwt_false_for_non_lwt_statements(self):
@@ -132,7 +132,7 @@ class PreparedStatementMetadataPairTest(unittest.TestCase):
     def _make_statement(result_metadata, result_metadata_id):
         return PreparedStatement(
             column_metadata=[], query_id=b'qid', routing_key_indexes=None,
-            query="SELECT * FROM foo", keyspace='ks', protocol_version=4,
+            query="SELECT * FROM foo", keyspace='ks',
             result_metadata=result_metadata, result_metadata_id=result_metadata_id)
 
     def test_constructor_sets_pair(self):

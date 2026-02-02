@@ -22,7 +22,7 @@ from cassandra.cqlengine.management import _get_table_metadata, sync_table, drop
 from cassandra.cqlengine.models import Model
 from cassandra.cqlengine import columns
 
-from tests.integration import PROTOCOL_VERSION, greaterthancass20, requires_collection_indexes, \
+from tests.integration import requires_collection_indexes, \
     MockLoggingHandler, CASSANDRA_VERSION, SCYLLA_VERSION, xfail_scylla
 from tests.integration.cqlengine.base import BaseCassEngTestCase
 from tests.integration.cqlengine.query.test_queryset import TestModel
@@ -368,11 +368,10 @@ class InconsistentTable(BaseCassEngTestCase):
             sync_table(BaseInconsistent)
             sync_table(ChangedInconsistent)
             assert 'differing from the model type' in mock_handler.messages.get('warning')[0]
-            if CASSANDRA_VERSION >= Version('2.1'):
-                sync_type(DEFAULT_KEYSPACE, BaseInconsistentType)
-                mock_handler.reset()
-                sync_type(DEFAULT_KEYSPACE, ChangedInconsistentType)
-                assert 'differing from the model user type' in mock_handler.messages.get('warning')[0]
+            sync_type(DEFAULT_KEYSPACE, BaseInconsistentType)
+            mock_handler.reset()
+            sync_type(DEFAULT_KEYSPACE, ChangedInconsistentType)
+            assert 'differing from the model user type' in mock_handler.messages.get('warning')[0]
 
 
 class TestIndexSetModel(Model):
@@ -431,7 +430,6 @@ class IndexTests(BaseCassEngTestCase):
         table_meta = management._get_table_metadata(IndexCaseSensitiveModel)
         assert management._get_index_name_by_column(table_meta, 'second_key') is not None
 
-    @greaterthancass20
     @requires_collection_indexes
     @xfail_scylla("scylladb/scylladb#22019 - Scylla incorrectly reports target as keys(%s) for sets")
     def test_sync_indexed_set(self):
@@ -463,9 +461,6 @@ class NonModelFailureTest(BaseCassEngTestCase):
 
 class StaticColumnTests(BaseCassEngTestCase):
     def test_static_columns(self):
-        if PROTOCOL_VERSION < 2:
-            raise unittest.SkipTest("Native protocol 2+ required, currently using: {0}".format(PROTOCOL_VERSION))
-
         class StaticModel(Model):
             id = columns.Integer(primary_key=True)
             c = columns.Integer(primary_key=True)

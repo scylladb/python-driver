@@ -52,12 +52,10 @@ COLLECTION_TYPES = sortedset([
 def update_datatypes():
     _cass_version, _cql_version = get_server_versions()
 
-    if _cass_version >= (2, 1, 0):
-        COLLECTION_TYPES.add('tuple')
+    COLLECTION_TYPES.add('tuple')
 
-    if _cass_version >= (2, 2, 0):
-        PRIMITIVE_DATATYPES.update(['date', 'time', 'smallint', 'tinyint'])
-        PRIMITIVE_DATATYPES_KEYS.update(['date', 'time', 'smallint', 'tinyint'])
+    PRIMITIVE_DATATYPES.update(['date', 'time', 'smallint', 'tinyint'])
+    PRIMITIVE_DATATYPES_KEYS.update(['date', 'time', 'smallint', 'tinyint'])
     if _cass_version >= (3, 10):
         PRIMITIVE_DATATYPES.add('duration')
 
