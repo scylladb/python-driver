@@ -232,9 +232,19 @@ def _atexit_cleanup():
     This wrapper ensures that cleanup receives the actual LibevLoop instance
     instead of None, which was the value of _global_loop when the module was
     imported.
+    
+    It also explicitly stops the event loop before cleanup to ensure the loop
+    breaks cleanly even if it's in the middle of processing events.
     """
     global _global_loop
     if _global_loop is not None:
+        # Stop the event loop before cleanup (thread-safe via async watcher)
+        if _global_loop._loop:
+            try:
+                _global_loop._loop.stop()
+            except Exception:
+                # If stop fails, continue with cleanup anyway
+                pass
         _cleanup(_global_loop)
 
 
