@@ -13,7 +13,6 @@
 # limitations under the License.
 import atexit
 from collections import deque
-from functools import partial
 import logging
 import os
 import socket
@@ -227,8 +226,20 @@ class LibevLoop(object):
             self._notifier.send()
 
 
+def _atexit_cleanup():
+    """Cleanup function called by atexit that uses the current _global_loop value.
+    
+    This wrapper ensures that cleanup receives the actual LibevLoop instance
+    instead of None, which was the value of _global_loop when the module was
+    imported.
+    """
+    global _global_loop
+    if _global_loop is not None:
+        _cleanup(_global_loop)
+
+
 _global_loop = None
-atexit.register(partial(_cleanup, _global_loop))
+atexit.register(_atexit_cleanup)
 
 
 class LibevConnection(Connection):
