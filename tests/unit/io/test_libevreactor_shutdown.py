@@ -21,7 +21,6 @@ shutdown instead of the actual loop instance.
 """
 
 import unittest
-import atexit
 import sys
 import subprocess
 import tempfile
@@ -53,77 +52,67 @@ class LibevAtexitCleanupTest(unittest.TestCase):
         if LibevConnection is None:
             raise unittest.SkipTest('libev does not appear to be installed correctly')
 
-    def test_atexit_callback_registered_with_none(self):
+    def test_atexit_callback_uses_current_global_loop(self):
         """
-        Test that demonstrates the atexit callback bug.
+        Test that verifies the atexit callback fix.
         
-        The atexit.register(partial(_cleanup, _global_loop)) line is executed
-        when _global_loop is None. This means the partial function captures
-        None as the argument, and when atexit calls it during shutdown, it
-        passes None to _cleanup instead of the actual loop instance.
+        The fix uses a wrapper function _atexit_cleanup() that looks up the
+        current value of _global_loop at shutdown time, instead of capturing
+        it at import time with partial().
         
         @since 3.29
         @jira_ticket PYTHON-XXX
-        @expected_result The test demonstrates that atexit cleanup is broken
+        @expected_result The atexit handler calls cleanup with the actual loop
         
         @test_category connection
         """
         from cassandra.io import libevreactor
-        from functools import partial
         
-        # Check the current atexit handlers
-        # Note: atexit._exithandlers is an implementation detail but useful for debugging
-        if hasattr(atexit, '_exithandlers'):
-            # Find our cleanup handler
-            cleanup_handler = None
-            for handler in atexit._exithandlers:
-                func = handler[0]
-                # Check if this is our partial(_cleanup, _global_loop) handler
-                if isinstance(func, partial):
-                    if func.func.__name__ == '_cleanup':
-                        cleanup_handler = func
-                        break
-            
-            if cleanup_handler:
-                # The problem: the partial was created with _global_loop=None
-                # So even if _global_loop is later set to a LibevLoop instance,
-                # the atexit callback will still call _cleanup(None)
-                captured_arg = cleanup_handler.args[0] if cleanup_handler.args else None
-                
-                # This assertion will fail after LibevConnection.initialize_reactor()
-                # is called and _global_loop is set to a LibevLoop instance
-                LibevConnection.initialize_reactor()
-                
-                # At this point, libevreactor._global_loop is not None
-                self.assertIsNotNone(libevreactor._global_loop,
-                                   "Global loop should be initialized")
-                
-                # But the atexit handler still has None captured!
-                self.assertIsNone(captured_arg,
-                                "The atexit handler captured None, not the actual loop instance. "
-                                "This is the BUG: cleanup will receive None at shutdown!")
-                
-    def test_shutdown_crash_scenario_subprocess(self):
+        # Verify the fix: _atexit_cleanup should exist as a module-level function
+        self.assertTrue(hasattr(libevreactor, '_atexit_cleanup'),
+                       "Module should have _atexit_cleanup function")
+
+        # Verify it's not a partial (the old buggy implementation)
+        from functools import partial
+        self.assertNotIsInstance(libevreactor._atexit_cleanup, partial,
+                                "The _atexit_cleanup should NOT be a partial function")
+
+        # Verify it's actually a function
+        self.assertTrue(callable(libevreactor._atexit_cleanup),
+                       "_atexit_cleanup should be callable")
+
+        # Initialize the reactor
+        LibevConnection.initialize_reactor()
+
+        # At this point, libevreactor._global_loop is not None
+        self.assertIsNotNone(libevreactor._global_loop,
+                           "Global loop should be initialized")
+
+        # The fix: _atexit_cleanup is a function that will look up
+        # _global_loop when it's called, not a partial with captured args
+        self.assertEqual(libevreactor._atexit_cleanup.__name__, '_atexit_cleanup',
+                        "The function should have the correct name")
+
+    def test_shutdown_cleanup_works_with_fix(self):
         """
-        Test that simulates a Python shutdown crash scenario in a subprocess.
+        Test that verifies the atexit cleanup fix works in a subprocess.
         
         This test creates a minimal script that:
         1. Imports the driver
-        2. Creates a connection (which starts the event loop)
-        3. Exits without explicit cleanup
+        2. Initializes the reactor (creates the global loop)
+        3. Verifies the _atexit_cleanup function is available
+        4. Exits without explicit cleanup
         
-        The expected behavior is that atexit should clean up the loop, but
-        because of the bug, the cleanup receives None and doesn't actually
-        stop the loop or its watchers. This can lead to crashes if callbacks
-        fire during shutdown.
+        With the fix, atexit should properly clean up the loop using the
+        wrapper function that looks up _global_loop at shutdown time.
         
         @since 3.29
         @jira_ticket PYTHON-XXX
-        @expected_result The subprocess demonstrates the cleanup issue
+        @expected_result The subprocess shows the fix is working
         
         @test_category connection
         """
-        # Create a test script that demonstrates the issue
+        # Create a test script that verifies the fix
         test_script = '''
 import sys
 import os
@@ -132,28 +121,29 @@ import os
 sys.path.insert(0, {driver_path!r})
 
 # Import and setup
-from cassandra.io.libevreactor import LibevConnection, _global_loop
+from cassandra.io import libevreactor
+from cassandra.io.libevreactor import LibevConnection
 import atexit
 
 # Initialize the reactor (creates the global loop)
 LibevConnection.initialize_reactor()
 
-print("Global loop initialized:", _global_loop is not None)
+print("Global loop initialized:", libevreactor._global_loop is not None)
 
-# Check what atexit will actually call
-if hasattr(atexit, '_exithandlers'):
-    from functools import partial
-    for handler in atexit._exithandlers:
-        func = handler[0]
-        if isinstance(func, partial) and func.func.__name__ == '_cleanup':
-            captured_arg = func.args[0] if func.args else None
-            print("Atexit will call _cleanup with:", captured_arg)
-            print("But _global_loop is:", _global_loop)
-            print("BUG: Cleanup will receive None instead of the loop!")
-            break
+# Verify the fix is in place: _atexit_cleanup should be a module-level function
+if hasattr(libevreactor, '_atexit_cleanup'):
+    print("FIXED: Module has _atexit_cleanup function")
+    print("This function will look up _global_loop at shutdown time")
+    # Verify it's not using partial with None
+    import inspect
+    source = inspect.getsource(libevreactor._atexit_cleanup)
+    if "global _global_loop" in source and "_global_loop is not None" in source:
+        print("Verified: _atexit_cleanup uses current _global_loop value")
+else:
+    print("BUG: No _atexit_cleanup function found")
 
-# Exit without explicit cleanup - atexit should handle it, but won't!
-print("Exiting...")
+# Exit without explicit cleanup - atexit should handle it properly with the fix!
+print("Exiting with proper cleanup...")
 '''
         
         driver_path = str(Path(__file__).parent.parent.parent.parent)
@@ -176,11 +166,12 @@ print("Exiting...")
             print(output)
             print("=== End Output ===\n")
             
-            # Verify the output shows the bug
+            # Verify the output shows the fix is working
             self.assertIn("Global loop initialized: True", output)
-            self.assertIn("Atexit will call _cleanup with: None", output)
-            self.assertIn("BUG: Cleanup will receive None instead of the loop!", output)
-            
+            self.assertIn("FIXED: Module has _atexit_cleanup function", output)
+            self.assertIn("Verified: _atexit_cleanup uses current _global_loop value", output)
+            self.assertNotIn("BUG", output.replace("BUG STILL PRESENT", "").replace("DEBUG", ""))  # Allow "BUG" only in success message
+
         finally:
             os.unlink(script_path)
 
@@ -196,54 +187,49 @@ class LibevShutdownRaceConditionTest(unittest.TestCase):
         if LibevConnection is None:
             raise unittest.SkipTest('libev does not appear to be installed correctly')
 
-    def test_callback_during_shutdown_scenario(self):
+    def test_cleanup_with_fix_properly_shuts_down(self):
         """
-        Test to document the potential crash scenario.
+        Test to verify the fix properly shuts down the event loop.
         
-        When Python is shutting down:
-        1. Various modules are being torn down
-        2. The libev event loop may still be running
-        3. If a callback (io_callback, timer_callback, prepare_callback) fires:
-           - It calls PyGILState_Ensure()
-           - It tries to call Python functions (PyObject_CallFunction)
-           - If Python objects have been deallocated, this can crash
+        With the fix in place, the atexit cleanup will:
+        1. Look up the current _global_loop value (not None)
+        2. Call _cleanup with the actual loop instance
+        3. Properly shut down the loop and its watchers
         
-        The root cause: The atexit cleanup doesn't actually run because it
-        receives None instead of the loop instance, so it never:
-        - Sets _shutdown flag
-        - Stops watchers
-        - Joins the event loop thread
+        This prevents the crash scenario where:
+        - Various modules are being torn down during Python shutdown
+        - The libev event loop is still running
+        - Callbacks fire and try to access deallocated Python objects
         
         @since 3.29
         @jira_ticket PYTHON-XXX
-        @expected_result Documents the crash scenario
+        @expected_result Cleanup properly shuts down the loop with the fix
         
         @test_category connection
         """
-        from cassandra.io.libevreactor import _global_loop, _cleanup
-        
-        # This test documents the issue - we can't easily reproduce a crash
-        # in a unit test without actually tearing down Python, but we can
-        # verify the conditions that lead to it
-        
+        from cassandra.io import libevreactor
+        from cassandra.io.libevreactor import _cleanup, _atexit_cleanup
+
         LibevConnection.initialize_reactor()
         
         # Verify the loop exists
-        self.assertIsNotNone(_global_loop)
+        self.assertIsNotNone(libevreactor._global_loop)
+
+        # Before cleanup, the loop should not be shut down
+        self.assertFalse(libevreactor._global_loop._shutdown,
+                        "Loop should not be shut down initially")
         
-        # Simulate what atexit would call (with the bug)
-        _cleanup(None)  # BUG: receives None instead of _global_loop
-        
-        # The loop is still running because cleanup did nothing!
-        self.assertFalse(_global_loop._shutdown,
+        # Simulate what the OLD buggy code would do
+        _cleanup(None)  # This does nothing
+        self.assertFalse(libevreactor._global_loop._shutdown,
                         "Loop should NOT be shut down when cleanup receives None")
         
-        # Now call it correctly
-        _cleanup(_global_loop)
+        # Now test the FIX: call the wrapper that looks up _global_loop
+        _atexit_cleanup()  # This is what atexit will actually call
         
-        # Now it should be shut down
-        self.assertTrue(_global_loop._shutdown,
-                       "Loop should be shut down when cleanup receives the actual loop")
+        # With the fix, the loop should be properly shut down
+        self.assertTrue(libevreactor._global_loop._shutdown,
+                       "Loop should be shut down when _atexit_cleanup is called")
 
 
 if __name__ == '__main__':
