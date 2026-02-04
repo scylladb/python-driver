@@ -44,7 +44,11 @@ def make_recv_results_rows(ColumnParser colparser):
             reader.buf_ptr = reader.buf
             reader.pos = 0
             rowcount = read_int(reader)
-            for i in range(rowcount):
-                rowparser.unpack_row(reader, desc)
+            if desc.column_encryption_policy:
+                for i in range(rowcount):
+                    rowparser.unpack_col_encrypted_row(reader, desc)
+            else:
+                for i in range(rowcount):
+                    rowparser.unpack_plain_row(reader, desc)
 
     return recv_results_rows

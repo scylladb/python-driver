@@ -636,28 +636,51 @@ class BoundStatement(Statement):
 
         self.raw_values = values
         self.values = []
-        for value, col_spec in zip(values, col_meta):
-            if value is None:
-                self.values.append(None)
-            elif value is UNSET_VALUE:
-                if proto_version >= 4:
-                    self._append_unset_value()
+        if ce_policy:
+            for value, col_spec in zip(values, col_meta):
+                if value is None:
+                    self.values.append(None)
+                elif value is UNSET_VALUE:
+                    if proto_version >= 4:
+                        self._append_unset_value()
+                    else:
+                        raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
                 else:
-                    raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
-            else:
-                try:
-                    col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
-                    uses_ce = ce_policy and ce_policy.contains_column(col_desc)
-                    col_type = ce_policy.column_type(col_desc) if uses_ce else col_spec.type
-                    col_bytes = col_type.serialize(value, proto_version)
-                    if uses_ce:
-                        col_bytes = ce_policy.encrypt(col_desc, col_bytes)
-                    self.values.append(col_bytes)
-                except (TypeError, struct.error) as exc:
-                    actual_type = type(value)
-                    message = ('Received an argument of invalid type for column "%s". '
-                               'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
-                    raise TypeError(message)
+                    try:
+                        col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
+                        uses_ce = ce_policy.contains_column(col_desc)
+                        if uses_ce:
+                            col_type = ce_policy.column_type(col_desc)
+                            col_bytes = col_type.serialize(value, proto_version)
+                            col_bytes = ce_policy.encrypt(col_desc, col_bytes)
+                        else:
+                            col_type = col_spec.type
+                            col_bytes = col_type.serialize(value, proto_version)
+                        self.values.append(col_bytes)
+                    except (TypeError, struct.error) as exc:
+                        actual_type = type(value)
+                        message = ('Received an argument of invalid type for column "%s". '
+                                   'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
+                        raise TypeError(message)
+        else:
+            for value, col_spec in zip(values, col_meta):
+                if value is None:
+                    self.values.append(None)
+                elif value is UNSET_VALUE:
+                    if proto_version >= 4:
+                        self._append_unset_value()
+                    else:
+                        raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
+                else:
+                    try:
+                        col_type = col_spec.type
+                        col_bytes = col_type.serialize(value, proto_version)
+                        self.values.append(col_bytes)
+                    except (TypeError, struct.error) as exc:
+                        actual_type = type(value)
+                        message = ('Received an argument of invalid type for column "%s". '
+                                   'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
+                        raise TypeError(message)
 
         if proto_version >= 4:
             diff = col_meta_len - len(self.values)
