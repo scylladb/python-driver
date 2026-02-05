@@ -62,8 +62,7 @@ cdef class DesDecimalType(Deserializer):
 
         # Create a view of the remaining bytes (after the 4-byte scale)
         cdef Buffer varint_buf
-        varint_buf.ptr = buf.ptr + 4
-        varint_buf.size = buf.size - 4
+        from_ptr_and_size(buf.ptr + 4, buf.size - 4, &varint_buf)
         unscaled = varint_unpack(&varint_buf)
 
         return Decimal('%de%d' % (unscaled, -scale))
@@ -254,9 +253,7 @@ cdef inline int subelem(
 
     _unpack_len(buf, offset[0], &elemlen)
     offset[0] += sizeof(int32_t)
-    # Direct pointer assignment instead of slice_buffer
-    elem_buf.ptr = buf.ptr + offset[0]
-    elem_buf.size = elemlen
+    from_ptr_and_size(buf.ptr + offset[0], elemlen, elem_buf)
     offset[0] += elemlen
     return 0
 
@@ -339,9 +336,7 @@ cdef class DesTupleType(_DesParameterizedType):
                 itemlen = <int32_t>ntohl((<uint32_t*>(buf.ptr + p))[0])
                 p += 4
                 if itemlen >= 0:
-                    # Direct pointer assignment instead of slice_buffer
-                    item_buf.ptr = buf.ptr + p
-                    item_buf.size = itemlen
+                    from_ptr_and_size(buf.ptr + p, itemlen, &item_buf)
                     p += itemlen
 
                     deserializer = self.deserializers[i]
@@ -387,9 +382,7 @@ cdef class DesCompositeType(_DesParameterizedType):
                 break
 
             element_length = unpack_num[uint16_t](buf)
-            # Direct pointer assignment instead of slice_buffer
-            elem_buf.ptr = buf.ptr + 2
-            elem_buf.size = element_length
+            from_ptr_and_size(buf.ptr + 2, element_length, &elem_buf)
 
             deserializer = self.deserializers[i]
             item = from_binary(deserializer, &elem_buf, protocol_version)

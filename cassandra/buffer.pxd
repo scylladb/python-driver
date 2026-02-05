@@ -41,4 +41,8 @@ cdef inline char *buf_read(Buffer *buf, Py_ssize_t size) except NULL:
         raise IndexError("Requested more than length of buffer")
     return buf.ptr
 
+cdef inline void from_ptr_and_size(char *ptr, Py_ssize_t size, Buffer *buf):
+    buf.ptr = ptr
+    buf.size = size
+
 
