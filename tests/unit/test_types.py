@@ -541,6 +541,25 @@ class VectorTests(unittest.TestCase):
         with pytest.raises(ValueError, match="Additional bytes remaining after vector deserialization completed"):
             ctype_four.deserialize(ctype_five_bytes, 0)
 
+    def test_subclass_vectors_keep_element_overrides(self):
+        # Bulk struct/NumPy codecs must not bypass a subclass's own codecs.
+        class OffsetInt32Type(Int32Type):
+            @staticmethod
+            def serialize(val, protocol_version):
+                return Int32Type.serialize(val + 100, protocol_version)
+
+            @staticmethod
+            def deserialize(byts, protocol_version):
+                return Int32Type.deserialize(byts, protocol_version) - 100
+
+        for vsize in (3, 64):
+            ctype = VectorType.apply_parameters([OffsetInt32Type, vsize], None)
+            assert ctype._vector_struct is None
+            data = list(range(vsize))
+            data_bytes = ctype.serialize(data, 0)
+            assert data_bytes == b''.join(int32_pack(v + 100) for v in data)
+            assert ctype.deserialize(data_bytes, 0) == data
+
 
 ZERO = datetime.timedelta(0)
 

@@ -1481,6 +1481,8 @@ class VectorType(_CassandraType):
     typename = 'vector'
     vector_size = 0
     subtype = None
+    _vector_struct = None  # Cached struct.Struct for bulk deserialization
+    _struct_format_map = {}  # Populated after FloatType etc. are defined
 
     @classmethod
     def serial_size(cls):
@@ -1492,7 +1494,12 @@ class VectorType(_CassandraType):
         assert len(params) == 2
         subtype = lookup_casstype(params[0])
         vsize = params[1]
-        return type('%s(%s)' % (cls.cass_parameterized_type_with([]), vsize), (cls,), {'vector_size': vsize, 'subtype': subtype})
+        # Bulk struct codec only for exact fixed-size classes: a subclass may
+        # override serialize/deserialize, and smallint/tinyint are vint-framed.
+        fmt_char = cls._struct_format_map.get(subtype) if subtype.serial_size() is not None else None
+        vector_struct = struct.Struct(f'>{vsize}{fmt_char}') if fmt_char else None
+        return type('%s(%s)' % (cls.cass_parameterized_type_with([]), vsize), (cls,),
+                     {'vector_size': vsize, 'subtype': subtype, '_vector_struct': vector_struct})
 
     @classmethod
     def deserialize(cls, byts, protocol_version):
@@ -1503,25 +1510,54 @@ class VectorType(_CassandraType):
                 raise ValueError(
                     "Expected vector of type {0} and dimension {1} to have serialized size {2}; observed serialized size of {3} instead"\
                     .format(cls.subtype.typename, cls.vector_size, expected_byte_size, len(byts)))
-            indexes = (serialized_size * x for x in range(0, cls.vector_size))
-            return [cls.subtype.deserialize(byts[idx:idx + serialized_size], protocol_version) for idx in indexes]
 
+            # Bulk deserialization for common numeric types via a cached struct.Struct
+            if cls._vector_struct is not None:
+                return list(cls._vector_struct.unpack(byts))
+            # Fallback: element-by-element deserialization for other fixed-size types
+            result = [None] * cls.vector_size
+            subtype_deserialize = cls.subtype.deserialize
+            offset = 0
+            for i in range(cls.vector_size):
+                result[i] = subtype_deserialize(byts[offset:offset + serialized_size], protocol_version)
+                offset += serialized_size
+            return result
+
+        # Variable-size subtype path
+        result = [None] * cls.vector_size
         idx = 0
-        rv = []
-        while (len(rv) < cls.vector_size):
+        byts_len = len(byts)
+        subtype_deserialize = cls.subtype.deserialize
+
+        for i in range(cls.vector_size):
+            if idx >= byts_len:
+                raise ValueError("Error reading additional data during vector deserialization after successfully adding {} elements"
+                    .format(i))
+
             try:
                 size, bytes_read = uvint_unpack(byts[idx:])
-                idx += bytes_read
-                rv.append(cls.subtype.deserialize(byts[idx:idx + size], protocol_version))
-                idx += size
-            except:
-                raise ValueError("Error reading additional data during vector deserialization after successfully adding {} elements"\
-                .format(len(rv)))
+            except IndexError:
+                raise ValueError("Error reading additional data during vector deserialization after successfully adding {} elements"
+                    .format(i))
 
-        # If we have any additional data in the serialized vector treat that as an error as well
-        if idx < len(byts):
+            idx += bytes_read
+
+            if idx + size > byts_len:
+                raise ValueError("Error reading additional data during vector deserialization after successfully adding {} elements"
+                    .format(i))
+
+            try:
+                result[i] = subtype_deserialize(byts[idx:idx + size], protocol_version)
+            except Exception as e:
+                raise ValueError("Error deserializing element {} during vector deserialization after successfully adding {} elements"
+                    .format(i, i)) from e
+            idx += size
+
+        # Check for additional data
+        if idx < byts_len:
             raise ValueError("Additional bytes remaining after vector deserialization completed")
-        return rv
+
+        return result
 
     @classmethod
     def serialize(cls, v, protocol_version):
@@ -1532,6 +1568,9 @@ class VectorType(_CassandraType):
                 .format(cls.vector_size, cls.subtype.typename, v_length))
 
         serialized_size = cls.subtype.serial_size()
+        # Bulk serialization for known numeric types (symmetric with struct.unpack in deserialize)
+        if cls._vector_struct is not None and serialized_size is not None:
+            return cls._vector_struct.pack(*v)
         buf = io.BytesIO()
         for item in v:
             item_bytes = cls.subtype.serialize(item, protocol_version)
@@ -1543,3 +1582,12 @@ class VectorType(_CassandraType):
     @classmethod
     def cql_parameterized_type(cls):
         return "%s<%s, %s>" % (cls.typename, cls.subtype.cql_parameterized_type(), cls.vector_size)
+
+
+# Exact fixed-size classes only; smallint/tinyint vector elements are vint-framed on the wire.
+VectorType._struct_format_map = {
+    FloatType: 'f',
+    DoubleType: 'd',
+    Int32Type: 'i',
+    LongType: 'q',
+}
