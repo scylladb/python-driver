@@ -42,6 +42,11 @@ cdef inline char *buf_read(Buffer *buf, Py_ssize_t size) except NULL:
     return buf.ptr
 
 cdef inline void from_ptr_and_size(char *ptr, Py_ssize_t size, Buffer *buf):
+    """Initialize buf from ptr and size.
+
+    Negative sizes are valid sentinel values: -1 means NULL, -2 means not-set.
+    Callers should check buf.size < 0 to detect these cases.
+    """
     buf.ptr = ptr
     buf.size = size
 
