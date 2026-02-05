@@ -62,8 +62,7 @@ cdef class DesDecimalType(Deserializer):
 
         # Create a view of the remaining bytes (after the 4-byte scale)
         cdef Buffer varint_buf
-        varint_buf.ptr = buf.ptr + 4
-        varint_buf.size = buf.size - 4
+        from_ptr_and_size(buf.ptr + 4, buf.size - 4, &varint_buf)
         unscaled = varint_unpack(&varint_buf)
 
         return Decimal('%de%d' % (unscaled, -scale))
@@ -183,6 +182,7 @@ cdef class DesVarcharType(DesUTF8Type):
     pass
 
 
+
 cdef class _DesParameterizedType(Deserializer):
 
     cdef object subtypes
@@ -249,22 +249,40 @@ cdef inline int subelem(
     Read the next element from the buffer: first read the size (in bytes) of the
     element, then fill elem_buf with a newly sliced buffer of this size (and the
     right offset).
+
+    Protocol: n >= 0: n bytes follow
+              n == -1: NULL value
+              n == -2: not set value
+              n < -2: invalid
     """
     cdef int32_t elemlen
 
     _unpack_len(buf, offset[0], &elemlen)
     offset[0] += sizeof(int32_t)
-    # Direct pointer assignment instead of slice_buffer
-    elem_buf.ptr = buf.ptr + offset[0]
-    elem_buf.size = elemlen
-    offset[0] += elemlen
-    return 0
+
+    # Happy path: non-negative length element that fits in buffer
+    if elemlen >= 0:
+        if offset[0] + elemlen <= buf.size:
+            from_ptr_and_size(buf.ptr + offset[0], elemlen, elem_buf)
+            offset[0] += elemlen
+            return 0
+        raise IndexError("Element length %d at offset %d exceeds buffer size %d" % (elemlen, offset[0], buf.size))
+    # NULL value (-1) or not set value (-2)
+    elif elemlen == -1 or elemlen == -2:
+        from_ptr_and_size(NULL, elemlen, elem_buf)
+        return 0
+    # Invalid value (n < -2)
+    else:
+        raise ValueError("Invalid element length %d at offset %d" % (elemlen, offset[0]))
 
 
 cdef inline int _unpack_len(Buffer *buf, int offset, int32_t *output) except -1:
-    """Read a big-endian int32 at the given offset using direct pointer access."""
-    cdef uint32_t *src = <uint32_t*>(buf.ptr + offset)
-    output[0] = <int32_t>ntohl(src[0])
+    """Read a big-endian int32 at the given offset using memcpy for alignment safety."""
+    if offset + sizeof(int32_t) > buf.size:
+        raise IndexError("Cannot read length field: offset %d + 4 exceeds buffer size %d" % (offset, buf.size))
+    cdef uint32_t temp
+    memcpy(&temp, buf.ptr + offset, sizeof(uint32_t))
+    output[0] = <int32_t>ntohl(temp)
     return 0
 
 #--------------------------------------------------------------------------
@@ -322,6 +340,7 @@ cdef class DesTupleType(_DesParameterizedType):
     cdef deserialize(self, Buffer *buf, int protocol_version):
         cdef Py_ssize_t i, p
         cdef int32_t itemlen
+        cdef uint32_t _tuple_tmp
         cdef tuple res = tuple_new(self.subtypes_len)
         cdef Buffer item_buf
         cdef Deserializer deserializer
@@ -334,18 +353,25 @@ cdef class DesTupleType(_DesParameterizedType):
         values = []
         for i in range(self.subtypes_len):
             item = None
-            if p < buf.size:
-                # Read itemlen directly using ntohl instead of slice_buffer
-                itemlen = <int32_t>ntohl((<uint32_t*>(buf.ptr + p))[0])
+            if p + 4 <= buf.size:
+                # Read itemlen using memcpy for alignment safety
+                memcpy(&_tuple_tmp, buf.ptr + p, 4)
+                itemlen = <int32_t>ntohl(_tuple_tmp)
                 p += 4
-                if itemlen >= 0:
-                    # Direct pointer assignment instead of slice_buffer
-                    item_buf.ptr = buf.ptr + p
-                    item_buf.size = itemlen
+
+                if itemlen >= 0 and p + itemlen <= buf.size:
+                    from_ptr_and_size(buf.ptr + p, itemlen, &item_buf)
                     p += itemlen
 
                     deserializer = self.deserializers[i]
                     item = from_binary(deserializer, &item_buf, protocol_version)
+                elif itemlen < 0:
+                    # NULL value, item stays None
+                    pass
+                else:
+                    raise IndexError("Tuple item length %d at offset %d exceeds buffer size %d" % (itemlen, p, buf.size))
+            elif p < buf.size:
+                raise IndexError("Cannot read tuple item length at offset %d: only %d bytes remain" % (p, buf.size - p))
 
             tuple_set(res, i, item)
 
@@ -387,19 +413,23 @@ cdef class DesCompositeType(_DesParameterizedType):
                 break
 
             element_length = unpack_num[uint16_t](buf)
-            # Direct pointer assignment instead of slice_buffer
-            elem_buf.ptr = buf.ptr + 2
-            elem_buf.size = element_length
 
-            deserializer = self.deserializers[i]
-            item = from_binary(deserializer, &elem_buf, protocol_version)
-            tuple_set(res, i, item)
+            # Validate that we have enough data for the element and EOC byte (happy path check)
+            if 2 + element_length + 1 <= buf.size:
+                from_ptr_and_size(buf.ptr + 2, element_length, &elem_buf)
 
-            # skip element length, element, and the EOC (one byte)
-            # Advance buffer in-place with direct assignment
-            start = 2 + element_length + 1
-            buf.ptr = buf.ptr + start
-            buf.size = buf.size - start
+                deserializer = self.deserializers[i]
+                item = from_binary(deserializer, &elem_buf, protocol_version)
+                tuple_set(res, i, item)
+
+                # skip element length, element, and the EOC (one byte)
+                # Advance buffer in-place with direct assignment
+                start = 2 + element_length + 1
+                buf.ptr = buf.ptr + start
+                buf.size = buf.size - start
+            else:
+                raise IndexError("Composite element length %d requires %d bytes but only %d remain" %
+                                (element_length, 2 + element_length + 1, buf.size))
 
         return res
 
