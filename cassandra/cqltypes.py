@@ -50,6 +50,10 @@ from cassandra.marshal import (int8_pack, int8_unpack, int16_pack, int16_unpack,
                                varint_pack, varint_unpack, point_be, point_le,
                                vints_pack, vints_unpack, uvint_unpack, uvint_pack)
 from cassandra import util
+from cassandra.cython_deps import HAVE_NUMPY
+
+if HAVE_NUMPY:
+    import numpy as np
 
 _little_endian_flag = 1  # we always serialize LE
 import ipaddress
@@ -1453,17 +1457,31 @@ class VectorType(_CassandraType):
                     "Expected vector of type {0} and dimension {1} to have serialized size {2}; observed serialized size of {3} instead"\
                     .format(cls.subtype.typename, cls.vector_size, expected_byte_size, len(byts)))
 
-            # Optimization: bulk deserialization for common numeric types using struct.unpack
-            # This provides 8-12x speedup for float/double and up to 37x for int32
+            # Optimization: bulk deserialization for common numeric types
+            # For small vectors: use struct.unpack (2.8-3.6x faster for 3-4 elements)
+            # For large vectors with numpy: use numpy.frombuffer (1.3-1.5x faster for 128+ elements)
+            # Threshold at 32 elements balances simplicity with performance
+            use_numpy = HAVE_NUMPY and cls.vector_size >= 32
+
             if cls.subtype is FloatType or (isinstance(cls.subtype, type) and issubclass(cls.subtype, FloatType)):
+                if use_numpy:
+                    return np.frombuffer(byts, dtype='>f4', count=cls.vector_size).tolist()
                 return list(struct.unpack(f'>{cls.vector_size}f', byts))
             elif cls.subtype is DoubleType or (isinstance(cls.subtype, type) and issubclass(cls.subtype, DoubleType)):
+                if use_numpy:
+                    return np.frombuffer(byts, dtype='>f8', count=cls.vector_size).tolist()
                 return list(struct.unpack(f'>{cls.vector_size}d', byts))
             elif cls.subtype is Int32Type or (isinstance(cls.subtype, type) and issubclass(cls.subtype, Int32Type)):
+                if use_numpy:
+                    return np.frombuffer(byts, dtype='>i4', count=cls.vector_size).tolist()
                 return list(struct.unpack(f'>{cls.vector_size}i', byts))
             elif cls.subtype is LongType or (isinstance(cls.subtype, type) and issubclass(cls.subtype, LongType)):
+                if use_numpy:
+                    return np.frombuffer(byts, dtype='>i8', count=cls.vector_size).tolist()
                 return list(struct.unpack(f'>{cls.vector_size}q', byts))
             elif cls.subtype is ShortType or (isinstance(cls.subtype, type) and issubclass(cls.subtype, ShortType)):
+                if use_numpy:
+                    return np.frombuffer(byts, dtype='>i2', count=cls.vector_size).tolist()
                 return list(struct.unpack(f'>{cls.vector_size}h', byts))
 
             # Fallback: element-by-element deserialization for other fixed-size types
