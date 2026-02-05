@@ -48,6 +48,7 @@ cdef inline num_t unpack_num(Buffer *buf, num_t *dummy=NULL): # dummy pointer be
     cdef char *src = buf_read(buf, sizeof(num_t))
     cdef num_t ret
     cdef char *out = <char*> &ret
+    cdef uint32_t temp32  # For float byte-swapping
 
     # Copy to aligned location first
     memcpy(&ret, src, sizeof(num_t))
@@ -60,8 +61,13 @@ cdef inline num_t unpack_num(Buffer *buf, num_t *dummy=NULL): # dummy pointer be
         return <num_t>ntohs(<uint16_t>ret)
     elif num_t is int32_t or num_t is uint32_t:
         return <num_t>ntohl(<uint32_t>ret)
+    elif num_t is float:
+        # For float, reinterpret bits as uint32, swap, then reinterpret back
+        temp32 = (<uint32_t*>&ret)[0]
+        temp32 = ntohl(temp32)
+        return (<float*>&temp32)[0]
     else:
-        # 64-bit, float, double, or 8-bit: use byte-swap loop (8-bit loop is no-op)
+        # 64-bit, double, or 8-bit: use byte-swap loop (8-bit loop is no-op)
         for i in range(sizeof(num_t)):
             out[sizeof(num_t) - i - 1] = src[i]
         return ret
