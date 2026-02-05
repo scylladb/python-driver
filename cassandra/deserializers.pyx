@@ -13,14 +13,17 @@
 # limitations under the License.
 
 
-from libc.stdint cimport int32_t, uint16_t, uint32_t
+from libc.stdint cimport int32_t, int64_t, int16_t, uint16_t, uint32_t
+from libc.string cimport memcpy
 
 include 'cython_marshal.pyx'
-from cassandra.buffer cimport Buffer, to_bytes, slice_buffer
+from cassandra.buffer cimport Buffer, to_bytes, from_ptr_and_size
 from cassandra.cython_utils cimport datetime_from_timestamp, datetime_from_ms_timestamp
 
 from cython.view cimport array as cython_array
 from cassandra.tuple cimport tuple_new, tuple_set
+from cpython.buffer cimport PyBUF_READ
+from cpython.memoryview cimport PyMemoryView_FromMemory
 
 import socket
 from decimal import Decimal
@@ -28,6 +31,20 @@ from uuid import UUID
 
 from cassandra import cqltypes
 from cassandra import util
+
+# Independent numpy-availability check. We deliberately do NOT import this from
+# cassandra.cython_deps: that module imports cassandra.row_parser, which in turn
+# imports this module (cassandra.deserializers) for make_deserializers(). Importing
+# cassandra.cython_deps from here would close that cycle while cython_deps is still
+# mid-import, so Python would see it as a partially-initialized module and raise
+# ImportError trying to resolve HAVE_NUMPY -- which cython_deps' own try/except then
+# swallows, spuriously setting HAVE_CYTHON = False even though this extension built
+# and imported fine. Doing our own independent check avoids the cycle entirely.
+try:
+    import numpy as np
+    HAVE_NUMPY = True
+except ImportError:
+    HAVE_NUMPY = False
 
 cdef class Deserializer:
     """Cython-based deserializer class for a cqltype"""
@@ -182,8 +199,264 @@ cdef class DesVarcharType(DesUTF8Type):
     pass
 
 
+#--------------------------------------------------------------------------
+# Vector deserialization
+
+cdef inline bint _is_float_type(object subtype):
+    return subtype is cqltypes.FloatType or issubclass(subtype, cqltypes.FloatType)
+
+cdef inline bint _is_double_type(object subtype):
+    return subtype is cqltypes.DoubleType or issubclass(subtype, cqltypes.DoubleType)
+
+cdef inline bint _is_int32_type(object subtype):
+    return subtype is cqltypes.Int32Type or issubclass(subtype, cqltypes.Int32Type)
+
+cdef inline bint _is_int64_type(object subtype):
+    return subtype is cqltypes.LongType or issubclass(subtype, cqltypes.LongType)
+
+# NOTE: ShortType (smallint) is intentionally NOT treated as fixed-width here.
+# Unlike FloatType/DoubleType/Int32Type/LongType, Cassandra 5.0 encodes smallint
+# elements of a vector as vint-prefixed (variable-length) values, not as a raw
+# 2-byte big-endian short -- see cqltypes.ShortType, which has no serial_size()
+# override (it inherits the base class's `return None`), and VectorType.deserialize()
+# in cqltypes.py, which switches to uvint_unpack() reading whenever
+# subtype.serial_size() is None. A fixed 2-bytes-per-element fast path for
+# ShortType would silently misparse real server data.
+
+cdef inline bint _vector_subtype_has_fast_path(object subtype):
+    """
+    True only for the subtypes that are genuinely fixed-width on the wire
+    (they have a real serial_size() override) *and* have a dedicated
+    C-level fast path implemented below. Anything else -- including
+    variable-length/vint-prefixed subtypes like text, varint, and smallint --
+    must not be routed to DesVectorType's fast paths; find_deserializer()
+    uses this to decide between DesVectorType and GenericDeserializer.
+    """
+    return (_is_float_type(subtype) or _is_double_type(subtype)
+            or _is_int32_type(subtype) or _is_int64_type(subtype))
+
+cdef inline list _deserialize_numpy_vector(Buffer *buf, int vector_size, str dtype):
+    """
+    Unified numpy deserialization for large vectors.
+
+    Wraps the raw buffer memory in a read-only Python memoryview (zero-copy)
+    rather than slicing buf.ptr[:buf.size], which would materialize a brand
+    new bytes object -- defeating the purpose of a "fast path" for large
+    vectors by paying for a full copy of the data before numpy even sees it.
+    """
+    cdef object mv = PyMemoryView_FromMemory(buf.ptr, buf.size, PyBUF_READ)
+    return np.frombuffer(mv, dtype=dtype, count=vector_size).tolist()
+
+cdef class DesVectorType(Deserializer):
+    """
+    Optimized Cython deserializer for VectorType.
+
+    For float and double vectors, uses direct memory access with C-level casting
+    for significantly better performance than Python-level deserialization.
+    """
+
+    cdef int vector_size
+    cdef object subtype
+
+    def __init__(self, cqltype):
+        super().__init__(cqltype)
+        self.vector_size = cqltype.vector_size
+        self.subtype = cqltype.subtype
+
+    def deserialize_bytes(self, bytes data, int protocol_version):
+        """Python-callable wrapper for deserialize that takes bytes."""
+        cdef Buffer buf
+        buf.ptr = <char*>data
+        buf.size = len(data)
+        return self.deserialize(&buf, protocol_version)
+
+    cdef deserialize(self, Buffer *buf, int protocol_version):
+        cdef int expected_size
+        cdef int elem_size
+        cdef bint use_numpy = HAVE_NUMPY and self.vector_size >= 32
+
+        # Determine element type, size, and dispatch appropriately
+        if _is_float_type(self.subtype):
+            elem_size = 4
+            expected_size = self.vector_size * elem_size
+            if buf.size == expected_size:
+                if use_numpy:
+                    return _deserialize_numpy_vector(buf, self.vector_size, '>f4')
+                return self._deserialize_float(buf)
+            raise ValueError(
+                f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
+                f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
+        elif _is_double_type(self.subtype):
+            elem_size = 8
+            expected_size = self.vector_size * elem_size
+            if buf.size == expected_size:
+                if use_numpy:
+                    return _deserialize_numpy_vector(buf, self.vector_size, '>f8')
+                return self._deserialize_double(buf)
+            raise ValueError(
+                f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
+                f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
+        elif _is_int32_type(self.subtype):
+            elem_size = 4
+            expected_size = self.vector_size * elem_size
+            if buf.size == expected_size:
+                if use_numpy:
+                    return _deserialize_numpy_vector(buf, self.vector_size, '>i4')
+                return self._deserialize_int32(buf)
+            raise ValueError(
+                f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
+                f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
+        elif _is_int64_type(self.subtype):
+            elem_size = 8
+            expected_size = self.vector_size * elem_size
+            if buf.size == expected_size:
+                if use_numpy:
+                    return _deserialize_numpy_vector(buf, self.vector_size, '>i8')
+                return self._deserialize_int64(buf)
+            raise ValueError(
+                f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
+                f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
+        else:
+            # Anything without a dedicated C-level fast path above (including
+            # variable-length/vint-prefixed subtypes such as text, varint, and
+            # smallint/ShortType). find_deserializer() is expected to keep
+            # DesVectorType from ever being selected for these in practice
+            # (see _vector_subtype_has_fast_path); this branch is a defensive
+            # fallback that still deserializes correctly instead of raising.
+            return self._deserialize_generic(buf, protocol_version)
+
+    cdef inline list _deserialize_float(self, Buffer *buf):
+        """Deserialize float vector using direct C-level access with byte swapping"""
+        cdef Py_ssize_t i
+        cdef list result
+        cdef float temp
+        cdef uint32_t temp32
+
+        result = [None] * self.vector_size
+        for i in range(self.vector_size):
+            # Copy to aligned local, then convert from big-endian
+            memcpy(&temp32, buf.ptr + i * 4, 4)
+            temp32 = ntohl(temp32)
+            # memcpy-based bit-cast: reinterpreting a uint32_t's bits as a
+            # float via a pointer-cast dereference (e.g. (<float*>&temp32)[0])
+            # violates C's strict-aliasing rules and can be miscompiled under
+            # optimization/LTO. memcpy is the well-defined way to reinterpret
+            # a bit pattern across unrelated types.
+            memcpy(&temp, &temp32, sizeof(float))
+            result[i] = temp
+
+        return result
+
+    cdef inline list _deserialize_double(self, Buffer *buf):
+        """Deserialize double vector using direct C-level access with byte swapping"""
+        cdef Py_ssize_t i
+        cdef list result
+        cdef double temp
+        cdef char *src_bytes
+        cdef char *out_bytes
+        cdef int j
+
+        result = [None] * self.vector_size
+        for i in range(self.vector_size):
+            src_bytes = buf.ptr + i * 8
+            out_bytes = <char*>&temp
+
+            # Swap bytes for big-endian to native conversion
+            if is_little_endian:
+                for j in range(8):
+                    out_bytes[7 - j] = src_bytes[j]
+            else:
+                memcpy(&temp, src_bytes, 8)
+
+            result[i] = temp
+
+        return result
+
+    cdef inline list _deserialize_int32(self, Buffer *buf):
+        """Deserialize int32 vector using direct C-level access with ntohl"""
+        cdef Py_ssize_t i
+        cdef list result
+        cdef int32_t temp
+        cdef uint32_t temp32
+
+        result = [None] * self.vector_size
+        for i in range(self.vector_size):
+            # Copy to aligned local, then convert from big-endian
+            memcpy(&temp32, buf.ptr + i * 4, 4)
+            temp = <int32_t>ntohl(temp32)
+            result[i] = temp
+
+        return result
+
+    cdef inline list _deserialize_int64(self, Buffer *buf):
+        """Deserialize int64/long vector using direct C-level access with byte swapping"""
+        cdef Py_ssize_t i
+        cdef list result
+        cdef int64_t temp
+        cdef char *src_bytes
+        cdef char *out_bytes
+        cdef int j
+
+        result = [None] * self.vector_size
+        for i in range(self.vector_size):
+            src_bytes = buf.ptr + i * 8
+            out_bytes = <char*>&temp
+
+            # Swap bytes for big-endian to native conversion
+            if is_little_endian:
+                for j in range(8):
+                    out_bytes[7 - j] = src_bytes[j]
+            else:
+                memcpy(&temp, src_bytes, 8)
+
+            result[i] = temp
+
+        return result
+
+    cdef inline list _deserialize_generic(self, Buffer *buf, int protocol_version):
+        """
+        Fallback deserialization for subtypes without a dedicated C-level fast
+        path above.
+
+        For variable-length/vint-prefixed subtypes (serial_size() is None --
+        e.g. text, varint, smallint/ShortType), delegate to the pure-Python
+        VectorType.deserialize(), which knows how to read vint-prefixed
+        element lengths. Raising here instead (as opposed to delegating)
+        would turn any such vector column into an uncaught ValueError during
+        row parsing.
+
+        For other fixed-width subtypes that simply lack a hand-written fast
+        path (e.g. uuid, boolean, date), do element-by-element deserialization
+        using the subtype's own (pure-Python) deserialize().
+        """
+        _serialized_size = self.subtype.serial_size()
+        if _serialized_size is None:
+            return self.cqltype.deserialize(to_bytes(buf), protocol_version)
+
+        cdef Py_ssize_t i
+        cdef Buffer elem_buf
+        cdef int offset = 0
+        cdef list result = [None] * self.vector_size
+        cdef int serialized_size = <int>_serialized_size
+
+        # Validate total size before processing
+        cdef int expected_size = self.vector_size * serialized_size
+        if buf.size != expected_size:
+            raise ValueError(
+                f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
+                f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
+
+        for i in range(self.vector_size):
+            from_ptr_and_size(buf.ptr + offset, serialized_size, &elem_buf)
+            result[i] = self.subtype.deserialize(to_bytes(&elem_buf), protocol_version)
+            offset += serialized_size
+
+        return result
+
+
 
 cdef class _DesParameterizedType(Deserializer):
+
 
     cdef object subtypes
     cdef Deserializer[::1] deserializers
@@ -511,6 +784,17 @@ cpdef Deserializer find_deserializer(cqltype):
         cls = DesReversedType
     elif issubclass(cqltype, cqltypes.FrozenType):
         cls = DesFrozenType
+    elif issubclass(cqltype, cqltypes.VectorType):
+        # Only dispatch to the optimized Cython deserializer for subtypes that
+        # are genuinely fixed-width on the wire (float/double/int32/bigint)
+        # and have a hand-written fast path. Every other subtype -- including
+        # variable-length/vint-prefixed ones like text, varint, and smallint --
+        # falls back to GenericDeserializer, which delegates to the
+        # pure-Python VectorType.deserialize() and handles them correctly.
+        if _vector_subtype_has_fast_path(cqltype.subtype):
+            cls = DesVectorType
+        else:
+            cls = GenericDeserializer
     else:
         cls = GenericDeserializer
 
