@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import unittest
+from unittest.mock import patch
 
 import datetime
 import tempfile
@@ -27,7 +28,7 @@ from cassandra.cqltypes import (
     _cqltypes, cql_typename, int8_pack, int64_pack, int64_unpack, lookup_casstype,
     lookup_casstype_simple, parse_casstype_args,
     int32_pack, Int32Type, ListType, MapType, VectorType,
-    FloatType
+    DoubleType, FloatType
 )
 from cassandra.encoder import cql_quote
 from cassandra.pool import Host
@@ -540,6 +541,21 @@ class VectorTests(unittest.TestCase):
         ctype_four = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.IntegerType, 4)")
         with pytest.raises(ValueError, match="Additional bytes remaining after vector deserialization completed"):
             ctype_four.deserialize(ctype_five_bytes, 0)
+
+    def test_large_numeric_vectors_decode_with_and_without_numpy(self):
+        from cassandra import numpy_support
+        for subtype, data in ((FloatType, [0.5 * i for i in range(64)]),
+                              (DoubleType, [0.25 * i for i in range(64)]),
+                              (Int32Type, list(range(-32, 32))),
+                              (LongType, [2 ** 40 * i for i in range(64)])):
+            ctype = VectorType.apply_parameters([subtype, len(data)], None)
+            data_bytes = ctype.serialize(data, 0)
+            expected = list(ctype._vector_struct.unpack(data_bytes))
+            assert expected == data
+            with patch.object(numpy_support, '_NUMPY', None):
+                assert ctype.deserialize(data_bytes, 0) == expected
+            if numpy_support.numpy_available():
+                assert ctype.deserialize(data_bytes, 0) == expected
 
     def test_subclass_vectors_keep_element_overrides(self):
         # Bulk struct/NumPy codecs must not bypass a subclass's own codecs.

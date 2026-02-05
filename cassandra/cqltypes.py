@@ -49,7 +49,7 @@ from cassandra.marshal import (int8_pack, int8_unpack, int16_pack, int16_unpack,
                                float_pack, float_unpack, double_pack, double_unpack,
                                varint_pack, varint_unpack, point_be, point_le,
                                vints_pack, vints_unpack, uvint_unpack, uvint_pack)
-from cassandra import util
+from cassandra import numpy_support, util
 
 _little_endian_flag = 1  # we always serialize LE
 import ipaddress
@@ -1483,6 +1483,8 @@ class VectorType(_CassandraType):
     subtype = None
     _vector_struct = None  # Cached struct.Struct for bulk deserialization
     _struct_format_map = {}  # Populated after FloatType etc. are defined
+    _numpy_dtype = None  # Cached numpy dtype string for large vector deserialization
+    _numpy_dtype_map = {}  # Populated after FloatType etc. are defined
 
     @classmethod
     def serial_size(cls):
@@ -1498,8 +1500,10 @@ class VectorType(_CassandraType):
         # override serialize/deserialize, and smallint/tinyint are vint-framed.
         fmt_char = cls._struct_format_map.get(subtype) if subtype.serial_size() is not None else None
         vector_struct = struct.Struct(f'>{vsize}{fmt_char}') if fmt_char else None
+        numpy_dtype = cls._numpy_dtype_map.get(fmt_char)
         return type('%s(%s)' % (cls.cass_parameterized_type_with([]), vsize), (cls,),
-                     {'vector_size': vsize, 'subtype': subtype, '_vector_struct': vector_struct})
+                     {'vector_size': vsize, 'subtype': subtype, '_vector_struct': vector_struct,
+                      '_numpy_dtype': numpy_dtype})
 
     @classmethod
     def deserialize(cls, byts, protocol_version):
@@ -1511,8 +1515,13 @@ class VectorType(_CassandraType):
                     "Expected vector of type {0} and dimension {1} to have serialized size {2}; observed serialized size of {3} instead"\
                     .format(cls.subtype.typename, cls.vector_size, expected_byte_size, len(byts)))
 
-            # Bulk deserialization for common numeric types via a cached struct.Struct
+            # Bulk deserialization for common numeric types: a cached struct.Struct,
+            # or numpy.frombuffer for 32+ elements (requested lazily, only here).
             if cls._vector_struct is not None:
+                if cls._numpy_dtype is not None and cls.vector_size >= 32:
+                    np = numpy_support._get_numpy()
+                    if np is not None:
+                        return np.frombuffer(byts, dtype=cls._numpy_dtype, count=cls.vector_size).tolist()
                 return list(cls._vector_struct.unpack(byts))
             # Fallback: element-by-element deserialization for other fixed-size types
             result = [None] * cls.vector_size
@@ -1591,3 +1600,8 @@ VectorType._struct_format_map = {
     Int32Type: 'i',
     LongType: 'q',
 }
+
+# Map struct format chars to numpy dtype strings for large vector deserialization.
+# Kept in sync with _struct_format_map above -- no entry for 'h' (ShortType),
+# since smallint vectors are variable-length on the wire (see the NOTE above).
+VectorType._numpy_dtype_map = {'f': '>f4', 'd': '>f8', 'i': '>i4', 'q': '>i8'}
