@@ -17,10 +17,10 @@
 Benchmark for VectorType deserialization performance.
 
 Tests different optimization strategies:
-1. Current implementation (baseline)
-2. Python struct.unpack optimization
-3. Cython optimization  
-4. Numpy optimization
+1. Current implementation (Python with struct.unpack/numpy)
+2. Python struct.unpack only
+3. Numpy frombuffer + tolist()
+4. Cython DesVectorType deserializer
 
 Run with: python benchmarks/vector_deserialize.py
 """
@@ -145,38 +145,30 @@ def benchmark_numpy_optimization(vector_type, serialized_data, iterations=10000)
     return elapsed, per_op, result
 
 
-def benchmark_numpy_array_only(vector_type, serialized_data, iterations=10000):
-    """Benchmark numpy.frombuffer without converting to list (zero-copy)."""
+def benchmark_cython_deserializer(vector_type, serialized_data, iterations=10000):
+    """Benchmark Cython DesVectorType deserializer."""
     try:
-        import numpy as np
+        from cassandra.deserializers import find_deserializer
     except ImportError:
         return None, None, None
-    
-    vector_size = vector_type.vector_size
-    subtype = vector_type.subtype
-    
-    # Determine dtype
-    if subtype is FloatType or (isinstance(subtype, type) and issubclass(subtype, FloatType)):
-        dtype = '>f4'
-    elif subtype is DoubleType or (isinstance(subtype, type) and issubclass(subtype, DoubleType)):
-        dtype = '>f8'
-    elif subtype is Int32Type or (isinstance(subtype, type) and issubclass(subtype, Int32Type)):
-        dtype = '>i4'
-    elif subtype is LongType or (isinstance(subtype, type) and issubclass(subtype, LongType)):
-        dtype = '>i8'
-    elif subtype is ShortType or (isinstance(subtype, type) and issubclass(subtype, ShortType)):
-        dtype = '>i2'
-    else:
+
+    protocol_version = 5
+
+    # Get the Cython deserializer
+    deserializer = find_deserializer(vector_type)
+
+    # Check if we got the Cython deserializer
+    if deserializer.__class__.__name__ != 'DesVectorType':
         return None, None, None
-    
+
     start = time.perf_counter()
     for _ in range(iterations):
-        result = np.frombuffer(serialized_data, dtype=dtype, count=vector_size)
+        result = deserializer.deserialize_bytes(serialized_data, protocol_version)
     end = time.perf_counter()
-    
+
     elapsed = end - start
     per_op = (elapsed / iterations) * 1_000_000  # microseconds
-    
+
     return elapsed, per_op, result
 
 
@@ -253,19 +245,18 @@ def run_benchmark_suite(vector_size, element_type, type_name, iterations=10000):
         print(f"   Total: {elapsed:.4f}s, Per-op: {per_op:.2f} μs, Speedup: {speedup:.2f}x")
     else:
         print("   Numpy not available")
-    
-    # 4. Numpy array only (zero-copy)
-    print("4. Numpy frombuffer (zero-copy, no tolist)...")
-    elapsed, per_op, result_numpy_array = benchmark_numpy_array_only(
+
+    # 4. Cython deserializer
+    print("4. Cython DesVectorType deserializer...")
+    elapsed, per_op, result_cython = benchmark_cython_deserializer(
         vector_type, serialized_data, iterations)
     if per_op is not None:
+        results.append(result_cython)
         speedup = baseline_time / per_op
         print(f"   Total: {elapsed:.4f}s, Per-op: {per_op:.2f} μs, Speedup: {speedup:.2f}x")
-        if result_numpy_array is not None:
-            results.append(result_numpy_array.tolist())
     else:
-        print("   Numpy not available")
-    
+        print("   Cython deserializers not available")
+
     # Verify results
     print("\nVerifying results...")
     if verify_results(expected_values, *results):

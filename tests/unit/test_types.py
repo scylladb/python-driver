@@ -509,6 +509,75 @@ class VectorTests(unittest.TestCase):
         with pytest.raises(ValueError, match="Additional bytes remaining after vector deserialization completed"):
             ctype_four.deserialize(ctype_five_bytes, 0)
 
+    def test_vector_cython_deserializer(self):
+        """
+        Test that VectorType uses the Cython DesVectorType deserializer
+        and correctly deserializes vectors of supported numeric types.
+
+        @since 3.x
+        @expected_result Cython deserializer exists and correctly deserializes vector data
+
+        @test_category data_types:vector
+        """
+        import struct
+        try:
+            from cassandra.deserializers import find_deserializer
+        except ImportError:
+            self.skipTest("Cython deserializers not available")
+
+        # Test float vector
+        vt_float = VectorType.apply_parameters(['FloatType', 4], {})
+        des_float = find_deserializer(vt_float)
+        self.assertEqual(des_float.__class__.__name__, 'DesVectorType')
+
+        data_float = struct.pack('>4f', 1.0, 2.0, 3.0, 4.0)
+        result_float = vt_float.deserialize(data_float, 5)
+        self.assertEqual(result_float, [1.0, 2.0, 3.0, 4.0])
+
+        # Test double vector
+        from cassandra.cqltypes import DoubleType
+        vt_double = VectorType.apply_parameters(['DoubleType', 3], {})
+        des_double = find_deserializer(vt_double)
+        self.assertEqual(des_double.__class__.__name__, 'DesVectorType')
+
+        data_double = struct.pack('>3d', 1.5, 2.5, 3.5)
+        result_double = vt_double.deserialize(data_double, 5)
+        self.assertEqual(result_double, [1.5, 2.5, 3.5])
+
+        # Test int32 vector
+        vt_int32 = VectorType.apply_parameters(['Int32Type', 4], {})
+        des_int32 = find_deserializer(vt_int32)
+        self.assertEqual(des_int32.__class__.__name__, 'DesVectorType')
+
+        data_int32 = struct.pack('>4i', 1, 2, 3, 4)
+        result_int32 = vt_int32.deserialize(data_int32, 5)
+        self.assertEqual(result_int32, [1, 2, 3, 4])
+
+        # Test int64/long vector
+        vt_int64 = VectorType.apply_parameters(['LongType', 2], {})
+        des_int64 = find_deserializer(vt_int64)
+        self.assertEqual(des_int64.__class__.__name__, 'DesVectorType')
+
+        data_int64 = struct.pack('>2q', 100, 200)
+        result_int64 = vt_int64.deserialize(data_int64, 5)
+        self.assertEqual(result_int64, [100, 200])
+
+        # Test int16/short vector
+        from cassandra.cqltypes import ShortType
+        vt_int16 = VectorType.apply_parameters(['ShortType', 3], {})
+        des_int16 = find_deserializer(vt_int16)
+        self.assertEqual(des_int16.__class__.__name__, 'DesVectorType')
+
+        data_int16 = struct.pack('>3h', 10, 20, 30)
+        result_int16 = vt_int16.deserialize(data_int16, 5)
+        self.assertEqual(result_int16, [10, 20, 30])
+
+        # Test error handling: wrong buffer size
+        with self.assertRaises(ValueError) as cm:
+            vt_float.deserialize(struct.pack('>3f', 1.0, 2.0, 3.0), 5)  # 3 floats instead of 4
+        self.assertIn('Expected vector', str(cm.exception))
+        self.assertIn('serialized size', str(cm.exception))
+
 
 ZERO = datetime.timedelta(0)
 

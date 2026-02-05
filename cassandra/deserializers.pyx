@@ -13,10 +13,11 @@
 # limitations under the License.
 
 
-from libc.stdint cimport int32_t, uint16_t, uint32_t
+from libc.stdint cimport int32_t, int64_t, int16_t, uint16_t, uint32_t
+from libc.string cimport memcpy
 
 include 'cython_marshal.pyx'
-from cassandra.buffer cimport Buffer, to_bytes
+from cassandra.buffer cimport Buffer, to_bytes, from_ptr_and_size
 from cassandra.cython_utils cimport datetime_from_timestamp
 
 from cython.view cimport array as cython_array
@@ -28,6 +29,11 @@ from uuid import UUID
 
 from cassandra import cqltypes
 from cassandra import util
+
+# Import numpy availability flag and conditionally import numpy
+from cassandra.cython_deps import HAVE_NUMPY
+if HAVE_NUMPY:
+    import numpy as np
 
 cdef class Deserializer:
     """Cython-based deserializer class for a cqltype"""
@@ -182,7 +188,226 @@ cdef class DesVarcharType(DesUTF8Type):
     pass
 
 
+#--------------------------------------------------------------------------
+# Vector deserialization
+
+cdef inline bint _is_float_type(object subtype):
+    return subtype is cqltypes.FloatType or issubclass(subtype, cqltypes.FloatType)
+
+cdef inline bint _is_double_type(object subtype):
+    return subtype is cqltypes.DoubleType or issubclass(subtype, cqltypes.DoubleType)
+
+cdef inline bint _is_int32_type(object subtype):
+    return subtype is cqltypes.Int32Type or issubclass(subtype, cqltypes.Int32Type)
+
+cdef inline bint _is_int64_type(object subtype):
+    return subtype is cqltypes.LongType or issubclass(subtype, cqltypes.LongType)
+
+cdef inline bint _is_int16_type(object subtype):
+    return subtype is cqltypes.ShortType or issubclass(subtype, cqltypes.ShortType)
+
+cdef inline list _deserialize_numpy_vector(Buffer *buf, int vector_size, str dtype):
+    """Unified numpy deserialization for large vectors"""
+    return np.frombuffer(buf.ptr[:buf.size], dtype=dtype, count=vector_size).tolist()
+
+cdef class DesVectorType(Deserializer):
+    """
+    Optimized Cython deserializer for VectorType.
+
+    For float and double vectors, uses direct memory access with C-level casting
+    for significantly better performance than Python-level deserialization.
+    """
+
+    cdef int vector_size
+    cdef object subtype
+
+    def __init__(self, cqltype):
+        super().__init__(cqltype)
+        self.vector_size = cqltype.vector_size
+        self.subtype = cqltype.subtype
+
+    def deserialize_bytes(self, bytes data, int protocol_version):
+        """Python-callable wrapper for deserialize that takes bytes."""
+        cdef Buffer buf
+        buf.ptr = <char*>data
+        buf.size = len(data)
+        return self.deserialize(&buf, protocol_version)
+
+    cdef deserialize(self, Buffer *buf, int protocol_version):
+        cdef int expected_size
+        cdef int elem_size
+        cdef bint use_numpy = HAVE_NUMPY and self.vector_size >= 32
+
+        # Determine element type, size, and dispatch appropriately
+        if _is_float_type(self.subtype):
+            elem_size = 4
+            expected_size = self.vector_size * elem_size
+            if buf.size == expected_size:
+                if use_numpy:
+                    return _deserialize_numpy_vector(buf, self.vector_size, '>f4')
+                return self._deserialize_float(buf)
+            raise ValueError(
+                f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
+                f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
+        elif _is_double_type(self.subtype):
+            elem_size = 8
+            expected_size = self.vector_size * elem_size
+            if buf.size == expected_size:
+                if use_numpy:
+                    return _deserialize_numpy_vector(buf, self.vector_size, '>f8')
+                return self._deserialize_double(buf)
+            raise ValueError(
+                f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
+                f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
+        elif _is_int32_type(self.subtype):
+            elem_size = 4
+            expected_size = self.vector_size * elem_size
+            if buf.size == expected_size:
+                if use_numpy:
+                    return _deserialize_numpy_vector(buf, self.vector_size, '>i4')
+                return self._deserialize_int32(buf)
+            raise ValueError(
+                f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
+                f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
+        elif _is_int64_type(self.subtype):
+            elem_size = 8
+            expected_size = self.vector_size * elem_size
+            if buf.size == expected_size:
+                if use_numpy:
+                    return _deserialize_numpy_vector(buf, self.vector_size, '>i8')
+                return self._deserialize_int64(buf)
+            raise ValueError(
+                f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
+                f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
+        elif _is_int16_type(self.subtype):
+            elem_size = 2
+            expected_size = self.vector_size * elem_size
+            if buf.size == expected_size:
+                if use_numpy:
+                    return _deserialize_numpy_vector(buf, self.vector_size, '>i2')
+                return self._deserialize_int16(buf)
+            raise ValueError(
+                f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
+                f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
+        else:
+            # Unsupported type, use generic deserialization
+            return self._deserialize_generic(buf, protocol_version)
+
+    cdef inline list _deserialize_float(self, Buffer *buf):
+        """Deserialize float vector using direct C-level access with byte swapping"""
+        cdef Py_ssize_t i
+        cdef list result
+        cdef float temp
+        cdef uint32_t temp32
+
+        result = [None] * self.vector_size
+        for i in range(self.vector_size):
+            # Read 4 bytes and convert from big-endian
+            temp32 = ntohl((<uint32_t*>(buf.ptr + i * 4))[0])
+            temp = (<float*>&temp32)[0]
+            result[i] = temp
+
+        return result
+
+    cdef inline list _deserialize_double(self, Buffer *buf):
+        """Deserialize double vector using direct C-level access with byte swapping"""
+        cdef Py_ssize_t i
+        cdef list result
+        cdef double temp
+        cdef char *src_bytes
+        cdef char *out_bytes
+        cdef int j
+
+        result = [None] * self.vector_size
+        for i in range(self.vector_size):
+            src_bytes = buf.ptr + i * 8
+            out_bytes = <char*>&temp
+
+            # Swap bytes for big-endian to native conversion
+            if is_little_endian:
+                for j in range(8):
+                    out_bytes[7 - j] = src_bytes[j]
+            else:
+                memcpy(&temp, src_bytes, 8)
+
+            result[i] = temp
+
+        return result
+
+    cdef inline list _deserialize_int32(self, Buffer *buf):
+        """Deserialize int32 vector using direct C-level access with ntohl"""
+        cdef Py_ssize_t i
+        cdef list result
+        cdef int32_t temp
+
+        result = [None] * self.vector_size
+        for i in range(self.vector_size):
+            temp = <int32_t>ntohl((<uint32_t*>(buf.ptr + i * 4))[0])
+            result[i] = temp
+
+        return result
+
+    cdef inline list _deserialize_int64(self, Buffer *buf):
+        """Deserialize int64/long vector using direct C-level access with byte swapping"""
+        cdef Py_ssize_t i
+        cdef list result
+        cdef int64_t temp
+        cdef char *src_bytes
+        cdef char *out_bytes
+        cdef int j
+
+        result = [None] * self.vector_size
+        for i in range(self.vector_size):
+            src_bytes = buf.ptr + i * 8
+            out_bytes = <char*>&temp
+
+            # Swap bytes for big-endian to native conversion
+            if is_little_endian:
+                for j in range(8):
+                    out_bytes[7 - j] = src_bytes[j]
+            else:
+                memcpy(&temp, src_bytes, 8)
+
+            result[i] = temp
+
+        return result
+
+    cdef inline list _deserialize_int16(self, Buffer *buf):
+        """Deserialize int16/short vector using direct C-level access with ntohs"""
+        cdef Py_ssize_t i
+        cdef list result
+        cdef int16_t temp
+
+        result = [None] * self.vector_size
+        for i in range(self.vector_size):
+            temp = <int16_t>ntohs((<uint16_t*>(buf.ptr + i * 2))[0])
+            result[i] = temp
+
+        return result
+
+    cdef inline list _deserialize_generic(self, Buffer *buf, int protocol_version):
+        """Fallback: element-by-element deserialization for non-optimized types"""
+        cdef Py_ssize_t i
+        cdef Buffer elem_buf
+        cdef int offset = 0
+        cdef int serialized_size = self.subtype.serial_size()
+        cdef list result = [None] * self.vector_size
+
+        if serialized_size is None:
+            raise ValueError(
+                f"VectorType with variable-size subtype {self.subtype.typename} "
+                "is not supported in Cython deserializer")
+
+        for i in range(self.vector_size):
+            from_ptr_and_size(buf.ptr + offset, serialized_size, &elem_buf)
+            result[i] = self.subtype.deserialize(to_bytes(&elem_buf), protocol_version)
+            offset += serialized_size
+
+        return result
+
+
 cdef class _DesParameterizedType(Deserializer):
+
 
     cdef object subtypes
     cdef Deserializer[::1] deserializers
@@ -474,6 +699,8 @@ cpdef Deserializer find_deserializer(cqltype):
         cls = DesReversedType
     elif issubclass(cqltype, cqltypes.FrozenType):
         cls = DesFrozenType
+    elif issubclass(cqltype, cqltypes.VectorType):
+        cls = DesVectorType
     else:
         cls = GenericDeserializer
 
