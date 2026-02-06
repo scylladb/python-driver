@@ -49,123 +49,28 @@ class NoConnectionsAvailable(Exception):
 class Host(object):
     """
     Represents a single Cassandra node.
-    """
 
-    endpoint = None
+    Attributes:
+        endpoint: The :class:`~.connection.EndPoint` to connect to the node.
+        broadcast_address: broadcast address configured for the node, *if available*
+        broadcast_port: broadcast port configured for the node, *if available*
+        broadcast_rpc_address: The broadcast rpc address of the node
+        broadcast_rpc_port: The broadcast rpc port of the node, *if available*
+        conviction_policy: A :class:`~.ConvictionPolicy` instance for determining when this node should be marked up or down.
+        is_up: :const:`True` if the node is considered up, :const:`False` if it is considered down, and :const:`None` if it is not known if the node is up or down.
+        release_version: release_version as queried from the control connection system tables
+        host_id: The unique identifier of the cassandra node
+        dse_version: dse_version as queried from the control connection system tables
+        dse_workload: DSE workload queried from the control connection system tables
+        dse_workloads: DSE workloads set, queried from the control connection system tables
     """
-    The :class:`~.connection.EndPoint` to connect to the node.
-    """
-
-    broadcast_address = None
-    """
-    broadcast address configured for the node, *if available*:
-
-    'system.local.broadcast_address' or 'system.peers.peer' (Cassandra 2-3)
-    'system.local.broadcast_address' or 'system.peers_v2.peer' (Cassandra 4)
-
-    This is not present in the ``system.local`` table for older versions of Cassandra. It
-    is also not queried if :attr:`~.Cluster.token_metadata_enabled` is ``False``.
-    """
-
-    broadcast_port = None
-    """
-    broadcast port configured for the node, *if available*:
-
-    'system.local.broadcast_port' or 'system.peers_v2.peer_port' (Cassandra 4)
-
-    It is also not queried if :attr:`~.Cluster.token_metadata_enabled` is ``False``.
-    """
-
-    broadcast_rpc_address = None
-    """
-    The broadcast rpc address of the node:
-
-    'system.local.rpc_address' or 'system.peers.rpc_address' (Cassandra 3)
-    'system.local.rpc_address' or 'system.peers.native_transport_address (DSE  6+)'
-    'system.local.rpc_address' or 'system.peers_v2.native_address (Cassandra 4)'
-    """
-
-    broadcast_rpc_port = None
-    """
-    The broadcast rpc port of the node, *if available*:
-    
-    'system.local.rpc_port' or 'system.peers.native_transport_port' (DSE 6+)
-    'system.local.rpc_port' or 'system.peers_v2.native_port' (Cassandra 4)
-    """
-
-    listen_address = None
-    """
-    listen address configured for the node, *if available*:
-
-    'system.local.listen_address'
-
-    This is only available in the ``system.local`` table for newer versions of Cassandra. It is also not
-    queried if :attr:`~.Cluster.token_metadata_enabled` is ``False``. Usually the same as ``broadcast_address``
-    unless configured differently in cassandra.yaml.
-    """
-
-    listen_port = None
-    """
-    listen port configured for the node, *if available*:
-
-    'system.local.listen_port'
-
-    This is only available in the ``system.local`` table for newer versions of Cassandra. It is also not
-    queried if :attr:`~.Cluster.token_metadata_enabled` is ``False``.
-    """
-
-    conviction_policy = None
-    """
-    A :class:`~.ConvictionPolicy` instance for determining when this node should
-    be marked up or down.
-    """
-
-    is_up = None
-    """
-    :const:`True` if the node is considered up, :const:`False` if it is
-    considered down, and :const:`None` if it is not known if the node is
-    up or down.
-    """
-
-    release_version = None
-    """
-    release_version as queried from the control connection system tables
-    """
-
-    host_id = None
-    """
-    The unique identifier of the cassandra node
-    """
-
-    dse_version = None
-    """
-    dse_version as queried from the control connection system tables. Only populated when connecting to
-    DSE with this property available. Not queried if :attr:`~.Cluster.token_metadata_enabled` is ``False``.
-    """
-
-    dse_workload = None
-    """
-    DSE workload queried from the control connection system tables. Only populated when connecting to
-    DSE with this property available. Not queried if :attr:`~.Cluster.token_metadata_enabled` is ``False``.
-    This is a legacy attribute that does not portray multiple workloads in a uniform fashion.
-    See also :attr:`~.Host.dse_workloads`.
-    """
-
-    dse_workloads = None
-    """
-    DSE workloads set, queried from the control connection system tables. Only populated when connecting to
-    DSE with this property available (added in DSE 5.1).
-    Not queried if :attr:`~.Cluster.token_metadata_enabled` is ``False``.
-    """
-
-    _datacenter = None
-    _rack = None
-    _reconnection_handler = None
-    lock = None
-
-    _currently_handling_node_up = False
-
-    sharding_info = None
+    __slots__ = (
+        'endpoint', 'broadcast_address', 'broadcast_port', 'broadcast_rpc_address',
+        'broadcast_rpc_port', 'conviction_policy', 'is_up', 'release_version',
+        'host_id', 'dse_version', 'dse_workload', 'dse_workloads', '_datacenter',
+        '_rack', '_reconnection_handler', 'lock', '_currently_handling_node_up',
+        'sharding_info'
+    )
 
     def __init__(self, endpoint, conviction_policy_factory, datacenter=None, rack=None, host_id=None):
         if endpoint is None:
@@ -180,6 +85,20 @@ class Host(object):
         self.host_id = host_id
         self.set_location_info(datacenter, rack)
         self.lock = RLock()
+
+        # Initialize attributes that had default values
+        self.broadcast_address = None
+        self.broadcast_port = None
+        self.broadcast_rpc_address = None
+        self.broadcast_rpc_port = None
+        self.is_up = None
+        self.release_version = None
+        self.dse_version = None
+        self.dse_workload = None
+        self.dse_workloads = None
+        self._reconnection_handler = None
+        self._currently_handling_node_up = False
+        self.sharding_info = None
 
     @property
     def address(self):
@@ -374,30 +293,29 @@ class _HostReconnectionHandler(_ReconnectionHandler):
 
 class HostConnection(object):
     """
-    When using v3 of the native protocol, this is useddue to the increased in-flight capacity
+    When using v3 of the native protocol, this is used due to the increased in-flight capacity
     of individual connections.
     """
-
-    host = None
-    host_distance = None
-    is_shutdown = False
-    shutdown_on_error = False
-
-    _session = None
-    _lock = None
-    _keyspace = None
-
-    # If the number of excess connections exceeds the number of shards times
-    # the number below, all excess connections will be closed.
-    max_excess_connections_per_shard_multiplier = 3
-
-    tablets_routing_v1 = False
+    __slots__ = (
+        'host', 'host_distance', 'is_shutdown', 'shutdown_on_error', '_session', '_lock',
+        '_keyspace', 'max_excess_connections_per_shard_multiplier', 'tablets_routing_v1',
+        '_stream_available_condition', '_is_replacing', '_connecting', '_connections',
+        '_pending_connections', '_excess_connections', '_trash', '_shard_connections_futures',
+        'advanced_shardaware_block_until'
+    )
 
     def __init__(self, host, host_distance, session):
         self.host = host
         self.host_distance = host_distance
+        self.is_shutdown = False
+        self.shutdown_on_error = False
         self._session = weakref.proxy(session)
         self._lock = Lock()
+        self._keyspace = None
+        # If the number of excess connections exceeds the number of shards times
+        # the number below, all excess connections will be closed.
+        self.max_excess_connections_per_shard_multiplier = 3
+        self.tablets_routing_v1 = False
         # this is used in conjunction with the connection streams. Not using the connection lock because the connection can be replaced in the lifetime of the pool.
         self._stream_available_condition = Condition(Lock())
         self._is_replacing = False
@@ -453,7 +371,7 @@ class HostConnection(object):
         shard_id = None
         if not self._session.cluster.shard_aware_options.disable and self.host.sharding_info and routing_key:
             t = self._session.cluster.metadata.token_map.token_class.from_key(routing_key)
-            
+
             shard_id = None
             if self.tablets_routing_v1 and table is not None:
                 if keyspace is None:
