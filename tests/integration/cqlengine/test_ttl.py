@@ -15,8 +15,6 @@
 
 import unittest
 
-from packaging.version import Version
-
 from cassandra import InvalidRequest
 from cassandra.cqlengine.management import sync_table, drop_table
 from tests.integration.cqlengine.base import BaseCassEngTestCase
@@ -25,7 +23,6 @@ from uuid import uuid4
 from cassandra.cqlengine import columns
 from unittest import mock
 from cassandra.cqlengine.connection import get_session
-from tests.integration import CASSANDRA_VERSION, greaterthancass20
 
 
 class TestTTLModel(Model):
@@ -62,17 +59,15 @@ class BaseDefaultTTLTest(BaseCassEngTestCase):
 
     @classmethod
     def setUpClass(cls):
-        if CASSANDRA_VERSION >= Version('2.0'):
-            super(BaseDefaultTTLTest, cls).setUpClass()
-            sync_table(TestDefaultTTLModel)
-            sync_table(TestTTLModel)
+        super(BaseDefaultTTLTest, cls).setUpClass()
+        sync_table(TestDefaultTTLModel)
+        sync_table(TestTTLModel)
 
     @classmethod
     def tearDownClass(cls):
-        if CASSANDRA_VERSION >= Version('2.0'):
-            super(BaseDefaultTTLTest, cls).tearDownClass()
-            drop_table(TestDefaultTTLModel)
-            drop_table(TestTTLModel)
+        super(BaseDefaultTTLTest, cls).tearDownClass()
+        drop_table(TestDefaultTTLModel)
+        drop_table(TestTTLModel)
 
 
 class TTLQueryTests(BaseTTLTest):

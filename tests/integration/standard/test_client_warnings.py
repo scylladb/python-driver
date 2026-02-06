@@ -17,7 +17,7 @@ import unittest
 
 from cassandra.query import BatchStatement
 
-from tests.integration import (use_singledc, PROTOCOL_VERSION, local, TestCluster,
+from tests.integration import (use_singledc, local, TestCluster,
                                requires_custom_payload, xfail_scylla)
 from tests.util import assertRegex, assertDictEqual
 
@@ -30,9 +30,6 @@ class ClientWarningTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if PROTOCOL_VERSION < 4:
-            return
-
         cls.cluster = TestCluster()
         cls.session = cls.cluster.connect()
 
@@ -47,16 +44,7 @@ class ClientWarningTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        if PROTOCOL_VERSION < 4:
-            return
-
         cls.cluster.shutdown()
-
-    def setUp(self):
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest(
-                "Native protocol 4,0+ is required for client warnings, currently using %r"
-                % (PROTOCOL_VERSION,))
 
     def test_warning_basic(self):
         """

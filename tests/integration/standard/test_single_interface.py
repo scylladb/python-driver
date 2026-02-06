@@ -19,7 +19,7 @@ from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
 from packaging.version import Version
-from tests.integration import use_singledc, PROTOCOL_VERSION, \
+from tests.integration import use_singledc, \
     remove_cluster, greaterthanorequalcass40, \
     CASSANDRA_VERSION, TestCluster, DEFAULT_SINGLE_INTERFACE_PORT
 

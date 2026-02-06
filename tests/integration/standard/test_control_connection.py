@@ -23,7 +23,7 @@ import requests
 
 
 from cassandra.protocol import ConfigurationException
-from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster, greaterthanorequalcass40, \
+from tests.integration import use_singledc, TestCluster, greaterthanorequalcass40, \
     xfail_scylla_version_lt
 from tests.integration.datatype_utils import update_datatypes
 
@@ -35,10 +35,6 @@ def setup_module():
 
 class ControlConnectionTests(unittest.TestCase):
     def setUp(self):
-        if PROTOCOL_VERSION < 3:
-            raise unittest.SkipTest(
-                "Native protocol 3,0+ is required for UDTs using %r"
-                % (PROTOCOL_VERSION,))
         self.cluster = TestCluster()
 
     def tearDown(self):

@@ -201,9 +201,6 @@ class NamedTupleFactoryAndNumericColNamesTests(unittest.TestCase):
         """
         can SELECT "<numeric col name>" AS aliases
         """
-        if self._cass_version < (2, 0, 0):
-            raise unittest.SkipTest("Alias in SELECT not supported before 2.0")
-
         try:
             self.session.execute('SELECT key, "626972746864617465" AS my_col from test1rf.table_num_col')
         except ValueError as e:

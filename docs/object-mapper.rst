@@ -65,7 +65,7 @@ Getting Started
     #next, setup the connection to your cassandra server(s)...
     # see http://datastax.github.io/python-driver/api/cassandra/cluster.html for options
     # the list of hosts will be passed to create a Cluster() instance
-    connection.setup(['127.0.0.1'], "cqlengine", protocol_version=3)
+    connection.setup(['127.0.0.1'], "cqlengine", protocol_version=4)
 
     #...and create your CQL table
     >>> sync_table(ExampleModel)

@@ -20,7 +20,7 @@ from cassandra.deserializers import make_deserializers
 include "ioutils.pyx"
 
 def make_recv_results_rows(ColumnParser colparser):
-    def recv_results_rows(self, f, int protocol_version, user_type_map, result_metadata, column_encryption_policy):
+    def recv_results_rows(self, f, user_type_map, result_metadata, column_encryption_policy):
         """
         Parse protocol data given as a BytesIO f into a set of columns (e.g. list of tuples)
         This is used as the recv_results_rows method of (Fast)ResultMessage
@@ -34,7 +34,7 @@ def make_recv_results_rows(ColumnParser colparser):
 
         desc = ParseDesc(self.column_names, self.column_types, column_encryption_policy,
                         [ColDesc(md[0], md[1], md[2]) for md in column_metadata],
-                        make_deserializers(self.column_types), protocol_version)
+                        make_deserializers(self.column_types))
         reader = BytesIOReader(f.read())
         try:
             self.parsed_rows = colparser.parse_rows(reader, desc)

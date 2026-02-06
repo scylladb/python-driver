@@ -257,8 +257,6 @@ class ProtocolVersionTests(unittest.TestCase):
         lower = ProtocolVersion.get_lower_supported(ProtocolVersion.V5)
         assert ProtocolVersion.V4 == lower
         lower = ProtocolVersion.get_lower_supported(ProtocolVersion.V4)
-        assert ProtocolVersion.V3 == lower
-        lower = ProtocolVersion.get_lower_supported(ProtocolVersion.V3)
         assert 0 == lower
 
         assert not ProtocolVersion.uses_error_code_map(ProtocolVersion.V4)

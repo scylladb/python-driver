@@ -3495,7 +3495,7 @@ def group_keys_by_replica(session, keyspace, table, keys):
     distance = cluster._default_load_balancing_policy.distance
 
     for key in keys:
-        serialized_key = [serializer.serialize(pk, cluster.protocol_version)
+        serialized_key = [serializer.serialize(pk)
                           for serializer, pk in zip(serializers, key)]
         if len(serialized_key) == 1:
             routing_key = serialized_key[0]

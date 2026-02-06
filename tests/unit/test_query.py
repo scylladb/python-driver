@@ -76,10 +76,10 @@ class BatchStatementTest(unittest.TestCase):
             routing_key_indexes=[],
             query="INSERT INTO test.table (id) VALUES (1)",
             keyspace=None,
-            protocol_version=4,
             result_metadata=[],
             result_metadata_id=None,
             is_lwt=is_lwt,
+            column_encryption_policy=None,
         )
 
     def test_is_lwt_false_for_non_lwt_statements(self):

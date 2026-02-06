@@ -22,7 +22,6 @@ from cassandra.cqlengine.query import BatchQuery, LWTException
 from cassandra.cqlengine.statements import ConditionalClause
 
 from tests.integration.cqlengine.base import BaseCassEngTestCase
-from tests.integration import greaterthancass20
 import pytest
 
 
@@ -43,7 +42,6 @@ class TestUpdateModel(Model):
     text = columns.Text(required=False, index=True)
 
 
-@greaterthancass20
 class TestConditional(BaseCassEngTestCase):
 
     @classmethod

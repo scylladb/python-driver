@@ -28,7 +28,7 @@ from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.query import SimpleStatement
 from tests.integration import (
-    use_singledc, PROTOCOL_VERSION, get_cluster, setup_keyspace, remove_cluster,
+    use_singledc, get_cluster, setup_keyspace, remove_cluster,
     get_node, start_cluster_wait_for_up, requiresmallclockgranularity,
     local, CASSANDRA_VERSION, TestCluster)
 
@@ -43,23 +43,19 @@ log = logging.getLogger(__name__)
 @local
 def setup_module():
     """
-    We need some custom setup for this module. All unit tests in this module
-    require protocol >=4. We won't bother going through the setup required unless that is the
-    protocol version we are using.
+    We need some custom setup for this module.
     """
 
-    # If we aren't at protocol v 4 or greater don't waste time setting anything up, all tests will be skipped
-    if PROTOCOL_VERSION >= 4:
-        use_singledc(start=False)
-        ccm_cluster = get_cluster()
-        ccm_cluster.stop()
-        config_options = {
-            'tombstone_failure_threshold': 2000,
-            'tombstone_warn_threshold': 1000,
-        }
-        ccm_cluster.set_configuration_options(config_options)
-        start_cluster_wait_for_up(ccm_cluster)
-        setup_keyspace()
+    use_singledc(start=False)
+    ccm_cluster = get_cluster()
+    ccm_cluster.stop()
+    config_options = {
+        'tombstone_failure_threshold': 2000,
+        'tombstone_warn_threshold': 1000,
+    }
+    ccm_cluster.set_configuration_options(config_options)
+    start_cluster_wait_for_up(ccm_cluster)
+    setup_keyspace()
 
 
 def teardown_module():
@@ -67,20 +63,12 @@ def teardown_module():
     The rest of the tests don't need custom tombstones
     remove the cluster so as to not interfere with other tests.
     """
-    if PROTOCOL_VERSION >= 4:
-        remove_cluster()
+    remove_cluster()
 
 
 class ClientExceptionTests(unittest.TestCase):
 
     def setUp(self):
-        """
-        Test is skipped if run with native protocol version <4
-        """
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest(
-                "Native protocol 4,0+ is required for custom payloads, currently using %r"
-                % (PROTOCOL_VERSION,))
         self.cluster = TestCluster()
         self.session = self.cluster.connect()
         self.nodes_currently_failing = []

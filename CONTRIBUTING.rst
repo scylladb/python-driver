@@ -89,12 +89,11 @@ The test will start the appropriate Scylla clusters when necessary  but if you d
 Specify a Protocol Version for Tests
 ------------------------------------
 The protocol version defaults to:
-- 4 for Scylla >= 3.0 and Scylla Enterprise > 2019.
-- 3 for older versions of Scylla
-- 5 for Cassandra >= 4.0, 4 for Cassandra >= 2.2, 3 for Cassandra >= 2.1, 2 for Cassandra >= 2.0
+- 4 for Scylla.
+- 5 for Cassandra >= 4.0, 4 for Cassandra >= 2.2
 You can overwrite it with the ``PROTOCOL_VERSION`` environment variable::
 
-    PROTOCOL_VERSION=3 SCYLLA_VERSION="release:5.1" uv run pytest tests/integration/standard tests/integration/cqlengine/
+    PROTOCOL_VERSION=4 SCYLLA_VERSION="release:5.1" uv run pytest tests/integration/standard tests/integration/cqlengine/
 
 Seeing Test Logs in Real Time
 -----------------------------
