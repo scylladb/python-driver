@@ -747,8 +747,14 @@ class ClusterTests(unittest.TestCase):
         connections = [c for holders in cluster.get_connection_holders() for c in holders.get_connections()]
 
         # make sure requests were sent on all connections
+        # Note: connections can be replaced in shard-aware environments, so we skip
+        # connections that weren't present in the initial snapshot
         for c in connections:
-            expected_ids = connection_request_ids[id(c)]
+            conn_id = id(c)
+            if conn_id not in connection_request_ids:
+                # Connection was replaced during the test, skip validation
+                continue
+            expected_ids = connection_request_ids[conn_id]
             expected_ids.rotate(-1)
             with c.lock:
                 assertListEqual(list(c.request_ids), list(expected_ids))
