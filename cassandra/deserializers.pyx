@@ -203,9 +203,6 @@ cdef inline bint _is_int32_type(object subtype):
 cdef inline bint _is_int64_type(object subtype):
     return subtype is cqltypes.LongType or issubclass(subtype, cqltypes.LongType)
 
-cdef inline bint _is_int16_type(object subtype):
-    return subtype is cqltypes.ShortType or issubclass(subtype, cqltypes.ShortType)
-
 cdef inline list _deserialize_numpy_vector(Buffer *buf, int vector_size, str dtype):
     """Unified numpy deserialization for large vectors"""
     return np.frombuffer(buf.ptr[:buf.size], dtype=dtype, count=vector_size).tolist()
@@ -276,16 +273,6 @@ cdef class DesVectorType(Deserializer):
                 if use_numpy:
                     return _deserialize_numpy_vector(buf, self.vector_size, '>i8')
                 return self._deserialize_int64(buf)
-            raise ValueError(
-                f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
-                f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
-        elif _is_int16_type(self.subtype):
-            elem_size = 2
-            expected_size = self.vector_size * elem_size
-            if buf.size == expected_size:
-                if use_numpy:
-                    return _deserialize_numpy_vector(buf, self.vector_size, '>i2')
-                return self._deserialize_int16(buf)
             raise ValueError(
                 f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
                 f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
@@ -372,19 +359,6 @@ cdef class DesVectorType(Deserializer):
 
         return result
 
-    cdef inline list _deserialize_int16(self, Buffer *buf):
-        """Deserialize int16/short vector using direct C-level access with ntohs"""
-        cdef Py_ssize_t i
-        cdef list result
-        cdef int16_t temp
-
-        result = [None] * self.vector_size
-        for i in range(self.vector_size):
-            temp = <int16_t>ntohs((<uint16_t*>(buf.ptr + i * 2))[0])
-            result[i] = temp
-
-        return result
-
     cdef inline list _deserialize_generic(self, Buffer *buf, int protocol_version):
         """Fallback: element-by-element deserialization for non-optimized types"""
         cdef Py_ssize_t i
@@ -397,6 +371,13 @@ cdef class DesVectorType(Deserializer):
             raise ValueError(
                 f"VectorType with variable-size subtype {self.subtype.typename} "
                 "is not supported in Cython deserializer")
+
+        # Validate total size before processing
+        cdef int expected_size = self.vector_size * serialized_size
+        if buf.size != expected_size:
+            raise ValueError(
+                f"Expected vector of type {self.subtype.typename} and dimension {self.vector_size} "
+                f"to have serialized size {expected_size}; observed serialized size of {buf.size} instead")
 
         for i in range(self.vector_size):
             from_ptr_and_size(buf.ptr + offset, serialized_size, &elem_buf)
@@ -473,18 +454,37 @@ cdef inline int subelem(
     Read the next element from the buffer: first read the size (in bytes) of the
     element, then fill elem_buf with a newly sliced buffer of this size (and the
     right offset).
+
+    Protocol: n >= 0: n bytes follow
+              n == -1: NULL value
+              n == -2: not set value
+              n < -2: invalid
     """
     cdef int32_t elemlen
 
     _unpack_len(buf, offset[0], &elemlen)
     offset[0] += sizeof(int32_t)
-    from_ptr_and_size(buf.ptr + offset[0], elemlen, elem_buf)
-    offset[0] += elemlen
-    return 0
+
+    # Happy path: non-negative length element that fits in buffer
+    if elemlen >= 0:
+        if offset[0] + elemlen <= buf.size:
+            from_ptr_and_size(buf.ptr + offset[0], elemlen, elem_buf)
+            offset[0] += elemlen
+            return 0
+        raise IndexError("Element length %d at offset %d exceeds buffer size %d" % (elemlen, offset[0], buf.size))
+    # NULL value (-1) or not set value (-2)
+    elif elemlen == -1 or elemlen == -2:
+        from_ptr_and_size(NULL, elemlen, elem_buf)
+        return 0
+    # Invalid value (n < -2)
+    else:
+        raise ValueError("Invalid element length %d at offset %d" % (elemlen, offset[0]))
 
 
 cdef inline int _unpack_len(Buffer *buf, int offset, int32_t *output) except -1:
     """Read a big-endian int32 at the given offset using direct pointer access."""
+    if offset + sizeof(int32_t) > buf.size:
+        raise IndexError("Cannot read length field: offset %d + 4 exceeds buffer size %d" % (offset, buf.size))
     cdef uint32_t *src = <uint32_t*>(buf.ptr + offset)
     output[0] = <int32_t>ntohl(src[0])
     return 0
@@ -556,16 +556,24 @@ cdef class DesTupleType(_DesParameterizedType):
         values = []
         for i in range(self.subtypes_len):
             item = None
-            if p < buf.size:
+            if p + 4 <= buf.size:
                 # Read itemlen directly using ntohl instead of slice_buffer
                 itemlen = <int32_t>ntohl((<uint32_t*>(buf.ptr + p))[0])
                 p += 4
-                if itemlen >= 0:
+
+                if itemlen >= 0 and p + itemlen <= buf.size:
                     from_ptr_and_size(buf.ptr + p, itemlen, &item_buf)
                     p += itemlen
 
                     deserializer = self.deserializers[i]
                     item = from_binary(deserializer, &item_buf, protocol_version)
+                elif itemlen < 0:
+                    # NULL value, item stays None
+                    pass
+                else:
+                    raise IndexError("Tuple item length %d at offset %d exceeds buffer size %d" % (itemlen, p, buf.size))
+            elif p < buf.size:
+                raise IndexError("Cannot read tuple item length at offset %d: only %d bytes remain" % (p, buf.size - p))
 
             tuple_set(res, i, item)
 
@@ -607,17 +615,23 @@ cdef class DesCompositeType(_DesParameterizedType):
                 break
 
             element_length = unpack_num[uint16_t](buf)
-            from_ptr_and_size(buf.ptr + 2, element_length, &elem_buf)
 
-            deserializer = self.deserializers[i]
-            item = from_binary(deserializer, &elem_buf, protocol_version)
-            tuple_set(res, i, item)
+            # Validate that we have enough data for the element and EOC byte (happy path check)
+            if 2 + element_length + 1 <= buf.size:
+                from_ptr_and_size(buf.ptr + 2, element_length, &elem_buf)
 
-            # skip element length, element, and the EOC (one byte)
-            # Advance buffer in-place with direct assignment
-            start = 2 + element_length + 1
-            buf.ptr = buf.ptr + start
-            buf.size = buf.size - start
+                deserializer = self.deserializers[i]
+                item = from_binary(deserializer, &elem_buf, protocol_version)
+                tuple_set(res, i, item)
+
+                # skip element length, element, and the EOC (one byte)
+                # Advance buffer in-place with direct assignment
+                start = 2 + element_length + 1
+                buf.ptr = buf.ptr + start
+                buf.size = buf.size - start
+            else:
+                raise IndexError("Composite element length %d requires %d bytes but only %d remain" %
+                                (element_length, 2 + element_length + 1, buf.size))
 
         return res
 

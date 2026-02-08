@@ -32,8 +32,8 @@ import struct
 # Add parent directory to path
 sys.path.insert(0, '.')
 
-from cassandra.cqltypes import FloatType, DoubleType, Int32Type, LongType, ShortType
-from cassandra.marshal import float_pack, double_pack, int32_pack, int64_pack, int16_pack
+from cassandra.cqltypes import FloatType, DoubleType, Int32Type, LongType
+from cassandra.marshal import float_pack, double_pack, int32_pack, int64_pack
 
 
 def create_test_data(vector_size, element_type):
@@ -50,9 +50,6 @@ def create_test_data(vector_size, element_type):
     elif element_type == LongType:
         values = list(range(vector_size))
         pack_fn = int64_pack
-    elif element_type == ShortType:
-        values = list(range(min(vector_size, 32767)))
-        pack_fn = int16_pack
     else:
         raise ValueError(f"Unsupported element type: {element_type}")
 
@@ -91,8 +88,6 @@ def benchmark_struct_optimization(vector_type, serialized_data, iterations=10000
         format_str = f'>{vector_size}i'
     elif subtype is LongType or (isinstance(subtype, type) and issubclass(subtype, LongType)):
         format_str = f'>{vector_size}q'
-    elif subtype is ShortType or (isinstance(subtype, type) and issubclass(subtype, ShortType)):
-        format_str = f'>{vector_size}h'
     else:
         return None, None, None
 
@@ -126,8 +121,6 @@ def benchmark_numpy_optimization(vector_type, serialized_data, iterations=10000)
         dtype = '>i4'
     elif subtype is LongType or (isinstance(subtype, type) and issubclass(subtype, LongType)):
         dtype = '>i8'
-    elif subtype is ShortType or (isinstance(subtype, type) and issubclass(subtype, ShortType)):
-        dtype = '>i2'
     else:
         return None, None, None
 

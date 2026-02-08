@@ -1479,11 +1479,6 @@ class VectorType(_CassandraType):
                 if use_numpy:
                     return np.frombuffer(byts, dtype='>i8', count=cls.vector_size).tolist()
                 return list(struct.unpack(f'>{cls.vector_size}q', byts))
-            elif cls.subtype is ShortType or (isinstance(cls.subtype, type) and issubclass(cls.subtype, ShortType)):
-                if use_numpy:
-                    return np.frombuffer(byts, dtype='>i2', count=cls.vector_size).tolist()
-                return list(struct.unpack(f'>{cls.vector_size}h', byts))
-
             # Fallback: element-by-element deserialization for other fixed-size types
             result = [None] * cls.vector_size
             subtype_deserialize = cls.subtype.deserialize
