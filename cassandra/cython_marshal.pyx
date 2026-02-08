@@ -20,9 +20,17 @@ from libc.string cimport memcpy
 from cassandra.buffer cimport Buffer, buf_read, to_bytes
 
 # Use ntohs/ntohl for efficient big-endian to native conversion (single bswap instruction on x86)
-cdef extern from "arpa/inet.h" nogil:
-    uint16_t ntohs(uint16_t netshort)
-    uint32_t ntohl(uint32_t netlong)
+# Platform-specific header: arpa/inet.h on POSIX, winsock2.h on Windows
+cdef extern from *:
+    """
+    #ifdef _WIN32
+        #include <winsock2.h>
+    #else
+        #include <arpa/inet.h>
+    #endif
+    """
+    uint16_t ntohs(uint16_t netshort) nogil
+    uint32_t ntohl(uint32_t netlong) nogil
 
 cdef bint is_little_endian
 from cassandra.util import is_little_endian

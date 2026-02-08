@@ -19,8 +19,16 @@ from libc.stdint cimport int32_t, uint32_t
 from cassandra.bytesio cimport BytesIOReader
 
 # Use ntohl for efficient big-endian to native conversion (single bswap instruction)
-cdef extern from "arpa/inet.h" nogil:
-    uint32_t ntohl(uint32_t netlong)
+# Platform-specific header: arpa/inet.h on POSIX, winsock2.h on Windows
+cdef extern from *:
+    """
+    #ifdef _WIN32
+        #include <winsock2.h>
+    #else
+        #include <arpa/inet.h>
+    #endif
+    """
+    uint32_t ntohl(uint32_t netlong) nogil
 
 
 cdef inline int get_buf(BytesIOReader reader, Buffer *buf_out) except -1:
