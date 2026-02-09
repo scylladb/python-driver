@@ -279,6 +279,11 @@ greaterthanorequalcass3_10 = unittest.skipUnless(CASSANDRA_VERSION >= Version('3
 greaterthanorequalcass3_11 = unittest.skipUnless(CASSANDRA_VERSION >= Version('3.11'), 'Cassandra version 3.11 or greater required')
 greaterthanorequalcass40 = unittest.skipUnless(CASSANDRA_VERSION >= Version('4.0'), 'Cassandra version 4.0 or greater required')
 greaterthanorequalcass50 = unittest.skipUnless(CASSANDRA_VERSION >= Version('5.0-beta'), 'Cassandra version 5.0 or greater required')
+def _has_vector_type():
+    if SCYLLA_VERSION is not None:
+        return Version(get_scylla_version(SCYLLA_VERSION)) >= Version('2025.4')
+    return CASSANDRA_VERSION >= Version('5.0-beta')
+
 lessthanorequalcass40 = unittest.skipUnless(CASSANDRA_VERSION <= Version('4.0'), 'Cassandra version less or equal to 4.0 required')
 lessthancass40 = unittest.skipUnless(CASSANDRA_VERSION < Version('4.0'), 'Cassandra version less than 4.0 required')
 lessthancass30 = unittest.skipUnless(CASSANDRA_VERSION < Version('3.0'), 'Cassandra version less then 3.0 required')
@@ -297,6 +302,9 @@ requires_composite_type = pytest.mark.skipif(SCYLLA_VERSION is not None,
                                             reason='Scylla does not support composite types')
 requires_custom_payload = pytest.mark.skipif(SCYLLA_VERSION is not None or PROTOCOL_VERSION < 4,
                                             reason='Scylla does not support custom payloads. Cassandra requires native protocol v4.0+')
+requires_vector_type = unittest.skipUnless(
+    _has_vector_type(),
+    'Cassandra >= 5.0 or Scylla >= 2025.4 required')
 xfail_scylla = lambda reason, *args, **kwargs: pytest.mark.xfail(SCYLLA_VERSION is not None, reason=reason, *args, **kwargs)
 incorrect_test = lambda reason='This test seems to be incorrect and should be fixed', *args, **kwargs: pytest.mark.xfail(reason=reason, *args, **kwargs)
 
