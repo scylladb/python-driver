@@ -112,7 +112,7 @@ def make_arrays(ParseDesc desc, array_size):
             (e.g. this can be fed into pandas.DataFrame)
     """
     array_descs = np.empty((desc.rowsize,), arrDescDtype)
-    arrays = []
+    arrays = [None] * desc.rowsize
 
     for i, coltype in enumerate(desc.coltypes):
         arr = make_array(coltype, array_size)
@@ -123,7 +123,7 @@ def make_arrays(ParseDesc desc, array_size):
             array_descs[i]['mask_ptr'] = arr.mask.ctypes.data
         except AttributeError:
             array_descs[i]['mask_ptr'] = 0
-        arrays.append(arr)
+        arrays[i] = arr
 
     return array_descs, arrays
 
@@ -131,7 +131,23 @@ def make_arrays(ParseDesc desc, array_size):
 def make_array(coltype, array_size):
     """
     Allocate a new NumPy array of the given column type and size.
+    For VectorType, creates a 2D array (array_size x vector_dimension).
     """
+    # Check if this is a VectorType
+    if hasattr(coltype, 'vector_size') and hasattr(coltype, 'subtype'):
+        # VectorType - create 2D array (rows x vector_dimension)
+        vector_size = coltype.vector_size
+        subtype = coltype.subtype
+        try:
+            dtype = _cqltype_to_numpy[subtype]
+            a = np.ma.empty((array_size, vector_size), dtype=dtype)
+            a.mask = np.zeros((array_size, vector_size), dtype=bool)
+        except KeyError:
+            # Unsupported vector subtype - fall back to object array
+            a = np.empty((array_size,), dtype=obj_dtype)
+        return a
+
+    # Scalar types
     try:
         a = np.ma.empty((array_size,), dtype=_cqltype_to_numpy[coltype])
         a.mask = np.zeros((array_size,), dtype=bool)
@@ -174,6 +190,7 @@ cdef inline int unpack_row(
 def make_native_byteorder(arr):
     """
     Make sure all values have a native endian in the NumPy arrays.
+    Handles both 1D (scalar types) and 2D (VectorType) arrays.
     """
     if is_little_endian and not arr.dtype.kind == 'O':
         # We have arrays in big-endian order. First swap the bytes

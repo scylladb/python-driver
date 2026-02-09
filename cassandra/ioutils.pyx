@@ -15,8 +15,20 @@
 include 'cython_marshal.pyx'
 from cassandra.buffer cimport Buffer, from_ptr_and_size
 
-from libc.stdint cimport int32_t
+from libc.stdint cimport int32_t, uint32_t
 from cassandra.bytesio cimport BytesIOReader
+
+# Use ntohl for efficient big-endian to native conversion (single bswap instruction)
+# Platform-specific header: arpa/inet.h on POSIX, winsock2.h on Windows
+cdef extern from *:
+    """
+    #ifdef _WIN32
+        #include <winsock2.h>
+    #else
+        #include <arpa/inet.h>
+    #endif
+    """
+    uint32_t ntohl(uint32_t netlong) nogil
 
 
 cdef inline int get_buf(BytesIOReader reader, Buffer *buf_out) except -1:
@@ -41,7 +53,6 @@ cdef inline int get_buf(BytesIOReader reader, Buffer *buf_out) except -1:
     return 0
 
 cdef inline int32_t read_int(BytesIOReader reader) except ?0xDEAD:
-    cdef Buffer buf
-    buf.ptr = reader.read(4)
-    buf.size = 4
-    return unpack_num[int32_t](&buf)
+    """Read a big-endian int32 directly from the reader."""
+    cdef uint32_t *src = <uint32_t*>reader.read(4)
+    return <int32_t>ntohl(src[0])
