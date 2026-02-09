@@ -1,3 +1,37 @@
+3.29.8
+======
+February 09, 2026
+
+Features
+--------
+* Add frozen parameter to collection columns with FULL index support
+* Include original error in ConnectionShutdown messages
+
+Bug Fixes
+---------
+* Fix IntStat comparison operators and metrics cleanup on shutdown
+* Fix NumPy 2.0 compatibility in numpy_parser
+* Fix race condition during host IP address update
+* Fix infinite retry when single host fails with server error
+* Don't mark node down when control connection fails to connect
+* Call on_add before distance to properly initialize lbp
+* Don't check if host is in initial contact points when setting default local_dc
+* Pull version information from system.local when version info is not present
+* Fix missing call to superclass ``__init__`` during object initialization
+
+Others
+------
+* Remove scales dependency with self-contained metrics implementation
+* Migrate from pytz to zoneinfo
+* Remove Python 2 compatibility code
+* Optimize write path in protocol.py to reduce copies
+* TokenAwarePolicy: remove redundant check if a table is using tablets
+* Don't create Host instances with random host_id
+* Use endpoint instead of Host in _try_connect
+* Remove support for protocols <3 from cython files
+* Return empty query plan if there are no live hosts
+* Replace asynctest with stdlib mock
+
 3.29.7
 ======
 December 08, 2025
