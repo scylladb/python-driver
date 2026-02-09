@@ -288,6 +288,9 @@ def main():
 
         # Other types (smaller iteration counts)
         (128, DoubleType, "double", 10000),
+        (768, DoubleType, "double", 5000),
+        (1536, DoubleType, "double", 2000),
+        (64, Int32Type, "int", 15000),
         (128, Int32Type, "int", 10000),
     ]
 
