@@ -279,6 +279,17 @@ greaterthanorequalcass3_10 = unittest.skipUnless(CASSANDRA_VERSION >= Version('3
 greaterthanorequalcass3_11 = unittest.skipUnless(CASSANDRA_VERSION >= Version('3.11'), 'Cassandra version 3.11 or greater required')
 greaterthanorequalcass40 = unittest.skipUnless(CASSANDRA_VERSION >= Version('4.0'), 'Cassandra version 4.0 or greater required')
 greaterthanorequalcass50 = unittest.skipUnless(CASSANDRA_VERSION >= Version('5.0-beta'), 'Cassandra version 5.0 or greater required')
+def _is_cass50_or_scylla_2025_4_plus():
+    if CASSANDRA_VERSION >= Version('5.0-beta'):
+        return True
+    if SCYLLA_VERSION is None:
+        return False
+    return Version(get_scylla_version(SCYLLA_VERSION)) >= Version('2025.4')
+
+greaterthanorequalcass50_or_scylla_2025_4 = unittest.skipUnless(
+    _is_cass50_or_scylla_2025_4_plus(),
+    'Cassandra >= 5.0 or Scylla >= 2025.4 required'
+)
 lessthanorequalcass40 = unittest.skipUnless(CASSANDRA_VERSION <= Version('4.0'), 'Cassandra version less or equal to 4.0 required')
 lessthancass40 = unittest.skipUnless(CASSANDRA_VERSION < Version('4.0'), 'Cassandra version less than 4.0 required')
 lessthancass30 = unittest.skipUnless(CASSANDRA_VERSION < Version('3.0'), 'Cassandra version less then 3.0 required')
