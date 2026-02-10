@@ -23,7 +23,7 @@ from cassandra.cluster import ExecutionProfile, _clusters_for_shutdown, _ConfigM
 from cassandra.policies import RoundRobinPolicy
 from cassandra.query import dict_factory
 
-from tests.integration import CASSANDRA_IP, PROTOCOL_VERSION, execute_with_long_wait_retry, local, TestCluster
+from tests.integration import CASSANDRA_IP, execute_with_long_wait_retry, local, TestCluster
 from tests.integration.cqlengine.base import BaseCassEngTestCase
 from tests.integration.cqlengine import DEFAULT_KEYSPACE, setup_connection
 

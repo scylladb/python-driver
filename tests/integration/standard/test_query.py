@@ -24,8 +24,8 @@ from cassandra.query import (PreparedStatement, BoundStatement, SimpleStatement,
                              BatchStatement, BatchType, dict_factory, TraceUnavailable)
 from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DEFAULT, Cluster
 from cassandra.policies import HostDistance, RoundRobinPolicy, WhiteListRoundRobinPolicy
-from tests.integration import use_singledc, PROTOCOL_VERSION, BasicSharedKeyspaceUnitTestCase, \
-    greaterthanprotocolv3, MockLoggingHandler, get_supported_protocol_versions, local, get_cluster, setup_keyspace, \
+from tests.integration import use_singledc, BasicSharedKeyspaceUnitTestCase, \
+    MockLoggingHandler, get_supported_protocol_versions, local, get_cluster, setup_keyspace, \
     USE_CASS_EXTERNAL, greaterthanorequalcass40, TestCluster, xfail_scylla
 from tests import notwindows
 from tests.integration import greaterthanorequalcass30, get_node
@@ -136,7 +136,6 @@ class QueryTests(BasicSharedKeyspaceUnitTestCase):
                 str(event)
 
     @local
-    @greaterthanprotocolv3
     def test_client_ip_in_trace(self):
         """
         Test to validate that client trace contains client ip information.
@@ -492,10 +491,7 @@ class PreparedStatementMetdataTest(unittest.TestCase):
 
             session = cluster.connect()
             select_statement = session.prepare("SELECT * FROM system.local WHERE key='local'")
-            if proto_version == 1:
-                assert select_statement.result_metadata == None
-            else:
-                assert select_statement.result_metadata != None
+            assert select_statement.result_metadata != None
             future = session.execute_async(select_statement)
             results = future.result()
             if base_line is None:
@@ -659,11 +655,6 @@ class PrintStatementTests(unittest.TestCase):
 class BatchStatementTests(BasicSharedKeyspaceUnitTestCase):
 
     def setUp(self):
-        if PROTOCOL_VERSION < 2:
-            raise unittest.SkipTest(
-                "Protocol 2.0+ is required for BATCH operations, currently testing against %r"
-                % (PROTOCOL_VERSION,))
-
         self.cluster = TestCluster()
         self.session = self.cluster.connect(wait_for_all_pools=True)
 
@@ -793,11 +784,6 @@ class BatchStatementTests(BasicSharedKeyspaceUnitTestCase):
 
 class SerialConsistencyTests(unittest.TestCase):
     def setUp(self):
-        if PROTOCOL_VERSION < 2:
-            raise unittest.SkipTest(
-                "Protocol 2.0+ is required for Serial Consistency, currently testing against %r"
-                % (PROTOCOL_VERSION,))
-
         self.cluster = TestCluster()
         self.session = self.cluster.connect()
 
@@ -880,15 +866,6 @@ class SerialConsistencyTests(unittest.TestCase):
 
 class LightweightTransactionTests(unittest.TestCase):
     def setUp(self):
-        """
-        Test is skipped if run with cql version < 2
-
-        """
-        if PROTOCOL_VERSION < 2:
-            raise unittest.SkipTest(
-                "Protocol 2.0+ is required for Lightweight transactions, currently testing against %r"
-                % (PROTOCOL_VERSION,))
-
         serial_profile = ExecutionProfile(consistency_level=ConsistencyLevel.SERIAL)
         self.cluster = TestCluster(execution_profiles={'serial': serial_profile})
         self.session = self.cluster.connect()
@@ -1072,10 +1049,6 @@ class BatchStatementDefaultRoutingKeyTests(unittest.TestCase):
     # Test for PYTHON-126: BatchStatement.add() should set the routing key of the first added prepared statement
 
     def setUp(self):
-        if PROTOCOL_VERSION < 2:
-            raise unittest.SkipTest(
-                "Protocol 2.0+ is required for BATCH operations, currently testing against %r"
-                % (PROTOCOL_VERSION,))
         self.cluster = TestCluster()
         self.session = self.cluster.connect()
         query = """

@@ -422,8 +422,8 @@ class BaseModel(object):
                                 ', '.join('{0}={1}'.format(k, getattr(self, k)) for k in self._primary_keys.keys()))
 
     @classmethod
-    def _routing_key_from_values(cls, pk_values, protocol_version):
-        return cls._key_serializer(pk_values, protocol_version)
+    def _routing_key_from_values(cls, pk_values):
+        return cls._key_serializer(pk_values)
 
     @classmethod
     def _discover_polymorphic_submodels(cls):
@@ -948,10 +948,10 @@ class ModelMetaClass(type):
             key_cols = [c for c in partition_keys.values()]
             partition_key_index = dict((col.db_field_name, col._partition_key_index) for col in key_cols)
             key_cql_types = [c.cql_type for c in key_cols]
-            key_serializer = staticmethod(lambda parts, proto_version: [t.to_binary(p, proto_version) for t, p in zip(key_cql_types, parts)])
+            key_serializer = staticmethod(lambda parts: [t.to_binary(p) for t, p in zip(key_cql_types, parts)])
         else:
             partition_key_index = {}
-            key_serializer = staticmethod(lambda parts, proto_version: None)
+            key_serializer = staticmethod(lambda parts: None)
 
         # setup partition key shortcut
         if len(partition_keys) == 0:

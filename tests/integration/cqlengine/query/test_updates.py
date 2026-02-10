@@ -22,7 +22,6 @@ from cassandra.cqlengine import columns
 from tests.integration.cqlengine import is_prepend_reversed
 from tests.integration.cqlengine.base import BaseCassEngTestCase, TestQueryUpdateModel
 from tests.integration.cqlengine import execute_count
-from tests.integration import greaterthancass20
 import pytest
 
 
@@ -234,7 +233,6 @@ class QueryUpdateTests(BaseCassEngTestCase):
         obj = TestQueryUpdateModel.objects.get(partition=partition, cluster=cluster)
         assert obj.text_map == {"foo": '1'}
 
-    @greaterthancass20
     @execute_count(5)
     def test_map_update_remove(self):
         """

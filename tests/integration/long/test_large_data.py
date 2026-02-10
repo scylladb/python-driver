@@ -21,7 +21,7 @@ from cassandra import ConsistencyLevel, OperationTimedOut, WriteTimeout
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.query import dict_factory
 from cassandra.query import SimpleStatement
-from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster
+from tests.integration import use_singledc, TestCluster
 from tests.integration.long.utils import create_schema
 
 import unittest

@@ -203,7 +203,7 @@ class CustomResultMessageRaw(ResultMessage):
     my_type_codes[0xc] = UUIDType
     type_codes = my_type_codes
 
-    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
+    def recv_results_rows(self, f, user_type_map, result_metadata, column_encryption_policy):
             self.recv_results_metadata(f, user_type_map)
             column_metadata = self.column_metadata or result_metadata
             rowcount = read_int(f)
@@ -232,7 +232,7 @@ class CustomResultMessageTracked(ResultMessage):
     type_codes = my_type_codes
     checked_rev_row_set = set()
 
-    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
+    def recv_results_rows(self, f, user_type_map, result_metadata, column_encryption_policy):
         self.recv_results_metadata(f, user_type_map)
         column_metadata = self.column_metadata or result_metadata
         rowcount = read_int(f)
@@ -241,7 +241,7 @@ class CustomResultMessageTracked(ResultMessage):
         self.column_types = [c[3] for c in column_metadata]
         self.checked_rev_row_set.update(self.column_types)
         self.parsed_rows = [
-            tuple(ctype.from_binary(val, protocol_version)
+            tuple(ctype.from_binary(val)
                   for ctype, val in zip(self.column_types, row))
             for row in rows]
 

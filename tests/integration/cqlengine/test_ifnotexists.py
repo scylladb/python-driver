@@ -21,7 +21,6 @@ from cassandra.cqlengine.models import Model
 from cassandra.cqlengine.query import BatchQuery, LWTException, IfNotExistsWithCounterColumn
 
 from tests.integration.cqlengine.base import BaseCassEngTestCase
-from tests.integration import PROTOCOL_VERSION
 import pytest
 
 class TestIfNotExistsModel(Model):
@@ -73,7 +72,6 @@ class BaseIfNotExistsWithCounterTest(BaseCassEngTestCase):
 
 class IfNotExistsInsertTests(BaseIfNotExistsTest):
 
-    @unittest.skipUnless(PROTOCOL_VERSION >= 2, "only runs against the cql3 protocol v2.0")
     def test_insert_if_not_exists(self):
         """ tests that insertion with if_not_exists work as expected """
 
@@ -101,7 +99,6 @@ class IfNotExistsInsertTests(BaseIfNotExistsTest):
         assert tm.count == 8
         assert tm.text == '123456789'
 
-    @unittest.skipUnless(PROTOCOL_VERSION >= 2, "only runs against the cql3 protocol v2.0")
     def test_batch_insert_if_not_exists(self):
         """ tests that batch insertion with if_not_exists work as expected """
 

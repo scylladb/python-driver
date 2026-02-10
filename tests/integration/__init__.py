@@ -163,49 +163,22 @@ ALLOW_BETA_PROTOCOL = False
 def get_default_protocol():
     if CASSANDRA_VERSION >= Version('4.0-a'):
         return ProtocolVersion.V5
-    if CASSANDRA_VERSION >= Version('3.10'):
-        return 4
-    if CASSANDRA_VERSION >= Version('2.2'):
-        return 4
-    elif CASSANDRA_VERSION >= Version('2.1'):
-        return 3
     else:
-        raise Exception("Running tests with an unsupported Cassandra version: {0}".format(CASSANDRA_VERSION))
+        return 4
 
 
 def get_scylla_default_protocol():
-    if len(CASSANDRA_VERSION.release) == 4:
-        # An enterprise, i.e. 2021.1.6
-        if CASSANDRA_VERSION > Version('2019'):
-            return 4
-        return 3
-    if CASSANDRA_VERSION >= Version('3.0'):
-        return 4
-    return 3
+    return 4
 
 
 def get_supported_protocol_versions():
     """
-    2.1 -> 3
-    2.2 -> 4, 3
-    3.X -> 4, 3
-    3.10(C*) -> 5(beta),4,3
-    4.0(C*) -> 6(beta),5,4,3
-`   """
+    Returns supported protocol versions (v4 minimum).
+    """
     if CASSANDRA_VERSION >= Version('4.0-beta5'):
-        return (3, 4, 5)
-    if CASSANDRA_VERSION >= Version('4.0-a'):
-       return (3, 4, 5)
-    elif CASSANDRA_VERSION >= Version('3.10'):
-        return (3, 4)
-    elif CASSANDRA_VERSION >= Version('3.0'):
-        return (3, 4)
-    elif CASSANDRA_VERSION >= Version('2.2'):
-        return (3, 4)
-    elif CASSANDRA_VERSION >= Version('2.1'):
-        return (3)
+        return (4, 5)
     else:
-        return (3,)
+        return (4,)
 
 
 def get_unsupported_lower_protocol():
@@ -213,34 +186,22 @@ def get_unsupported_lower_protocol():
     This is used to determine the lowest protocol version that is NOT
     supported by the version of C* running
     """
-    if SCYLLA_VERSION is not None:
-        return 2
-    if CASSANDRA_VERSION >= Version('3.0'):
-        return 2
-    else:
-        return None
+    return 3
 
 
 def get_unsupported_upper_protocol():
     """
     This is used to determine the highest protocol version that is NOT
-    supported by the version of C* running
+    supported by the version of C* running. Since protocol v4 is the minimum
+    supported, this returns v5 or higher for older Cassandra versions.
     """
     if SCYLLA_VERSION is not None:
         return 5
 
     if CASSANDRA_VERSION >= Version('4.0-a'):
         return ProtocolVersion.DSE_V1
-    if CASSANDRA_VERSION >= Version('3.10'):
-        return 5
-    if CASSANDRA_VERSION >= Version('2.2'):
-        return 5
-    elif CASSANDRA_VERSION >= Version('2.1'):
-        return 4
-    elif CASSANDRA_VERSION >= Version('2.0'):
-        return 3
     else:
-        return 2
+        return 5
 
 
 default_protocol_version = get_scylla_default_protocol() if SCYLLA_VERSION else get_default_protocol()
@@ -267,11 +228,6 @@ def xfail_scylla_version(filter: Callable[[Version], bool], reason: str, *args, 
     return pytest.mark.xfail(filter(current_version), reason=reason, *args, **kwargs)
 
 local = local_decorator_creator()
-notprotocolv1 = unittest.skipUnless(PROTOCOL_VERSION > 1, 'Protocol v1 not supported')
-greaterthanprotocolv3 = unittest.skipUnless(PROTOCOL_VERSION >= 4, 'Protocol versions less than 4 are not supported')
-
-greaterthancass20 = unittest.skipUnless(CASSANDRA_VERSION >= Version('2.1'), 'Cassandra version 2.1 or greater required')
-greaterthancass21 = unittest.skipUnless(CASSANDRA_VERSION >= Version('2.2'), 'Cassandra version 2.2 or greater required')
 greaterthanorequalcass30 = unittest.skipUnless(CASSANDRA_VERSION >= Version('3.0'), 'Cassandra version 3.0 or greater required')
 greaterthanorequalcass31 = unittest.skipUnless(CASSANDRA_VERSION >= Version('3.1'), 'Cassandra version 3.1 or greater required')
 greaterthanorequalcass36 = unittest.skipUnless(CASSANDRA_VERSION >= Version('3.6'), 'Cassandra version 3.6 or greater required')
@@ -281,7 +237,6 @@ greaterthanorequalcass40 = unittest.skipUnless(CASSANDRA_VERSION >= Version('4.0
 greaterthanorequalcass50 = unittest.skipUnless(CASSANDRA_VERSION >= Version('5.0-beta'), 'Cassandra version 5.0 or greater required')
 lessthanorequalcass40 = unittest.skipUnless(CASSANDRA_VERSION <= Version('4.0'), 'Cassandra version less or equal to 4.0 required')
 lessthancass40 = unittest.skipUnless(CASSANDRA_VERSION < Version('4.0'), 'Cassandra version less than 4.0 required')
-lessthancass30 = unittest.skipUnless(CASSANDRA_VERSION < Version('3.0'), 'Cassandra version less then 3.0 required')
 
 # pytest.mark.xfail instead of unittest.expectedFailure because
 # 1. unittest doesn't skip setUpClass when used on class and we need it sometimes
@@ -295,15 +250,15 @@ requires_java_udf = pytest.mark.skipif(SCYLLA_VERSION is not None,
                                     reason='Scylla does not support UDFs written in Java')
 requires_composite_type = pytest.mark.skipif(SCYLLA_VERSION is not None,
                                             reason='Scylla does not support composite types')
-requires_custom_payload = pytest.mark.skipif(SCYLLA_VERSION is not None or PROTOCOL_VERSION < 4,
-                                            reason='Scylla does not support custom payloads. Cassandra requires native protocol v4.0+')
+requires_custom_payload = pytest.mark.skipif(SCYLLA_VERSION is not None,
+                                            reason='Scylla does not support custom payloads')
 xfail_scylla = lambda reason, *args, **kwargs: pytest.mark.xfail(SCYLLA_VERSION is not None, reason=reason, *args, **kwargs)
 incorrect_test = lambda reason='This test seems to be incorrect and should be fixed', *args, **kwargs: pytest.mark.xfail(reason=reason, *args, **kwargs)
 
 pypy = unittest.skipUnless(platform.python_implementation() == "PyPy", "Test is skipped unless it's on PyPy")
 requiresmallclockgranularity = unittest.skipIf("Windows" in platform.system() or "asyncore" in EVENT_LOOP_MANAGER,
                                                "This test is not suitible for environments with large clock granularity")
-requiressimulacron = unittest.skipIf(SIMULACRON_JAR is None or CASSANDRA_VERSION < Version("2.1"), "Simulacron jar hasn't been specified or C* version is 2.0")
+requiressimulacron = unittest.skipIf(SIMULACRON_JAR is None, "Simulacron jar hasn't been specified")
 requirescompactstorage = xfail_scylla_version(lambda v: v >= Version('2025.1.0'), reason="ScyllaDB deprecated compact storage", raises=InvalidRequest)
 libevtest = unittest.skipUnless(EVENT_LOOP_MANAGER=="libev", "Test timing designed for libev loop")
 
@@ -507,9 +462,8 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
 
         if 'graph' in workloads:
             jvm_args += ['-Xms1500M', '-Xmx1500M']
-        else:
-            if PROTOCOL_VERSION >= 4 and not SCYLLA_VERSION:
-                jvm_args = [" -Dcassandra.custom_query_handler_class=org.apache.cassandra.cql3.CustomPayloadMirroringQueryHandler"]
+        elif not SCYLLA_VERSION:
+            jvm_args = [" -Dcassandra.custom_query_handler_class=org.apache.cassandra.cql3.CustomPayloadMirroringQueryHandler"]
         if len(workloads) > 0:
             for node in CCM_CLUSTER.nodes.values():
                 node.set_workloads(workloads)

@@ -18,7 +18,6 @@ import logging
 import sys
 import traceback
 from uuid import uuid4
-from packaging.version import Version
 
 from cassandra import WriteTimeout, OperationTimedOut
 import cassandra.cqlengine.columns as columns
@@ -29,7 +28,6 @@ from cassandra.cqlengine.management import sync_table, drop_table
 from tests.integration import CASSANDRA_IP
 from tests.integration.cqlengine import is_prepend_reversed
 from tests.integration.cqlengine.base import BaseCassEngTestCase
-from tests.integration import greaterthancass20, CASSANDRA_VERSION
 import pytest
 
 log = logging.getLogger(__name__)
@@ -570,15 +568,12 @@ class TestTupleModel(Model):
     mixed_tuple = columns.Tuple(columns.Text, columns.Integer, columns.Text, required=False)
 
 
-@greaterthancass20
 class TestTupleColumn(BaseCassEngTestCase):
 
     @classmethod
     def setUpClass(cls):
-        # Skip annotations don't seem to skip class level teradown and setup methods
-        if CASSANDRA_VERSION >= Version('2.1'):
-            drop_table(TestTupleModel)
-            sync_table(TestTupleModel)
+        drop_table(TestTupleModel)
+        sync_table(TestTupleModel)
 
     @classmethod
     def tearDownClass(cls):
@@ -774,15 +769,12 @@ class TestNestedModel(Model):
     set_tuple = columns.Set(columns.Tuple(columns.Integer, columns.Integer), required=False)
 
 
-@greaterthancass20
 class TestNestedType(BaseCassEngTestCase):
 
     @classmethod
     def setUpClass(cls):
-        # Skip annotations don't seem to skip class level teradown and setup methods
-        if CASSANDRA_VERSION >= Version('2.1'):
-            drop_table(TestNestedModel)
-            sync_table(TestNestedModel)
+        drop_table(TestNestedModel)
+        sync_table(TestNestedModel)
 
     @classmethod
     def tearDownClass(cls):

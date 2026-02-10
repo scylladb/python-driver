@@ -13,7 +13,7 @@
 # limitations under the License
 import unittest
 
-from tests.integration import CASSANDRA_VERSION, SIMULACRON_JAR, PROTOCOL_VERSION
+from tests.integration import SIMULACRON_JAR, PROTOCOL_VERSION
 from tests.integration.simulacron.utils import (
     clear_queries,
     start_and_prime_singledc,
@@ -22,8 +22,6 @@ from tests.integration.simulacron.utils import (
 )
 
 from cassandra.cluster import Cluster
-
-from packaging.version import Version
 
 
 PROTOCOL_VERSION = min(4, PROTOCOL_VERSION)
@@ -45,7 +43,7 @@ class SimulacronCluster(SimulacronBase):
 
     @classmethod
     def setUpClass(cls):
-        if SIMULACRON_JAR is None or CASSANDRA_VERSION < Version("2.1"):
+        if SIMULACRON_JAR is None:
             return
 
         start_and_prime_singledc()
@@ -55,7 +53,7 @@ class SimulacronCluster(SimulacronBase):
 
     @classmethod
     def tearDownClass(cls):
-        if SIMULACRON_JAR is None or CASSANDRA_VERSION < Version("2.1"):
+        if SIMULACRON_JAR is None:
             return
 
         if cls.cluster:

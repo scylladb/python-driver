@@ -767,17 +767,16 @@ class OrderedMap(Mapping):
 
 class OrderedMapSerializedKey(OrderedMap):
 
-    def __init__(self, cass_type, protocol_version):
+    def __init__(self, cass_type):
         super(OrderedMapSerializedKey, self).__init__()
         self.cass_key_type = cass_type
-        self.protocol_version = protocol_version
 
     def _insert_unchecked(self, key, flat_key, value):
         self._items.append((key, value))
         self._index[flat_key] = len(self._items) - 1
 
     def _serialize_key(self, key):
-        return self.cass_key_type.serialize(key, self.protocol_version)
+        return self.cass_key_type.serialize(key)
 
 
 @total_ordering
