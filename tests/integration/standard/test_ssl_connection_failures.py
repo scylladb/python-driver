@@ -64,6 +64,7 @@ class AsyncoreSSLConnectionFailureTest(unittest.TestCase):
         Simulates: Node reboot causing socket to be closed while sending data
         """
         # Create a connection
+        # Note: Using CERT_NONE for testing only - this is intentionally insecure
         conn = AsyncoreConnection(
             DefaultEndPoint('127.0.0.1', 9999),
             ssl_options={'cert_reqs': ssl.CERT_NONE}
@@ -91,6 +92,7 @@ class AsyncoreSSLConnectionFailureTest(unittest.TestCase):
         
         Simulates: Node reboot causing connection reset while reading response
         """
+        # Note: Using CERT_NONE for testing only - this is intentionally insecure
         conn = AsyncoreConnection(
             DefaultEndPoint('127.0.0.1', 9999),
             ssl_options={'cert_reqs': ssl.CERT_NONE}
@@ -136,6 +138,7 @@ class AsyncoreSSLConnectionFailureTest(unittest.TestCase):
         
         Simulates: Write to socket whose peer has closed connection
         """
+        # Note: Using CERT_NONE for testing only - this is intentionally insecure
         conn = AsyncoreConnection(
             DefaultEndPoint('127.0.0.1', 9999),
             ssl_options={'cert_reqs': ssl.CERT_NONE}
@@ -161,6 +164,7 @@ class AsyncoreSSLConnectionFailureTest(unittest.TestCase):
         Simulates: Multiple threads operating on connection during node reboot
         This is the core scenario from the reported issue.
         """
+        # Note: Using CERT_NONE for testing only - this is intentionally insecure
         conn = AsyncoreConnection(
             DefaultEndPoint('127.0.0.1', 9999),
             ssl_options={'cert_reqs': ssl.CERT_NONE}
@@ -209,6 +213,7 @@ class AsyncioSSLConnectionFailureTest(unittest.TestCase):
         """
         Test that socket errors are preserved in asyncio connections.
         """
+        # Note: Using CERT_NONE for testing only - this is intentionally insecure
         conn = AsyncioConnection(
             DefaultEndPoint('127.0.0.1', 9999),
             ssl_options={'cert_reqs': ssl.CERT_NONE}
@@ -227,6 +232,7 @@ class AsyncioSSLConnectionFailureTest(unittest.TestCase):
         """
         Test connection reset handling in asyncio.
         """
+        # Note: Using CERT_NONE for testing only - this is intentionally insecure
         conn = AsyncioConnection(
             DefaultEndPoint('127.0.0.1', 9999),
             ssl_options={'cert_reqs': ssl.CERT_NONE}
@@ -257,6 +263,7 @@ class SSLErrorMessageQualityTest(unittest.TestCase):
         """
         Verify that ConnectionShutdown messages include the root cause error.
         """
+        # Note: Using CERT_NONE for testing only - this is intentionally insecure
         # This can work with any connection type
         if AsyncoreConnection:
             conn = AsyncoreConnection(
@@ -289,6 +296,7 @@ class SSLErrorMessageQualityTest(unittest.TestCase):
         """
         Verify that when multiple errors occur, the first (root cause) is preserved.
         """
+        # Note: Using CERT_NONE for testing only - this is intentionally insecure
         if AsyncoreConnection:
             conn = AsyncoreConnection(
                 DefaultEndPoint('127.0.0.1', 9999),

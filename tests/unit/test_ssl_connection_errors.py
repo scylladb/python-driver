@@ -316,10 +316,12 @@ class SSLConnectionCloseRaceConditionTest(unittest.TestCase):
         c.close = Mock()  # Mock the close method since base class raises NotImplementedError
         
         # Add some pending requests
+        # Each request is a tuple of (callback, encoder, decoder)
+        mock_request = (Mock(), ProtocolHandler.encode_message, ProtocolHandler.decode_message)
         c._requests = {
-            1: (Mock(), ProtocolHandler.encode_message, ProtocolHandler.decode_message),
-            2: (Mock(), ProtocolHandler.encode_message, ProtocolHandler.decode_message),
-            3: (Mock(), ProtocolHandler.encode_message, ProtocolHandler.decode_message),
+            1: mock_request,
+            2: mock_request,
+            3: mock_request,
         }
         
         return c
