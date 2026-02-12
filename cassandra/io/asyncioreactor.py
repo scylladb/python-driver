@@ -158,24 +158,34 @@ class AsyncioConnection(Connection):
 
     async def _close(self):
         log.debug("Closing connection (%s) to %s" % (id(self), self.endpoint))
-        if self._write_watcher:
-            self._write_watcher.cancel()
-        if self._read_watcher:
-            self._read_watcher.cancel()
-        if self._socket:
-            self._loop.remove_writer(self._socket.fileno())
-            self._loop.remove_reader(self._socket.fileno())
-            self._socket.close()
+        try:
+            if self._write_watcher:
+                self._write_watcher.cancel()
+            if self._read_watcher:
+                self._read_watcher.cancel()
+            if self._socket:
+                # remove_reader/remove_writer are not supported on Windows
+                # ProactorEventLoop — ignore failures so the socket still
+                # gets closed.
+                try:
+                    self._loop.remove_writer(self._socket.fileno())
+                except (NotImplementedError, OSError):
+                    pass
+                try:
+                    self._loop.remove_reader(self._socket.fileno())
+                except (NotImplementedError, OSError):
+                    pass
+                self._socket.close()
 
-        log.debug("Closed socket to %s" % (self.endpoint,))
-
-        if not self.is_defunct:
-            msg = "Connection to %s was closed" % self.endpoint
-            if self.last_error:
-                msg += ": %s" % (self.last_error,)
-            self.error_all_requests(ConnectionShutdown(msg))
-            # don't leave in-progress operations hanging
-            self.connected_event.set()
+            log.debug("Closed socket to %s" % (self.endpoint,))
+        finally:
+            if not self.is_defunct:
+                msg = "Connection to %s was closed" % self.endpoint
+                if self.last_error:
+                    msg += ": %s" % (self.last_error,)
+                self.error_all_requests(ConnectionShutdown(msg))
+                # don't leave in-progress operations hanging
+                self.connected_event.set()
 
     def push(self, data):
         if self.is_closed or self.is_defunct:
