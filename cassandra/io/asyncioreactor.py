@@ -155,7 +155,9 @@ class AsyncioConnection(Connection):
             try:
                 future.result(timeout=5)
             except Exception:
-                pass
+                # Best-effort close: suppress errors during shutdown
+                log.debug("Error waiting for async close of %s",
+                          self.endpoint, exc_info=True)
 
     async def _close(self):
         log.debug("Closing connection (%s) to %s" % (id(self), self.endpoint))
@@ -171,11 +173,11 @@ class AsyncioConnection(Connection):
                 try:
                     self._loop.remove_writer(self._socket.fileno())
                 except (NotImplementedError, OSError):
-                    pass
+                    pass  # not supported on Windows ProactorEventLoop
                 try:
                     self._loop.remove_reader(self._socket.fileno())
                 except (NotImplementedError, OSError):
-                    pass
+                    pass  # not supported on Windows ProactorEventLoop
                 self._socket.close()
 
             log.debug("Closed socket to %s" % (self.endpoint,))

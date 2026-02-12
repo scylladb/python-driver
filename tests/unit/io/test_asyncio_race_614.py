@@ -49,24 +49,25 @@ log = logging.getLogger(__name__)
 skip_me = is_monkey_patched() or not ASYNCIO_AVAILABLE
 
 
-class SocketPairAsyncioConnection(AsyncioConnection):
-    """
-    A subclass of AsyncioConnection that uses a pre-provided socket from
-    a socketpair instead of connecting to a real CQL server.
+if ASYNCIO_AVAILABLE and AsyncioConnection is not None:
+    class SocketPairAsyncioConnection(AsyncioConnection):
+        """
+        A subclass of AsyncioConnection that uses a pre-provided socket from
+        a socketpair instead of connecting to a real CQL server.
 
-    This bypasses _connect_socket() and _send_options_message() so we can
-    test I/O race conditions with a real fd registered on the event loop.
-    """
+        This bypasses _connect_socket() and _send_options_message() so we can
+        test I/O race conditions with a real fd registered on the event loop.
+        """
 
-    _test_socket = None  # Set before __init__
+        _test_socket = None  # Set before __init__
 
-    def _connect_socket(self):
-        """Use the pre-provided test socket instead of connecting."""
-        self._socket = self._test_socket
+        def _connect_socket(self):
+            """Use the pre-provided test socket instead of connecting."""
+            self._socket = self._test_socket
 
-    def _send_options_message(self):
-        """Skip the CQL handshake -- we don't have a real server."""
-        pass
+        def _send_options_message(self):
+            """Skip the CQL handshake -- we don't have a real server."""
+            pass
 
 
 def _make_connection_with_socketpair():
