@@ -50,20 +50,13 @@ This test suite verifies that this mechanism works correctly across all SSL erro
    - `test_ssl_error_on_closed_connection_send_msg`: Error included in send_msg
 
 ### Integration Tests (`test_ssl_connection_failures.py`)
-8 integration tests with actual connection implementations:
+4 integration tests with actual connection implementations:
 
-1. **AsyncoreConnection Tests** (5 tests)
-   - Socket closed forcefully during send
-   - Connection reset during recv
-   - SSL handshake failure
-   - Broken pipe on SSL socket
-   - Concurrent operations on closing connection
-
-2. **AsyncioConnection Tests** (2 tests)
+1. **AsyncioConnection Tests** (2 tests)
    - Socket error preservation
    - Connection reset handling
 
-3. **Error Message Quality Tests** (2 tests)
+2. **Error Message Quality Tests** (2 tests)
    - Error message includes root cause
    - Multiple errors preserve first error
 
@@ -92,7 +85,7 @@ The tests verify:
 - ✅ Concurrent operations see original error, not just "Bad file descriptor"
 - ✅ First error is preserved when multiple errors occur
 - ✅ Mechanism works across different error types (EBADF, EPIPE, ECONNRESET, etc.)
-- ✅ Both AsyncoreConnection and AsyncioConnection handle errors correctly
+- ✅ AsyncioConnection handles errors correctly
 
 ## Code Changes
 
