@@ -11,7 +11,6 @@ typedef struct libevwrapper_Loop {
 
 static void
 Loop_dealloc(libevwrapper_Loop *self) {
-    ev_async_stop(self->loop, &self->async_watcher);
     ev_loop_destroy(self->loop);
     Py_TYPE(self)->tp_free((PyObject *)self);
 };
