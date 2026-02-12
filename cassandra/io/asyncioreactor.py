@@ -1,3 +1,4 @@
+import errno
 import threading
 
 from cassandra.connection import Connection, ConnectionShutdown
@@ -232,8 +233,15 @@ class AsyncioConnection(Connection):
                 # winerror check for Windows IOCP which may raise plain
                 # OSError with winerror=10054 (WSAECONNRESET) or
                 # 10053 (WSAECONNABORTED).
+                # Also check errno for ENOTCONN/ESHUTDOWN/ECONNRESET
+                # which macOS raises as plain OSError (not ConnectionError).
+                _peer_errnos = (
+                    errno.ENOTCONN, errno.ESHUTDOWN,
+                    errno.ECONNRESET, errno.ECONNABORTED,
+                )
                 if (isinstance(err, ConnectionError)
-                        or getattr(err, 'winerror', None) in (10053, 10054)):
+                        or getattr(err, 'winerror', None) in (10053, 10054)
+                        or getattr(err, 'errno', None) in _peer_errnos):
                     log.debug("Connection %s closed by peer during write: %s",
                               self, err)
                     self.close()
