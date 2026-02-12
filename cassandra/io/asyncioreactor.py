@@ -226,8 +226,14 @@ class AsyncioConnection(Connection):
                 if next_msg:
                     await self._loop.sock_sendall(self._socket, next_msg)
             except socket.error as err:
-                # Peer disconnected — do a clean close instead of defunct
-                if isinstance(err, (BrokenPipeError, ConnectionResetError)):
+                # Peer disconnected — do a clean close instead of defunct.
+                # Use ConnectionError (parent of BrokenPipeError,
+                # ConnectionResetError, ConnectionAbortedError) plus a
+                # winerror check for Windows IOCP which may raise plain
+                # OSError with winerror=10054 (WSAECONNRESET) or
+                # 10053 (WSAECONNABORTED).
+                if (isinstance(err, ConnectionError)
+                        or getattr(err, 'winerror', None) in (10053, 10054)):
                     log.debug("Connection %s closed by peer during write: %s",
                               self, err)
                     self.close()
