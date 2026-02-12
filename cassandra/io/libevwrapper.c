@@ -6,6 +6,7 @@
 typedef struct libevwrapper_Loop {
     PyObject_HEAD
     struct ev_loop *loop;
+    ev_async async_watcher;
 } libevwrapper_Loop;
 
 static void
@@ -30,12 +31,26 @@ Loop_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
     return (PyObject *)self;
 };
 
+static void async_stop_cb(EV_P_ ev_async *w, int revents) {
+    ev_break(EV_A_ EVBREAK_ALL);
+}
+
+static PyObject *
+Loop_stop(libevwrapper_Loop *self, PyObject *args) {
+    ev_async_send(self->loop, &self->async_watcher);
+    Py_RETURN_NONE;
+}
+
 static int
 Loop_init(libevwrapper_Loop *self, PyObject *args, PyObject *kwds) {
     if (!PyArg_ParseTuple(args, "")) {
         PyErr_SetString(PyExc_TypeError, "Loop.__init__() takes no arguments");
         return -1;
     }
+    ev_async_init(&self->async_watcher, async_stop_cb);
+    ev_async_start(self->loop, &self->async_watcher);
+    // Prevent async_watcher from keeping the loop from returning
+    ev_unref(self->loop);
     return 0;
 };
 
@@ -56,6 +71,7 @@ Loop_unref(libevwrapper_Loop *self, PyObject *args) {
 static PyMethodDef Loop_methods[] = {
     {"start", (PyCFunction)Loop_start, METH_NOARGS, "Start the event loop"},
     {"unref", (PyCFunction)Loop_unref, METH_NOARGS, "Unrefrence the event loop"},
+    {"stop", (PyCFunction)Loop_stop, METH_NOARGS, "Stop the event loop from any thread"},
     {NULL} /* Sentinel */
 };
 
