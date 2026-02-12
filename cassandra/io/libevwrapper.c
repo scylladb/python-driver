@@ -50,6 +50,8 @@ Loop_init(libevwrapper_Loop *self, PyObject *args, PyObject *kwds) {
     }
     ev_async_init(&self->async_watcher, async_stop_cb);
     ev_async_start(self->loop, &self->async_watcher);
+    // Prevent async_watcher from keeping the loop from returning
+    ev_unref(self->loop);
     return 0;
 };
 
