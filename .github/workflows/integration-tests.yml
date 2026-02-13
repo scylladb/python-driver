@@ -29,7 +29,7 @@ on:
      - .github/dependabot.yml
      - .github/pull_request_template.md
       - "*.md"
-      - .github/workflows/docs-*     -
+      - .github/workflows/docs-*
   workflow_dispatch:
 
 jobs:
