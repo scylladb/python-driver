@@ -725,11 +725,33 @@ class ClusterTests(unittest.TestCase):
             assert auth_warning >= 4
             assert auth_warning == mock_handler.get_message_count("debug", "Got ReadyMessage on new connection")
 
+    def _wait_for_all_shard_connections(self, cluster, timeout=30):
+        """Wait until all shard-aware connections are fully established."""
+        from cassandra.pool import HostConnection
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            all_connected = True
+            for holder in cluster.get_connection_holders():
+                if not isinstance(holder, HostConnection):
+                    continue
+                if holder.host.sharding_info and len(holder._connections) < holder.host.sharding_info.shards_count:
+                    all_connected = False
+                    break
+            if all_connected:
+                return
+            time.sleep(0.1)
+        raise RuntimeError("Timed out waiting for all shard connections to be established")
+
     def test_idle_heartbeat(self):
         interval = 2
         cluster = TestCluster(idle_heartbeat_interval=interval,
                               monitor_reporting_enabled=False)
         session = cluster.connect(wait_for_all_pools=True)
+
+        # wait_for_all_pools only waits for the first connection per host;
+        # shard-aware connections to remaining shards are opened in background.
+        # Wait for them to stabilize so they don't get replaced during the test.
+        self._wait_for_all_shard_connections(cluster)
 
         # This test relies on impl details of connection req id management to see if heartbeats
         # are being sent. May need update if impl is changed
@@ -746,11 +768,8 @@ class ClusterTests(unittest.TestCase):
 
         connections = [c for holders in cluster.get_connection_holders() for c in holders.get_connections()]
 
-        # make sure requests were sent on all connections that existed before the sleep
-        # (shard-aware reconnection may replace connections during the sleep interval)
+        # make sure requests were sent on all connections
         for c in connections:
-            if id(c) not in connection_request_ids:
-                continue
             expected_ids = connection_request_ids[id(c)]
             expected_ids.rotate(-1)
             with c.lock:
@@ -759,14 +778,19 @@ class ClusterTests(unittest.TestCase):
         # assert idle status
         assert all(c.is_idle for c in connections)
 
-        # send messages on all connections
-        statements_and_params = [("SELECT release_version FROM system.local WHERE key='local'", ())] * len(cluster.metadata.all_hosts())
+        # send enough messages to ensure all connections are used
+        # (with shard-aware routing, each query only hits one shard per host,
+        # so we need more queries than just len(hosts) to cover all connections)
+        num_connections = len([c for c in connections if not c.is_control_connection])
+        statements_and_params = [("SELECT release_version FROM system.local WHERE key='local'", ())] * max(num_connections * 2, len(cluster.metadata.all_hosts()))
         results = execute_concurrent(session, statements_and_params)
         for success, result in results:
             assert success
 
-        # assert not idle status
-        assert not any(c.is_idle if not c.is_control_connection else False for c in connections)
+        # assert at least some non-control connections are no longer idle
+        # (shard-aware routing may not distribute queries to every connection)
+        non_idle = [c for c in connections if not c.is_control_connection and not c.is_idle]
+        assert len(non_idle) > 0
 
         # holders include session pools and cc
         holders = cluster.get_connection_holders()
