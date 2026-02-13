@@ -40,7 +40,8 @@ from tests.util import assertEqual
 
 from tests.integration import use_singledc, execute_until_pass, notprotocolv1, \
     BasicSharedKeyspaceUnitTestCase, greaterthancass21, lessthancass30, \
-    greaterthanorequalcass3_10, TestCluster, requires_composite_type, greaterthanorequalcass50
+    greaterthanorequalcass3_10, TestCluster, requires_composite_type, \
+    greaterthanorequalcass50_or_scylla_2025_4
 from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES, COLLECTION_TYPES, PRIMITIVE_DATATYPES_KEYS, \
     get_sample, get_all_samples, get_collection_sample
 import pytest
@@ -984,7 +985,7 @@ class TypeTestsProtocol(BasicSharedKeyspaceUnitTestCase):
         finally:
             session.cluster.shutdown()
 
-@greaterthanorequalcass50
+@greaterthanorequalcass50_or_scylla_2025_4
 class TypeTestsVector(BasicSharedKeyspaceUnitTestCase):
 
     def _get_first_j(self, rs):
