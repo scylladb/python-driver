@@ -746,8 +746,11 @@ class ClusterTests(unittest.TestCase):
 
         connections = [c for holders in cluster.get_connection_holders() for c in holders.get_connections()]
 
-        # make sure requests were sent on all connections
+        # make sure requests were sent on all connections that existed before the sleep
+        # (shard-aware reconnection may replace connections during the sleep interval)
         for c in connections:
+            if id(c) not in connection_request_ids:
+                continue
             expected_ids = connection_request_ids[id(c)]
             expected_ids.rotate(-1)
             with c.lock:
