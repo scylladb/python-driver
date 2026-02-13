@@ -1,0 +1,2048 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             cassandra.policies - Load balancing and Failure Handling Policies | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://python-driver.docs.scylladb.com/stable/api/cassandra/policies.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+            
+        
+    
+        
+        
+            
+        <script type="text/javascript" src="../../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../../_static/documentation_options.js?v=be4f90db"></script>
+            
+        
+            
+                <script src="../../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+    </head>
+
+    <body class="brand-product">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University Live | Free Virtual Training Event</div>
+            <a class="promo-banner__button button button--reverse" href="#"
+               target="_blank" rel="noopener noreferrer">Learn more</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../../index.html"
+           class="bread__highlight">
+            Scylla Python Driver
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="../index.html" class="bread__highlight">
+                API Documentation
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last"><code class="docutils literal notranslate"><span class="pre">cassandra.policies</span></code> - Load balancing and Failure Handling Policies</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+    <div class="admonition caution">
+        <p class="admonition-title">Caution</p>
+        <p>
+            
+                You're viewing documentation for a deprecated version of Scylla Python Driver.
+            
+            <a href="../../../stable/api/cassandra/policies.html">Switch to the latest stable version.</a>
+        </p>
+    </div>
+
+                    
+
+                    <section id="module-cassandra.policies">
+<span id="cassandra-policies-load-balancing-and-failure-handling-policies"></span><h1><code class="docutils literal notranslate"><span class="pre">cassandra.policies</span></code> - Load balancing and Failure Handling Policies<a class="headerlink" href="#module-cassandra.policies" title="Link to this heading">¶</a></h1>
+<section id="load-balancing">
+<h2>Load Balancing<a class="headerlink" href="#load-balancing" title="Link to this heading">¶</a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.HostDistance">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">HostDistance</span></span><a class="headerlink" href="#cassandra.policies.HostDistance" title="Link to this definition">¶</a></dt>
+<dd><p>A measure of how “distant” a node is from the client, which
+may influence how the load balancer distributes requests
+and how many connections are opened to the node.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.HostDistance.IGNORED">
+<span class="sig-name descname"><span class="pre">IGNORED</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">-1</span></em><a class="headerlink" href="#cassandra.policies.HostDistance.IGNORED" title="Link to this definition">¶</a></dt>
+<dd><p>A node with this distance should never be queried or have
+connections opened to it.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.HostDistance.LOCAL_RACK">
+<span class="sig-name descname"><span class="pre">LOCAL_RACK</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0</span></em><a class="headerlink" href="#cassandra.policies.HostDistance.LOCAL_RACK" title="Link to this definition">¶</a></dt>
+<dd><p>Nodes with <code class="docutils literal notranslate"><span class="pre">LOCAL_RACK</span></code> distance will be preferred for operations
+under some load balancing policies (such as <code class="xref py py-class docutils literal notranslate"><span class="pre">RackAwareRoundRobinPolicy</span></code>)
+and will have a greater number of connections opened against
+them by default.</p>
+<p>This distance is typically used for nodes within the same
+datacenter and the same rack as the client.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.HostDistance.LOCAL">
+<span class="sig-name descname"><span class="pre">LOCAL</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">1</span></em><a class="headerlink" href="#cassandra.policies.HostDistance.LOCAL" title="Link to this definition">¶</a></dt>
+<dd><p>Nodes with <code class="docutils literal notranslate"><span class="pre">LOCAL</span></code> distance will be preferred for operations
+under some load balancing policies (such as <a class="reference internal" href="#cassandra.policies.DCAwareRoundRobinPolicy" title="cassandra.policies.DCAwareRoundRobinPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">DCAwareRoundRobinPolicy</span></code></a>)
+and will have a greater number of connections opened against
+them by default.</p>
+<p>This distance is typically used for nodes within the same
+datacenter as the client.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.HostDistance.REMOTE">
+<span class="sig-name descname"><span class="pre">REMOTE</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">2</span></em><a class="headerlink" href="#cassandra.policies.HostDistance.REMOTE" title="Link to this definition">¶</a></dt>
+<dd><p>Nodes with <code class="docutils literal notranslate"><span class="pre">REMOTE</span></code> distance will be treated as a last resort
+by some load balancing policies (such as <a class="reference internal" href="#cassandra.policies.DCAwareRoundRobinPolicy" title="cassandra.policies.DCAwareRoundRobinPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">DCAwareRoundRobinPolicy</span></code></a>
+and <code class="xref py py-class docutils literal notranslate"><span class="pre">RackAwareRoundRobinPolicy</span></code>)and will have a smaller number of
+connections opened against them by default.</p>
+<p>This distance is typically used for nodes outside of the
+datacenter that the client is running in.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.LoadBalancingPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">LoadBalancingPolicy</span></span><a class="headerlink" href="#cassandra.policies.LoadBalancingPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>Load balancing policies are used to decide how to distribute
+requests among all possible coordinator nodes in the cluster.</p>
+<p>In particular, they may focus on querying “near” nodes (those
+in a local datacenter) or on querying nodes who happen to
+be replicas for the requested data.</p>
+<p>You may also use subclasses of <a class="reference internal" href="#cassandra.policies.LoadBalancingPolicy" title="cassandra.policies.LoadBalancingPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">LoadBalancingPolicy</span></code></a> for
+custom behavior.</p>
+<p>You should always use immutable collections (e.g., tuples or
+frozensets) to store information about hosts to prevent accidental
+modification. When there are changes to the hosts (e.g., a host is
+down or up), the old collection should be replaced with a new one.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.LoadBalancingPolicy.distance">
+<span class="sig-name descname"><span class="pre">distance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.LoadBalancingPolicy.distance" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a measure of how remote a <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> is in
+terms of the <a class="reference internal" href="#cassandra.policies.HostDistance" title="cassandra.policies.HostDistance"><code class="xref py py-class docutils literal notranslate"><span class="pre">HostDistance</span></code></a> enums.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.LoadBalancingPolicy.populate">
+<span class="sig-name descname"><span class="pre">populate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cluster</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hosts</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.LoadBalancingPolicy.populate" title="Link to this definition">¶</a></dt>
+<dd><p>This method is called to initialize the load balancing
+policy with a set of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances before its
+first use.  The <cite>cluster</cite> parameter is an instance of
+<a class="reference internal" href="cluster.html#cassandra.cluster.Cluster" title="cassandra.cluster.Cluster"><code class="xref py py-class docutils literal notranslate"><span class="pre">Cluster</span></code></a>.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.LoadBalancingPolicy.make_query_plan">
+<span class="sig-name descname"><span class="pre">make_query_plan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">working_keyspace</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">query</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.LoadBalancingPolicy.make_query_plan" title="Link to this definition">¶</a></dt>
+<dd><p>Given a <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> instance, return a iterable
+of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances which should be queried in that
+order.  A generator may work well for custom implementations
+of this method.</p>
+<p>Note that the <cite>query</cite> argument may be <code class="xref py py-const docutils literal notranslate"><span class="pre">None</span></code> when preparing
+statements.</p>
+<p><cite>working_keyspace</cite> should be the string name of the current keyspace,
+as set through <a class="reference internal" href="cluster.html#cassandra.cluster.Session.set_keyspace" title="cassandra.cluster.Session.set_keyspace"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Session.set_keyspace()</span></code></a> or with a <code class="docutils literal notranslate"><span class="pre">USE</span></code>
+statement.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.LoadBalancingPolicy.check_supported">
+<span class="sig-name descname"><span class="pre">check_supported</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.LoadBalancingPolicy.check_supported" title="Link to this definition">¶</a></dt>
+<dd><p>This will be called after the cluster Metadata has been initialized.
+If the load balancing policy implementation cannot be supported for
+some reason (such as a missing C extension), this is the point at
+which it should raise an exception.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.RoundRobinPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">RoundRobinPolicy</span></span><a class="headerlink" href="#cassandra.policies.RoundRobinPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>A subclass of <a class="reference internal" href="#cassandra.policies.LoadBalancingPolicy" title="cassandra.policies.LoadBalancingPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">LoadBalancingPolicy</span></code></a> which evenly
+distributes queries across all nodes in the cluster,
+regardless of what datacenter the nodes may be in.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.RoundRobinPolicy.populate">
+<span class="sig-name descname"><span class="pre">populate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cluster</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hosts</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.RoundRobinPolicy.populate" title="Link to this definition">¶</a></dt>
+<dd><p>This method is called to initialize the load balancing
+policy with a set of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances before its
+first use.  The <cite>cluster</cite> parameter is an instance of
+<a class="reference internal" href="cluster.html#cassandra.cluster.Cluster" title="cassandra.cluster.Cluster"><code class="xref py py-class docutils literal notranslate"><span class="pre">Cluster</span></code></a>.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.RoundRobinPolicy.distance">
+<span class="sig-name descname"><span class="pre">distance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.RoundRobinPolicy.distance" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a measure of how remote a <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> is in
+terms of the <a class="reference internal" href="#cassandra.policies.HostDistance" title="cassandra.policies.HostDistance"><code class="xref py py-class docutils literal notranslate"><span class="pre">HostDistance</span></code></a> enums.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.RoundRobinPolicy.make_query_plan">
+<span class="sig-name descname"><span class="pre">make_query_plan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">working_keyspace</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">query</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.RoundRobinPolicy.make_query_plan" title="Link to this definition">¶</a></dt>
+<dd><p>Given a <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> instance, return a iterable
+of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances which should be queried in that
+order.  A generator may work well for custom implementations
+of this method.</p>
+<p>Note that the <cite>query</cite> argument may be <code class="xref py py-const docutils literal notranslate"><span class="pre">None</span></code> when preparing
+statements.</p>
+<p><cite>working_keyspace</cite> should be the string name of the current keyspace,
+as set through <a class="reference internal" href="cluster.html#cassandra.cluster.Session.set_keyspace" title="cassandra.cluster.Session.set_keyspace"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Session.set_keyspace()</span></code></a> or with a <code class="docutils literal notranslate"><span class="pre">USE</span></code>
+statement.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.RoundRobinPolicy.on_up">
+<span class="sig-name descname"><span class="pre">on_up</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.RoundRobinPolicy.on_up" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is marked up.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.RoundRobinPolicy.on_down">
+<span class="sig-name descname"><span class="pre">on_down</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.RoundRobinPolicy.on_down" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is marked down.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.RoundRobinPolicy.on_add">
+<span class="sig-name descname"><span class="pre">on_add</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.RoundRobinPolicy.on_add" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is added to the cluster.  The newly added node
+should be considered up.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.RoundRobinPolicy.on_remove">
+<span class="sig-name descname"><span class="pre">on_remove</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.RoundRobinPolicy.on_remove" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is removed from the cluster.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.DCAwareRoundRobinPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">DCAwareRoundRobinPolicy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">local_dc</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">used_hosts_per_remote_dc</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DCAwareRoundRobinPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>Similar to <a class="reference internal" href="#cassandra.policies.RoundRobinPolicy" title="cassandra.policies.RoundRobinPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">RoundRobinPolicy</span></code></a>, but prefers hosts
+in the local datacenter and only uses nodes in remote
+datacenters as a last resort.</p>
+<p>The <cite>local_dc</cite> parameter should be the name of the datacenter
+(such as is reported by <code class="docutils literal notranslate"><span class="pre">nodetool</span> <span class="pre">ring</span></code>) that should
+be considered local. If not specified, the driver will choose
+a local_dc based on the first host among <a class="reference internal" href="cluster.html#cassandra.cluster.Cluster.contact_points" title="cassandra.cluster.Cluster.contact_points"><code class="xref py py-attr docutils literal notranslate"><span class="pre">Cluster.contact_points</span></code></a>
+having a valid DC. If relying on this mechanism, all specified
+contact points should be nodes in a single, local DC.</p>
+<p><cite>used_hosts_per_remote_dc</cite> controls how many nodes in
+each remote datacenter will have connections opened
+against them. In other words, <cite>used_hosts_per_remote_dc</cite> hosts
+will be considered <a class="reference internal" href="#cassandra.policies.HostDistance.REMOTE" title="cassandra.policies.HostDistance.REMOTE"><code class="xref py py-attr docutils literal notranslate"><span class="pre">REMOTE</span></code></a> and the
+rest will be considered <a class="reference internal" href="#cassandra.policies.HostDistance.IGNORED" title="cassandra.policies.HostDistance.IGNORED"><code class="xref py py-attr docutils literal notranslate"><span class="pre">IGNORED</span></code></a>.
+By default, all remote hosts are ignored.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.DCAwareRoundRobinPolicy.populate">
+<span class="sig-name descname"><span class="pre">populate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cluster</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hosts</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DCAwareRoundRobinPolicy.populate" title="Link to this definition">¶</a></dt>
+<dd><p>This method is called to initialize the load balancing
+policy with a set of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances before its
+first use.  The <cite>cluster</cite> parameter is an instance of
+<a class="reference internal" href="cluster.html#cassandra.cluster.Cluster" title="cassandra.cluster.Cluster"><code class="xref py py-class docutils literal notranslate"><span class="pre">Cluster</span></code></a>.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.DCAwareRoundRobinPolicy.distance">
+<span class="sig-name descname"><span class="pre">distance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DCAwareRoundRobinPolicy.distance" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a measure of how remote a <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> is in
+terms of the <a class="reference internal" href="#cassandra.policies.HostDistance" title="cassandra.policies.HostDistance"><code class="xref py py-class docutils literal notranslate"><span class="pre">HostDistance</span></code></a> enums.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.DCAwareRoundRobinPolicy.make_query_plan">
+<span class="sig-name descname"><span class="pre">make_query_plan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">working_keyspace</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">query</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DCAwareRoundRobinPolicy.make_query_plan" title="Link to this definition">¶</a></dt>
+<dd><p>Given a <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> instance, return a iterable
+of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances which should be queried in that
+order.  A generator may work well for custom implementations
+of this method.</p>
+<p>Note that the <cite>query</cite> argument may be <code class="xref py py-const docutils literal notranslate"><span class="pre">None</span></code> when preparing
+statements.</p>
+<p><cite>working_keyspace</cite> should be the string name of the current keyspace,
+as set through <a class="reference internal" href="cluster.html#cassandra.cluster.Session.set_keyspace" title="cassandra.cluster.Session.set_keyspace"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Session.set_keyspace()</span></code></a> or with a <code class="docutils literal notranslate"><span class="pre">USE</span></code>
+statement.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.DCAwareRoundRobinPolicy.on_up">
+<span class="sig-name descname"><span class="pre">on_up</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DCAwareRoundRobinPolicy.on_up" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is marked up.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.DCAwareRoundRobinPolicy.on_down">
+<span class="sig-name descname"><span class="pre">on_down</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DCAwareRoundRobinPolicy.on_down" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is marked down.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.DCAwareRoundRobinPolicy.on_add">
+<span class="sig-name descname"><span class="pre">on_add</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DCAwareRoundRobinPolicy.on_add" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is added to the cluster.  The newly added node
+should be considered up.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.DCAwareRoundRobinPolicy.on_remove">
+<span class="sig-name descname"><span class="pre">on_remove</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DCAwareRoundRobinPolicy.on_remove" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is removed from the cluster.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.WhiteListRoundRobinPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">WhiteListRoundRobinPolicy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hosts</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.WhiteListRoundRobinPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>A subclass of <a class="reference internal" href="#cassandra.policies.RoundRobinPolicy" title="cassandra.policies.RoundRobinPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">RoundRobinPolicy</span></code></a> which evenly
+distributes queries across all nodes in the cluster,
+regardless of what datacenter the nodes may be in, but
+only if that node exists in the list of allowed nodes</p>
+<p>This policy is addresses the issue described in
+<a class="reference external" href="https://datastax-oss.atlassian.net/browse/JAVA-145">https://datastax-oss.atlassian.net/browse/JAVA-145</a>
+Where connection errors occur when connection
+attempts are made to private IP addresses remotely</p>
+<p>The <cite>hosts</cite> parameter should be a sequence of hosts to permit
+connections to.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.WhiteListRoundRobinPolicy.populate">
+<span class="sig-name descname"><span class="pre">populate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cluster</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hosts</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.WhiteListRoundRobinPolicy.populate" title="Link to this definition">¶</a></dt>
+<dd><p>This method is called to initialize the load balancing
+policy with a set of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances before its
+first use.  The <cite>cluster</cite> parameter is an instance of
+<a class="reference internal" href="cluster.html#cassandra.cluster.Cluster" title="cassandra.cluster.Cluster"><code class="xref py py-class docutils literal notranslate"><span class="pre">Cluster</span></code></a>.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.WhiteListRoundRobinPolicy.distance">
+<span class="sig-name descname"><span class="pre">distance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.WhiteListRoundRobinPolicy.distance" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a measure of how remote a <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> is in
+terms of the <a class="reference internal" href="#cassandra.policies.HostDistance" title="cassandra.policies.HostDistance"><code class="xref py py-class docutils literal notranslate"><span class="pre">HostDistance</span></code></a> enums.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.WhiteListRoundRobinPolicy.on_up">
+<span class="sig-name descname"><span class="pre">on_up</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.WhiteListRoundRobinPolicy.on_up" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is marked up.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.WhiteListRoundRobinPolicy.on_add">
+<span class="sig-name descname"><span class="pre">on_add</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.WhiteListRoundRobinPolicy.on_add" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is added to the cluster.  The newly added node
+should be considered up.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.TokenAwarePolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">TokenAwarePolicy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">child_policy</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shuffle_replicas</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.TokenAwarePolicy" title="Link to this definition">¶</a></dt>
+<dd><p>A <a class="reference internal" href="#cassandra.policies.LoadBalancingPolicy" title="cassandra.policies.LoadBalancingPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">LoadBalancingPolicy</span></code></a> wrapper that adds token awareness to
+a child policy.</p>
+<p>This alters the child policy’s behavior so that it first attempts to
+send queries to <a class="reference internal" href="#cassandra.policies.HostDistance.LOCAL" title="cassandra.policies.HostDistance.LOCAL"><code class="xref py py-attr docutils literal notranslate"><span class="pre">LOCAL</span></code></a> replicas (as determined
+by the child policy) based on the <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a>’s
+<a class="reference internal" href="query.html#cassandra.query.Statement.routing_key" title="cassandra.query.Statement.routing_key"><code class="xref py py-attr docutils literal notranslate"><span class="pre">routing_key</span></code></a>. If <a class="reference internal" href="#cassandra.policies.TokenAwarePolicy.shuffle_replicas" title="cassandra.policies.TokenAwarePolicy.shuffle_replicas"><code class="xref py py-attr docutils literal notranslate"><span class="pre">shuffle_replicas</span></code></a> is
+truthy, these replicas will be yielded in a random order. Once those
+hosts are exhausted, the remaining hosts in the child policy’s query
+plan will be used in the order provided by the child policy.</p>
+<p>If no <a class="reference internal" href="query.html#cassandra.query.Statement.routing_key" title="cassandra.query.Statement.routing_key"><code class="xref py py-attr docutils literal notranslate"><span class="pre">routing_key</span></code></a> is set on the query, the child
+policy’s query plan will be used as is.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.TokenAwarePolicy.shuffle_replicas">
+<span class="sig-name descname"><span class="pre">shuffle_replicas</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">True</span></em><a class="headerlink" href="#cassandra.policies.TokenAwarePolicy.shuffle_replicas" title="Link to this definition">¶</a></dt>
+<dd><p>Yield local replicas in a random order.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.TokenAwarePolicy.populate">
+<span class="sig-name descname"><span class="pre">populate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cluster</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hosts</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.TokenAwarePolicy.populate" title="Link to this definition">¶</a></dt>
+<dd><p>This method is called to initialize the load balancing
+policy with a set of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances before its
+first use.  The <cite>cluster</cite> parameter is an instance of
+<a class="reference internal" href="cluster.html#cassandra.cluster.Cluster" title="cassandra.cluster.Cluster"><code class="xref py py-class docutils literal notranslate"><span class="pre">Cluster</span></code></a>.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.TokenAwarePolicy.check_supported">
+<span class="sig-name descname"><span class="pre">check_supported</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.TokenAwarePolicy.check_supported" title="Link to this definition">¶</a></dt>
+<dd><p>This will be called after the cluster Metadata has been initialized.
+If the load balancing policy implementation cannot be supported for
+some reason (such as a missing C extension), this is the point at
+which it should raise an exception.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.TokenAwarePolicy.distance">
+<span class="sig-name descname"><span class="pre">distance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.TokenAwarePolicy.distance" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a measure of how remote a <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> is in
+terms of the <a class="reference internal" href="#cassandra.policies.HostDistance" title="cassandra.policies.HostDistance"><code class="xref py py-class docutils literal notranslate"><span class="pre">HostDistance</span></code></a> enums.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.TokenAwarePolicy.make_query_plan">
+<span class="sig-name descname"><span class="pre">make_query_plan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">working_keyspace</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">query</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.TokenAwarePolicy.make_query_plan" title="Link to this definition">¶</a></dt>
+<dd><p>Given a <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> instance, return a iterable
+of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances which should be queried in that
+order.  A generator may work well for custom implementations
+of this method.</p>
+<p>Note that the <cite>query</cite> argument may be <code class="xref py py-const docutils literal notranslate"><span class="pre">None</span></code> when preparing
+statements.</p>
+<p><cite>working_keyspace</cite> should be the string name of the current keyspace,
+as set through <a class="reference internal" href="cluster.html#cassandra.cluster.Session.set_keyspace" title="cassandra.cluster.Session.set_keyspace"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Session.set_keyspace()</span></code></a> or with a <code class="docutils literal notranslate"><span class="pre">USE</span></code>
+statement.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.TokenAwarePolicy.on_up">
+<span class="sig-name descname"><span class="pre">on_up</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.TokenAwarePolicy.on_up" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is marked up.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.TokenAwarePolicy.on_down">
+<span class="sig-name descname"><span class="pre">on_down</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.TokenAwarePolicy.on_down" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is marked down.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.TokenAwarePolicy.on_add">
+<span class="sig-name descname"><span class="pre">on_add</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.TokenAwarePolicy.on_add" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is added to the cluster.  The newly added node
+should be considered up.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.TokenAwarePolicy.on_remove">
+<span class="sig-name descname"><span class="pre">on_remove</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.TokenAwarePolicy.on_remove" title="Link to this definition">¶</a></dt>
+<dd><p>Called when a node is removed from the cluster.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.HostFilterPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">HostFilterPolicy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">child_policy</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">predicate</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.HostFilterPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>A <a class="reference internal" href="#cassandra.policies.LoadBalancingPolicy" title="cassandra.policies.LoadBalancingPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">LoadBalancingPolicy</span></code></a> subclass configured with a child policy,
+and a single-argument predicate. This policy defers to the child policy for
+hosts where <code class="docutils literal notranslate"><span class="pre">predicate(host)</span></code> is truthy. Hosts for which
+<code class="docutils literal notranslate"><span class="pre">predicate(host)</span></code> is falsy will be considered <a class="reference internal" href="#cassandra.policies.HostDistance.IGNORED" title="cassandra.policies.HostDistance.IGNORED"><code class="xref py py-attr docutils literal notranslate"><span class="pre">IGNORED</span></code></a>, and will
+not be used in a query plan.</p>
+<p>This can be used in the cases where you need a whitelist or blacklist
+policy, e.g. to prepare for decommissioning nodes or for testing:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">address_is_ignored</span><span class="p">(</span><span class="n">host</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">host</span><span class="o">.</span><span class="n">address</span> <span class="ow">in</span> <span class="p">[</span><span class="n">ignored_address0</span><span class="p">,</span> <span class="n">ignored_address1</span><span class="p">]</span>
+
+<span class="n">blacklist_filter_policy</span> <span class="o">=</span> <span class="n">HostFilterPolicy</span><span class="p">(</span>
+    <span class="n">child_policy</span><span class="o">=</span><span class="n">RoundRobinPolicy</span><span class="p">(),</span>
+    <span class="n">predicate</span><span class="o">=</span><span class="n">address_is_ignored</span>
+<span class="p">)</span>
+
+<span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">(</span>
+    <span class="n">primary_host</span><span class="p">,</span>
+    <span class="n">load_balancing_policy</span><span class="o">=</span><span class="n">blacklist_filter_policy</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>See the note in the <a class="reference internal" href="#cassandra.policies.HostFilterPolicy.make_query_plan" title="cassandra.policies.HostFilterPolicy.make_query_plan"><code class="xref py py-meth docutils literal notranslate"><span class="pre">make_query_plan()</span></code></a> documentation for a caveat on
+how wrapping ordering polices (e.g. <a class="reference internal" href="#cassandra.policies.RoundRobinPolicy" title="cassandra.policies.RoundRobinPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">RoundRobinPolicy</span></code></a>) may break
+desirable properties of the wrapped policy.</p>
+<p>Please note that whitelist and blacklist policies are not recommended for
+general, day-to-day use. You probably want something like
+<a class="reference internal" href="#cassandra.policies.DCAwareRoundRobinPolicy" title="cassandra.policies.DCAwareRoundRobinPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">DCAwareRoundRobinPolicy</span></code></a>, which prefers a local DC but has
+fallbacks, over a brute-force method like whitelisting or blacklisting.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>child_policy</strong> – an instantiated <a class="reference internal" href="#cassandra.policies.LoadBalancingPolicy" title="cassandra.policies.LoadBalancingPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">LoadBalancingPolicy</span></code></a>
+that this one will defer to.</p></li>
+<li><p><strong>predicate</strong> – a one-parameter function that takes a <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a>.
+If it returns a falsy value, the <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> will
+be <a class="reference internal" href="#cassandra.policies.HostDistance.IGNORED" title="cassandra.policies.HostDistance.IGNORED"><code class="xref py py-attr docutils literal notranslate"><span class="pre">IGNORED</span></code></a> and not returned in query plans.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.HostFilterPolicy.predicate">
+<span class="sig-name descname"><span class="pre">predicate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.HostFilterPolicy.predicate" title="Link to this definition">¶</a></dt>
+<dd><p>A predicate, set on object initialization, that takes a <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a>
+and returns a value. If the value is falsy, the <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> is
+<a class="reference internal" href="#cassandra.policies.HostDistance.IGNORED" title="cassandra.policies.HostDistance.IGNORED"><code class="xref py py-class docutils literal notranslate"><span class="pre">IGNORED</span></code></a>. If the value is truthy,
+<a class="reference internal" href="#cassandra.policies.HostFilterPolicy" title="cassandra.policies.HostFilterPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">HostFilterPolicy</span></code></a> defers to the child policy to determine the
+host’s distance.</p>
+<p>This is a read-only value set in <code class="docutils literal notranslate"><span class="pre">__init__</span></code>, implemented as a
+<code class="docutils literal notranslate"><span class="pre">property</span></code>.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.HostFilterPolicy.distance">
+<span class="sig-name descname"><span class="pre">distance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.HostFilterPolicy.distance" title="Link to this definition">¶</a></dt>
+<dd><p>Checks if <code class="docutils literal notranslate"><span class="pre">predicate(host)</span></code>, then returns
+<a class="reference internal" href="#cassandra.policies.HostDistance.IGNORED" title="cassandra.policies.HostDistance.IGNORED"><code class="xref py py-attr docutils literal notranslate"><span class="pre">IGNORED</span></code></a> if falsy, and defers to the child policy
+otherwise.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.HostFilterPolicy.make_query_plan">
+<span class="sig-name descname"><span class="pre">make_query_plan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">working_keyspace</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">query</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.HostFilterPolicy.make_query_plan" title="Link to this definition">¶</a></dt>
+<dd><p>Defers to the child policy’s
+<a class="reference internal" href="#cassandra.policies.LoadBalancingPolicy.make_query_plan" title="cassandra.policies.LoadBalancingPolicy.make_query_plan"><code class="xref py py-meth docutils literal notranslate"><span class="pre">LoadBalancingPolicy.make_query_plan()</span></code></a> and filters the results.</p>
+<p>Note that this filtering may break desirable properties of the wrapped
+policy in some cases. For instance, imagine if you configure this
+policy to filter out <code class="docutils literal notranslate"><span class="pre">host2</span></code>, and to wrap a round-robin policy that
+rotates through three hosts in the order <code class="docutils literal notranslate"><span class="pre">host1,</span> <span class="pre">host2,</span> <span class="pre">host3</span></code>,
+<code class="docutils literal notranslate"><span class="pre">host2,</span> <span class="pre">host3,</span> <span class="pre">host1</span></code>, <code class="docutils literal notranslate"><span class="pre">host3,</span> <span class="pre">host1,</span> <span class="pre">host2</span></code>, repeating. This
+policy will yield <code class="docutils literal notranslate"><span class="pre">host1,</span> <span class="pre">host3</span></code>, <code class="docutils literal notranslate"><span class="pre">host3,</span> <span class="pre">host1</span></code>, <code class="docutils literal notranslate"><span class="pre">host3,</span> <span class="pre">host1</span></code>,
+disproportionately favoring <code class="docutils literal notranslate"><span class="pre">host3</span></code>.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.DefaultLoadBalancingPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">DefaultLoadBalancingPolicy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">child_policy</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DefaultLoadBalancingPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>A <a class="reference internal" href="#cassandra.policies.LoadBalancingPolicy" title="cassandra.policies.LoadBalancingPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">LoadBalancingPolicy</span></code></a> wrapper that adds the ability to target a specific host first.</p>
+<p>If no host is set on the query, the child policy’s query plan will be used as is.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.DefaultLoadBalancingPolicy.populate">
+<span class="sig-name descname"><span class="pre">populate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cluster</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hosts</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DefaultLoadBalancingPolicy.populate" title="Link to this definition">¶</a></dt>
+<dd><p>This method is called to initialize the load balancing
+policy with a set of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances before its
+first use.  The <cite>cluster</cite> parameter is an instance of
+<a class="reference internal" href="cluster.html#cassandra.cluster.Cluster" title="cassandra.cluster.Cluster"><code class="xref py py-class docutils literal notranslate"><span class="pre">Cluster</span></code></a>.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.DefaultLoadBalancingPolicy.make_query_plan">
+<span class="sig-name descname"><span class="pre">make_query_plan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">working_keyspace</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">query</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DefaultLoadBalancingPolicy.make_query_plan" title="Link to this definition">¶</a></dt>
+<dd><p>Given a <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> instance, return a iterable
+of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> instances which should be queried in that
+order.  A generator may work well for custom implementations
+of this method.</p>
+<p>Note that the <cite>query</cite> argument may be <code class="xref py py-const docutils literal notranslate"><span class="pre">None</span></code> when preparing
+statements.</p>
+<p><cite>working_keyspace</cite> should be the string name of the current keyspace,
+as set through <a class="reference internal" href="cluster.html#cassandra.cluster.Session.set_keyspace" title="cassandra.cluster.Session.set_keyspace"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Session.set_keyspace()</span></code></a> or with a <code class="docutils literal notranslate"><span class="pre">USE</span></code>
+statement.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.DSELoadBalancingPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">DSELoadBalancingPolicy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DSELoadBalancingPolicy" title="Link to this definition">¶</a></dt>
+<dd><p><em>Deprecated:</em> This will be removed in the next major release,
+consider using <a class="reference internal" href="#cassandra.policies.DefaultLoadBalancingPolicy" title="cassandra.policies.DefaultLoadBalancingPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">DefaultLoadBalancingPolicy</span></code></a>.</p>
+</dd></dl>
+
+</section>
+<section id="translating-server-node-addresses">
+<h2>Translating Server Node Addresses<a class="headerlink" href="#translating-server-node-addresses" title="Link to this heading">¶</a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.AddressTranslator">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">AddressTranslator</span></span><a class="headerlink" href="#cassandra.policies.AddressTranslator" title="Link to this definition">¶</a></dt>
+<dd><p>Interface for translating cluster-defined endpoints.</p>
+<p>The driver discovers nodes using server metadata and topology change events. Normally,
+the endpoint defined by the server is the right way to connect to a node. In some environments,
+these addresses may not be reachable, or not preferred (public vs. private IPs in cloud environments,
+suboptimal routing, etc). This interface allows for translating from server defined endpoints to
+preferred addresses for driver connections.</p>
+<p><em>Note:</em> <code class="xref py py-attr docutils literal notranslate"><span class="pre">contact_points</span></code> provided while creating the <a class="reference internal" href="cluster.html#cassandra.cluster.Cluster" title="cassandra.cluster.Cluster"><code class="xref py py-class docutils literal notranslate"><span class="pre">Cluster</span></code></a> instance are not
+translated using this mechanism – only addresses received from Cassandra nodes are.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.AddressTranslator.translate">
+<span class="sig-name descname"><span class="pre">translate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">addr</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.AddressTranslator.translate" title="Link to this definition">¶</a></dt>
+<dd><p>Accepts the node ip address, and returns a translated address to be used connecting to this node.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.IdentityTranslator">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">IdentityTranslator</span></span><a class="headerlink" href="#cassandra.policies.IdentityTranslator" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the endpoint with no translation</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.IdentityTranslator.translate">
+<span class="sig-name descname"><span class="pre">translate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">addr</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.IdentityTranslator.translate" title="Link to this definition">¶</a></dt>
+<dd><p>Accepts the node ip address, and returns a translated address to be used connecting to this node.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.EC2MultiRegionTranslator">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">EC2MultiRegionTranslator</span></span><a class="headerlink" href="#cassandra.policies.EC2MultiRegionTranslator" title="Link to this definition">¶</a></dt>
+<dd><p>Resolves private ips of the hosts in the same datacenter as the client, and public ips of hosts in other datacenters.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.EC2MultiRegionTranslator.translate">
+<span class="sig-name descname"><span class="pre">translate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">addr</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.EC2MultiRegionTranslator.translate" title="Link to this definition">¶</a></dt>
+<dd><p>Reverse DNS the public broadcast_address, then lookup that hostname to get the AWS-resolved IP, which
+will point to the private IP address within the same datacenter.</p>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="marking-hosts-up-or-down">
+<h2>Marking Hosts Up or Down<a class="headerlink" href="#marking-hosts-up-or-down" title="Link to this heading">¶</a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.ConvictionPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">ConvictionPolicy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.ConvictionPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>A policy which decides when hosts should be considered down
+based on the types of failures and the number of failures.</p>
+<p>If custom behavior is needed, this class may be subclassed.</p>
+<p><cite>host</cite> is an instance of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a>.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.ConvictionPolicy.add_failure">
+<span class="sig-name descname"><span class="pre">add_failure</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">connection_exc</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.ConvictionPolicy.add_failure" title="Link to this definition">¶</a></dt>
+<dd><p>Implementations should return <code class="xref py py-const docutils literal notranslate"><span class="pre">True</span></code> if the host should be
+convicted, <code class="xref py py-const docutils literal notranslate"><span class="pre">False</span></code> otherwise.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.ConvictionPolicy.reset">
+<span class="sig-name descname"><span class="pre">reset</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.ConvictionPolicy.reset" title="Link to this definition">¶</a></dt>
+<dd><p>Implementations should clear out any convictions or state regarding
+the host.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.SimpleConvictionPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">SimpleConvictionPolicy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.SimpleConvictionPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>The default implementation of <a class="reference internal" href="#cassandra.policies.ConvictionPolicy" title="cassandra.policies.ConvictionPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConvictionPolicy</span></code></a>,
+which simply marks a host as down after the first failure
+of any kind.</p>
+<p><cite>host</cite> is an instance of <a class="reference internal" href="pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a>.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.SimpleConvictionPolicy.add_failure">
+<span class="sig-name descname"><span class="pre">add_failure</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">connection_exc</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.SimpleConvictionPolicy.add_failure" title="Link to this definition">¶</a></dt>
+<dd><p>Implementations should return <code class="xref py py-const docutils literal notranslate"><span class="pre">True</span></code> if the host should be
+convicted, <code class="xref py py-const docutils literal notranslate"><span class="pre">False</span></code> otherwise.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.SimpleConvictionPolicy.reset">
+<span class="sig-name descname"><span class="pre">reset</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.SimpleConvictionPolicy.reset" title="Link to this definition">¶</a></dt>
+<dd><p>Implementations should clear out any convictions or state regarding
+the host.</p>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="reconnecting-to-dead-hosts">
+<h2>Reconnecting to Dead Hosts<a class="headerlink" href="#reconnecting-to-dead-hosts" title="Link to this heading">¶</a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.ReconnectionPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">ReconnectionPolicy</span></span><a class="headerlink" href="#cassandra.policies.ReconnectionPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>This class and its subclasses govern how frequently an attempt is made
+to reconnect to nodes that are marked as dead.</p>
+<p>If custom behavior is needed, this class may be subclassed.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.ReconnectionPolicy.new_schedule">
+<span class="sig-name descname"><span class="pre">new_schedule</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.ReconnectionPolicy.new_schedule" title="Link to this definition">¶</a></dt>
+<dd><p>This should return a finite or infinite iterable of delays (each as a
+floating point number of seconds) in-between each failed reconnection
+attempt.  Note that if the iterable is finite, reconnection attempts
+will cease once the iterable is exhausted.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.ConstantReconnectionPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">ConstantReconnectionPolicy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">delay</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_attempts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">64</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.ConstantReconnectionPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>A <a class="reference internal" href="#cassandra.policies.ReconnectionPolicy" title="cassandra.policies.ReconnectionPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">ReconnectionPolicy</span></code></a> subclass which sleeps for a fixed delay
+in-between each reconnection attempt.</p>
+<p><cite>delay</cite> should be a floating point number of seconds to wait in-between
+each attempt.</p>
+<p><cite>max_attempts</cite> should be a total number of attempts to be made before
+giving up, or <code class="xref py py-const docutils literal notranslate"><span class="pre">None</span></code> to continue reconnection attempts forever.
+The default is 64.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.ConstantReconnectionPolicy.new_schedule">
+<span class="sig-name descname"><span class="pre">new_schedule</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.ConstantReconnectionPolicy.new_schedule" title="Link to this definition">¶</a></dt>
+<dd><p>This should return a finite or infinite iterable of delays (each as a
+floating point number of seconds) in-between each failed reconnection
+attempt.  Note that if the iterable is finite, reconnection attempts
+will cease once the iterable is exhausted.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.ExponentialReconnectionPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">ExponentialReconnectionPolicy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">base_delay</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_delay</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_attempts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">64</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.ExponentialReconnectionPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>A <a class="reference internal" href="#cassandra.policies.ReconnectionPolicy" title="cassandra.policies.ReconnectionPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">ReconnectionPolicy</span></code></a> subclass which exponentially increases
+the length of the delay in-between each reconnection attempt up to
+a set maximum delay.</p>
+<p>A random amount of jitter (+/- 15%) will be added to the pure exponential
+delay value to avoid the situations where many reconnection handlers are
+trying to reconnect at exactly the same time.</p>
+<p><cite>base_delay</cite> and <cite>max_delay</cite> should be in floating point units of
+seconds.</p>
+<p><cite>max_attempts</cite> should be a total number of attempts to be made before
+giving up, or <code class="xref py py-const docutils literal notranslate"><span class="pre">None</span></code> to continue reconnection attempts forever.
+The default is 64.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.ExponentialReconnectionPolicy.new_schedule">
+<span class="sig-name descname"><span class="pre">new_schedule</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.ExponentialReconnectionPolicy.new_schedule" title="Link to this definition">¶</a></dt>
+<dd><p>This should return a finite or infinite iterable of delays (each as a
+floating point number of seconds) in-between each failed reconnection
+attempt.  Note that if the iterable is finite, reconnection attempts
+will cease once the iterable is exhausted.</p>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="retrying-failed-operations">
+<h2>Retrying Failed Operations<a class="headerlink" href="#retrying-failed-operations" title="Link to this heading">¶</a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.WriteType">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">WriteType</span></span><a class="headerlink" href="#cassandra.policies.WriteType" title="Link to this definition">¶</a></dt>
+<dd><p>For usage with <a class="reference internal" href="#cassandra.policies.RetryPolicy" title="cassandra.policies.RetryPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">RetryPolicy</span></code></a>, this describe a type
+of write operation.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.WriteType.SIMPLE">
+<span class="sig-name descname"><span class="pre">SIMPLE</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0</span></em><a class="headerlink" href="#cassandra.policies.WriteType.SIMPLE" title="Link to this definition">¶</a></dt>
+<dd><p>A write to a single partition key. Such writes are guaranteed to be atomic
+and isolated.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.WriteType.BATCH">
+<span class="sig-name descname"><span class="pre">BATCH</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">1</span></em><a class="headerlink" href="#cassandra.policies.WriteType.BATCH" title="Link to this definition">¶</a></dt>
+<dd><p>A write to multiple partition keys that used the distributed batch log to
+ensure atomicity.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.WriteType.UNLOGGED_BATCH">
+<span class="sig-name descname"><span class="pre">UNLOGGED_BATCH</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">2</span></em><a class="headerlink" href="#cassandra.policies.WriteType.UNLOGGED_BATCH" title="Link to this definition">¶</a></dt>
+<dd><p>A write to multiple partition keys that did not use the distributed batch
+log. Atomicity for such writes is not guaranteed.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.WriteType.COUNTER">
+<span class="sig-name descname"><span class="pre">COUNTER</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">3</span></em><a class="headerlink" href="#cassandra.policies.WriteType.COUNTER" title="Link to this definition">¶</a></dt>
+<dd><p>A counter write (for one or multiple partition keys). Such writes should
+not be replayed in order to avoid overcount.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.WriteType.BATCH_LOG">
+<span class="sig-name descname"><span class="pre">BATCH_LOG</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">4</span></em><a class="headerlink" href="#cassandra.policies.WriteType.BATCH_LOG" title="Link to this definition">¶</a></dt>
+<dd><p>The initial write to the distributed batch log that Cassandra performs
+internally before a BATCH write.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.WriteType.CAS">
+<span class="sig-name descname"><span class="pre">CAS</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">5</span></em><a class="headerlink" href="#cassandra.policies.WriteType.CAS" title="Link to this definition">¶</a></dt>
+<dd><p>A lighweight-transaction write, such as “DELETE … IF EXISTS”.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.WriteType.VIEW">
+<span class="sig-name descname"><span class="pre">VIEW</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">6</span></em><a class="headerlink" href="#cassandra.policies.WriteType.VIEW" title="Link to this definition">¶</a></dt>
+<dd><p>This WriteType is only seen in results for requests that were unable to
+complete MV operations.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.WriteType.CDC">
+<span class="sig-name descname"><span class="pre">CDC</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">7</span></em><a class="headerlink" href="#cassandra.policies.WriteType.CDC" title="Link to this definition">¶</a></dt>
+<dd><p>This WriteType is only seen in results for requests that were unable to
+complete CDC operations.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.RetryPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">RetryPolicy</span></span><a class="headerlink" href="#cassandra.policies.RetryPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>A policy that describes whether to retry, rethrow, or ignore coordinator
+timeout and unavailable failures. These are failures reported from the
+server side. Timeouts are configured by
+<a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-2.1.4/conf/cassandra.yaml#L568-L584">settings in cassandra.yaml</a>.
+Unavailable failures occur when the coordinator cannot achieve the consistency
+level for a request. For further information see the method descriptions
+below.</p>
+<p>To specify a default retry policy, set the
+<a class="reference internal" href="cluster.html#cassandra.cluster.Cluster.default_retry_policy" title="cassandra.cluster.Cluster.default_retry_policy"><code class="xref py py-attr docutils literal notranslate"><span class="pre">Cluster.default_retry_policy</span></code></a> attribute to an instance of this
+class or one of its subclasses.</p>
+<p>To specify a retry policy per query, set the <a class="reference internal" href="query.html#cassandra.query.Statement.retry_policy" title="cassandra.query.Statement.retry_policy"><code class="xref py py-attr docutils literal notranslate"><span class="pre">Statement.retry_policy</span></code></a>
+attribute to an instance of this class or one of its subclasses.</p>
+<p>If custom behavior is needed for retrying certain operations,
+this class may be subclassed.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.RetryPolicy.RETRY">
+<span class="sig-name descname"><span class="pre">RETRY</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0</span></em><a class="headerlink" href="#cassandra.policies.RetryPolicy.RETRY" title="Link to this definition">¶</a></dt>
+<dd><p>This should be returned from the below methods if the operation
+should be retried on the same connection.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.RetryPolicy.RETHROW">
+<span class="sig-name descname"><span class="pre">RETHROW</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">1</span></em><a class="headerlink" href="#cassandra.policies.RetryPolicy.RETHROW" title="Link to this definition">¶</a></dt>
+<dd><p>This should be returned from the below methods if the failure
+should be propagated and no more retries attempted.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.RetryPolicy.IGNORE">
+<span class="sig-name descname"><span class="pre">IGNORE</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">2</span></em><a class="headerlink" href="#cassandra.policies.RetryPolicy.IGNORE" title="Link to this definition">¶</a></dt>
+<dd><p>This should be returned from the below methods if the failure
+should be ignored but no more retries should be attempted.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.policies.RetryPolicy.RETRY_NEXT_HOST">
+<span class="sig-name descname"><span class="pre">RETRY_NEXT_HOST</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">3</span></em><a class="headerlink" href="#cassandra.policies.RetryPolicy.RETRY_NEXT_HOST" title="Link to this definition">¶</a></dt>
+<dd><p>This should be returned from the below methods if the operation
+should be retried on another connection.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.RetryPolicy.on_read_timeout">
+<span class="sig-name descname"><span class="pre">on_read_timeout</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">query</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">consistency</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">required_responses</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">received_responses</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data_retrieved</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">retry_num</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.RetryPolicy.on_read_timeout" title="Link to this definition">¶</a></dt>
+<dd><p>This is called when a read operation times out from the coordinator’s
+perspective (i.e. a replica did not respond to the coordinator in time).
+It should return a tuple with two items: one of the class enums (such
+as <a class="reference internal" href="#cassandra.policies.RetryPolicy.RETRY" title="cassandra.policies.RetryPolicy.RETRY"><code class="xref py py-attr docutils literal notranslate"><span class="pre">RETRY</span></code></a>) and a <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> to retry the
+operation at or <code class="xref py py-const docutils literal notranslate"><span class="pre">None</span></code> to keep the same consistency level.</p>
+<p><cite>query</cite> is the <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> that timed out.</p>
+<p><cite>consistency</cite> is the <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> that the operation was
+attempted at.</p>
+<p>The <cite>required_responses</cite> and <cite>received_responses</cite> parameters describe
+how many replicas needed to respond to meet the requested consistency
+level and how many actually did respond before the coordinator timed
+out the request. <cite>data_retrieved</cite> is a boolean indicating whether
+any of those responses contained data (as opposed to just a digest).</p>
+<p><cite>retry_num</cite> counts how many times the operation has been retried, so
+the first time this method is called, <cite>retry_num</cite> will be 0.</p>
+<p>By default, operations will be retried at most once, and only if
+a sufficient number of replicas responded (with data digests).</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.RetryPolicy.on_write_timeout">
+<span class="sig-name descname"><span class="pre">on_write_timeout</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">query</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">consistency</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">required_responses</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">received_responses</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">retry_num</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.RetryPolicy.on_write_timeout" title="Link to this definition">¶</a></dt>
+<dd><p>This is called when a write operation times out from the coordinator’s
+perspective (i.e. a replica did not respond to the coordinator in time).</p>
+<p><cite>query</cite> is the <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> that timed out.</p>
+<p><cite>consistency</cite> is the <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> that the operation was
+attempted at.</p>
+<p><cite>write_type</cite> is one of the <a class="reference internal" href="#cassandra.policies.WriteType" title="cassandra.policies.WriteType"><code class="xref py py-class docutils literal notranslate"><span class="pre">WriteType</span></code></a> enums describing the
+type of write operation.</p>
+<p>The <cite>required_responses</cite> and <cite>received_responses</cite> parameters describe
+how many replicas needed to acknowledge the write to meet the requested
+consistency level and how many replicas actually did acknowledge the
+write before the coordinator timed out the request.</p>
+<p><cite>retry_num</cite> counts how many times the operation has been retried, so
+the first time this method is called, <cite>retry_num</cite> will be 0.</p>
+<p>By default, failed write operations will retried at most once, and
+they will only be retried if the <cite>write_type</cite> was
+<a class="reference internal" href="#cassandra.policies.WriteType.BATCH_LOG" title="cassandra.policies.WriteType.BATCH_LOG"><code class="xref py py-attr docutils literal notranslate"><span class="pre">BATCH_LOG</span></code></a>.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.RetryPolicy.on_unavailable">
+<span class="sig-name descname"><span class="pre">on_unavailable</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">query</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">consistency</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">required_replicas</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">alive_replicas</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">retry_num</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.RetryPolicy.on_unavailable" title="Link to this definition">¶</a></dt>
+<dd><p>This is called when the coordinator node determines that a read or
+write operation cannot be successful because the number of live
+replicas are too low to meet the requested <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a>.
+This means that the read or write operation was never forwarded to
+any replicas.</p>
+<p><cite>query</cite> is the <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> that failed.</p>
+<p><cite>consistency</cite> is the <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> that the operation was
+attempted at.</p>
+<p><cite>required_replicas</cite> is the number of replicas that would have needed to
+acknowledge the operation to meet the requested consistency level.
+<cite>alive_replicas</cite> is the number of replicas that the coordinator
+considered alive at the time of the request.</p>
+<p><cite>retry_num</cite> counts how many times the operation has been retried, so
+the first time this method is called, <cite>retry_num</cite> will be 0.</p>
+<p>By default, if this is the first retry, it triggers a retry on the next
+host in the query plan with the same consistency level. If this is not the
+first retry, no retries will be attempted and the error will be re-raised.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.RetryPolicy.on_request_error">
+<span class="sig-name descname"><span class="pre">on_request_error</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">query</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">consistency</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">error</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">retry_num</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.RetryPolicy.on_request_error" title="Link to this definition">¶</a></dt>
+<dd><p>This is called when an unexpected error happens. This can be in the
+following situations:</p>
+<ul class="simple">
+<li><p>On a connection error</p></li>
+<li><p>On server errors: overloaded, isBootstrapping, serverError, etc.</p></li>
+</ul>
+<p><cite>query</cite> is the <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> that timed out.</p>
+<p><cite>consistency</cite> is the <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> that the operation was
+attempted at.</p>
+<p><cite>error</cite> the instance of the exception.</p>
+<p><cite>retry_num</cite> counts how many times the operation has been retried, so
+the first time this method is called, <cite>retry_num</cite> will be 0.</p>
+<p>By default, it triggers a retry on the next host in the query plan
+with the same consistency level.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.FallthroughRetryPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">FallthroughRetryPolicy</span></span><a class="headerlink" href="#cassandra.policies.FallthroughRetryPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>A retry policy that never retries and always propagates failures to
+the application.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.FallthroughRetryPolicy.on_read_timeout">
+<span class="sig-name descname"><span class="pre">on_read_timeout</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.FallthroughRetryPolicy.on_read_timeout" title="Link to this definition">¶</a></dt>
+<dd><p>This is called when a read operation times out from the coordinator’s
+perspective (i.e. a replica did not respond to the coordinator in time).
+It should return a tuple with two items: one of the class enums (such
+as <a class="reference internal" href="#cassandra.policies.RetryPolicy.RETRY" title="cassandra.policies.RetryPolicy.RETRY"><code class="xref py py-attr docutils literal notranslate"><span class="pre">RETRY</span></code></a>) and a <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> to retry the
+operation at or <code class="xref py py-const docutils literal notranslate"><span class="pre">None</span></code> to keep the same consistency level.</p>
+<p><cite>query</cite> is the <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> that timed out.</p>
+<p><cite>consistency</cite> is the <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> that the operation was
+attempted at.</p>
+<p>The <cite>required_responses</cite> and <cite>received_responses</cite> parameters describe
+how many replicas needed to respond to meet the requested consistency
+level and how many actually did respond before the coordinator timed
+out the request. <cite>data_retrieved</cite> is a boolean indicating whether
+any of those responses contained data (as opposed to just a digest).</p>
+<p><cite>retry_num</cite> counts how many times the operation has been retried, so
+the first time this method is called, <cite>retry_num</cite> will be 0.</p>
+<p>By default, operations will be retried at most once, and only if
+a sufficient number of replicas responded (with data digests).</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.FallthroughRetryPolicy.on_write_timeout">
+<span class="sig-name descname"><span class="pre">on_write_timeout</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.FallthroughRetryPolicy.on_write_timeout" title="Link to this definition">¶</a></dt>
+<dd><p>This is called when a write operation times out from the coordinator’s
+perspective (i.e. a replica did not respond to the coordinator in time).</p>
+<p><cite>query</cite> is the <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> that timed out.</p>
+<p><cite>consistency</cite> is the <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> that the operation was
+attempted at.</p>
+<p><cite>write_type</cite> is one of the <a class="reference internal" href="#cassandra.policies.WriteType" title="cassandra.policies.WriteType"><code class="xref py py-class docutils literal notranslate"><span class="pre">WriteType</span></code></a> enums describing the
+type of write operation.</p>
+<p>The <cite>required_responses</cite> and <cite>received_responses</cite> parameters describe
+how many replicas needed to acknowledge the write to meet the requested
+consistency level and how many replicas actually did acknowledge the
+write before the coordinator timed out the request.</p>
+<p><cite>retry_num</cite> counts how many times the operation has been retried, so
+the first time this method is called, <cite>retry_num</cite> will be 0.</p>
+<p>By default, failed write operations will retried at most once, and
+they will only be retried if the <cite>write_type</cite> was
+<a class="reference internal" href="#cassandra.policies.WriteType.BATCH_LOG" title="cassandra.policies.WriteType.BATCH_LOG"><code class="xref py py-attr docutils literal notranslate"><span class="pre">BATCH_LOG</span></code></a>.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.FallthroughRetryPolicy.on_unavailable">
+<span class="sig-name descname"><span class="pre">on_unavailable</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.FallthroughRetryPolicy.on_unavailable" title="Link to this definition">¶</a></dt>
+<dd><p>This is called when the coordinator node determines that a read or
+write operation cannot be successful because the number of live
+replicas are too low to meet the requested <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a>.
+This means that the read or write operation was never forwarded to
+any replicas.</p>
+<p><cite>query</cite> is the <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> that failed.</p>
+<p><cite>consistency</cite> is the <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> that the operation was
+attempted at.</p>
+<p><cite>required_replicas</cite> is the number of replicas that would have needed to
+acknowledge the operation to meet the requested consistency level.
+<cite>alive_replicas</cite> is the number of replicas that the coordinator
+considered alive at the time of the request.</p>
+<p><cite>retry_num</cite> counts how many times the operation has been retried, so
+the first time this method is called, <cite>retry_num</cite> will be 0.</p>
+<p>By default, if this is the first retry, it triggers a retry on the next
+host in the query plan with the same consistency level. If this is not the
+first retry, no retries will be attempted and the error will be re-raised.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.FallthroughRetryPolicy.on_request_error">
+<span class="sig-name descname"><span class="pre">on_request_error</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.FallthroughRetryPolicy.on_request_error" title="Link to this definition">¶</a></dt>
+<dd><p>This is called when an unexpected error happens. This can be in the
+following situations:</p>
+<ul class="simple">
+<li><p>On a connection error</p></li>
+<li><p>On server errors: overloaded, isBootstrapping, serverError, etc.</p></li>
+</ul>
+<p><cite>query</cite> is the <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> that timed out.</p>
+<p><cite>consistency</cite> is the <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> that the operation was
+attempted at.</p>
+<p><cite>error</cite> the instance of the exception.</p>
+<p><cite>retry_num</cite> counts how many times the operation has been retried, so
+the first time this method is called, <cite>retry_num</cite> will be 0.</p>
+<p>By default, it triggers a retry on the next host in the query plan
+with the same consistency level.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.DowngradingConsistencyRetryPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">DowngradingConsistencyRetryPolicy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DowngradingConsistencyRetryPolicy" title="Link to this definition">¶</a></dt>
+<dd><p><em>Deprecated:</em> This retry policy will be removed in the next major release.</p>
+<p>A retry policy that sometimes retries with a lower consistency level than
+the one initially requested.</p>
+<p><strong>BEWARE</strong>: This policy may retry queries using a lower consistency
+level than the one initially requested. By doing so, it may break
+consistency guarantees. In other words, if you use this retry policy,
+there are cases (documented below) where a read at <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel.QUORUM" title="cassandra.ConsistencyLevel.QUORUM"><code class="xref py py-attr docutils literal notranslate"><span class="pre">QUORUM</span></code></a>
+<em>may not</em> see a preceding write at <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel.QUORUM" title="cassandra.ConsistencyLevel.QUORUM"><code class="xref py py-attr docutils literal notranslate"><span class="pre">QUORUM</span></code></a>. Do not use this
+policy unless you have understood the cases where this can happen and
+are ok with that. It is also recommended to subclass this class so
+that queries that required a consistency level downgrade can be
+recorded (so that repairs can be made later, etc).</p>
+<p>This policy implements the same retries as <a class="reference internal" href="#cassandra.policies.RetryPolicy" title="cassandra.policies.RetryPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">RetryPolicy</span></code></a>,
+but on top of that, it also retries in the following cases:</p>
+<ul class="simple">
+<li><p>On a read timeout: if the number of replicas that responded is
+greater than one but lower than is required by the requested
+consistency level, the operation is retried at a lower consistency
+level.</p></li>
+<li><p>On a write timeout: if the operation is an <a class="reference internal" href="#cassandra.policies.WriteType.UNLOGGED_BATCH" title="cassandra.policies.WriteType.UNLOGGED_BATCH"><code class="xref py py-attr docutils literal notranslate"><span class="pre">UNLOGGED_BATCH</span></code></a>
+and at least one replica acknowledged the write, the operation is
+retried at a lower consistency level.  Furthermore, for other
+write types, if at least one replica acknowledged the write, the
+timeout is ignored.</p></li>
+<li><p>On an unavailable exception: if at least one replica is alive, the
+operation is retried at a lower consistency level.</p></li>
+</ul>
+<p>The reasoning behind this retry policy is as follows: if, based
+on the information the Cassandra coordinator node returns, retrying the
+operation with the initially requested consistency has a chance to
+succeed, do it. Otherwise, if based on that information we know the
+initially requested consistency level cannot be achieved currently, then:</p>
+<ul class="simple">
+<li><p>For writes, ignore the exception (thus silently failing the
+consistency requirement) if we know the write has been persisted on at
+least one replica.</p></li>
+<li><p>For reads, try reading at a lower consistency level (thus silently
+failing the consistency requirement).</p></li>
+</ul>
+<p>In other words, this policy implements the idea that if the requested
+consistency level cannot be achieved, the next best thing for writes is
+to make sure the data is persisted, and that reading something is better
+than reading nothing, even if there is a risk of reading stale data.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.DowngradingConsistencyRetryPolicy.on_read_timeout">
+<span class="sig-name descname"><span class="pre">on_read_timeout</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">query</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">consistency</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">required_responses</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">received_responses</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data_retrieved</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">retry_num</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DowngradingConsistencyRetryPolicy.on_read_timeout" title="Link to this definition">¶</a></dt>
+<dd><p>This is called when a read operation times out from the coordinator’s
+perspective (i.e. a replica did not respond to the coordinator in time).
+It should return a tuple with two items: one of the class enums (such
+as <a class="reference internal" href="#cassandra.policies.RetryPolicy.RETRY" title="cassandra.policies.RetryPolicy.RETRY"><code class="xref py py-attr docutils literal notranslate"><span class="pre">RETRY</span></code></a>) and a <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> to retry the
+operation at or <code class="xref py py-const docutils literal notranslate"><span class="pre">None</span></code> to keep the same consistency level.</p>
+<p><cite>query</cite> is the <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> that timed out.</p>
+<p><cite>consistency</cite> is the <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> that the operation was
+attempted at.</p>
+<p>The <cite>required_responses</cite> and <cite>received_responses</cite> parameters describe
+how many replicas needed to respond to meet the requested consistency
+level and how many actually did respond before the coordinator timed
+out the request. <cite>data_retrieved</cite> is a boolean indicating whether
+any of those responses contained data (as opposed to just a digest).</p>
+<p><cite>retry_num</cite> counts how many times the operation has been retried, so
+the first time this method is called, <cite>retry_num</cite> will be 0.</p>
+<p>By default, operations will be retried at most once, and only if
+a sufficient number of replicas responded (with data digests).</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.DowngradingConsistencyRetryPolicy.on_write_timeout">
+<span class="sig-name descname"><span class="pre">on_write_timeout</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">query</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">consistency</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">required_responses</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">received_responses</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">retry_num</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DowngradingConsistencyRetryPolicy.on_write_timeout" title="Link to this definition">¶</a></dt>
+<dd><p>This is called when a write operation times out from the coordinator’s
+perspective (i.e. a replica did not respond to the coordinator in time).</p>
+<p><cite>query</cite> is the <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> that timed out.</p>
+<p><cite>consistency</cite> is the <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> that the operation was
+attempted at.</p>
+<p><cite>write_type</cite> is one of the <a class="reference internal" href="#cassandra.policies.WriteType" title="cassandra.policies.WriteType"><code class="xref py py-class docutils literal notranslate"><span class="pre">WriteType</span></code></a> enums describing the
+type of write operation.</p>
+<p>The <cite>required_responses</cite> and <cite>received_responses</cite> parameters describe
+how many replicas needed to acknowledge the write to meet the requested
+consistency level and how many replicas actually did acknowledge the
+write before the coordinator timed out the request.</p>
+<p><cite>retry_num</cite> counts how many times the operation has been retried, so
+the first time this method is called, <cite>retry_num</cite> will be 0.</p>
+<p>By default, failed write operations will retried at most once, and
+they will only be retried if the <cite>write_type</cite> was
+<a class="reference internal" href="#cassandra.policies.WriteType.BATCH_LOG" title="cassandra.policies.WriteType.BATCH_LOG"><code class="xref py py-attr docutils literal notranslate"><span class="pre">BATCH_LOG</span></code></a>.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.DowngradingConsistencyRetryPolicy.on_unavailable">
+<span class="sig-name descname"><span class="pre">on_unavailable</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">query</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">consistency</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">required_replicas</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">alive_replicas</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">retry_num</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.DowngradingConsistencyRetryPolicy.on_unavailable" title="Link to this definition">¶</a></dt>
+<dd><p>This is called when the coordinator node determines that a read or
+write operation cannot be successful because the number of live
+replicas are too low to meet the requested <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a>.
+This means that the read or write operation was never forwarded to
+any replicas.</p>
+<p><cite>query</cite> is the <a class="reference internal" href="query.html#cassandra.query.Statement" title="cassandra.query.Statement"><code class="xref py py-class docutils literal notranslate"><span class="pre">Statement</span></code></a> that failed.</p>
+<p><cite>consistency</cite> is the <a class="reference internal" href="../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> that the operation was
+attempted at.</p>
+<p><cite>required_replicas</cite> is the number of replicas that would have needed to
+acknowledge the operation to meet the requested consistency level.
+<cite>alive_replicas</cite> is the number of replicas that the coordinator
+considered alive at the time of the request.</p>
+<p><cite>retry_num</cite> counts how many times the operation has been retried, so
+the first time this method is called, <cite>retry_num</cite> will be 0.</p>
+<p>By default, if this is the first retry, it triggers a retry on the next
+host in the query plan with the same consistency level. If this is not the
+first retry, no retries will be attempted and the error will be re-raised.</p>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="retrying-idempotent-operations">
+<h2>Retrying Idempotent Operations<a class="headerlink" href="#retrying-idempotent-operations" title="Link to this heading">¶</a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.SpeculativeExecutionPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">SpeculativeExecutionPolicy</span></span><a class="headerlink" href="#cassandra.policies.SpeculativeExecutionPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>Interface for specifying speculative execution plans</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.SpeculativeExecutionPolicy.new_plan">
+<span class="sig-name descname"><span class="pre">new_plan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keyspace</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">statement</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.SpeculativeExecutionPolicy.new_plan" title="Link to this definition">¶</a></dt>
+<dd><p>Returns</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>keyspace</strong></p></li>
+<li><p><strong>statement</strong></p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.policies.ConstantSpeculativeExecutionPolicy">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.policies.</span></span><span class="sig-name descname"><span class="pre">ConstantSpeculativeExecutionPolicy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">delay</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_attempts</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.ConstantSpeculativeExecutionPolicy" title="Link to this definition">¶</a></dt>
+<dd><p>A speculative execution policy that sends a new query every X seconds (<strong>delay</strong>) for a maximum of Y attempts (<strong>max_attempts</strong>).</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.policies.ConstantSpeculativeExecutionPolicy.new_plan">
+<span class="sig-name descname"><span class="pre">new_plan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keyspace</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">statement</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.policies.ConstantSpeculativeExecutionPolicy.new_plan" title="Link to this definition">¶</a></dt>
+<dd><p>Returns</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>keyspace</strong></p></li>
+<li><p><strong>statement</strong></p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page cassandra.policies - Load balancing and Failure Handling Policies&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.26.9-scylla/api/cassandra/policies%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="cluster.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br /><code class="docutils literal notranslate"><span class="pre">cassandra.cluster</span></code> - Clusters and Sessions
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="auth.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br /><code class="docutils literal notranslate"><span class="pre">cassandra.auth</span></code> - Authentication
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <div class="notice">
+<p>
+ScyllaDB Python Driver is available under the <a href="https://www.apache.org/licenses/LICENSE-2.0.html">Apache v2 License</a>.
+ScyllaDB Python Driver is a fork of <a href="https://github.com/datastax/python-driver">DataStax Python Driver</a>.
+See Copyright <a href="https://python-driver.docs.scylladb.com/stable/#copyright">here</a>.</p>
+</div>
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page cassandra.policies - Load balancing and Failure Handling Policies&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.26.9-scylla/api/cassandra/policies%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/python-driver/edit/master/docs/api/cassandra/policies.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#"><code class="docutils literal notranslate"><span class="pre">cassandra.policies</span></code> - Load balancing and Failure Handling Policies</a><ul>
+<li><a class="reference internal" href="#load-balancing">Load Balancing</a><ul>
+<li><a class="reference internal" href="#cassandra.policies.HostDistance"><code class="docutils literal notranslate"><span class="pre">HostDistance</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.HostDistance.IGNORED"><code class="docutils literal notranslate"><span class="pre">HostDistance.IGNORED</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.HostDistance.LOCAL_RACK"><code class="docutils literal notranslate"><span class="pre">HostDistance.LOCAL_RACK</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.HostDistance.LOCAL"><code class="docutils literal notranslate"><span class="pre">HostDistance.LOCAL</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.HostDistance.REMOTE"><code class="docutils literal notranslate"><span class="pre">HostDistance.REMOTE</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.LoadBalancingPolicy"><code class="docutils literal notranslate"><span class="pre">LoadBalancingPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.LoadBalancingPolicy.distance"><code class="docutils literal notranslate"><span class="pre">LoadBalancingPolicy.distance()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.LoadBalancingPolicy.populate"><code class="docutils literal notranslate"><span class="pre">LoadBalancingPolicy.populate()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.LoadBalancingPolicy.make_query_plan"><code class="docutils literal notranslate"><span class="pre">LoadBalancingPolicy.make_query_plan()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.LoadBalancingPolicy.check_supported"><code class="docutils literal notranslate"><span class="pre">LoadBalancingPolicy.check_supported()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.RoundRobinPolicy"><code class="docutils literal notranslate"><span class="pre">RoundRobinPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.RoundRobinPolicy.populate"><code class="docutils literal notranslate"><span class="pre">RoundRobinPolicy.populate()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RoundRobinPolicy.distance"><code class="docutils literal notranslate"><span class="pre">RoundRobinPolicy.distance()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RoundRobinPolicy.make_query_plan"><code class="docutils literal notranslate"><span class="pre">RoundRobinPolicy.make_query_plan()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RoundRobinPolicy.on_up"><code class="docutils literal notranslate"><span class="pre">RoundRobinPolicy.on_up()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RoundRobinPolicy.on_down"><code class="docutils literal notranslate"><span class="pre">RoundRobinPolicy.on_down()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RoundRobinPolicy.on_add"><code class="docutils literal notranslate"><span class="pre">RoundRobinPolicy.on_add()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RoundRobinPolicy.on_remove"><code class="docutils literal notranslate"><span class="pre">RoundRobinPolicy.on_remove()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.DCAwareRoundRobinPolicy"><code class="docutils literal notranslate"><span class="pre">DCAwareRoundRobinPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.DCAwareRoundRobinPolicy.populate"><code class="docutils literal notranslate"><span class="pre">DCAwareRoundRobinPolicy.populate()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.DCAwareRoundRobinPolicy.distance"><code class="docutils literal notranslate"><span class="pre">DCAwareRoundRobinPolicy.distance()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.DCAwareRoundRobinPolicy.make_query_plan"><code class="docutils literal notranslate"><span class="pre">DCAwareRoundRobinPolicy.make_query_plan()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.DCAwareRoundRobinPolicy.on_up"><code class="docutils literal notranslate"><span class="pre">DCAwareRoundRobinPolicy.on_up()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.DCAwareRoundRobinPolicy.on_down"><code class="docutils literal notranslate"><span class="pre">DCAwareRoundRobinPolicy.on_down()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.DCAwareRoundRobinPolicy.on_add"><code class="docutils literal notranslate"><span class="pre">DCAwareRoundRobinPolicy.on_add()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.DCAwareRoundRobinPolicy.on_remove"><code class="docutils literal notranslate"><span class="pre">DCAwareRoundRobinPolicy.on_remove()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.WhiteListRoundRobinPolicy"><code class="docutils literal notranslate"><span class="pre">WhiteListRoundRobinPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.WhiteListRoundRobinPolicy.populate"><code class="docutils literal notranslate"><span class="pre">WhiteListRoundRobinPolicy.populate()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.WhiteListRoundRobinPolicy.distance"><code class="docutils literal notranslate"><span class="pre">WhiteListRoundRobinPolicy.distance()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.WhiteListRoundRobinPolicy.on_up"><code class="docutils literal notranslate"><span class="pre">WhiteListRoundRobinPolicy.on_up()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.WhiteListRoundRobinPolicy.on_add"><code class="docutils literal notranslate"><span class="pre">WhiteListRoundRobinPolicy.on_add()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.TokenAwarePolicy"><code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.TokenAwarePolicy.shuffle_replicas"><code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy.shuffle_replicas</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.TokenAwarePolicy.populate"><code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy.populate()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.TokenAwarePolicy.check_supported"><code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy.check_supported()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.TokenAwarePolicy.distance"><code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy.distance()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.TokenAwarePolicy.make_query_plan"><code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy.make_query_plan()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.TokenAwarePolicy.on_up"><code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy.on_up()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.TokenAwarePolicy.on_down"><code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy.on_down()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.TokenAwarePolicy.on_add"><code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy.on_add()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.TokenAwarePolicy.on_remove"><code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy.on_remove()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.HostFilterPolicy"><code class="docutils literal notranslate"><span class="pre">HostFilterPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.HostFilterPolicy.predicate"><code class="docutils literal notranslate"><span class="pre">HostFilterPolicy.predicate()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.HostFilterPolicy.distance"><code class="docutils literal notranslate"><span class="pre">HostFilterPolicy.distance()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.HostFilterPolicy.make_query_plan"><code class="docutils literal notranslate"><span class="pre">HostFilterPolicy.make_query_plan()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.DefaultLoadBalancingPolicy"><code class="docutils literal notranslate"><span class="pre">DefaultLoadBalancingPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.DefaultLoadBalancingPolicy.populate"><code class="docutils literal notranslate"><span class="pre">DefaultLoadBalancingPolicy.populate()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.DefaultLoadBalancingPolicy.make_query_plan"><code class="docutils literal notranslate"><span class="pre">DefaultLoadBalancingPolicy.make_query_plan()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.DSELoadBalancingPolicy"><code class="docutils literal notranslate"><span class="pre">DSELoadBalancingPolicy</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#translating-server-node-addresses">Translating Server Node Addresses</a><ul>
+<li><a class="reference internal" href="#cassandra.policies.AddressTranslator"><code class="docutils literal notranslate"><span class="pre">AddressTranslator</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.AddressTranslator.translate"><code class="docutils literal notranslate"><span class="pre">AddressTranslator.translate()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.IdentityTranslator"><code class="docutils literal notranslate"><span class="pre">IdentityTranslator</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.IdentityTranslator.translate"><code class="docutils literal notranslate"><span class="pre">IdentityTranslator.translate()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.EC2MultiRegionTranslator"><code class="docutils literal notranslate"><span class="pre">EC2MultiRegionTranslator</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.EC2MultiRegionTranslator.translate"><code class="docutils literal notranslate"><span class="pre">EC2MultiRegionTranslator.translate()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a class="reference internal" href="#marking-hosts-up-or-down">Marking Hosts Up or Down</a><ul>
+<li><a class="reference internal" href="#cassandra.policies.ConvictionPolicy"><code class="docutils literal notranslate"><span class="pre">ConvictionPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.ConvictionPolicy.add_failure"><code class="docutils literal notranslate"><span class="pre">ConvictionPolicy.add_failure()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.ConvictionPolicy.reset"><code class="docutils literal notranslate"><span class="pre">ConvictionPolicy.reset()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.SimpleConvictionPolicy"><code class="docutils literal notranslate"><span class="pre">SimpleConvictionPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.SimpleConvictionPolicy.add_failure"><code class="docutils literal notranslate"><span class="pre">SimpleConvictionPolicy.add_failure()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.SimpleConvictionPolicy.reset"><code class="docutils literal notranslate"><span class="pre">SimpleConvictionPolicy.reset()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a class="reference internal" href="#reconnecting-to-dead-hosts">Reconnecting to Dead Hosts</a><ul>
+<li><a class="reference internal" href="#cassandra.policies.ReconnectionPolicy"><code class="docutils literal notranslate"><span class="pre">ReconnectionPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.ReconnectionPolicy.new_schedule"><code class="docutils literal notranslate"><span class="pre">ReconnectionPolicy.new_schedule()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.ConstantReconnectionPolicy"><code class="docutils literal notranslate"><span class="pre">ConstantReconnectionPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.ConstantReconnectionPolicy.new_schedule"><code class="docutils literal notranslate"><span class="pre">ConstantReconnectionPolicy.new_schedule()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.ExponentialReconnectionPolicy"><code class="docutils literal notranslate"><span class="pre">ExponentialReconnectionPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.ExponentialReconnectionPolicy.new_schedule"><code class="docutils literal notranslate"><span class="pre">ExponentialReconnectionPolicy.new_schedule()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a class="reference internal" href="#retrying-failed-operations">Retrying Failed Operations</a><ul>
+<li><a class="reference internal" href="#cassandra.policies.WriteType"><code class="docutils literal notranslate"><span class="pre">WriteType</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.WriteType.SIMPLE"><code class="docutils literal notranslate"><span class="pre">WriteType.SIMPLE</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.WriteType.BATCH"><code class="docutils literal notranslate"><span class="pre">WriteType.BATCH</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.WriteType.UNLOGGED_BATCH"><code class="docutils literal notranslate"><span class="pre">WriteType.UNLOGGED_BATCH</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.WriteType.COUNTER"><code class="docutils literal notranslate"><span class="pre">WriteType.COUNTER</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.WriteType.BATCH_LOG"><code class="docutils literal notranslate"><span class="pre">WriteType.BATCH_LOG</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.WriteType.CAS"><code class="docutils literal notranslate"><span class="pre">WriteType.CAS</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.WriteType.VIEW"><code class="docutils literal notranslate"><span class="pre">WriteType.VIEW</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.WriteType.CDC"><code class="docutils literal notranslate"><span class="pre">WriteType.CDC</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.RetryPolicy"><code class="docutils literal notranslate"><span class="pre">RetryPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.RetryPolicy.RETRY"><code class="docutils literal notranslate"><span class="pre">RetryPolicy.RETRY</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RetryPolicy.RETHROW"><code class="docutils literal notranslate"><span class="pre">RetryPolicy.RETHROW</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RetryPolicy.IGNORE"><code class="docutils literal notranslate"><span class="pre">RetryPolicy.IGNORE</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RetryPolicy.RETRY_NEXT_HOST"><code class="docutils literal notranslate"><span class="pre">RetryPolicy.RETRY_NEXT_HOST</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RetryPolicy.on_read_timeout"><code class="docutils literal notranslate"><span class="pre">RetryPolicy.on_read_timeout()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RetryPolicy.on_write_timeout"><code class="docutils literal notranslate"><span class="pre">RetryPolicy.on_write_timeout()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RetryPolicy.on_unavailable"><code class="docutils literal notranslate"><span class="pre">RetryPolicy.on_unavailable()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.RetryPolicy.on_request_error"><code class="docutils literal notranslate"><span class="pre">RetryPolicy.on_request_error()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.FallthroughRetryPolicy"><code class="docutils literal notranslate"><span class="pre">FallthroughRetryPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.FallthroughRetryPolicy.on_read_timeout"><code class="docutils literal notranslate"><span class="pre">FallthroughRetryPolicy.on_read_timeout()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.FallthroughRetryPolicy.on_write_timeout"><code class="docutils literal notranslate"><span class="pre">FallthroughRetryPolicy.on_write_timeout()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.FallthroughRetryPolicy.on_unavailable"><code class="docutils literal notranslate"><span class="pre">FallthroughRetryPolicy.on_unavailable()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.FallthroughRetryPolicy.on_request_error"><code class="docutils literal notranslate"><span class="pre">FallthroughRetryPolicy.on_request_error()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.DowngradingConsistencyRetryPolicy"><code class="docutils literal notranslate"><span class="pre">DowngradingConsistencyRetryPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.DowngradingConsistencyRetryPolicy.on_read_timeout"><code class="docutils literal notranslate"><span class="pre">DowngradingConsistencyRetryPolicy.on_read_timeout()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.DowngradingConsistencyRetryPolicy.on_write_timeout"><code class="docutils literal notranslate"><span class="pre">DowngradingConsistencyRetryPolicy.on_write_timeout()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.policies.DowngradingConsistencyRetryPolicy.on_unavailable"><code class="docutils literal notranslate"><span class="pre">DowngradingConsistencyRetryPolicy.on_unavailable()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a class="reference internal" href="#retrying-idempotent-operations">Retrying Idempotent Operations</a><ul>
+<li><a class="reference internal" href="#cassandra.policies.SpeculativeExecutionPolicy"><code class="docutils literal notranslate"><span class="pre">SpeculativeExecutionPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.SpeculativeExecutionPolicy.new_plan"><code class="docutils literal notranslate"><span class="pre">SpeculativeExecutionPolicy.new_plan()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.policies.ConstantSpeculativeExecutionPolicy"><code class="docutils literal notranslate"><span class="pre">ConstantSpeculativeExecutionPolicy</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.policies.ConstantSpeculativeExecutionPolicy.new_plan"><code class="docutils literal notranslate"><span class="pre">ConstantSpeculativeExecutionPolicy.new_plan()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../../index.html">Scylla Python Driver</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                3.26.9
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+            
+            
+                
+                    <li>
+                        <a href="../../../stable/api/cassandra/policies.html">
+                            3.29.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.7-scylla/api/cassandra/policies.html">
+                            3.29.7
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.6-scylla/api/cassandra/policies.html">
+                            3.29.6
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.5-scylla/api/cassandra/policies.html">
+                            3.29.5
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.4-scylla/api/cassandra/policies.html">
+                            3.29.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.3-scylla/api/cassandra/policies.html">
+                            3.29.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.2-scylla/api/cassandra/policies.html">
+                            3.29.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.0-scylla/api/cassandra/policies.html">
+                            3.29.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.28.2-scylla/api/cassandra/policies.html">
+                            3.28.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.28.1-scylla/api/cassandra/policies.html">
+                            3.28.1
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.28.0-scylla/api/cassandra/policies.html">
+                            3.28.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="policies.html">
+                            3.26.9
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.25.11-scylla/api/cassandra/policies.html">
+                            3.25.11
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.25.4-scylla/api/cassandra/policies.html">
+                            3.25.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.24.8-scylla/api/cassandra/policies.html">
+                            3.24.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.22.3-scylla/api/cassandra/policies.html">
+                            3.22.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.21.0-scylla/api/cassandra/policies.html">
+                            3.21.0
+                        </a>
+                    </li>
+                
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../index.html">API Documentation</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../cassandra.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra</span></code> - Exceptions and Enums</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cluster.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cluster</span></code> - Clusters and Sessions</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#"><code class="docutils literal notranslate"><span class="pre">cassandra.policies</span></code> - Load balancing and Failure Handling Policies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="auth.html"><code class="docutils literal notranslate"><span class="pre">cassandra.auth</span></code> - Authentication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="graph.html"><code class="docutils literal notranslate"><span class="pre">cassandra.graph</span></code> - Graph Statements, Options, and Row Factories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="metadata.html"><code class="docutils literal notranslate"><span class="pre">cassandra.metadata</span></code> - Schema and Ring Topology</a></li>
+<li class="toctree-l2"><a class="reference internal" href="metrics.html"><code class="docutils literal notranslate"><span class="pre">cassandra.metrics</span></code> - Performance Metrics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="query.html"><code class="docutils literal notranslate"><span class="pre">cassandra.query</span></code> - Prepared Statements, Batch Statements, Tracing, and Row Factories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="pool.html"><code class="docutils literal notranslate"><span class="pre">cassandra.pool</span></code> - Hosts and Connection Pools</a></li>
+<li class="toctree-l2"><a class="reference internal" href="protocol.html"><code class="docutils literal notranslate"><span class="pre">cassandra.protocol</span></code> - Protocol Features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="encoder.html"><code class="docutils literal notranslate"><span class="pre">cassandra.encoder</span></code> - Encoders for non-prepared Statements</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decoder.html"><code class="docutils literal notranslate"><span class="pre">cassandra.decoder</span></code> - Data Return Formats</a></li>
+<li class="toctree-l2"><a class="reference internal" href="concurrent.html"><code class="docutils literal notranslate"><span class="pre">cassandra.concurrent</span></code> - Utilities for Concurrent Statement Execution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="connection.html"><code class="docutils literal notranslate"><span class="pre">cassandra.connection</span></code> - Low Level Connection Info</a></li>
+<li class="toctree-l2"><a class="reference internal" href="util.html"><code class="docutils literal notranslate"><span class="pre">cassandra.util</span></code> - Utilities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="timestamps.html"><code class="docutils literal notranslate"><span class="pre">cassandra.timestamps</span></code> - Timestamp Generation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/asyncioreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.asyncioreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">asyncio</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/asyncorereactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.asyncorereactor</span></code> - <code class="docutils literal notranslate"><span class="pre">asyncore</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/eventletreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.eventletreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">eventlet</span></code>-compatible Connection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/libevreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.libevreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">libev</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/geventreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.geventreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">gevent</span></code>-compatible Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/twistedreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.twistedreactor</span></code> - Twisted Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/models.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.models</span></code> - Table models for object mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/columns.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.columns</span></code> - Column types for object mapping models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/query.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.query</span></code> - Query and filter model objects</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/connection.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.connection</span></code> - Connection management for cqlengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/management.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.management</span></code> - Schema management for cqlengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/usertype.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.usertype</span></code> - Model classes for User Defined Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="datastax/graph/index.html"><code class="docutils literal notranslate"><span class="pre">cassandra.datastax.graph</span></code> - Graph Statements, Options, and Row Factories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="datastax/graph/fluent/index.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="datastax/graph/fluent/query.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent.query</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="datastax/graph/fluent/predicates.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent.predicates</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../scylla-specific.html">Scylla Specific Features</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../upgrading.html">Upgrading</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="simple">
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../execution-profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../query-paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-defined-types.html">User Defined Types</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../object-mapper.html">Object Mapper</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/upgrade-guide.html">Upgrade Guide</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/models.html">Models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/queryset.html">Making Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/batches.html">Batch Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/connections.html">Connections</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/third-party.html">Third party integrations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/faq.html">Frequently Asked Questions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../dates-and-times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../scylla-cloud.html">ScyllaDB Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../scylla-cloud-serverless.html">ScyllaDB Cloud Serverless</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; ScyllaDB 2021 and © DataStax 2013-2017
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.2.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

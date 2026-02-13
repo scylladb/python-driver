@@ -1,0 +1,3146 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             CHANGELOG | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://python-driver.docs.scylladb.com/stable/CHANGELOG.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
+            
+        
+    
+        
+        
+            
+        <script type="text/javascript" src="_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="_static/js/main.bundle.js"></script>
+        
+            
+                <script src="_static/documentation_options.js?v=be4f90db"></script>
+            
+        
+            
+                <script src="_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+    </head>
+
+    <body class="brand-product">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University Live | Free Virtual Training Event</div>
+            <a class="promo-banner__button button button--reverse" href="#"
+               target="_blank" rel="noopener noreferrer">Learn more</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="index.html"
+           class="bread__highlight">
+            Scylla Python Driver
+        </a>
+    </span>
+    
+    <span class="bread__item bread__item--last">CHANGELOG</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+    <div class="admonition caution">
+        <p class="admonition-title">Caution</p>
+        <p>
+            
+                You're viewing documentation for a deprecated version of Scylla Python Driver.
+            
+            <a href="../stable/CHANGELOG.html">Switch to the latest stable version.</a>
+        </p>
+    </div>
+
+                    
+
+                    <section id="changelog">
+<h1>CHANGELOG<a class="headerlink" href="#changelog" title="Link to this heading">¶</a></h1>
+<section id="id1">
+<h2>3.28.0<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
+<p>June 5, 2023</p>
+<section id="features">
+<h3>Features<a class="headerlink" href="#features" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add support for vector type (PYTHON-1352)</p></li>
+<li><p>Cryptography module is now an optional dependency (PYTHON-1351)</p></li>
+</ul>
+</section>
+<section id="bug-fixes">
+<h3>Bug Fixes<a class="headerlink" href="#bug-fixes" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Store IV along with encrypted text when using column-level encryption (PYTHON-1350)</p></li>
+<li><p>Create session-specific protocol handlers to contain session-specific CLE policies (PYTHON-1356)</p></li>
+</ul>
+</section>
+<section id="others">
+<h3>Others<a class="headerlink" href="#others" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Use Cython for smoke builds (PYTHON-1343)</p></li>
+<li><p>Don’t fail when inserting UDTs with prepared queries with some missing fields (PR 1151)</p></li>
+<li><p>Convert print statement to function in docs (PR 1157)</p></li>
+<li><p>Update comment for retry policy (DOC-3278)</p></li>
+<li><p>Added error handling blog reference (DOC-2813)</p></li>
+</ul>
+</section>
+</section>
+<section id="id2">
+<h2>3.27.0<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<p>May 1, 2023</p>
+<section id="id3">
+<h3>Features<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add support for client-side encryption (PYTHON-1341)</p></li>
+</ul>
+</section>
+</section>
+<section id="id4">
+<h2>3.26.0<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
+<p>March 13, 2023</p>
+<section id="id5">
+<h3>Features<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add support for execution profiles in execute_concurrent (PR 1122)</p></li>
+</ul>
+</section>
+<section id="id6">
+<h3>Bug Fixes<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Handle empty non-final result pages (PR 1110)</p></li>
+<li><p>Do not re-use stream IDs for in-flight requests (PR 1114)</p></li>
+<li><p>Asyncore race condition cause logging exception on shutdown (PYTHON-1266)</p></li>
+</ul>
+</section>
+<section id="id7">
+<h3>Others<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix deprecation warning in query tracing (PR 1103)</p></li>
+<li><p>Remove mutable default values from some tests (PR 1116)</p></li>
+<li><p>Remove dependency on unittest2 (PYTHON-1289)</p></li>
+<li><p>Fix deprecation warnings for asyncio.coroutine annotation in asyncioreactor (PYTHON-1290)</p></li>
+<li><p>Fix typos in source files (PR 1126)</p></li>
+<li><p>HostFilterPolicyInitTest fix for Python 3.11 (PR 1131)</p></li>
+<li><p>Fix for DontPrepareOnIgnoredHostsTest (PYTHON-1287)</p></li>
+<li><p>tests.integration.simulacron.test_connection failures (PYTHON-1304)</p></li>
+<li><p>tests.integration.standard.test_single_interface.py appears to be failing for C* 4.0 (PYTHON-1329)</p></li>
+<li><p>Authentication tests appear to be failing fraudulently (PYTHON-1328)</p></li>
+<li><p>PreparedStatementTests.test_fail_if_different_query_id_on_reprepare() failing unexpectedly (PTYHON-1327)</p></li>
+<li><p>Refactor deprecated unittest aliases for Python 3.11 compatibility (PR 1112)</p></li>
+</ul>
+</section>
+<section id="deprecations">
+<h3>Deprecations<a class="headerlink" href="#deprecations" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>This release removes support for Python 2.7.x as well as Python 3.5.x and 3.6.x</p></li>
+</ul>
+</section>
+</section>
+<section id="id8">
+<h2>3.25.0<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h2>
+<p>March 18, 2021</p>
+<section id="id9">
+<h3>Features<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Ensure the driver can connect when invalid peer hosts are in system.peers (PYTHON-1260)</p></li>
+<li><p>Implement protocol v5 checksumming (PYTHON-1258)</p></li>
+<li><p>Fix the default cqlengine connection mechanism to work with Astra (PYTHON-1265)</p></li>
+</ul>
+</section>
+<section id="id10">
+<h3>Bug Fixes<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Asyncore race condition cause logging exception on shutdown (PYTHON-1266)</p></li>
+<li><p>Update list of reserved keywords (PYTHON-1269)</p></li>
+</ul>
+</section>
+<section id="id11">
+<h3>Others<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Drop Python 3.4 support (PYTHON-1220)</p></li>
+<li><p>Update security documentation and examples to use PROTOCOL_TLS (PYTHON-1264)</p></li>
+</ul>
+</section>
+</section>
+<section id="id12">
+<h2>3.24.0<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h2>
+<p>June 18, 2020</p>
+<section id="id13">
+<h3>Features<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Make geomet an optional dependency at runtime (PYTHON-1237)</p></li>
+<li><p>Add use_default_tempdir cloud config options (PYTHON-1245)</p></li>
+<li><p>Tcp flow control for libevreactor (PYTHON-1248)</p></li>
+</ul>
+</section>
+<section id="id14">
+<h3>Bug Fixes<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Unable to connect to a cloud cluster using Ubuntu 20.04 (PYTHON-1238)</p></li>
+<li><p>PlainTextAuthProvider fails with unicode chars and Python3 (PYTHON-1241)</p></li>
+<li><p>[GRAPH] Graph execution profiles consistency level are not set to LOCAL_QUORUM with a cloud cluster (PYTHON-1240)</p></li>
+<li><p>[GRAPH] Can’t write data in a Boolean field using the Fluent API (PYTHON-1239)</p></li>
+<li><p>[GRAPH] Fix elementMap() result deserialization (PYTHON-1233)</p></li>
+</ul>
+</section>
+<section id="id15">
+<h3>Others<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Bump geomet dependency version to 0.2 (PYTHON-1243)</p></li>
+<li><p>Bump gremlinpython dependency version to 3.4.6 (PYTHON-1212)</p></li>
+<li><p>Improve fluent graph documentation for core graphs (PYTHON-1244)</p></li>
+</ul>
+</section>
+</section>
+<section id="id16">
+<h2>3.23.0<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h2>
+<p>April 6, 2020</p>
+<section id="id17">
+<h3>Features<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Transient Replication Support (PYTHON-1207)</p></li>
+<li><p>Support system.peers_v2 and port discovery for C* 4.0 (PYTHON-700)</p></li>
+</ul>
+</section>
+<section id="id18">
+<h3>Bug Fixes<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Asyncore logging exception on shutdown (PYTHON-1228)</p></li>
+</ul>
+</section>
+</section>
+<section id="id19">
+<h2>3.22.0<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h2>
+<p>February 26, 2020</p>
+<section id="id20">
+<h3>Features<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add all() function to the ResultSet API (PYTHON-1203)</p></li>
+<li><p>Parse new schema metadata in NGDG and generate table edges CQL syntax (PYTHON-996)</p></li>
+<li><p>Add GraphSON3 support (PYTHON-788)</p></li>
+<li><p>Use GraphSON3 as default for Native graphs (PYTHON-1004)</p></li>
+<li><p>Add Tuple and UDT types for native graph (PYTHON-1005)</p></li>
+<li><p>Add Duration type for native graph (PYTHON-1000)</p></li>
+<li><p>Add gx:ByteBuffer graphson type support for Blob field (PYTHON-1027)</p></li>
+<li><p>Enable Paging Through DSE Driver for Gremlin Traversals (PYTHON-1045)</p></li>
+<li><p>Provide numerical wrappers to ensure proper graphson schema definition (PYTHON-1051)</p></li>
+<li><p>Resolve the row_factory automatically for native graphs (PYTHON-1056)</p></li>
+<li><p>Add g:TraversalMetrics/g:Metrics graph deserializers (PYTHON-1057)</p></li>
+<li><p>Add g:BulkSet graph deserializers (PYTHON-1060)</p></li>
+<li><p>Update Graph Engine names and the way to create a Classic/Native Graph (PYTHON-1090)</p></li>
+<li><p>Update Native to Core Graph Engine</p></li>
+<li><p>Add graphson3 and native graph support (PYTHON-1039)</p></li>
+<li><p>Enable Paging Through DSE Driver for Gremlin Traversals (PYTHON-1045)</p></li>
+<li><p>Expose filter predicates for cql collections (PYTHON-1019)</p></li>
+<li><p>Add g:TraversalMetrics/Metrics deserializers (PYTHON-1057)</p></li>
+<li><p>Make graph metadata handling more robust (PYTHON-1204)</p></li>
+</ul>
+</section>
+<section id="id21">
+<h3>Bug Fixes<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Make sure to only query the native_transport_address column with DSE (PYTHON-1205)</p></li>
+</ul>
+</section>
+</section>
+<section id="id22">
+<h2>3.21.0<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h2>
+<p>January 15, 2020</p>
+<section id="id23">
+<h3>Features<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Unified driver: merge core and DSE drivers into a single package (PYTHON-1130)</p></li>
+<li><p>Add Python 3.8 support (PYTHON-1189)</p></li>
+<li><p>Allow passing ssl context for Twisted (PYTHON-1161)</p></li>
+<li><p>Ssl context and cloud support for Eventlet (PYTHON-1162)</p></li>
+<li><p>Cloud Twisted support (PYTHON-1163)</p></li>
+<li><p>Add additional_write_policy and read_repair to system schema parsing (PYTHON-1048)</p></li>
+<li><p>Flexible version parsing (PYTHON-1174)</p></li>
+<li><p>Support NULL in collection deserializer (PYTHON-1123)</p></li>
+<li><p>[GRAPH] Ability to execute Fluent Graph queries asynchronously (PYTHON-1129)</p></li>
+</ul>
+</section>
+<section id="id24">
+<h3>Bug Fixes<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Handle prepared id mismatch when repreparing on the fly (PYTHON-1124)</p></li>
+<li><p>re-raising the CQLEngineException will fail on Python 3 (PYTHON-1166)</p></li>
+<li><p>asyncio message chunks can be processed discontinuously (PYTHON-1185)</p></li>
+<li><p>Reconnect attempts persist after downed node removed from peers (PYTHON-1181)</p></li>
+<li><p>Connection fails to validate ssl certificate hostname when SSLContext.check_hostname is set (PYTHON-1186)</p></li>
+<li><p>ResponseFuture._set_result crashes on connection error when used with PrepareMessage (PYTHON-1187)</p></li>
+<li><p>Insights fail to serialize the startup message when the SSL Context is from PyOpenSSL (PYTHON-1192)</p></li>
+</ul>
+</section>
+<section id="id25">
+<h3>Others<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>The driver has a new dependency: geomet. It comes from the dse-driver unification and
+is used to support DSE geo types.</p></li>
+<li><p>Remove <code class="docutils literal notranslate"><span class="pre">*read_repair_chance</span></code> table options (PYTHON-1140)</p></li>
+<li><p>Avoid warnings about unspecified load balancing policy when connecting to a cloud cluster (PYTHON-1177)</p></li>
+<li><p>Add new DSE CQL keywords (PYTHON-1122)</p></li>
+<li><p>Publish binary wheel distributions (PYTHON-1013)</p></li>
+</ul>
+</section>
+<section id="id26">
+<h3>Deprecations<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>DSELoadBalancingPolicy will be removed in the next major, consider using
+the DefaultLoadBalancingPolicy.</p></li>
+</ul>
+<p>Merged from dse-driver:</p>
+</section>
+<section id="id27">
+<h3>Features<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Insights integration (PYTHON-1047)</p></li>
+<li><p>Graph execution profiles should preserve their graph_source when graph_options is overridden (PYTHON-1021)</p></li>
+<li><p>Add NodeSync metadata (PYTHON-799)</p></li>
+<li><p>Add new NodeSync failure values (PYTHON-934)</p></li>
+<li><p>DETERMINISTIC and MONOTONIC Clauses for Functions and Aggregates (PYTHON-955)</p></li>
+<li><p>GraphOptions should show a warning for unknown parameters (PYTHON-819)</p></li>
+<li><p>DSE protocol version 2 and continous paging backpressure (PYTHON-798)</p></li>
+<li><p>GraphSON2 Serialization/Deserialization Support (PYTHON-775)</p></li>
+<li><p>Add graph-results payload option for GraphSON format (PYTHON-773)</p></li>
+<li><p>Create an AuthProvider for the DSE transitional mode (PYTHON-831)</p></li>
+<li><p>Implement serializers for the Graph String API (PYTHON-778)</p></li>
+<li><p>Provide deserializers for GraphSON types (PYTHON-782)</p></li>
+<li><p>Add Graph DurationType support (PYTHON-607)</p></li>
+<li><p>Support DSE DateRange type (PYTHON-668)</p></li>
+<li><p>RLAC CQL output for materialized views (PYTHON-682)</p></li>
+<li><p>Add Geom Types wkt deserializer</p></li>
+<li><p>DSE Graph Client timeouts in custom payload (PYTHON-589)</p></li>
+<li><p>Make DSEGSSAPIAuthProvider accept principal name (PYTHON-574)</p></li>
+<li><p>Add config profiles to DSE graph execution (PYTHON-570)</p></li>
+<li><p>DSE Driver version checking (PYTHON-568)</p></li>
+<li><p>Distinct default timeout for graph queries (PYTHON-477)</p></li>
+<li><p>Graph result parsing for known types (PYTHON-479,487)</p></li>
+<li><p>Distinct read/write CL for graph execution (PYTHON-509)</p></li>
+<li><p>Target graph analytics query to spark master when available (PYTHON-510)</p></li>
+</ul>
+</section>
+<section id="id28">
+<h3>Bug Fixes<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Continuous paging sessions raise RuntimeError when results are not entirely consumed (PYTHON-1054)</p></li>
+<li><p>GraphSON Property deserializer should return a dict instead of a set (PYTHON-1033)</p></li>
+<li><p>ResponseFuture.has_more_pages may hold the wrong value (PYTHON-946)</p></li>
+<li><p>DETERMINISTIC clause in AGGREGATE misplaced in CQL generation (PYTHON-963)</p></li>
+<li><p>graph module import cause a DLL issue on Windows due to its cythonizing failure (PYTHON-900)</p></li>
+<li><p>Update date serialization to isoformat in graph (PYTHON-805)</p></li>
+<li><p>DateRange Parse Error (PYTHON-729)</p></li>
+<li><p>MontonicTimestampGenerator.__init__ ignores class defaults (PYTHON-728)</p></li>
+<li><p>metadata.get_host returning None unexpectedly (PYTHON-709)</p></li>
+<li><p>Sockets associated with sessions not getting cleaned up on session.shutdown() (PYTHON-673)</p></li>
+<li><p>Resolve FQDN from ip address and use that as host passed to SASLClient (PYTHON-566)</p></li>
+<li><p>Geospatial type implementations don’t handle ‘EMPTY’ values. (PYTHON-481)</p></li>
+<li><p>Correctly handle other types in geo type equality (PYTHON-508)</p></li>
+</ul>
+</section>
+<section id="other">
+<h3>Other<a class="headerlink" href="#other" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add tests around cqlengine and continuous paging (PYTHON-872)</p></li>
+<li><p>Add an abstract GraphStatement to handle different graph statements  (PYTHON-789)</p></li>
+<li><p>Write documentation examples for DSE 2.0 features (PYTHON-732)</p></li>
+<li><p>DSE_V1 protocol should not include all of protocol v5 (PYTHON-694)</p></li>
+</ul>
+</section>
+</section>
+<section id="id29">
+<h2>3.20.2<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h2>
+<p>November 19, 2019</p>
+<section id="id30">
+<h3>Bug Fixes<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix import error for old python installation without SSLContext (PYTHON-1183)</p></li>
+</ul>
+</section>
+</section>
+<section id="id31">
+<h2>3.20.1<a class="headerlink" href="#id31" title="Link to this heading">¶</a></h2>
+<p>November 6, 2019</p>
+<section id="id32">
+<h3>Bug Fixes<a class="headerlink" href="#id32" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>ValueError: too many values to unpack (expected 2)” when there are two dashes in server version number (PYTHON-1172)</p></li>
+</ul>
+</section>
+</section>
+<section id="id33">
+<h2>3.20.0<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h2>
+<p>October 28, 2019</p>
+<section id="id34">
+<h3>Features<a class="headerlink" href="#id34" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>DataStax Astra Support (PYTHON-1074)</p></li>
+<li><p>Use 4.0 schema parser in 4 alpha and snapshot builds (PYTHON-1158)</p></li>
+</ul>
+</section>
+<section id="id35">
+<h3>Bug Fixes<a class="headerlink" href="#id35" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Connection setup methods prevent using ExecutionProfile in cqlengine (PYTHON-1009)</p></li>
+<li><p>Driver deadlock if all connections dropped by heartbeat whilst request in flight and request times out (PYTHON-1044)</p></li>
+<li><p>Exception when use pk__token__gt filter In python 3.7 (PYTHON-1121)</p></li>
+</ul>
+</section>
+</section>
+<section id="id36">
+<h2>3.19.0<a class="headerlink" href="#id36" title="Link to this heading">¶</a></h2>
+<p>August 26, 2019</p>
+<section id="id37">
+<h3>Features<a class="headerlink" href="#id37" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add Python 3.7 support (PYTHON-1016)</p></li>
+<li><p>Future-proof Mapping imports (PYTHON-1023)</p></li>
+<li><p>Include param values in cqlengine logging (PYTHON-1105)</p></li>
+<li><p>NTS Token Replica Map Generation is slow (PYTHON-622)</p></li>
+</ul>
+</section>
+<section id="id38">
+<h3>Bug Fixes<a class="headerlink" href="#id38" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>as_cql_query UDF/UDA parameters incorrectly includes “frozen” if arguments are collections (PYTHON-1031)</p></li>
+<li><p>cqlengine does not currently support combining TTL and TIMESTAMP on INSERT (PYTHON-1093)</p></li>
+<li><p>Fix incorrect metadata for compact counter tables (PYTHON-1100)</p></li>
+<li><p>Call ConnectionException with correct kwargs (PYTHON-1117)</p></li>
+<li><p>Can’t connect to clusters built from source because version parsing doesn’t handle ‘x.y-SNAPSHOT’ (PYTHON-1118)</p></li>
+<li><p>Discovered node doesn´t honor the configured Cluster port on connection (PYTHON-1127)</p></li>
+<li><p>Exception when use pk__token__gt filter In python 3.7 (PYTHON-1121)</p></li>
+</ul>
+</section>
+<section id="id39">
+<h3>Other<a class="headerlink" href="#id39" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Remove invalid warning in set_session when we initialize a default connection (PYTHON-1104)</p></li>
+<li><p>Set the proper default ExecutionProfile.row_factory value (PYTHON-1119)</p></li>
+</ul>
+</section>
+</section>
+<section id="id40">
+<h2>3.18.0<a class="headerlink" href="#id40" title="Link to this heading">¶</a></h2>
+<p>May 27, 2019</p>
+<section id="id41">
+<h3>Features<a class="headerlink" href="#id41" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Abstract Host Connection information (PYTHON-1079)</p></li>
+<li><p>Improve version parsing to support a non-integer 4th component (PYTHON-1091)</p></li>
+<li><p>Expose on_request_error method in the RetryPolicy (PYTHON-1064)</p></li>
+<li><p>Add jitter to ExponentialReconnectionPolicy (PYTHON-1065)</p></li>
+</ul>
+</section>
+<section id="id42">
+<h3>Bug Fixes<a class="headerlink" href="#id42" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix error when preparing queries with beta protocol v5 (PYTHON-1081)</p></li>
+<li><p>Accept legacy empty strings as column names (PYTHON-1082)</p></li>
+<li><p>Let util.SortedSet handle uncomparable elements (PYTHON-1087)</p></li>
+</ul>
+</section>
+</section>
+<section id="id43">
+<h2>3.17.1<a class="headerlink" href="#id43" title="Link to this heading">¶</a></h2>
+<p>May 2, 2019</p>
+<section id="id44">
+<h3>Bug Fixes<a class="headerlink" href="#id44" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Socket errors EAGAIN/EWOULDBLOCK are not handled properly and cause timeouts (PYTHON-1089)</p></li>
+</ul>
+</section>
+</section>
+<section id="id45">
+<h2>3.17.0<a class="headerlink" href="#id45" title="Link to this heading">¶</a></h2>
+<p>February 19, 2019</p>
+<section id="id46">
+<h3>Features<a class="headerlink" href="#id46" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Send driver name and version in startup message (PYTHON-1068)</p></li>
+<li><p>Add Cluster ssl_context option to enable SSL (PYTHON-995)</p></li>
+<li><p>Allow encrypted private keys for 2-way SSL cluster connections (PYTHON-995)</p></li>
+<li><p>Introduce new method ConsistencyLevel.is_serial (PYTHON-1067)</p></li>
+<li><p>Add Session.get_execution_profile (PYTHON-932)</p></li>
+<li><p>Add host kwarg to Session.execute/execute_async APIs to send a query to a specific node (PYTHON-993)</p></li>
+</ul>
+</section>
+<section id="id47">
+<h3>Bug Fixes<a class="headerlink" href="#id47" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>NoHostAvailable when all hosts are up and connectable (PYTHON-891)</p></li>
+<li><p>Serial consistency level is not used (PYTHON-1007)</p></li>
+</ul>
+</section>
+<section id="id48">
+<h3>Other<a class="headerlink" href="#id48" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fail faster on incorrect lz4 import (PYTHON-1042)</p></li>
+<li><p>Bump Cython dependency version to 0.29 (PYTHON-1036)</p></li>
+<li><p>Expand Driver SSL Documentation (PYTHON-740)</p></li>
+</ul>
+</section>
+<section id="id49">
+<h3>Deprecations<a class="headerlink" href="#id49" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Using Cluster.ssl_options to enable SSL is deprecated and will be removed in
+the next major release, use ssl_context.</p></li>
+<li><p>DowngradingConsistencyRetryPolicy is deprecated and will be
+removed in the next major release. (PYTHON-937)</p></li>
+</ul>
+</section>
+</section>
+<section id="id50">
+<h2>3.16.0<a class="headerlink" href="#id50" title="Link to this heading">¶</a></h2>
+<p>November 12, 2018</p>
+<section id="id51">
+<h3>Bug Fixes<a class="headerlink" href="#id51" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Improve and fix socket error-catching code in nonblocking-socket reactors (PYTHON-1024)</p></li>
+<li><p>Non-ASCII characters in schema break CQL string generation (PYTHON-1008)</p></li>
+<li><p>Fix OSS driver’s virtual table support against DSE 6.0.X and future server releases (PYTHON-1020)</p></li>
+<li><p>ResultSet.one() fails if the row_factory is using a generator (PYTHON-1026)</p></li>
+<li><p>Log profile name on attempt to create existing profile (PYTHON-944)</p></li>
+<li><p>Cluster instantiation fails if any contact points’ hostname resolution fails (PYTHON-895)</p></li>
+</ul>
+</section>
+<section id="id52">
+<h3>Other<a class="headerlink" href="#id52" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix tests when RF is not maintained if we decomission a node (PYTHON-1017)</p></li>
+<li><p>Fix wrong use of ResultSet indexing (PYTHON-1015)</p></li>
+</ul>
+</section>
+</section>
+<section id="id53">
+<h2>3.15.1<a class="headerlink" href="#id53" title="Link to this heading">¶</a></h2>
+<p>September 6, 2018</p>
+<section id="id54">
+<h3>Bug Fixes<a class="headerlink" href="#id54" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>C* 4.0 schema-parsing logic breaks running against DSE 6.0.X (PYTHON-1018)</p></li>
+</ul>
+</section>
+</section>
+<section id="id55">
+<h2>3.15.0<a class="headerlink" href="#id55" title="Link to this heading">¶</a></h2>
+<p>August 30, 2018</p>
+<section id="id56">
+<h3>Features<a class="headerlink" href="#id56" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Parse Virtual Keyspace Metadata (PYTHON-992)</p></li>
+</ul>
+</section>
+<section id="id57">
+<h3>Bug Fixes<a class="headerlink" href="#id57" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Tokenmap.get_replicas returns the wrong value if token coincides with the end of the range (PYTHON-978)</p></li>
+<li><p>Python Driver fails with “more than 255 arguments” python exception when &gt; 255 columns specified in query response (PYTHON-893)</p></li>
+<li><p>Hang in integration.standard.test_cluster.ClusterTests.test_set_keyspace_twice (PYTHON-998)</p></li>
+<li><p>Asyncore reactors should use a global variable instead of a class variable for the event loop (PYTHON-697)</p></li>
+</ul>
+</section>
+<section id="id58">
+<h3>Other<a class="headerlink" href="#id58" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Use global variable for libev loops so it can be subclassed (PYTHON-973)</p></li>
+<li><p>Update SchemaParser for V4 (PYTHON-1006)</p></li>
+<li><p>Bump Cython dependency version to 0.28 (PYTHON-1012)</p></li>
+</ul>
+</section>
+</section>
+<section id="id59">
+<h2>3.14.0<a class="headerlink" href="#id59" title="Link to this heading">¶</a></h2>
+<p>April 17, 2018</p>
+<section id="id60">
+<h3>Features<a class="headerlink" href="#id60" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add one() function to the ResultSet API (PYTHON-947)</p></li>
+<li><p>Create an utility function to fetch concurrently many keys from the same replica (PYTHON-647)</p></li>
+<li><p>Allow filter queries with fields that have an index managed outside of cqlengine (PYTHON-966)</p></li>
+<li><p>Twisted SSL Support (PYTHON-343)</p></li>
+<li><p>Support IS NOT NULL operator in cqlengine (PYTHON-968)</p></li>
+</ul>
+</section>
+<section id="id61">
+<h3>Other<a class="headerlink" href="#id61" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix Broken Links in Docs (PYTHON-916)</p></li>
+<li><p>Reevaluate MONKEY_PATCH_LOOP in test codebase (PYTHON-903)</p></li>
+<li><p>Remove CASS_SERVER_VERSION and replace it for CASSANDRA_VERSION in tests (PYTHON-910)</p></li>
+<li><p>Refactor CASSANDRA_VERSION to a some kind of version object (PYTHON-915)</p></li>
+<li><p>Log warning when driver configures an authenticator, but server does not request authentication (PYTHON-940)</p></li>
+<li><p>Warn users when using the deprecated Session.default_consistency_level (PYTHON-953)</p></li>
+<li><p>Add DSE smoke test to OSS driver tests (PYTHON-894)</p></li>
+<li><p>Document long compilation times and workarounds (PYTHON-868)</p></li>
+<li><p>Improve error for batch WriteTimeouts (PYTHON-941)</p></li>
+<li><p>Deprecate ResultSet indexing (PYTHON-945)</p></li>
+</ul>
+</section>
+</section>
+<section id="id62">
+<h2>3.13.0<a class="headerlink" href="#id62" title="Link to this heading">¶</a></h2>
+<p>January 30, 2018</p>
+<section id="id63">
+<h3>Features<a class="headerlink" href="#id63" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>cqlengine: LIKE filter operator (PYTHON-512)</p></li>
+<li><p>Support cassandra.query.BatchType with cqlengine BatchQuery (PYTHON-888)</p></li>
+</ul>
+</section>
+<section id="id64">
+<h3>Bug Fixes<a class="headerlink" href="#id64" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>AttributeError: ‘NoneType’ object has no attribute ‘add_timer’ (PYTHON-862)</p></li>
+<li><p>Support retry_policy in PreparedStatement (PYTHON-861)</p></li>
+<li><p>__del__ method in Session is throwing an exception (PYTHON-813)</p></li>
+<li><p>LZ4 import issue with recent versions (PYTHON-897)</p></li>
+<li><p>ResponseFuture._connection can be None when returning request_id (PYTHON-853)</p></li>
+<li><p>ResultSet.was_applied doesn’t support batch with LWT statements (PYTHON-848)</p></li>
+</ul>
+</section>
+<section id="id65">
+<h3>Other<a class="headerlink" href="#id65" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>cqlengine: avoid warning when unregistering connection on shutdown (PYTHON-865)</p></li>
+<li><p>Fix DeprecationWarning of log.warn (PYTHON-846)</p></li>
+<li><p>Fix example_mapper.py for python3 (PYTHON-860)</p></li>
+<li><p>Possible deadlock on cassandra.concurrent.execute_concurrent (PYTHON-768)</p></li>
+<li><p>Add some known deprecated warnings for 4.x (PYTHON-877)</p></li>
+<li><p>Remove copyright dates from copyright notices (PYTHON-863)</p></li>
+<li><p>Remove “Experimental” tag from execution profiles documentation (PYTHON-840)</p></li>
+<li><p>request_timer metrics descriptions are slightly incorrect (PYTHON-885)</p></li>
+<li><p>Remove “Experimental” tag from cqlengine connections documentation (PYTHON-892)</p></li>
+<li><p>Set in documentation default consistency for operations is LOCAL_ONE (PYTHON-901)</p></li>
+</ul>
+</section>
+</section>
+<section id="id66">
+<h2>3.12.0<a class="headerlink" href="#id66" title="Link to this heading">¶</a></h2>
+<p>November 6, 2017</p>
+<section id="id67">
+<h3>Features<a class="headerlink" href="#id67" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Send keyspace in QUERY, PREPARE, and BATCH messages (PYTHON-678)</p></li>
+<li><p>Add IPv4Address/IPv6Address support for inet types (PYTHON-751)</p></li>
+<li><p>WriteType.CDC and VIEW missing (PYTHON-794)</p></li>
+<li><p>Warn on Cluster init if contact points are specified but LBP isn’t (legacy mode) (PYTHON-812)</p></li>
+<li><p>Warn on Cluster init if contact points are specified but LBP isn’t (exection profile mode) (PYTHON-838)</p></li>
+<li><p>Include hash of result set metadata in prepared stmt id (PYTHON-808)</p></li>
+<li><p>Add NO_COMPACT startup option (PYTHON-839)</p></li>
+<li><p>Add new exception type for CDC (PYTHON-837)</p></li>
+<li><p>Allow 0ms in ConstantSpeculativeExecutionPolicy (PYTHON-836)</p></li>
+<li><p>Add asyncio reactor (PYTHON-507)</p></li>
+</ul>
+</section>
+<section id="id68">
+<h3>Bug Fixes<a class="headerlink" href="#id68" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Both _set_final_exception/result called for the same ResponseFuture (PYTHON-630)</p></li>
+<li><p>Use of DCAwareRoundRobinPolicy raises NoHostAvailable exception (PYTHON-781)</p></li>
+<li><p>Not create two sessions by default in CQLEngine (PYTHON-814)</p></li>
+<li><p>Bug when subclassing AyncoreConnection (PYTHON-827)</p></li>
+<li><p>Error at cleanup when closing the asyncore connections (PYTHON-829)</p></li>
+<li><p>Fix sites where <cite>sessions</cite> can change during iteration (PYTHON-793)</p></li>
+<li><p>cqlengine: allow min_length=0 for Ascii and Text column types (PYTHON-735)</p></li>
+<li><p>Rare exception when “sys.exit(0)” after query timeouts (PYTHON-752)</p></li>
+<li><p>Dont set the session keyspace when preparing statements (PYTHON-843)</p></li>
+<li><p>Use of DCAwareRoundRobinPolicy raises NoHostAvailable exception       (PYTHON-781)</p></li>
+</ul>
+</section>
+<section id="id69">
+<h3>Other<a class="headerlink" href="#id69" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Remove DeprecationWarning when using WhiteListRoundRobinPolicy (PYTHON-810)</p></li>
+<li><p>Bump Cython dependency version to 0.27 (PYTHON-833)</p></li>
+</ul>
+</section>
+</section>
+<section id="id70">
+<h2>3.11.0<a class="headerlink" href="#id70" title="Link to this heading">¶</a></h2>
+<p>July 24, 2017</p>
+<section id="id71">
+<h3>Features<a class="headerlink" href="#id71" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add idle_heartbeat_timeout cluster option to tune how long to wait for heartbeat responses. (PYTHON-762)</p></li>
+<li><p>Add HostFilterPolicy (PYTHON-761)</p></li>
+</ul>
+</section>
+<section id="id72">
+<h3>Bug Fixes<a class="headerlink" href="#id72" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>is_idempotent flag is not propagated from PreparedStatement to BoundStatement (PYTHON-736)</p></li>
+<li><p>Fix asyncore hang on exit (PYTHON-767)</p></li>
+<li><p>Driver takes several minutes to remove a bad host from session (PYTHON-762)</p></li>
+<li><p>Installation doesn’t always fall back to no cython in Windows (PYTHON-763)</p></li>
+<li><p>Avoid to replace a connection that is supposed to shutdown (PYTHON-772)</p></li>
+<li><p>request_ids may not be returned to the pool (PYTHON-739)</p></li>
+<li><p>Fix murmur3 on big-endian systems (PYTHON-653)</p></li>
+<li><p>Ensure unused connections are closed if a Session is deleted by the GC (PYTHON-774)</p></li>
+<li><p>Fix .values_list by using db names internally (cqlengine) (PYTHON-785)</p></li>
+</ul>
+</section>
+<section id="id73">
+<h3>Other<a class="headerlink" href="#id73" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Bump Cython dependency version to 0.25.2 (PYTHON-754)</p></li>
+<li><p>Fix DeprecationWarning when using lz4 (PYTHON-769)</p></li>
+<li><p>Deprecate WhiteListRoundRobinPolicy (PYTHON-759)</p></li>
+<li><p>Improve upgrade guide for materializing pages (PYTHON-464)</p></li>
+<li><p>Documentation for time/date specifies timestamp inupt as microseconds (PYTHON-717)</p></li>
+<li><p>Point to DSA Slack, not IRC, in docs index</p></li>
+</ul>
+</section>
+</section>
+<section id="id74">
+<h2>3.10.0<a class="headerlink" href="#id74" title="Link to this heading">¶</a></h2>
+<p>May 24, 2017</p>
+<section id="id75">
+<h3>Features<a class="headerlink" href="#id75" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add Duration type to cqlengine (PYTHON-750)</p></li>
+<li><p>Community PR review: Raise error on primary key update only if its value changed (PYTHON-705)</p></li>
+<li><p>get_query_trace() contract is ambiguous (PYTHON-196)</p></li>
+</ul>
+</section>
+<section id="id76">
+<h3>Bug Fixes<a class="headerlink" href="#id76" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Queries using speculative execution policy timeout prematurely (PYTHON-755)</p></li>
+<li><p>Fix <cite>map</cite> where results are not consumed (PYTHON-749)</p></li>
+<li><p>Driver fails to encode Duration’s with large values (PYTHON-747)</p></li>
+<li><p>UDT values are not updated correctly in CQLEngine (PYTHON-743)</p></li>
+<li><p>UDT types are not validated in CQLEngine (PYTHON-742)</p></li>
+<li><p>to_python is not implemented for types columns.Type and columns.Date in CQLEngine (PYTHON-741)</p></li>
+<li><p>Clients spin infinitely trying to connect to a host that is drained (PYTHON-734)</p></li>
+<li><p>Resulset.get_query_trace returns empty trace sometimes (PYTHON-730)</p></li>
+<li><p>Memory grows and doesn’t get removed (PYTHON-720)</p></li>
+<li><p>Fix RuntimeError caused by change dict size during iteration (PYTHON-708)</p></li>
+<li><p>fix ExponentialReconnectionPolicy may throw OverflowError problem (PYTHON-707)</p></li>
+<li><p>Avoid using nonexistent prepared statement in ResponseFuture (PYTHON-706)</p></li>
+</ul>
+</section>
+<section id="id77">
+<h3>Other<a class="headerlink" href="#id77" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Update README (PYTHON-746)</p></li>
+<li><p>Test python versions 3.5 and 3.6 (PYTHON-737)</p></li>
+<li><p>Docs Warning About Prepare <code class="docutils literal notranslate"><span class="pre">select</span> <span class="pre">*</span></code> (PYTHON-626)</p></li>
+<li><p>Increase Coverage in CqlEngine Test Suite (PYTHON-505)</p></li>
+<li><p>Example SSL connection code does not verify server certificates (PYTHON-469)</p></li>
+</ul>
+</section>
+</section>
+<section id="id78">
+<h2>3.9.0<a class="headerlink" href="#id78" title="Link to this heading">¶</a></h2>
+<section id="id79">
+<h3>Features<a class="headerlink" href="#id79" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>cqlengine: remove elements by key from a map (PYTHON-688)</p></li>
+</ul>
+</section>
+<section id="id80">
+<h3>Bug Fixes<a class="headerlink" href="#id80" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>improve error handling when connecting to non-existent keyspace (PYTHON-665)</p></li>
+<li><p>Sockets associated with sessions not getting cleaned up on session.shutdown() (PYTHON-673)</p></li>
+<li><p>rare flake on integration.standard.test_cluster.ClusterTests.test_clone_shared_lbp (PYTHON-727)</p></li>
+<li><p>MontonicTimestampGenerator.__init__ ignores class defaults (PYTHON-728)</p></li>
+<li><p>race where callback or errback for request may not be called (PYTHON-733)</p></li>
+<li><p>cqlengine: model.update() should not update columns with a default value that hasn’t changed (PYTHON-657)</p></li>
+<li><p>cqlengine: field value manager’s explicit flag is True when queried back from cassandra (PYTHON-719)</p></li>
+</ul>
+</section>
+<section id="id81">
+<h3>Other<a class="headerlink" href="#id81" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Connection not closed in example_mapper (PYTHON-723)</p></li>
+<li><p>Remove mention of pre-2.0 C* versions from OSS 3.0+ docs (PYTHON-710)</p></li>
+</ul>
+</section>
+</section>
+<section id="id82">
+<h2>3.8.1<a class="headerlink" href="#id82" title="Link to this heading">¶</a></h2>
+<p>March 16, 2017</p>
+<section id="id83">
+<h3>Bug Fixes<a class="headerlink" href="#id83" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>implement __le__/__ge__/__ne__ on some custom types (PYTHON-714)</p></li>
+<li><p>Fix bug in eventlet and gevent reactors that could cause hangs (PYTHON-721)</p></li>
+<li><p>Fix DecimalType regression (PYTHON-724)</p></li>
+</ul>
+</section>
+</section>
+<section id="id84">
+<h2>3.8.0<a class="headerlink" href="#id84" title="Link to this heading">¶</a></h2>
+<section id="id85">
+<h3>Features<a class="headerlink" href="#id85" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Quote index names in metadata CQL generation (PYTHON-616)</p></li>
+<li><p>On column deserialization failure, keep error message consistent between python and cython (PYTHON-631)</p></li>
+<li><p>TokenAwarePolicy always sends requests to the same replica for a given key (PYTHON-643)</p></li>
+<li><p>Added cql types to result set (PYTHON-648)</p></li>
+<li><p>Add __len__ to BatchStatement (PYTHON-650)</p></li>
+<li><p>Duration Type for Cassandra (PYTHON-655)</p></li>
+<li><p>Send flags with PREPARE message in v5 (PYTHON-684)</p></li>
+</ul>
+</section>
+<section id="id86">
+<h3>Bug Fixes<a class="headerlink" href="#id86" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Potential Timing issue if application exits prior to session pool initialization (PYTHON-636)</p></li>
+<li><p>“Host X.X.X.X has been marked down” without any exceptions (PYTHON-640)</p></li>
+<li><p>NoHostAvailable or OperationTimedOut when using execute_concurrent with a generator that inserts into more than one table (PYTHON-642)</p></li>
+<li><p>ResponseFuture creates Timers and don’t cancel them even when result is received which leads to memory leaks (PYTHON-644)</p></li>
+<li><p>Driver cannot connect to Cassandra version &gt; 3 (PYTHON-646)</p></li>
+<li><p>Unable to import model using UserType without setuping connection since 3.7 (PYTHON-649)</p></li>
+<li><p>Don’t prepare queries on ignored hosts on_up (PYTHON-669)</p></li>
+<li><p>Sockets associated with sessions not getting cleaned up on session.shutdown() (PYTHON-673)</p></li>
+<li><p>Make client timestamps strictly monotonic (PYTHON-676)</p></li>
+<li><p>cassandra.cqlengine.connection.register_connection broken when hosts=None (PYTHON-692)</p></li>
+</ul>
+</section>
+<section id="id87">
+<h3>Other<a class="headerlink" href="#id87" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Create a cqlengine doc section explaining None semantics (PYTHON-623)</p></li>
+<li><p>Resolve warnings in documentation generation (PYTHON-645)</p></li>
+<li><p>Cython dependency (PYTHON-686)</p></li>
+<li><p>Drop Support for Python 2.6 (PYTHON-690)</p></li>
+</ul>
+</section>
+</section>
+<section id="id88">
+<h2>3.7.1<a class="headerlink" href="#id88" title="Link to this heading">¶</a></h2>
+<p>October 26, 2016</p>
+<section id="id89">
+<h3>Bug Fixes<a class="headerlink" href="#id89" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Cython upgrade has broken stable version of cassandra-driver (PYTHON-656)</p></li>
+</ul>
+</section>
+</section>
+<section id="id90">
+<h2>3.7.0<a class="headerlink" href="#id90" title="Link to this heading">¶</a></h2>
+<p>September 13, 2016</p>
+<section id="id91">
+<h3>Features<a class="headerlink" href="#id91" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add v5 protocol failure map (PYTHON-619)</p></li>
+<li><p>Don’t return from initial connect on first error (PYTHON-617)</p></li>
+<li><p>Indicate failed column when deserialization fails (PYTHON-361)</p></li>
+<li><p>Let Cluster.refresh_nodes force a token map rebuild (PYTHON-349)</p></li>
+<li><p>Refresh UDTs after “keyspace updated” event with v1/v2 protocol (PYTHON-106)</p></li>
+<li><p>EC2 Address Resolver (PYTHON-198)</p></li>
+<li><p>Speculative query retries (PYTHON-218)</p></li>
+<li><p>Expose paging state in API (PYTHON-200)</p></li>
+<li><p>Don’t mark host down while one connection is active (PYTHON-498)</p></li>
+<li><p>Query request size information (PYTHON-284)</p></li>
+<li><p>Avoid quadratic ring processing with invalid replication factors (PYTHON-379)</p></li>
+<li><p>Improve Connection/Pool creation concurrency on startup (PYTHON-82)</p></li>
+<li><p>Add beta version native protocol flag (PYTHON-614)</p></li>
+<li><p>cqlengine: Connections: support of multiple keyspaces and sessions (PYTHON-613)</p></li>
+</ul>
+</section>
+<section id="id92">
+<h3>Bug Fixes<a class="headerlink" href="#id92" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Race when adding a pool while setting keyspace (PYTHON-628)</p></li>
+<li><p>Update results_metadata when prepared statement is reprepared (PYTHON-621)</p></li>
+<li><p>CQL Export for Thrift Tables (PYTHON-213)</p></li>
+<li><p>cqlengine: default value not applied to UserDefinedType (PYTHON-606)</p></li>
+<li><p>cqlengine: columns are no longer hashable (PYTHON-618)</p></li>
+<li><p>cqlengine: remove clustering keys from where clause when deleting only static columns (PYTHON-608)</p></li>
+</ul>
+</section>
+</section>
+<section id="id93">
+<h2>3.6.0<a class="headerlink" href="#id93" title="Link to this heading">¶</a></h2>
+<p>August 1, 2016</p>
+<section id="id94">
+<h3>Features<a class="headerlink" href="#id94" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Handle null values in NumpyProtocolHandler (PYTHON-553)</p></li>
+<li><p>Collect greplin scales stats per cluster (PYTHON-561)</p></li>
+<li><p>Update mock unit test dependency requirement (PYTHON-591)</p></li>
+<li><p>Handle Missing CompositeType metadata following C* upgrade (PYTHON-562)</p></li>
+<li><p>Improve Host.is_up state for HostDistance.IGNORED hosts (PYTHON-551)</p></li>
+<li><p>Utilize v2 protocol’s ability to skip result set metadata for prepared statement execution (PYTHON-71)</p></li>
+<li><p>Return from Cluster.connect() when first contact point connection(pool) is opened (PYTHON-105)</p></li>
+<li><p>cqlengine: Add ContextQuery to allow cqlengine models to switch the keyspace context easily (PYTHON-598)</p></li>
+<li><p>Standardize Validation between Ascii and Text types in Cqlengine (PYTHON-609)</p></li>
+</ul>
+</section>
+<section id="id95">
+<h3>Bug Fixes<a class="headerlink" href="#id95" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix geventreactor with SSL support (PYTHON-600)</p></li>
+<li><p>Don’t downgrade protocol version if explicitly set (PYTHON-537)</p></li>
+<li><p>Nonexistent contact point tries to connect indefinitely (PYTHON-549)</p></li>
+<li><p>Execute_concurrent can exceed max recursion depth in failure mode (PYTHON-585)</p></li>
+<li><p>Libev loop shutdown race (PYTHON-578)</p></li>
+<li><p>Include aliases in DCT type string (PYTHON-579)</p></li>
+<li><p>cqlengine: Comparison operators for Columns (PYTHON-595)</p></li>
+<li><p>cqlengine: disentangle default_time_to_live table option from model query default TTL (PYTHON-538)</p></li>
+<li><p>cqlengine: pk__token column name issue with the equality operator (PYTHON-584)</p></li>
+<li><p>cqlengine: Fix “__in” filtering operator converts True to string “True” automatically (PYTHON-596)</p></li>
+<li><p>cqlengine: Avoid LWTExceptions when updating columns that are part of the condition (PYTHON-580)</p></li>
+<li><p>cqlengine: Cannot execute a query when the filter contains all columns (PYTHON-599)</p></li>
+<li><p>cqlengine: routing key computation issue when a primary key column is overriden by model inheritance (PYTHON-576)</p></li>
+</ul>
+</section>
+</section>
+<section id="id96">
+<h2>3.5.0<a class="headerlink" href="#id96" title="Link to this heading">¶</a></h2>
+<p>June 27, 2016</p>
+<section id="id97">
+<h3>Features<a class="headerlink" href="#id97" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Optional Execution Profiles for the core driver (PYTHON-569)</p></li>
+<li><p>API to get the host metadata associated with the control connection node (PYTHON-583)</p></li>
+<li><p>Expose CDC option in table metadata CQL (PYTHON-593)</p></li>
+</ul>
+</section>
+<section id="id98">
+<h3>Bug Fixes<a class="headerlink" href="#id98" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Clean up Asyncore socket map when fork is detected (PYTHON-577)</p></li>
+<li><p>cqlengine: QuerySet only() is not respected when there are deferred fields (PYTHON-560)</p></li>
+</ul>
+</section>
+</section>
+<section id="id99">
+<h2>3.4.1<a class="headerlink" href="#id99" title="Link to this heading">¶</a></h2>
+<p>May 26, 2016</p>
+<section id="id100">
+<h3>Bug Fixes<a class="headerlink" href="#id100" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Gevent connection closes on IO timeout (PYTHON-573)</p></li>
+<li><p>“dictionary changed size during iteration” with Python 3 (PYTHON-572)</p></li>
+</ul>
+</section>
+</section>
+<section id="id101">
+<h2>3.4.0<a class="headerlink" href="#id101" title="Link to this heading">¶</a></h2>
+<p>May 24, 2016</p>
+<section id="id102">
+<h3>Features<a class="headerlink" href="#id102" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Include DSE version and workload in Host data (PYTHON-555)</p></li>
+<li><p>Add a context manager to Cluster and Session (PYTHON-521)</p></li>
+<li><p>Better Error Message for Unsupported Protocol Version (PYTHON-157)</p></li>
+<li><p>Make the error message explicitly state when an error comes from the server (PYTHON-412)</p></li>
+<li><p>Short Circuit meta refresh on topo change if NEW_NODE already exists (PYTHON-557)</p></li>
+<li><p>Show warning when the wrong config is passed to SimpleStatement (PYTHON-219)</p></li>
+<li><p>Return namedtuple result pairs from execute_concurrent (PYTHON-362)</p></li>
+<li><p>BatchStatement should enforce batch size limit in a better way (PYTHON-151)</p></li>
+<li><p>Validate min/max request thresholds for connection pool scaling (PYTHON-220)</p></li>
+<li><p>Handle or warn about multiple hosts with the same rpc_address (PYTHON-365)</p></li>
+<li><p>Write docs around working with datetime and timezones (PYTHON-394)</p></li>
+</ul>
+</section>
+<section id="id103">
+<h3>Bug Fixes<a class="headerlink" href="#id103" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>High CPU utilization when using asyncore event loop (PYTHON-239)</p></li>
+<li><p>Fix CQL Export for non-ASCII Identifiers (PYTHON-447)</p></li>
+<li><p>Make stress scripts Python 2.6 compatible (PYTHON-434)</p></li>
+<li><p>UnicodeDecodeError when unicode characters in key in BOP (PYTHON-559)</p></li>
+<li><p>WhiteListRoundRobinPolicy should resolve hosts (PYTHON-565)</p></li>
+<li><p>Cluster and Session do not GC after leaving scope (PYTHON-135)</p></li>
+<li><p>Don’t wait for schema agreement on ignored nodes (PYTHON-531)</p></li>
+<li><p>Reprepare on_up with many clients causes node overload (PYTHON-556)</p></li>
+<li><p>None inserted into host map when control connection node is decommissioned (PYTHON-548)</p></li>
+<li><p>weakref.ref does not accept keyword arguments (github #585)</p></li>
+</ul>
+</section>
+</section>
+<section id="id104">
+<h2>3.3.0<a class="headerlink" href="#id104" title="Link to this heading">¶</a></h2>
+<p>May 2, 2016</p>
+<section id="id105">
+<h3>Features<a class="headerlink" href="#id105" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add an AddressTranslator interface (PYTHON-69)</p></li>
+<li><p>New Retry Policy Decision - try next host (PYTHON-285)</p></li>
+<li><p>Don’t mark host down on timeout (PYTHON-286)</p></li>
+<li><p>SSL hostname verification (PYTHON-296)</p></li>
+<li><p>Add C* version to metadata or cluster objects (PYTHON-301)</p></li>
+<li><p>Options to Disable Schema, Token Metadata Processing (PYTHON-327)</p></li>
+<li><p>Expose listen_address of node we get ring information from (PYTHON-332)</p></li>
+<li><p>Use A-record with multiple IPs for contact points (PYTHON-415)</p></li>
+<li><p>Custom consistency level for populating query traces (PYTHON-435)</p></li>
+<li><p>Normalize Server Exception Types (PYTHON-443)</p></li>
+<li><p>Propagate exception message when DDL schema agreement fails (PYTHON-444)</p></li>
+<li><p>Specialized exceptions for metadata refresh methods failure (PYTHON-527)</p></li>
+</ul>
+</section>
+<section id="id106">
+<h3>Bug Fixes<a class="headerlink" href="#id106" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Resolve contact point hostnames to avoid duplicate hosts (PYTHON-103)</p></li>
+<li><p>GeventConnection stalls requests when read is a multiple of the input buffer size (PYTHON-429)</p></li>
+<li><p>named_tuple_factory breaks with duplicate “cleaned” col names (PYTHON-467)</p></li>
+<li><p>Connection leak if Cluster.shutdown() happens during reconnection (PYTHON-482)</p></li>
+<li><p>HostConnection.borrow_connection does not block when all request ids are used (PYTHON-514)</p></li>
+<li><p>Empty field not being handled by the NumpyProtocolHandler (PYTHON-550)</p></li>
+</ul>
+</section>
+</section>
+<section id="id107">
+<h2>3.2.2<a class="headerlink" href="#id107" title="Link to this heading">¶</a></h2>
+<p>April 19, 2016</p>
+<ul class="simple">
+<li><p>Fix counter save-after-no-update (PYTHON-547)</p></li>
+</ul>
+</section>
+<section id="id108">
+<h2>3.2.1<a class="headerlink" href="#id108" title="Link to this heading">¶</a></h2>
+<p>April 13, 2016</p>
+<ul class="simple">
+<li><p>Introduced an update to allow deserializer compilation with recently released Cython 0.24 (PYTHON-542)</p></li>
+</ul>
+</section>
+<section id="id109">
+<h2>3.2.0<a class="headerlink" href="#id109" title="Link to this heading">¶</a></h2>
+<p>April 12, 2016</p>
+<section id="id110">
+<h3>Features<a class="headerlink" href="#id110" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>cqlengine: Warn on sync_schema type mismatch (PYTHON-260)</p></li>
+<li><p>cqlengine: Automatically defer fields with the ‘=’ operator (and immutable values) in select queries (PYTHON-520)</p></li>
+<li><p>cqlengine: support non-equal conditions for LWT (PYTHON-528)</p></li>
+<li><p>cqlengine: sync_table should validate the primary key composition (PYTHON-532)</p></li>
+<li><p>cqlengine: token-aware routing for mapper statements (PYTHON-535)</p></li>
+</ul>
+</section>
+<section id="id111">
+<h3>Bug Fixes<a class="headerlink" href="#id111" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Deleting a column in a lightweight transaction raises a SyntaxException #325 (PYTHON-249)</p></li>
+<li><p>cqlengine: make Token function works with named tables/columns #86 (PYTHON-272)</p></li>
+<li><p>comparing models with datetime fields fail #79 (PYTHON-273)</p></li>
+<li><p>cython date deserializer integer math should be aligned with CPython (PYTHON-480)</p></li>
+<li><p>db_field is not always respected with UpdateStatement (PYTHON-530)</p></li>
+<li><p>Sync_table fails on column.Set with secondary index (PYTHON-533)</p></li>
+</ul>
+</section>
+</section>
+<section id="id112">
+<h2>3.1.1<a class="headerlink" href="#id112" title="Link to this heading">¶</a></h2>
+<p>March 14, 2016</p>
+<section id="id113">
+<h3>Bug Fixes<a class="headerlink" href="#id113" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>cqlengine: Fix performance issue related to additional “COUNT” queries (PYTHON-522)</p></li>
+</ul>
+</section>
+</section>
+<section id="id114">
+<h2>3.1.0<a class="headerlink" href="#id114" title="Link to this heading">¶</a></h2>
+<p>March 10, 2016</p>
+<section id="id115">
+<h3>Features<a class="headerlink" href="#id115" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Pass name of server auth class to AuthProvider (PYTHON-454)</p></li>
+<li><p>Surface schema agreed flag for DDL statements (PYTHON-458)</p></li>
+<li><p>Automatically convert float and int to Decimal on serialization (PYTHON-468)</p></li>
+<li><p>Eventlet Reactor IO improvement (PYTHON-495)</p></li>
+<li><p>Make pure Python ProtocolHandler available even when Cython is present (PYTHON-501)</p></li>
+<li><p>Optional Cython deserializer for bytes as bytearray (PYTHON-503)</p></li>
+<li><p>Add Session.default_serial_consistency_level (github #510)</p></li>
+<li><p>cqlengine: Expose prior state information via cqlengine LWTException (github #343, PYTHON-336)</p></li>
+<li><p>cqlengine: Collection datatype “contains” operators support (Cassandra 2.1) #278 (PYTHON-258)</p></li>
+<li><p>cqlengine: Add DISTINCT query operator (PYTHON-266)</p></li>
+<li><p>cqlengine: Tuple cqlengine api (PYTHON-306)</p></li>
+<li><p>cqlengine: Add support for UPDATE/DELETE … IF EXISTS statements (PYTHON-432)</p></li>
+<li><p>cqlengine: Allow nested container types (PYTHON-478)</p></li>
+<li><p>cqlengine: Add ability to set query’s fetch_size and limit (PYTHON-323)</p></li>
+<li><p>cqlengine: Internalize default keyspace from successive set_session (PYTHON-486)</p></li>
+<li><p>cqlengine: Warn when Model.create() on Counters (to be deprecated) (PYTHON-333)</p></li>
+</ul>
+</section>
+<section id="id116">
+<h3>Bug Fixes<a class="headerlink" href="#id116" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Bus error (alignment issues) when running cython on some ARM platforms (PYTHON-450)</p></li>
+<li><p>Overflow when decoding large collections (cython) (PYTHON-459)</p></li>
+<li><p>Timer heap comparison issue with Python 3 (github #466)</p></li>
+<li><p>Cython deserializer date overflow at 2^31 - 1 (PYTHON-452)</p></li>
+<li><p>Decode error encountered when cython deserializing large map results (PYTHON-459)</p></li>
+<li><p>Don’t require Cython for build if compiler or Python header not present (PYTHON-471)</p></li>
+<li><p>Unorderable types in task scheduling with Python 3 (h(PYTHON-473)</p></li>
+<li><p>cqlengine: Fix crash when updating a UDT column with a None value (github #467)</p></li>
+<li><p>cqlengine: Race condition in ..connection.execute with lazy_connect (PYTHON-310)</p></li>
+<li><p>cqlengine: doesn’t support case sensitive column family names (PYTHON-337)</p></li>
+<li><p>cqlengine: UserDefinedType mandatory in create or update (PYTHON-344)</p></li>
+<li><p>cqlengine: db_field breaks UserType (PYTHON-346)</p></li>
+<li><p>cqlengine: UDT badly quoted (PYTHON-347)</p></li>
+<li><p>cqlengine: Use of db_field on primary key prevents querying except while tracing. (PYTHON-351)</p></li>
+<li><p>cqlengine: DateType.deserialize being called with one argument vs two (PYTHON-354)</p></li>
+<li><p>cqlengine: Querying without setting up connection now throws AttributeError and not CQLEngineException (PYTHON-395)</p></li>
+<li><p>cqlengine: BatchQuery multiple time executing execute statements. (PYTHON-445)</p></li>
+<li><p>cqlengine: Better error for management functions when no connection set (PYTHON-451)</p></li>
+<li><p>cqlengine: Handle None values for UDT attributes in cqlengine (PYTHON-470)</p></li>
+<li><p>cqlengine: Fix inserting None for model save (PYTHON-475)</p></li>
+<li><p>cqlengine: EQ doesn’t map to a QueryOperator (setup race condition) (PYTHON-476)</p></li>
+<li><p>cqlengine: class.MultipleObjectsReturned has DoesNotExist as base class (PYTHON-489)</p></li>
+<li><p>cqlengine: Typo in cqlengine UserType __len__ breaks attribute assignment (PYTHON-502)</p></li>
+</ul>
+</section>
+<section id="id117">
+<h3>Other<a class="headerlink" href="#id117" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>cqlengine: a major improvement on queryset has been introduced. It
+is a lot more efficient to iterate large datasets: the rows are
+now fetched on demand using the driver pagination.</p></li>
+<li><p>cqlengine: the queryset len() and count() behaviors have changed. It
+now executes a “SELECT COUNT(*)” of the query rather than returning
+the size of the internal result_cache (loaded rows). On large
+queryset, you might want to avoid using them due to the performance
+cost. Note that trying to access objects using list index/slicing
+with negative indices also requires a count to be
+executed.</p></li>
+</ul>
+</section>
+</section>
+<section id="id118">
+<h2>3.0.0<a class="headerlink" href="#id118" title="Link to this heading">¶</a></h2>
+<p>November 24, 2015</p>
+<section id="id119">
+<h3>Features<a class="headerlink" href="#id119" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Support datetime.date objects as a DateType (PYTHON-212)</p></li>
+<li><p>Add Cluster.update_view_metadata (PYTHON-407)</p></li>
+<li><p>QueryTrace option to populate partial trace sessions (PYTHON-438)</p></li>
+<li><p>Attach column names to ResultSet (PYTHON-439)</p></li>
+<li><p>Change default consistency level to LOCAL_ONE</p></li>
+</ul>
+</section>
+<section id="id120">
+<h3>Bug Fixes<a class="headerlink" href="#id120" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Properly SerDes nested collections when protocol_version &lt; 3 (PYTHON-215)</p></li>
+<li><p>Evict UDTs from UserType cache on change (PYTHON-226)</p></li>
+<li><p>Make sure query strings are always encoded UTF-8 (PYTHON-334)</p></li>
+<li><p>Track previous value of columns at instantiation in CQLengine (PYTHON-348)</p></li>
+<li><p>UDT CQL encoding does not work for unicode values (PYTHON-353)</p></li>
+<li><p>NetworkTopologyStrategy#make_token_replica_map does not account for multiple racks in a DC (PYTHON-378)</p></li>
+<li><p>Cython integer overflow on decimal type deserialization (PYTHON-433)</p></li>
+<li><p>Query trace: if session hasn’t been logged, query trace can throw exception (PYTHON-442)</p></li>
+</ul>
+</section>
+</section>
+<section id="rc1">
+<h2>3.0.0rc1<a class="headerlink" href="#rc1" title="Link to this heading">¶</a></h2>
+<p>November 9, 2015</p>
+<section id="id121">
+<h3>Features<a class="headerlink" href="#id121" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Process Modernized Schema Tables for Cassandra 3.0 (PYTHON-276, PYTHON-408, PYTHON-400, PYTHON-422)</p></li>
+<li><p>Remove deprecated features (PYTHON-292)</p></li>
+<li><p>Don’t assign trace data to Statements (PYTHON-318)</p></li>
+<li><p>Normalize results return (PYTHON-368)</p></li>
+<li><p>Process Materialized View Metadata/Events (PYTHON-371)</p></li>
+<li><p>Remove blist as soft dependency (PYTHON-385)</p></li>
+<li><p>Change default consistency level to LOCAL_QUORUM (PYTHON-416)</p></li>
+<li><p>Normalize CQL query/export in metadata model (PYTHON-405)</p></li>
+</ul>
+</section>
+<section id="id122">
+<h3>Bug Fixes<a class="headerlink" href="#id122" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Implementation of named arguments bind is non-pythonic (PYTHON-178)</p></li>
+<li><p>CQL encoding is incorrect for NaN and Infinity floats (PYTHON-282)</p></li>
+<li><p>Protocol downgrade issue with C* 2.0.x, 2.1.x, and python3, with non-default logging (PYTHON-409)</p></li>
+<li><p>ValueError when accessing usertype with non-alphanumeric field names (PYTHON-413)</p></li>
+<li><p>NumpyProtocolHandler does not play well with PagedResult (PYTHON-430)</p></li>
+</ul>
+</section>
+</section>
+<section id="id123">
+<h2>2.7.2<a class="headerlink" href="#id123" title="Link to this heading">¶</a></h2>
+<p>September 14, 2015</p>
+<section id="id124">
+<h3>Bug Fixes<a class="headerlink" href="#id124" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Resolve CQL export error for UDF with zero parameters (PYTHON-392)</p></li>
+<li><p>Remove futures dep. for Python 3 (PYTHON-393)</p></li>
+<li><p>Avoid Python closure in cdef (supports earlier Cython compiler) (PYTHON-396)</p></li>
+<li><p>Unit test runtime issues (PYTHON-397,398)</p></li>
+</ul>
+</section>
+</section>
+<section id="id125">
+<h2>2.7.1<a class="headerlink" href="#id125" title="Link to this heading">¶</a></h2>
+<p>August 25, 2015</p>
+<section id="id126">
+<h3>Bug Fixes<a class="headerlink" href="#id126" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Explicitly include extension source files in Manifest</p></li>
+</ul>
+</section>
+</section>
+<section id="id127">
+<h2>2.7.0<a class="headerlink" href="#id127" title="Link to this heading">¶</a></h2>
+<p>August 25, 2015</p>
+<p>Cython is introduced, providing compiled extensions for core modules, and
+extensions for optimized results deserialization.</p>
+<section id="id128">
+<h3>Features<a class="headerlink" href="#id128" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>General Performance Improvements for Throughput (PYTHON-283)</p></li>
+<li><p>Improve synchronous request performance with Timers (PYTHON-108)</p></li>
+<li><p>Enable C Extensions for PyPy Runtime (PYTHON-357)</p></li>
+<li><p>Refactor SerDes functionality for pluggable interface (PYTHON-313)</p></li>
+<li><p>Cython SerDes Extension (PYTHON-377)</p></li>
+<li><p>Accept iterators/generators for execute_concurrent() (PYTHON-123)</p></li>
+<li><p>cythonize existing modules (PYTHON-342)</p></li>
+<li><p>Pure Python murmur3 implementation (PYTHON-363)</p></li>
+<li><p>Make driver tolerant of inconsistent metadata (PYTHON-370)</p></li>
+</ul>
+</section>
+<section id="id129">
+<h3>Bug Fixes<a class="headerlink" href="#id129" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Drop Events out-of-order Cause KeyError on Processing (PYTHON-358)</p></li>
+<li><p>DowngradingConsistencyRetryPolicy doesn’t check response count on write timeouts (PYTHON-338)</p></li>
+<li><p>Blocking connect does not use connect_timeout (PYTHON-381)</p></li>
+<li><p>Properly protect partition key in CQL export (PYTHON-375)</p></li>
+<li><p>Trigger error callbacks on timeout (PYTHON-294)</p></li>
+</ul>
+</section>
+</section>
+<section id="id130">
+<h2>2.6.0<a class="headerlink" href="#id130" title="Link to this heading">¶</a></h2>
+<p>July 20, 2015</p>
+<section id="id131">
+<h3>Bug Fixes<a class="headerlink" href="#id131" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Output proper CQL for compact tables with no clustering columns (PYTHON-360)</p></li>
+</ul>
+</section>
+</section>
+<section id="c2">
+<h2>2.6.0c2<a class="headerlink" href="#c2" title="Link to this heading">¶</a></h2>
+<p>June 24, 2015</p>
+<section id="id132">
+<h3>Features<a class="headerlink" href="#id132" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Automatic Protocol Version Downgrade (PYTHON-240)</p></li>
+<li><p>cqlengine Python 2.6 compatibility (PYTHON-288)</p></li>
+<li><p>Double-dollar string quote UDF body (PYTHON-345)</p></li>
+<li><p>Set models.DEFAULT_KEYSPACE when calling set_session (github #352)</p></li>
+</ul>
+</section>
+<section id="id133">
+<h3>Bug Fixes<a class="headerlink" href="#id133" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Avoid stall while connecting to mixed version cluster (PYTHON-303)</p></li>
+<li><p>Make SSL work with AsyncoreConnection in python 2.6.9 (PYTHON-322)</p></li>
+<li><p>Fix Murmur3Token.from_key() on Windows (PYTHON-331)</p></li>
+<li><p>Fix cqlengine TimeUUID rounding error for Windows (PYTHON-341)</p></li>
+<li><p>Avoid invalid compaction options in CQL export for non-SizeTiered (PYTHON-352)</p></li>
+</ul>
+</section>
+</section>
+<section id="c1">
+<h2>2.6.0c1<a class="headerlink" href="#c1" title="Link to this heading">¶</a></h2>
+<p>June 4, 2015</p>
+<p>This release adds support for Cassandra 2.2 features, including version
+4 of the native protocol.</p>
+<section id="id134">
+<h3>Features<a class="headerlink" href="#id134" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Default load balancing policy to TokenAware(DCAware) (PYTHON-160)</p></li>
+<li><p>Configuration option for connection timeout (PYTHON-206)</p></li>
+<li><p>Support User Defined Function and Aggregate metadata in C* 2.2 (PYTHON-211)</p></li>
+<li><p>Surface request client in QueryTrace for C* 2.2+ (PYTHON-235)</p></li>
+<li><p>Implement new request failure messages in protocol v4+ (PYTHON-238)</p></li>
+<li><p>Metadata model now maps index meta by index name (PYTHON-241)</p></li>
+<li><p>Support new types in C* 2.2: date, time, smallint, tinyint (PYTHON-245, 295)</p></li>
+<li><p>cqle: add Double column type and remove Float overload (PYTHON-246)</p></li>
+<li><p>Use partition key column information in prepared response for protocol v4+ (PYTHON-277)</p></li>
+<li><p>Support message custom payloads in protocol v4+ (PYTHON-280, PYTHON-329)</p></li>
+<li><p>Deprecate refresh_schema and replace with functions for specific entities (PYTHON-291)</p></li>
+<li><p>Save trace id even when trace complete times out (PYTHON-302)</p></li>
+<li><p>Warn when registering client UDT class for protocol &lt; v3 (PYTHON-305)</p></li>
+<li><p>Support client warnings returned with messages in protocol v4+ (PYTHON-315)</p></li>
+<li><p>Ability to distinguish between NULL and UNSET values in protocol v4+ (PYTHON-317)</p></li>
+<li><p>Expose CQL keywords in API (PYTHON-324)</p></li>
+</ul>
+</section>
+<section id="id135">
+<h3>Bug Fixes<a class="headerlink" href="#id135" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>IPv6 address support on Windows (PYTHON-20)</p></li>
+<li><p>Convert exceptions during automatic re-preparation to nice exceptions (PYTHON-207)</p></li>
+<li><p>cqle: Quote keywords properly in table management functions (PYTHON-244)</p></li>
+<li><p>Don’t default to GeventConnection when gevent is loaded, but not monkey-patched (PYTHON-289)</p></li>
+<li><p>Pass dynamic host from SaslAuthProvider to SaslAuthenticator (PYTHON-300)</p></li>
+<li><p>Make protocol read_inet work for Windows (PYTHON-309)</p></li>
+<li><p>cqle: Correct encoding for nested types (PYTHON-311)</p></li>
+<li><p>Update list of CQL keywords used quoting identifiers (PYTHON-319)</p></li>
+<li><p>Make ConstantReconnectionPolicy work with infinite retries (github #327, PYTHON-325)</p></li>
+<li><p>Accept UUIDs with uppercase hex as valid in cqlengine (github #335)</p></li>
+</ul>
+</section>
+</section>
+<section id="id136">
+<h2>2.5.1<a class="headerlink" href="#id136" title="Link to this heading">¶</a></h2>
+<p>April 23, 2015</p>
+<section id="id137">
+<h3>Bug Fixes<a class="headerlink" href="#id137" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix thread safety in DC-aware load balancing policy (PYTHON-297)</p></li>
+<li><p>Fix race condition in node/token rebuild (PYTHON-298)</p></li>
+<li><p>Set and send serial consistency parameter (PYTHON-299)</p></li>
+</ul>
+</section>
+</section>
+<section id="id138">
+<h2>2.5.0<a class="headerlink" href="#id138" title="Link to this heading">¶</a></h2>
+<p>March 30, 2015</p>
+<section id="id139">
+<h3>Features<a class="headerlink" href="#id139" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Integrated cqlengine object mapping package</p></li>
+<li><p>Utility functions for converting timeuuids and datetime (PYTHON-99)</p></li>
+<li><p>Schema metadata fetch window randomized, config options added (PYTHON-202)</p></li>
+<li><p>Support for new Date and Time Cassandra types (PYTHON-190)</p></li>
+</ul>
+</section>
+<section id="id140">
+<h3>Bug Fixes<a class="headerlink" href="#id140" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix index target for collection indexes (full(), keys()) (PYTHON-222)</p></li>
+<li><p>Thread exception during GIL cleanup (PYTHON-229)</p></li>
+<li><p>Workaround for rounding anomaly in datetime.utcfromtime (Python 3.4) (PYTHON-230)</p></li>
+<li><p>Normalize text serialization for lookup in OrderedMap (PYTHON-231)</p></li>
+<li><p>Support reading CompositeType data (PYTHON-234)</p></li>
+<li><p>Preserve float precision in CQL encoding (PYTHON-243)</p></li>
+</ul>
+</section>
+</section>
+<section id="id141">
+<h2>2.1.4<a class="headerlink" href="#id141" title="Link to this heading">¶</a></h2>
+<p>January 26, 2015</p>
+<section id="id142">
+<h3>Features<a class="headerlink" href="#id142" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>SaslAuthenticator for Kerberos support (PYTHON-109)</p></li>
+<li><p>Heartbeat for network device keepalive and detecting failures on idle connections (PYTHON-197)</p></li>
+<li><p>Support nested, frozen collections for Cassandra 2.1.3+ (PYTHON-186)</p></li>
+<li><p>Schema agreement wait bypass config, new call for synchronous schema refresh (PYTHON-205)</p></li>
+<li><p>Add eventlet connection support (PYTHON-194)</p></li>
+</ul>
+</section>
+<section id="id143">
+<h3>Bug Fixes<a class="headerlink" href="#id143" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Schema meta fix for complex thrift tables (PYTHON-191)</p></li>
+<li><p>Support for ‘unknown’ replica placement strategies in schema meta (PYTHON-192)</p></li>
+<li><p>Resolve stream ID leak on set_keyspace (PYTHON-195)</p></li>
+<li><p>Remove implicit timestamp scaling on serialization of numeric timestamps (PYTHON-204)</p></li>
+<li><p>Resolve stream id collision when using SASL auth (PYTHON-210)</p></li>
+<li><p>Correct unhexlify usage for user defined type meta in Python3 (PYTHON-208)</p></li>
+</ul>
+</section>
+</section>
+<section id="id144">
+<h2>2.1.3<a class="headerlink" href="#id144" title="Link to this heading">¶</a></h2>
+<p>December 16, 2014</p>
+<section id="id145">
+<h3>Features<a class="headerlink" href="#id145" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>INFO-level log confirmation that a connection was opened to a node that was marked up (PYTHON-116)</p></li>
+<li><p>Avoid connecting to peer with incomplete metadata (PYTHON-163)</p></li>
+<li><p>Add SSL support to gevent reactor (PYTHON-174)</p></li>
+<li><p>Use control connection timeout in wait for schema agreement (PYTHON-175)</p></li>
+<li><p>Better consistency level representation in unavailable+timeout exceptions (PYTHON-180)</p></li>
+<li><p>Update schema metadata processing to accommodate coming schema modernization (PYTHON-185)</p></li>
+</ul>
+</section>
+<section id="id146">
+<h3>Bug Fixes<a class="headerlink" href="#id146" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Support large negative timestamps on Windows (PYTHON-119)</p></li>
+<li><p>Fix schema agreement for clusters with peer rpc_addres 0.0.0.0 (PYTHON-166)</p></li>
+<li><p>Retain table metadata following keyspace meta refresh (PYTHON-173)</p></li>
+<li><p>Use a timeout when preparing a statement for all nodes (PYTHON-179)</p></li>
+<li><p>Make TokenAware routing tolerant of statements with no keyspace (PYTHON-181)</p></li>
+<li><p>Update add_collback to store/invoke multiple callbacks (PYTHON-182)</p></li>
+<li><p>Correct routing key encoding for composite keys (PYTHON-184)</p></li>
+<li><p>Include compression option in schema export string when disabled (PYTHON-187)</p></li>
+</ul>
+</section>
+</section>
+<section id="id147">
+<h2>2.1.2<a class="headerlink" href="#id147" title="Link to this heading">¶</a></h2>
+<p>October 16, 2014</p>
+<section id="id148">
+<h3>Features<a class="headerlink" href="#id148" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Allow DCAwareRoundRobinPolicy to be constructed without a local_dc, defaulting
+instead to the DC of a contact_point (PYTHON-126)</p></li>
+<li><p>Set routing key in BatchStatement.add() if none specified in batch (PYTHON-148)</p></li>
+<li><p>Improved feedback on ValueError using named_tuple_factory with invalid column names (PYTHON-122)</p></li>
+</ul>
+</section>
+<section id="id149">
+<h3>Bug Fixes<a class="headerlink" href="#id149" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Make execute_concurrent compatible with Python 2.6 (PYTHON-159)</p></li>
+<li><p>Handle Unauthorized message on schema_triggers query (PYTHON-155)</p></li>
+<li><p>Pure Python sorted set in support of UDTs nested in collections (PYTON-167)</p></li>
+<li><p>Support CUSTOM index metadata and string export (PYTHON-165)</p></li>
+</ul>
+</section>
+</section>
+<section id="id150">
+<h2>2.1.1<a class="headerlink" href="#id150" title="Link to this heading">¶</a></h2>
+<p>September 11, 2014</p>
+<section id="id151">
+<h3>Features<a class="headerlink" href="#id151" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Detect triggers and include them in CQL queries generated to recreate
+the schema (github-189)</p></li>
+<li><p>Support IPv6 addresses (PYTHON-144) (note: basic functionality added; Windows
+platform not addressed (PYTHON-20))</p></li>
+</ul>
+</section>
+<section id="id152">
+<h3>Bug Fixes<a class="headerlink" href="#id152" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix NetworkTopologyStrategy.export_for_schema (PYTHON-120)</p></li>
+<li><p>Keep timeout for paged results (PYTHON-150)</p></li>
+</ul>
+</section>
+<section id="id153">
+<h3>Other<a class="headerlink" href="#id153" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add frozen&lt;&gt; type modifier to UDTs and tuples to handle CASSANDRA-7857</p></li>
+</ul>
+</section>
+</section>
+<section id="id154">
+<h2>2.1.0<a class="headerlink" href="#id154" title="Link to this heading">¶</a></h2>
+<p>August 7, 2014</p>
+<section id="id155">
+<h3>Bug Fixes<a class="headerlink" href="#id155" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Correctly serialize and deserialize null values in tuples and
+user-defined types (PYTHON-110)</p></li>
+<li><p>Include additional header and lib dirs, allowing libevwrapper to build
+against Homebrew and Mac Ports installs of libev (PYTHON-112 and 804dea3)</p></li>
+</ul>
+</section>
+</section>
+<section id="id156">
+<h2>2.1.0c1<a class="headerlink" href="#id156" title="Link to this heading">¶</a></h2>
+<p>July 25, 2014</p>
+<section id="id157">
+<h3>Bug Fixes<a class="headerlink" href="#id157" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Properly specify UDTs for columns in CREATE TABLE statements</p></li>
+<li><p>Avoid moving retries to a new host when using request ID zero (PYTHON-88)</p></li>
+<li><p>Don’t ignore fetch_size arguments to Statement constructors (github-151)</p></li>
+<li><p>Allow disabling automatic paging on a per-statement basis when it’s
+enabled by default for the session (PYTHON-93)</p></li>
+<li><p>Raise ValueError when tuple query parameters for prepared statements
+have extra items (PYTHON-98)</p></li>
+<li><p>Correctly encode nested tuples and UDTs for non-prepared statements (PYTHON-100)</p></li>
+<li><p>Raise TypeError when a string is used for contact_points (github #164)</p></li>
+<li><p>Include User Defined Types in KeyspaceMetadata.export_as_string() (PYTHON-96)</p></li>
+</ul>
+</section>
+<section id="id158">
+<h3>Other<a class="headerlink" href="#id158" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Return list collection columns as python lists instead of tuples
+now that tuples are a specific Cassandra type</p></li>
+</ul>
+</section>
+</section>
+<section id="b1">
+<h2>2.1.0b1<a class="headerlink" href="#b1" title="Link to this heading">¶</a></h2>
+<p>July 11, 2014</p>
+<p>This release adds support for Cassandra 2.1 features, including version
+3 of the native protocol.</p>
+<section id="id159">
+<h3>Features<a class="headerlink" href="#id159" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>When using the v3 protocol, only one connection is opened per-host, and
+throughput is improved due to reduced pooling overhead and lock contention.</p></li>
+<li><p>Support for user-defined types (Cassandra 2.1+)</p></li>
+<li><p>Support for tuple type in (limited usage Cassandra 2.0.9, full usage
+in Cassandra 2.1)</p></li>
+<li><p>Protocol-level client-side timestamps (see Session.use_client_timestamp)</p></li>
+<li><p>Overridable type encoding for non-prepared statements (see Session.encoders)</p></li>
+<li><p>Configurable serial consistency levels for batch statements</p></li>
+<li><p>Use io.BytesIO for reduced CPU consumption (github #143)</p></li>
+<li><p>Support Twisted as a reactor. Note that a Twisted-compatible
+API is not exposed (so no Deferreds), this is just a reactor
+implementation. (github #135, PYTHON-8)</p></li>
+</ul>
+</section>
+<section id="id160">
+<h3>Bug Fixes<a class="headerlink" href="#id160" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix references to xrange that do not go through “six” in libevreactor and
+geventreactor (github #138)</p></li>
+<li><p>Make BoundStatements inherit fetch_size from their parent
+PreparedStatement (PYTHON-80)</p></li>
+<li><p>Clear reactor state in child process after forking to prevent errors with
+multiprocessing when the parent process has connected a Cluster before
+forking (github #141)</p></li>
+<li><p>Don’t share prepared statement lock across Cluster instances</p></li>
+<li><p>Format CompositeType and DynamicCompositeType columns correctly in
+CREATE TABLE statements.</p></li>
+<li><p>Fix cassandra.concurrent behavior when dealing with automatic paging
+(PYTHON-81)</p></li>
+<li><p>Properly defunct connections after protocol errors</p></li>
+<li><p>Avoid UnicodeDecodeError when query string is unicode (PYTHON-76)</p></li>
+<li><p>Correctly capture dclocal_read_repair_chance for tables and
+use it when generating CREATE TABLE statements (PYTHON-84)</p></li>
+<li><p>Avoid race condition with AsyncoreConnection that may cause messages
+to fail to be written until a new message is pushed</p></li>
+<li><p>Make sure cluster.metadata.partitioner and cluster.metadata.token_map
+are populated when all nodes in the cluster are included in the
+contact points (PYTHON-90)</p></li>
+<li><p>Make Murmur3 hash match Cassandra’s hash for all values (PYTHON-89,
+github #147)</p></li>
+<li><p>Don’t attempt to reconnect to hosts that should be ignored (according
+to the load balancing policy) when a notification is received that the
+host is down.</p></li>
+<li><p>Add CAS WriteType, avoiding KeyError on CAS write timeout (PYTHON-91)</p></li>
+</ul>
+</section>
+</section>
+<section id="id161">
+<h2>2.0.2<a class="headerlink" href="#id161" title="Link to this heading">¶</a></h2>
+<p>June 10, 2014</p>
+<section id="id162">
+<h3>Bug Fixes<a class="headerlink" href="#id162" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add six to requirements.txt</p></li>
+<li><p>Avoid KeyError during schema refresh when a keyspace is dropped
+and TokenAwarePolicy is not in use</p></li>
+<li><p>Avoid registering multiple atexit cleanup functions when the
+asyncore event loop is restarted multiple times</p></li>
+<li><p>Delay initialization of reactors in order to avoid problems
+with shared state when using multiprocessing (PYTHON-60)</p></li>
+<li><p>Add python-six to debian dependencies, move python-blist to recommends</p></li>
+<li><p>Fix memory leak when libev connections are created and
+destroyed (github #93)</p></li>
+<li><p>Ensure token map is rebuilt when hosts are removed from the cluster</p></li>
+</ul>
+</section>
+</section>
+<section id="id163">
+<h2>2.0.1<a class="headerlink" href="#id163" title="Link to this heading">¶</a></h2>
+<p>May 28, 2014</p>
+<section id="id164">
+<h3>Bug Fixes<a class="headerlink" href="#id164" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix check for Cluster.is_shutdown in in &#64;run_in_executor
+decorator</p></li>
+</ul>
+</section>
+</section>
+<section id="id165">
+<h2>2.0.0<a class="headerlink" href="#id165" title="Link to this heading">¶</a></h2>
+<p>May 28, 2014</p>
+<section id="id166">
+<h3>Features<a class="headerlink" href="#id166" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Make libev C extension Python3-compatible (PYTHON-70)</p></li>
+<li><p>Support v2 protocol authentication (PYTHON-73, github #125)</p></li>
+</ul>
+</section>
+<section id="id167">
+<h3>Bug Fixes<a class="headerlink" href="#id167" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix murmur3 C extension compilation under Python3.4 (github #124)</p></li>
+</ul>
+</section>
+<section id="merged-from-1-x">
+<h3>Merged From 1.x<a class="headerlink" href="#merged-from-1-x" title="Link to this heading">¶</a></h3>
+<section id="id168">
+<h4>Features<a class="headerlink" href="#id168" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p>Add Session.default_consistency_level (PYTHON-14)</p></li>
+</ul>
+</section>
+<section id="id169">
+<h4>Bug Fixes<a class="headerlink" href="#id169" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p>Don’t strip trailing underscores from column names when using the
+named_tuple_factory (PYTHON-56)</p></li>
+<li><p>Ensure replication factors are ints for NetworkTopologyStrategy
+to avoid TypeErrors (github #120)</p></li>
+<li><p>Pass WriteType instance to RetryPolicy.on_write_timeout() instead
+of the string name of the write type. This caused write timeout
+errors to always be rethrown instead of retrying. (github #123)</p></li>
+<li><p>Avoid submitting tasks to the ThreadPoolExecutor after shutdown. With
+retries enabled, this could cause Cluster.shutdown() to hang under
+some circumstances.</p></li>
+<li><p>Fix unintended rebuild of token replica map when keyspaces are
+discovered (on startup), added, or updated and TokenAwarePolicy is not
+in use.</p></li>
+<li><p>Avoid rebuilding token metadata when cluster topology has not
+actually changed</p></li>
+<li><p>Avoid preparing queries for hosts that should be ignored (such as
+remote hosts when using the DCAwareRoundRobinPolicy) (PYTHON-75)</p></li>
+</ul>
+</section>
+<section id="id170">
+<h4>Other<a class="headerlink" href="#id170" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p>Add 1 second timeout to join() call on event loop thread during
+interpreter shutdown.  This can help to prevent the process from
+hanging during shutdown.</p></li>
+</ul>
+</section>
+</section>
+</section>
+<section id="id171">
+<h2>2.0.0b1<a class="headerlink" href="#id171" title="Link to this heading">¶</a></h2>
+<p>May 6, 2014</p>
+<section id="upgrading-from-1-x">
+<h3>Upgrading from 1.x<a class="headerlink" href="#upgrading-from-1-x" title="Link to this heading">¶</a></h3>
+<p>Cluster.shutdown() should always be called when you are done with a
+Cluster instance.  If it is not called, there are no guarantees that the
+driver will not hang.  However, if you <em>do</em> have a reproduceable case
+where Cluster.shutdown() is not called and the driver hangs, please
+report it so that we can attempt to fix it.</p>
+<p>If you’re using the 2.0 driver against Cassandra 1.2, you will need
+to set your protocol version to 1.  For example:</p>
+<blockquote>
+<div><p>cluster = Cluster(…, protocol_version=1)</p>
+</div></blockquote>
+</section>
+<section id="id172">
+<h3>Features<a class="headerlink" href="#id172" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Support v2 of Cassandra’s native protocol, which includes the following
+new features: automatic query paging support, protocol-level batch statements,
+and lightweight transactions</p></li>
+<li><p>Support for Python 3.3 and 3.4</p></li>
+<li><p>Allow a default query timeout to be set per-Session</p></li>
+</ul>
+</section>
+<section id="id173">
+<h3>Bug Fixes<a class="headerlink" href="#id173" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Avoid errors during interpreter shutdown (the driver attempts to cleanup
+daemonized worker threads before interpreter shutdown)</p></li>
+</ul>
+</section>
+<section id="id174">
+<h3>Deprecations<a class="headerlink" href="#id174" title="Link to this heading">¶</a></h3>
+<p>The following functions have moved from cassandra.decoder to cassandra.query.
+The original functions have been left in place with a DeprecationWarning for
+now:</p>
+<ul class="simple">
+<li><p>cassandra.decoder.tuple_factory has moved to cassandra.query.tuple_factory</p></li>
+<li><p>cassandra.decoder.named_tuple_factory has moved to cassandra.query.named_tuple_factory</p></li>
+<li><p>cassandra.decoder.dict_factory has moved to cassandra.query.dict_factory</p></li>
+<li><p>cassandra.decoder.ordered_dict_factory has moved to cassandra.query.ordered_dict_factory</p></li>
+</ul>
+<p>Exceptions that were in cassandra.decoder have been moved to cassandra.protocol. If
+you handle any of these exceptions, you must adjust the code accordingly.</p>
+</section>
+</section>
+<section id="id175">
+<h2>1.1.2<a class="headerlink" href="#id175" title="Link to this heading">¶</a></h2>
+<p>May 8, 2014</p>
+<section id="id176">
+<h3>Features<a class="headerlink" href="#id176" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Allow a specific compression type to be requested for communications with
+Cassandra and prefer lz4 if available</p></li>
+</ul>
+</section>
+<section id="id177">
+<h3>Bug Fixes<a class="headerlink" href="#id177" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Update token metadata (for TokenAware calculations) when a node is removed
+from the ring</p></li>
+<li><p>Fix file handle leak with gevent reactor due to blocking Greenlet kills when
+closing excess connections</p></li>
+<li><p>Avoid handling a node coming up multiple times due to a reconnection attempt
+succeeding close to the same time that an UP notification is pushed</p></li>
+<li><p>Fix duplicate node-up handling, which could result in multiple reconnectors
+being started as well as the executor threads becoming deadlocked, preventing
+future node up or node down handling from being executed.</p></li>
+<li><p>Handle exhausted ReconnectionPolicy schedule correctly</p></li>
+</ul>
+</section>
+<section id="id178">
+<h3>Other<a class="headerlink" href="#id178" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Don’t log at ERROR when a connection is closed during the startup
+communications</p></li>
+<li><p>Mke scales, blist optional dependencies</p></li>
+</ul>
+</section>
+</section>
+<section id="id179">
+<h2>1.1.1<a class="headerlink" href="#id179" title="Link to this heading">¶</a></h2>
+<p>April 16, 2014</p>
+<section id="id180">
+<h3>Bug Fixes<a class="headerlink" href="#id180" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix unconditional import of nose in setup.py (github #111)</p></li>
+</ul>
+</section>
+</section>
+<section id="id181">
+<h2>1.1.0<a class="headerlink" href="#id181" title="Link to this heading">¶</a></h2>
+<p>April 16, 2014</p>
+<section id="id182">
+<h3>Features<a class="headerlink" href="#id182" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Gevent is now supported through monkey-patching the stdlib (PYTHON-7,
+github issue #46)</p></li>
+<li><p>Support static columns in schemas, which are available starting in
+Cassandra 2.1. (github issue #91)</p></li>
+<li><p>Add debian packaging (github issue #101)</p></li>
+<li><p>Add utility methods for easy concurrent execution of statements. See
+the new cassandra.concurrent module. (github issue #7)</p></li>
+</ul>
+</section>
+<section id="id183">
+<h3>Bug Fixes<a class="headerlink" href="#id183" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Correctly supply compaction and compression parameters in CREATE statements
+for tables when working with Cassandra 2.0+</p></li>
+<li><p>Lowercase boolean literals when generating schemas</p></li>
+<li><p>Ignore SSL_ERROR_WANT_READ and SSL_ERROR_WANT_WRITE socket errors.  Previously,
+these resulted in the connection being defuncted, but they can safely be
+ignored by the driver.</p></li>
+<li><p>Don’t reconnect the control connection every time Cluster.connect() is
+called</p></li>
+<li><p>Avoid race condition that could leave ResponseFuture callbacks uncalled
+if the callback was added outside of the event loop thread (github issue #95)</p></li>
+<li><p>Properly escape keyspace name in Session.set_keyspace().  Previously, the
+keyspace name was quoted, but any quotes in the string were not escaped.</p></li>
+<li><p>Avoid adding hosts to the load balancing policy before their datacenter
+and rack information has been set, if possible.</p></li>
+<li><p>Avoid KeyError when updating metadata after droping a table (github issues
+#97, #98)</p></li>
+<li><p>Use tuples instead of sets for DCAwareLoadBalancingPolicy to ensure equal
+distribution of requests</p></li>
+</ul>
+</section>
+<section id="id184">
+<h3>Other<a class="headerlink" href="#id184" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Don’t ignore column names when parsing typestrings.  This is needed for
+user-defined type support.  (github issue #90)</p></li>
+<li><p>Better error message when libevwrapper is not found</p></li>
+<li><p>Only try to import scales when metrics are enabled (github issue #92)</p></li>
+<li><p>Cut down on the number of queries executing when a new Cluster
+connects and when the control connection has to reconnect (github issue #104,
+PYTHON-59)</p></li>
+<li><p>Issue warning log when schema versions do not match</p></li>
+</ul>
+</section>
+</section>
+<section id="id185">
+<h2>1.0.2<a class="headerlink" href="#id185" title="Link to this heading">¶</a></h2>
+<p>March 4, 2014</p>
+<section id="id186">
+<h3>Bug Fixes<a class="headerlink" href="#id186" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>With asyncorereactor, correctly handle EAGAIN/EWOULDBLOCK when the message from
+Cassandra is a multiple of the read buffer size.  Previously, if no more data
+became available to read on the socket, the message would never be processed,
+resulting in an OperationTimedOut error.</p></li>
+<li><p>Double quote keyspace, table and column names that require them (those using
+uppercase characters or keywords) when generating CREATE statements through
+KeyspaceMetadata and TableMetadata.</p></li>
+<li><p>Decode TimestampType as DateType.  (Cassandra replaced DateType with
+TimestampType to fix sorting of pre-unix epoch dates in CASSANDRA-5723.)</p></li>
+<li><p>Handle latest table options when parsing the schema and generating
+CREATE statements.</p></li>
+<li><p>Avoid ‘Set changed size during iteration’ during query plan generation
+when hosts go up or down</p></li>
+</ul>
+</section>
+<section id="id187">
+<h3>Other<a class="headerlink" href="#id187" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Remove ignored <code class="docutils literal notranslate"><span class="pre">tracing_enabled</span></code> parameter for <code class="docutils literal notranslate"><span class="pre">SimpleStatement</span></code>.  The
+correct way to trace a query is by setting the <code class="docutils literal notranslate"><span class="pre">trace</span></code> argument to <code class="docutils literal notranslate"><span class="pre">True</span></code>
+in <code class="docutils literal notranslate"><span class="pre">Session.execute()</span></code> and <code class="docutils literal notranslate"><span class="pre">Session.execute_async()</span></code>.</p></li>
+<li><p>Raise TypeError instead of cassandra.query.InvalidParameterTypeError when
+a parameter for a prepared statement has the wrong type; remove
+cassandra.query.InvalidParameterTypeError.</p></li>
+<li><p>More consistent type checking for query parameters</p></li>
+<li><p>Add option to a return special object for empty string values for non-string
+columns</p></li>
+</ul>
+</section>
+</section>
+<section id="id188">
+<h2>1.0.1<a class="headerlink" href="#id188" title="Link to this heading">¶</a></h2>
+<p>Feb 19, 2014</p>
+<section id="id189">
+<h3>Bug Fixes<a class="headerlink" href="#id189" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Include table indexes in <code class="docutils literal notranslate"><span class="pre">KeyspaceMetadata.export_as_string()</span></code></p></li>
+<li><p>Fix broken token awareness on ByteOrderedPartitioner</p></li>
+<li><p>Always close socket when defuncting error’ed connections to avoid a potential
+file descriptor leak</p></li>
+<li><p>Handle “custom” types (such as the replaced DateType) correctly</p></li>
+<li><p>With libevreactor, correctly handle EAGAIN/EWOULDBLOCK when the message from
+Cassandra is a multiple of the read buffer size.  Previously, if no more data
+became available to read on the socket, the message would never be processed,
+resulting in an OperationTimedOut error.</p></li>
+<li><p>Don’t break tracing when a Session’s row_factory is not the default
+namedtuple_factory.</p></li>
+<li><p>Handle data that is already utf8-encoded for UTF8Type values</p></li>
+<li><p>Fix token-aware routing for tokens that fall before the first node token in
+the ring and tokens that exactly match a node’s token</p></li>
+<li><p>Tolerate null source_elapsed values for Trace events.  These may not be
+set when events complete after the main operation has already completed.</p></li>
+</ul>
+</section>
+<section id="id190">
+<h3>Other<a class="headerlink" href="#id190" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Skip sending OPTIONS message on connection creation if compression is
+disabled or not available and a CQL version has not been explicitly
+set</p></li>
+<li><p>Add details about errors and the last queried host to <code class="docutils literal notranslate"><span class="pre">OperationTimedOut</span></code></p></li>
+</ul>
+</section>
+</section>
+<section id="final">
+<h2>1.0.0 Final<a class="headerlink" href="#final" title="Link to this heading">¶</a></h2>
+<p>Jan 29, 2014</p>
+<section id="id191">
+<h3>Bug Fixes<a class="headerlink" href="#id191" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Prevent leak of Scheduler thread (even with proper shutdown)</p></li>
+<li><p>Correctly handle ignored hosts, which are common with the
+DCAwareRoundRobinPolicy</p></li>
+<li><p>Hold strong reference to prepared statement while executing it to avoid
+garbage collection</p></li>
+<li><p>Add NullHandler logging handler to the cassandra package to avoid
+warnings about there being no configured logger</p></li>
+<li><p>Fix bad handling of nodes that have been removed from the cluster</p></li>
+<li><p>Properly escape string types within cql collections</p></li>
+<li><p>Handle setting the same keyspace twice in a row</p></li>
+<li><p>Avoid race condition during schema agreement checks that could result
+in schema update queries returning before all nodes had seen the change</p></li>
+<li><p>Preserve millisecond-level precision in datetimes when performing inserts
+with simple (non-prepared) statements</p></li>
+<li><p>Properly defunct connections when libev reports an error by setting
+errno instead of simply logging the error</p></li>
+<li><p>Fix endless hanging of some requests when using the libev reactor</p></li>
+<li><p>Always start a reconnection process when we fail to connect to
+a newly bootstrapped node</p></li>
+<li><p>Generators map to CQL lists, not key sequences</p></li>
+<li><p>Always defunct connections when an internal operation fails</p></li>
+<li><p>Correctly break from handle_write() if nothing was sent (asyncore
+reactor only)</p></li>
+<li><p>Avoid potential double-erroring of callbacks when a connection
+becomes defunct</p></li>
+</ul>
+</section>
+<section id="id192">
+<h3>Features<a class="headerlink" href="#id192" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add default query timeout to <code class="docutils literal notranslate"><span class="pre">Session</span></code></p></li>
+<li><p>Add timeout parameter to <code class="docutils literal notranslate"><span class="pre">Session.execute()</span></code></p></li>
+<li><p>Add <code class="docutils literal notranslate"><span class="pre">WhiteListRoundRobinPolicy</span></code> as a load balancing policy option</p></li>
+<li><p>Support for consistency level <code class="docutils literal notranslate"><span class="pre">LOCAL_ONE</span></code></p></li>
+<li><p>Make the backoff for fetching traces exponentially increasing and
+configurable</p></li>
+</ul>
+</section>
+<section id="id193">
+<h3>Other<a class="headerlink" href="#id193" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Raise Exception if <code class="docutils literal notranslate"><span class="pre">TokenAwarePolicy</span></code> is used against a cluster using the
+<code class="docutils literal notranslate"><span class="pre">Murmur3Partitioner</span></code> if the murmur3 C extension has not been compiled</p></li>
+<li><p>Add encoder mapping for <code class="docutils literal notranslate"><span class="pre">OrderedDict</span></code></p></li>
+<li><p>Use timeouts on all control connection queries</p></li>
+<li><p>Benchmark improvements, including command line options and eay
+multithreading support</p></li>
+<li><p>Reduced lock contention when using the asyncore reactor</p></li>
+<li><p>Warn when non-datetimes are used for ‘timestamp’ column values in
+prepared statements</p></li>
+<li><p>Add requirements.txt and test-requirements.txt</p></li>
+<li><p>TravisCI integration for running unit tests against Python 2.6,
+Python 2.7, and PyPy</p></li>
+</ul>
+</section>
+</section>
+<section id="b7">
+<h2>1.0.0b7<a class="headerlink" href="#b7" title="Link to this heading">¶</a></h2>
+<p>Nov 12, 2013</p>
+<p>This release makes many stability improvements, especially around
+prepared statements and node failure handling.  In particular,
+several cases where a request would never be completed (and as a
+result, leave the application hanging) have been resolved.</p>
+<section id="id194">
+<h3>Features<a class="headerlink" href="#id194" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Add <cite>timeout</cite> kwarg to <code class="docutils literal notranslate"><span class="pre">ResponseFuture.result()</span></code></p></li>
+<li><p>Create connection pools to all hosts in parallel when initializing
+new Sesssions.</p></li>
+</ul>
+</section>
+<section id="id195">
+<h3>Bug Fixes<a class="headerlink" href="#id195" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Properly set exception on ResponseFuture when a query fails
+against all hosts</p></li>
+<li><p>Improved cleanup and reconnection efforts when reconnection fails
+on a node that has recently come up</p></li>
+<li><p>Use correct consistency level when retrying failed operations
+against a different host. (An invalid consistency level was being
+used, causing the retry to fail.)</p></li>
+<li><p>Better error messages for failed <code class="docutils literal notranslate"><span class="pre">Session.prepare()</span></code> opertaions</p></li>
+<li><p>Prepare new statements against all hosts in parallel (formerly
+sequential)</p></li>
+<li><p>Fix failure to save the new current keyspace on connections. (This
+could cause problems for prepared statements and lead to extra
+operations to continuously re-set the keyspace.)</p></li>
+<li><p>Avoid sharing <code class="docutils literal notranslate"><span class="pre">LoadBalancingPolicies</span></code> across <code class="docutils literal notranslate"><span class="pre">Cluster</span></code> instances. (When
+a second <code class="docutils literal notranslate"><span class="pre">Cluster</span></code> was connected, it effectively mark nodes down for the
+first <code class="docutils literal notranslate"><span class="pre">Cluster</span></code>.)</p></li>
+<li><p>Better handling of failures during the re-preparation sequence for
+unrecognized prepared statements</p></li>
+<li><p>Throttle trashing of underutilized connections to avoid trashing newly
+created connections</p></li>
+<li><p>Fix race condition which could result in trashed connections being closed
+before the last operations had completed</p></li>
+<li><p>Avoid preparing statements on the event loop thread (which could lead to
+deadlock)</p></li>
+<li><p>Correctly mark up non-contact point nodes discovered by the control
+connection. (This lead to prepared statements not being prepared
+against those hosts, generating extra traffic later when the
+statements were executed and unrecognized.)</p></li>
+<li><p>Correctly handle large messages through libev</p></li>
+<li><p>Add timeout to schema agreement check queries</p></li>
+<li><p>More complete (and less contended) locking around manipulation of the
+pending message deque for libev connections</p></li>
+</ul>
+</section>
+<section id="id196">
+<h3>Other<a class="headerlink" href="#id196" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Prepare statements in batches of 10. (When many prepared statements
+are in use, this allows the driver to start utilizing nodes that
+were restarted more quickly.)</p></li>
+<li><p>Better debug logging around connection management</p></li>
+<li><p>Don’t retain unreferenced prepared statements in the local cache.
+(If many different prepared statements were created, this would
+increase memory usage and greatly increase the amount of time
+required to begin utilizing a node that was added or marked
+up.)</p></li>
+</ul>
+</section>
+</section>
+<section id="b6">
+<h2>1.0.0b6<a class="headerlink" href="#b6" title="Link to this heading">¶</a></h2>
+<p>Oct 22, 2013</p>
+<section id="id197">
+<h3>Bug Fixes<a class="headerlink" href="#id197" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Use lazy string formatting when logging</p></li>
+<li><p>Avoid several deadlock scenarios, especially when nodes go down</p></li>
+<li><p>Avoid trashing newly created connections due to insufficient traffic</p></li>
+<li><p>Gracefully handle un-handled Exceptions when erroring callbacks</p></li>
+</ul>
+</section>
+<section id="id198">
+<h3>Other<a class="headerlink" href="#id198" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Node state listeners (which are called when a node is added, removed,
+goes down, or comes up) should now be registered through
+Cluster.register_listener() instead of through a host’s HealthMonitor
+(which has been removed)</p></li>
+</ul>
+</section>
+</section>
+<section id="b5">
+<h2>1.0.0b5<a class="headerlink" href="#b5" title="Link to this heading">¶</a></h2>
+<p>Oct 10, 2013</p>
+<section id="id199">
+<h3>Features<a class="headerlink" href="#id199" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>SSL support</p></li>
+</ul>
+</section>
+<section id="id200">
+<h3>Bug Fixes<a class="headerlink" href="#id200" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Avoid KeyError when building replica map for NetworkTopologyStrategy</p></li>
+<li><p>Work around python bug which causes deadlock when a thread imports
+the utf8 module</p></li>
+<li><p>Handle no blist library, which is not compatible with pypy</p></li>
+<li><p>Avoid deadlock triggered by a keyspace being set on a connection (which
+may happen automatically for new connections)</p></li>
+</ul>
+</section>
+<section id="id201">
+<h3>Other<a class="headerlink" href="#id201" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Switch packaging from Distribute to setuptools, improved C extension
+support</p></li>
+<li><p>Use PEP 386 compliant beta and post-release versions</p></li>
+</ul>
+</section>
+</section>
+<section id="beta4">
+<h2>1.0.0-beta4<a class="headerlink" href="#beta4" title="Link to this heading">¶</a></h2>
+<p>Sep 24, 2013</p>
+<section id="id202">
+<h3>Features<a class="headerlink" href="#id202" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Handle new blob syntax in Cassandra 2.0 by accepting bytearray
+objects for blob values</p></li>
+<li><p>Add cql_version kwarg to Cluster.__init__</p></li>
+</ul>
+</section>
+<section id="id203">
+<h3>Bug Fixes<a class="headerlink" href="#id203" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix KeyError when building token map with NetworkTopologyStrategy
+keyspaces (this prevented a Cluster from successfully connecting
+at all).</p></li>
+<li><p>Don’t lose default consitency level from parent PreparedStatement
+when creating BoundStatements</p></li>
+</ul>
+</section>
+</section>
+<section id="beta3">
+<h2>1.0.0-beta3<a class="headerlink" href="#beta3" title="Link to this heading">¶</a></h2>
+<p>Sep 20, 2013</p>
+<section id="id204">
+<h3>Features<a class="headerlink" href="#id204" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Support for LZ4 compression (Cassandra 2.0+)</p></li>
+<li><p>Token-aware routing will now utilize all replicas for a query instead
+of just the first replica</p></li>
+</ul>
+</section>
+<section id="id205">
+<h3>Bug Fixes<a class="headerlink" href="#id205" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix libev include path for CentOS</p></li>
+<li><p>Fix varint packing of the value 0</p></li>
+<li><p>Correctly pack unicode values</p></li>
+<li><p>Don’t attempt to return failed connections to the pool when a final result
+is set</p></li>
+<li><p>Fix bad iteration of connection credentials</p></li>
+<li><p>Use blist’s orderedset for set collections and OrderedDict for map
+collections so that Cassandra’s ordering is preserved</p></li>
+<li><p>Fix connection failure on Windows due to unavailability of inet_pton
+and inet_ntop.  (Note that IPv6 inet_address values are still not
+supported on Windows.)</p></li>
+<li><p>Boolean constants shouldn’t be surrounded by single quotes</p></li>
+<li><p>Avoid a potential loss of precision on float constants due to string
+formatting</p></li>
+<li><p>Actually utilize non-standard ports set on Cluster objects</p></li>
+<li><p>Fix export of schema as a set of CQL queries</p></li>
+</ul>
+</section>
+<section id="id206">
+<h3>Other<a class="headerlink" href="#id206" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Use cStringIO for connection buffer for better performance</p></li>
+<li><p>Add __repr__ method for Statement classes</p></li>
+<li><p>Raise InvalidTypeParameterError when parameters of the wrong
+type are used with statements</p></li>
+<li><p>Make all tests compatible with Python 2.6</p></li>
+<li><p>Add 1s timeout for opening new connections</p></li>
+</ul>
+</section>
+</section>
+<section id="beta2">
+<h2>1.0.0-beta2<a class="headerlink" href="#beta2" title="Link to this heading">¶</a></h2>
+<p>Aug 19, 2013</p>
+<section id="id207">
+<h3>Bug Fixes<a class="headerlink" href="#id207" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Fix pip packaging</p></li>
+</ul>
+</section>
+</section>
+<section id="beta">
+<h2>1.0.0-beta<a class="headerlink" href="#beta" title="Link to this heading">¶</a></h2>
+<p>Aug 16, 2013</p>
+<p>Initial release</p>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page CHANGELOG&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.28.1-scylla/CHANGELOG%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+    </div>
+</div>
+                        <div class="notice">
+<p>
+ScyllaDB Python Driver is available under the <a href="https://www.apache.org/licenses/LICENSE-2.0.html">Apache v2 License</a>.
+ScyllaDB Python Driver is a fork of <a href="https://github.com/datastax/python-driver">DataStax Python Driver</a>.
+See Copyright <a href="https://python-driver.docs.scylladb.com/stable/#copyright">here</a>.</p>
+</div>
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page CHANGELOG&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.28.1-scylla/CHANGELOG%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/python-driver/edit/master/docs/CHANGELOG.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">CHANGELOG</a><ul>
+<li><a class="reference internal" href="#id1">3.28.0</a><ul>
+<li><a class="reference internal" href="#features">Features</a></li>
+<li><a class="reference internal" href="#bug-fixes">Bug Fixes</a></li>
+<li><a class="reference internal" href="#others">Others</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id2">3.27.0</a><ul>
+<li><a class="reference internal" href="#id3">Features</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id4">3.26.0</a><ul>
+<li><a class="reference internal" href="#id5">Features</a></li>
+<li><a class="reference internal" href="#id6">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id7">Others</a></li>
+<li><a class="reference internal" href="#deprecations">Deprecations</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id8">3.25.0</a><ul>
+<li><a class="reference internal" href="#id9">Features</a></li>
+<li><a class="reference internal" href="#id10">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id11">Others</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id12">3.24.0</a><ul>
+<li><a class="reference internal" href="#id13">Features</a></li>
+<li><a class="reference internal" href="#id14">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id15">Others</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id16">3.23.0</a><ul>
+<li><a class="reference internal" href="#id17">Features</a></li>
+<li><a class="reference internal" href="#id18">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id19">3.22.0</a><ul>
+<li><a class="reference internal" href="#id20">Features</a></li>
+<li><a class="reference internal" href="#id21">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id22">3.21.0</a><ul>
+<li><a class="reference internal" href="#id23">Features</a></li>
+<li><a class="reference internal" href="#id24">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id25">Others</a></li>
+<li><a class="reference internal" href="#id26">Deprecations</a></li>
+<li><a class="reference internal" href="#id27">Features</a></li>
+<li><a class="reference internal" href="#id28">Bug Fixes</a></li>
+<li><a class="reference internal" href="#other">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id29">3.20.2</a><ul>
+<li><a class="reference internal" href="#id30">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id31">3.20.1</a><ul>
+<li><a class="reference internal" href="#id32">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id33">3.20.0</a><ul>
+<li><a class="reference internal" href="#id34">Features</a></li>
+<li><a class="reference internal" href="#id35">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id36">3.19.0</a><ul>
+<li><a class="reference internal" href="#id37">Features</a></li>
+<li><a class="reference internal" href="#id38">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id39">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id40">3.18.0</a><ul>
+<li><a class="reference internal" href="#id41">Features</a></li>
+<li><a class="reference internal" href="#id42">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id43">3.17.1</a><ul>
+<li><a class="reference internal" href="#id44">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id45">3.17.0</a><ul>
+<li><a class="reference internal" href="#id46">Features</a></li>
+<li><a class="reference internal" href="#id47">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id48">Other</a></li>
+<li><a class="reference internal" href="#id49">Deprecations</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id50">3.16.0</a><ul>
+<li><a class="reference internal" href="#id51">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id52">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id53">3.15.1</a><ul>
+<li><a class="reference internal" href="#id54">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id55">3.15.0</a><ul>
+<li><a class="reference internal" href="#id56">Features</a></li>
+<li><a class="reference internal" href="#id57">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id58">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id59">3.14.0</a><ul>
+<li><a class="reference internal" href="#id60">Features</a></li>
+<li><a class="reference internal" href="#id61">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id62">3.13.0</a><ul>
+<li><a class="reference internal" href="#id63">Features</a></li>
+<li><a class="reference internal" href="#id64">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id65">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id66">3.12.0</a><ul>
+<li><a class="reference internal" href="#id67">Features</a></li>
+<li><a class="reference internal" href="#id68">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id69">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id70">3.11.0</a><ul>
+<li><a class="reference internal" href="#id71">Features</a></li>
+<li><a class="reference internal" href="#id72">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id73">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id74">3.10.0</a><ul>
+<li><a class="reference internal" href="#id75">Features</a></li>
+<li><a class="reference internal" href="#id76">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id77">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id78">3.9.0</a><ul>
+<li><a class="reference internal" href="#id79">Features</a></li>
+<li><a class="reference internal" href="#id80">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id81">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id82">3.8.1</a><ul>
+<li><a class="reference internal" href="#id83">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id84">3.8.0</a><ul>
+<li><a class="reference internal" href="#id85">Features</a></li>
+<li><a class="reference internal" href="#id86">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id87">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id88">3.7.1</a><ul>
+<li><a class="reference internal" href="#id89">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id90">3.7.0</a><ul>
+<li><a class="reference internal" href="#id91">Features</a></li>
+<li><a class="reference internal" href="#id92">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id93">3.6.0</a><ul>
+<li><a class="reference internal" href="#id94">Features</a></li>
+<li><a class="reference internal" href="#id95">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id96">3.5.0</a><ul>
+<li><a class="reference internal" href="#id97">Features</a></li>
+<li><a class="reference internal" href="#id98">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id99">3.4.1</a><ul>
+<li><a class="reference internal" href="#id100">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id101">3.4.0</a><ul>
+<li><a class="reference internal" href="#id102">Features</a></li>
+<li><a class="reference internal" href="#id103">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id104">3.3.0</a><ul>
+<li><a class="reference internal" href="#id105">Features</a></li>
+<li><a class="reference internal" href="#id106">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id107">3.2.2</a></li>
+<li><a class="reference internal" href="#id108">3.2.1</a></li>
+<li><a class="reference internal" href="#id109">3.2.0</a><ul>
+<li><a class="reference internal" href="#id110">Features</a></li>
+<li><a class="reference internal" href="#id111">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id112">3.1.1</a><ul>
+<li><a class="reference internal" href="#id113">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id114">3.1.0</a><ul>
+<li><a class="reference internal" href="#id115">Features</a></li>
+<li><a class="reference internal" href="#id116">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id117">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id118">3.0.0</a><ul>
+<li><a class="reference internal" href="#id119">Features</a></li>
+<li><a class="reference internal" href="#id120">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#rc1">3.0.0rc1</a><ul>
+<li><a class="reference internal" href="#id121">Features</a></li>
+<li><a class="reference internal" href="#id122">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id123">2.7.2</a><ul>
+<li><a class="reference internal" href="#id124">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id125">2.7.1</a><ul>
+<li><a class="reference internal" href="#id126">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id127">2.7.0</a><ul>
+<li><a class="reference internal" href="#id128">Features</a></li>
+<li><a class="reference internal" href="#id129">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id130">2.6.0</a><ul>
+<li><a class="reference internal" href="#id131">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#c2">2.6.0c2</a><ul>
+<li><a class="reference internal" href="#id132">Features</a></li>
+<li><a class="reference internal" href="#id133">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#c1">2.6.0c1</a><ul>
+<li><a class="reference internal" href="#id134">Features</a></li>
+<li><a class="reference internal" href="#id135">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id136">2.5.1</a><ul>
+<li><a class="reference internal" href="#id137">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id138">2.5.0</a><ul>
+<li><a class="reference internal" href="#id139">Features</a></li>
+<li><a class="reference internal" href="#id140">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id141">2.1.4</a><ul>
+<li><a class="reference internal" href="#id142">Features</a></li>
+<li><a class="reference internal" href="#id143">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id144">2.1.3</a><ul>
+<li><a class="reference internal" href="#id145">Features</a></li>
+<li><a class="reference internal" href="#id146">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id147">2.1.2</a><ul>
+<li><a class="reference internal" href="#id148">Features</a></li>
+<li><a class="reference internal" href="#id149">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id150">2.1.1</a><ul>
+<li><a class="reference internal" href="#id151">Features</a></li>
+<li><a class="reference internal" href="#id152">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id153">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id154">2.1.0</a><ul>
+<li><a class="reference internal" href="#id155">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id156">2.1.0c1</a><ul>
+<li><a class="reference internal" href="#id157">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id158">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#b1">2.1.0b1</a><ul>
+<li><a class="reference internal" href="#id159">Features</a></li>
+<li><a class="reference internal" href="#id160">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id161">2.0.2</a><ul>
+<li><a class="reference internal" href="#id162">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id163">2.0.1</a><ul>
+<li><a class="reference internal" href="#id164">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id165">2.0.0</a><ul>
+<li><a class="reference internal" href="#id166">Features</a></li>
+<li><a class="reference internal" href="#id167">Bug Fixes</a></li>
+<li><a class="reference internal" href="#merged-from-1-x">Merged From 1.x</a><ul>
+<li><a class="reference internal" href="#id168">Features</a></li>
+<li><a class="reference internal" href="#id169">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id170">Other</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id171">2.0.0b1</a><ul>
+<li><a class="reference internal" href="#upgrading-from-1-x">Upgrading from 1.x</a></li>
+<li><a class="reference internal" href="#id172">Features</a></li>
+<li><a class="reference internal" href="#id173">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id174">Deprecations</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id175">1.1.2</a><ul>
+<li><a class="reference internal" href="#id176">Features</a></li>
+<li><a class="reference internal" href="#id177">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id178">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id179">1.1.1</a><ul>
+<li><a class="reference internal" href="#id180">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id181">1.1.0</a><ul>
+<li><a class="reference internal" href="#id182">Features</a></li>
+<li><a class="reference internal" href="#id183">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id184">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id185">1.0.2</a><ul>
+<li><a class="reference internal" href="#id186">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id187">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id188">1.0.1</a><ul>
+<li><a class="reference internal" href="#id189">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id190">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#final">1.0.0 Final</a><ul>
+<li><a class="reference internal" href="#id191">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id192">Features</a></li>
+<li><a class="reference internal" href="#id193">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#b7">1.0.0b7</a><ul>
+<li><a class="reference internal" href="#id194">Features</a></li>
+<li><a class="reference internal" href="#id195">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id196">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#b6">1.0.0b6</a><ul>
+<li><a class="reference internal" href="#id197">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id198">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#b5">1.0.0b5</a><ul>
+<li><a class="reference internal" href="#id199">Features</a></li>
+<li><a class="reference internal" href="#id200">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id201">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#beta4">1.0.0-beta4</a><ul>
+<li><a class="reference internal" href="#id202">Features</a></li>
+<li><a class="reference internal" href="#id203">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#beta3">1.0.0-beta3</a><ul>
+<li><a class="reference internal" href="#id204">Features</a></li>
+<li><a class="reference internal" href="#id205">Bug Fixes</a></li>
+<li><a class="reference internal" href="#id206">Other</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#beta2">1.0.0-beta2</a><ul>
+<li><a class="reference internal" href="#id207">Bug Fixes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#beta">1.0.0-beta</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="index.html">Scylla Python Driver</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                3.28.1
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+            
+            
+                
+                    <li>
+                        <a href="../stable/CHANGELOG.html">
+                            3.29.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.7-scylla/CHANGELOG.html">
+                            3.29.7
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.6-scylla/CHANGELOG.html">
+                            3.29.6
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.5-scylla/CHANGELOG.html">
+                            3.29.5
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.4-scylla/CHANGELOG.html">
+                            3.29.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.3-scylla/CHANGELOG.html">
+                            3.29.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.2-scylla/CHANGELOG.html">
+                            3.29.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.0-scylla/CHANGELOG.html">
+                            3.29.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.28.2-scylla/CHANGELOG.html">
+                            3.28.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="CHANGELOG.html">
+                            3.28.1
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.28.0-scylla/CHANGELOG.html">
+                            3.28.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.26.9-scylla/CHANGELOG.html">
+                            3.26.9
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.25.11-scylla/CHANGELOG.html">
+                            3.25.11
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.25.4-scylla/CHANGELOG.html">
+                            3.25.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.24.8-scylla/CHANGELOG.html">
+                            3.24.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.22.3-scylla/CHANGELOG.html">
+                            3.22.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.21.0-scylla/CHANGELOG.html">
+                            3.21.0
+                        </a>
+                    </li>
+                
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="api/index.html">API Documentation</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra</span></code> - Exceptions and Enums</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cluster.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cluster</span></code> - Clusters and Sessions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/policies.html"><code class="docutils literal notranslate"><span class="pre">cassandra.policies</span></code> - Load balancing and Failure Handling Policies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/auth.html"><code class="docutils literal notranslate"><span class="pre">cassandra.auth</span></code> - Authentication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/metadata.html"><code class="docutils literal notranslate"><span class="pre">cassandra.metadata</span></code> - Schema and Ring Topology</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/metrics.html"><code class="docutils literal notranslate"><span class="pre">cassandra.metrics</span></code> - Performance Metrics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/query.html"><code class="docutils literal notranslate"><span class="pre">cassandra.query</span></code> - Prepared Statements, Batch Statements, Tracing, and Row Factories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/pool.html"><code class="docutils literal notranslate"><span class="pre">cassandra.pool</span></code> - Hosts and Connection Pools</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/protocol.html"><code class="docutils literal notranslate"><span class="pre">cassandra.protocol</span></code> - Protocol Features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/encoder.html"><code class="docutils literal notranslate"><span class="pre">cassandra.encoder</span></code> - Encoders for non-prepared Statements</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/decoder.html"><code class="docutils literal notranslate"><span class="pre">cassandra.decoder</span></code> - Data Return Formats</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/concurrent.html"><code class="docutils literal notranslate"><span class="pre">cassandra.concurrent</span></code> - Utilities for Concurrent Statement Execution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/connection.html"><code class="docutils literal notranslate"><span class="pre">cassandra.connection</span></code> - Low Level Connection Info</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/util.html"><code class="docutils literal notranslate"><span class="pre">cassandra.util</span></code> - Utilities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/timestamps.html"><code class="docutils literal notranslate"><span class="pre">cassandra.timestamps</span></code> - Timestamp Generation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/io/asyncioreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.asyncioreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">asyncio</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/io/asyncorereactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.asyncorereactor</span></code> - <code class="docutils literal notranslate"><span class="pre">asyncore</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/io/eventletreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.eventletreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">eventlet</span></code>-compatible Connection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/io/libevreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.libevreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">libev</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/io/geventreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.geventreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">gevent</span></code>-compatible Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/io/twistedreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.twistedreactor</span></code> - Twisted Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cqlengine/models.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.models</span></code> - Table models for object mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cqlengine/columns.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.columns</span></code> - Column types for object mapping models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cqlengine/query.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.query</span></code> - Query and filter model objects</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cqlengine/connection.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.connection</span></code> - Connection management for cqlengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cqlengine/management.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.management</span></code> - Schema management for cqlengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cqlengine/usertype.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.usertype</span></code> - Model classes for User Defined Types</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="scylla-specific.html">Scylla Specific Features</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="upgrading.html">Upgrading</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="simple">
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="execution-profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="query-paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user-defined-types.html">User Defined Types</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="object-mapper.html">Object Mapper</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/upgrade-guide.html">Upgrade Guide</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/models.html">Models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/queryset.html">Making Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/batches.html">Batch Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/connections.html">Connections</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/third-party.html">Third party integrations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/faq.html">Frequently Asked Questions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="dates-and-times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="scylla-cloud.html">ScyllaDB Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="scylla-cloud-serverless.html">ScyllaDB Cloud Serverless</a></li>
+<li class="toctree-l1"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; ScyllaDB 2021 and © DataStax 2013-2017
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.2.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>
