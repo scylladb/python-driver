@@ -148,7 +148,10 @@ class EventletConnection(Connection):
             msg = "Connection to %s was closed" % self.endpoint
             if self.last_error:
                 msg += ": %s" % (self.last_error,)
-            self.error_all_requests(ConnectionShutdown(msg))
+            shutdown_exc = ConnectionShutdown(msg)
+            self.error_all_requests(shutdown_exc)
+            if not self.connected_event.is_set():
+                self.last_error = shutdown_exc
             # don't leave in-progress operations hanging
             self.connected_event.set()
 
@@ -162,6 +165,8 @@ class EventletConnection(Connection):
                 next_msg = self._write_queue.get()
                 self._socket.sendall(next_msg)
             except socket.error as err:
+                if self.is_closed or self.is_defunct:
+                    return
                 log.debug("Exception during socket send for %s: %s", self, err)
                 self.defunct(err)
                 return  # Leave the write loop
@@ -174,6 +179,8 @@ class EventletConnection(Connection):
                 buf = self._socket.recv(self.in_buffer_size)
                 self._iobuf.write(buf)
             except socket.error as err:
+                if self.is_closed or self.is_defunct:
+                    return
                 log.debug("Exception during socket recv for %s: %s",
                           self, err)
                 self.defunct(err)
@@ -185,6 +192,8 @@ class EventletConnection(Connection):
                 self.process_io_buffer()
             else:
                 log.debug("Connection %s closed by server", self)
+                self.last_error = ConnectionShutdown(
+                    "Connection to %s was closed by server" % self.endpoint)
                 self.close()
                 return
 
