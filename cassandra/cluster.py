@@ -195,9 +195,7 @@ _GRAPH_PAGING_MIN_DSE_VERSION = Version('6.8.0')
 
 _NOT_SET = object()
 
-# TLS session cache defaults
-_DEFAULT_TLS_SESSION_CACHE_SIZE = 100
-_DEFAULT_TLS_SESSION_CACHE_TTL = 3600  # 1 hour in seconds
+_NOT_SET_TLS_CACHE = object()
 
 
 class NoHostAvailable(Exception):
@@ -879,58 +877,36 @@ class Cluster(object):
     .. versionadded:: 3.17.0
     """
 
-    tls_session_cache_enabled = True
+    tls_session_cache = _NOT_SET_TLS_CACHE
     """
-    Enable or disable TLS session caching for faster reconnections.
-    When enabled (default), TLS sessions are cached and reused for subsequent
+    TLS session cache configuration for faster reconnections.
+    When SSL/TLS is enabled, TLS sessions are cached and reused for subsequent
     connections to the same endpoint, reducing handshake latency.
 
-    Set to False to disable session caching entirely.
+    Can be set to:
 
-    .. versionadded:: 3.30.0
-    """
-
-    tls_session_cache_size = _DEFAULT_TLS_SESSION_CACHE_SIZE
-    """
-    Maximum number of TLS sessions to cache. Default is 100.
-    When the cache is full, the least recently used session is evicted.
-
-    .. versionadded:: 3.30.0
-    """
-
-    tls_session_cache_ttl = _DEFAULT_TLS_SESSION_CACHE_TTL
-    """
-    Time-to-live for cached TLS sessions in seconds. Default is 3600 (1 hour).
-    Sessions older than this value will not be reused.
-
-    .. versionadded:: 3.30.0
-    """
-
-    tls_session_cache_options = None
-    """
-    Advanced TLS session cache configuration. Can be set to:
-
+    - ``_NOT_SET_TLS_CACHE`` (default): A :class:`~cassandra.tls.DefaultTLSSessionCache` is
+      automatically created when SSL/TLS is enabled.
+    - ``None``: Disable TLS session caching entirely.
     - An instance of :class:`~cassandra.tls.TLSSessionCacheOptions` for
       fine-grained control over session caching behavior (e.g., cache_by_host_only option).
     - An instance of :class:`~cassandra.tls.TLSSessionCache` (or a custom subclass)
       for complete control over session caching implementation.
 
-    If None (default), a cache is created using :attr:`~.tls_session_cache_size`
-    and :attr:`~.tls_session_cache_ttl` when SSL/TLS is enabled.
+    Example disabling caching::
 
-    This option takes precedence over the individual tls_session_cache_* parameters.
+        cluster = Cluster(ssl_context=ssl_context, tls_session_cache=None)
 
     Example with options::
 
         from cassandra.tls import TLSSessionCacheOptions
 
-        # Cache by host only (ignoring port)
         options = TLSSessionCacheOptions(
             max_size=200,
             ttl=7200,
             cache_by_host_only=True
         )
-        cluster = Cluster(ssl_context=ssl_context, tls_session_cache_options=options)
+        cluster = Cluster(ssl_context=ssl_context, tls_session_cache=options)
 
     Example with custom cache::
 
@@ -940,7 +916,7 @@ class Cluster(object):
             # Custom implementation
             pass
 
-        cluster = Cluster(ssl_context=ssl_context, tls_session_cache_options=MyCustomCache())
+        cluster = Cluster(ssl_context=ssl_context, tls_session_cache=MyCustomCache())
 
     .. versionadded:: 3.30.0
     """
@@ -1274,10 +1250,7 @@ class Cluster(object):
                  idle_heartbeat_timeout=30,
                  no_compact=False,
                  ssl_context=None,
-                 tls_session_cache_enabled=True,
-                 tls_session_cache_size=_DEFAULT_TLS_SESSION_CACHE_SIZE,
-                 tls_session_cache_ttl=_DEFAULT_TLS_SESSION_CACHE_TTL,
-                 tls_session_cache_options=None,
+                 tls_session_cache=_NOT_SET_TLS_CACHE,
                  endpoint_factory=None,
                  application_name=None,
                  application_version=None,
@@ -1494,32 +1467,20 @@ class Cluster(object):
 
         self.ssl_options = ssl_options
         self.ssl_context = ssl_context
-        self.tls_session_cache_enabled = tls_session_cache_enabled
-        self.tls_session_cache_size = tls_session_cache_size
-        self.tls_session_cache_ttl = tls_session_cache_ttl
-        self.tls_session_cache_options = tls_session_cache_options
+        self.tls_session_cache = tls_session_cache
 
-        # Initialize TLS session cache if SSL is enabled and caching is enabled
+        # Initialize TLS session cache if SSL is enabled and caching is not disabled
         self._tls_session_cache = None
-        if (ssl_context or ssl_options) and tls_session_cache_enabled:
-            from cassandra.tls import TLSSessionCache, TLSSessionCacheOptions
+        if (ssl_context or ssl_options) and tls_session_cache is not None:
+            from cassandra.tls import TLSSessionCache, TLSSessionCacheOptions, DefaultTLSSessionCache
 
-            if tls_session_cache_options is not None:
-                # Check if it's a TLSSessionCache instance (use directly)
-                # or TLSSessionCacheOptions (use create_cache())
-                if isinstance(tls_session_cache_options, TLSSessionCache):
-                    self._tls_session_cache = tls_session_cache_options
-                else:
-                    # Assume it's TLSSessionCacheOptions
-                    self._tls_session_cache = tls_session_cache_options.create_cache()
+            if isinstance(tls_session_cache, TLSSessionCache):
+                self._tls_session_cache = tls_session_cache
+            elif isinstance(tls_session_cache, TLSSessionCacheOptions):
+                self._tls_session_cache = tls_session_cache.create_cache()
             else:
-                # Create default cache from individual parameters
-                cache_options = TLSSessionCacheOptions(
-                    max_size=tls_session_cache_size,
-                    ttl=tls_session_cache_ttl,
-                    cache_by_host_only=False
-                )
-                self._tls_session_cache = cache_options.create_cache()
+                # Default: create cache with default parameters
+                self._tls_session_cache = DefaultTLSSessionCache()
 
         self.sockopts = sockopts
         self.cql_version = cql_version

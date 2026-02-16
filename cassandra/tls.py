@@ -1,4 +1,4 @@
-# Copyright DataStax, Inc.
+# Copyright ScyllaDB, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,9 +16,9 @@
 TLS session caching implementation for faster reconnections.
 """
 
-from abc import ABC, abstractmethod
 from collections import OrderedDict, namedtuple
 from threading import RLock
+from typing import Any, Optional, Tuple
 import time
 
 
@@ -26,75 +26,60 @@ import time
 _SessionCacheEntry = namedtuple('_SessionCacheEntry', ['session', 'timestamp'])
 
 
-class TLSSessionCache(ABC):
+class TLSSessionCache:
     """
-    Abstract base class for TLS session caching.
-    
+    Base class for TLS session caching.
+
     Implementations should provide thread-safe caching of TLS sessions
     to enable session resumption for faster reconnections.
     """
-    
-    @abstractmethod
-    def get_session(self, endpoint):
+
+    def get_session(self, endpoint: 'EndPoint') -> Optional[Any]:
         """
         Get a cached TLS session for the given endpoint.
-        
-        Args:
-            endpoint: The EndPoint object representing the connection target
-            
-        Returns:
-            ssl.SSLSession object if a valid cached session exists, None otherwise
         """
-        pass
-    
-    @abstractmethod
-    def set_session(self, endpoint, session):
+        raise NotImplementedError
+
+    def set_session(self, endpoint: 'EndPoint', session: Any) -> None:
         """
         Store a TLS session for the given endpoint.
-        
-        Args:
-            endpoint: The EndPoint object representing the connection target
-            session: The ssl.SSLSession object to cache
         """
-        pass
-    
-    @abstractmethod
-    def clear_expired(self):
+        raise NotImplementedError
+
+    def clear_expired(self) -> None:
         """Remove all expired sessions from the cache."""
-        pass
-    
-    @abstractmethod
-    def clear(self):
+        raise NotImplementedError
+
+    def clear(self) -> None:
         """Clear all sessions from the cache."""
-        pass
-    
-    @abstractmethod
-    def size(self):
+        raise NotImplementedError
+
+    def size(self) -> int:
         """Return the current number of cached sessions."""
-        pass
+        raise NotImplementedError
 
 
 class DefaultTLSSessionCache(TLSSessionCache):
     """
     Default implementation of TLS session caching.
-    
+
     This cache stores TLS sessions per endpoint to allow quick TLS
     renegotiation when reconnecting to the same server. Sessions are
     automatically expired after a TTL and the cache has a maximum
     size with LRU eviction using OrderedDict.
-    
+
     TLS session resumption works with both TLS 1.2 and TLS 1.3:
     - TLS 1.2: Session IDs (RFC 5246) and optionally Session Tickets (RFC 5077)
     - TLS 1.3: Session Tickets (RFC 8446)
-    
+
     Python's ssl.SSLSession API handles both versions transparently, so no
     version-specific checks are needed.
     """
-    
+
     # Cleanup expired sessions every N set_session calls
     _EXPIRY_CLEANUP_INTERVAL = 100
 
-    def __init__(self, max_size=100, ttl=3600, cache_by_host_only=False):
+    def __init__(self, max_size: int = 100, ttl: int = 3600, cache_by_host_only: bool = False):
         """
         Initialize the TLS session cache.
 
@@ -110,8 +95,8 @@ class DefaultTLSSessionCache(TLSSessionCache):
         self._ttl = ttl
         self._cache_by_host_only = cache_by_host_only
         self._operation_count = 0  # Counter for opportunistic cleanup
-    
-    def _make_key(self, endpoint):
+
+    def _make_key(self, endpoint: 'EndPoint') -> Tuple:
         """
         Create a cache key from endpoint.
 
@@ -121,45 +106,30 @@ class DefaultTLSSessionCache(TLSSessionCache):
         """
         key = endpoint.tls_session_cache_key
         if self._cache_by_host_only:
-            # When caching by host only, use just the first component (address/path)
             return (key[0],)
         else:
             return key
-    
-    def get_session(self, endpoint):
-        """
-        Get a cached TLS session for the given endpoint.
-        
-        Args:
-            endpoint: The EndPoint object representing the connection target
-            
-        Returns:
-            ssl.SSLSession object if a valid cached session exists, None otherwise
-        """
+
+    def get_session(self, endpoint: 'EndPoint') -> Optional[Any]:
+        """Get a cached TLS session for the given endpoint."""
         key = self._make_key(endpoint)
         with self._lock:
             if key not in self._sessions:
                 return None
-            
+
             entry = self._sessions[key]
-            
+
             # Check if session has expired
             if time.time() - entry.timestamp > self._ttl:
                 del self._sessions[key]
                 return None
-            
+
             # Move to end to mark as recently used (LRU)
             self._sessions.move_to_end(key)
             return entry.session
-    
-    def set_session(self, endpoint, session):
-        """
-        Store a TLS session for the given endpoint.
 
-        Args:
-            endpoint: The EndPoint object representing the connection target
-            session: The ssl.SSLSession object to cache
-        """
+    def set_session(self, endpoint: 'EndPoint', session: Any) -> None:
+        """Store a TLS session for the given endpoint."""
         if session is None:
             return
 
@@ -185,8 +155,8 @@ class DefaultTLSSessionCache(TLSSessionCache):
 
             # Store session with creation time
             self._sessions[key] = _SessionCacheEntry(session, current_time)
-    
-    def _clear_expired_unlocked(self, current_time=None):
+
+    def _clear_expired_unlocked(self, current_time: Optional[float] = None) -> None:
         """Remove all expired sessions (must be called with lock held)."""
         if current_time is None:
             current_time = time.time()
@@ -197,17 +167,17 @@ class DefaultTLSSessionCache(TLSSessionCache):
         for key in expired_keys:
             del self._sessions[key]
 
-    def clear_expired(self):
+    def clear_expired(self) -> None:
         """Remove all expired sessions from the cache."""
         with self._lock:
             self._clear_expired_unlocked()
-    
-    def clear(self):
+
+    def clear(self) -> None:
         """Clear all sessions from the cache."""
         with self._lock:
             self._sessions.clear()
-    
-    def size(self):
+
+    def size(self) -> int:
         """Return the current number of cached sessions."""
         with self._lock:
             return len(self._sessions)
@@ -215,13 +185,13 @@ class DefaultTLSSessionCache(TLSSessionCache):
 
 class TLSSessionCacheOptions:
     """
-    Default implementation of TLS session cache configuration options.
+    Configuration options for the default TLS session cache.
     """
-    
-    def __init__(self, max_size=100, ttl=3600, cache_by_host_only=False):
+
+    def __init__(self, max_size: int = 100, ttl: int = 3600, cache_by_host_only: bool = False):
         """
         Initialize TLS session cache options.
-        
+
         Args:
             max_size: Maximum number of sessions to cache (default: 100)
             ttl: Time-to-live for cached sessions in seconds (default: 3600)
@@ -231,14 +201,9 @@ class TLSSessionCacheOptions:
         self.max_size = max_size
         self.ttl = ttl
         self.cache_by_host_only = cache_by_host_only
-    
-    def create_cache(self):
-        """
-        Build and return a DefaultTLSSessionCache implementation.
-        
-        Returns:
-            DefaultTLSSessionCache: A configured session cache instance
-        """
+
+    def create_cache(self) -> DefaultTLSSessionCache:
+        """Build and return a DefaultTLSSessionCache instance."""
         return DefaultTLSSessionCache(
             max_size=self.max_size,
             ttl=self.ttl,

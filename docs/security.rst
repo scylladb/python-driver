@@ -322,27 +322,20 @@ connections to the same endpoint, reducing handshake latency and CPU usage.
 Session IDs and optionally Session Tickets (RFC 5077), while TLS 1.3 uses Session Tickets (RFC 8446)
 as the primary mechanism. Python's ``ssl.SSLSession`` API handles both versions transparently.
 
-Session caching is **enabled by default** when SSL/TLS is configured and applies to the following
-connection classes:
-
-* :class:`~cassandra.io.asyncorereactor.AsyncoreConnection` (default)
-* :class:`~cassandra.io.libevreactor.LibevConnection`
-* :class:`~cassandra.io.asyncioreactor.AsyncioConnection`
-* :class:`~cassandra.io.geventreactor.GeventConnection` (when not using SSL)
-
-.. note::
-    Session caching is not currently supported for PyOpenSSL-based reactors
-    (:class:`~cassandra.io.twistedreactor.TwistedConnection`,
-    :class:`~cassandra.io.eventletreactor.EventletConnection`) but may be added in a future release.
+Session caching is **enabled by default** when SSL/TLS is configured and works with all
+connection classes, including PyOpenSSL-based reactors
+(:class:`~cassandra.io.eventletreactor.EventletConnection`,
+:class:`~cassandra.io.twistedreactor.TwistedConnection`).
 
 Configuration
 ^^^^^^^^^^^^^
 
-TLS session caching is controlled by three cluster-level parameters:
+TLS session caching is controlled by the :attr:`~.Cluster.tls_session_cache` parameter:
 
-* :attr:`~.Cluster.tls_session_cache_enabled` - Enable or disable session caching (default: ``True``)
-* :attr:`~.Cluster.tls_session_cache_size` - Maximum number of sessions to cache (default: ``100``)
-* :attr:`~.Cluster.tls_session_cache_ttl` - Time-to-live for cached sessions in seconds (default: ``3600``)
+* Default (not set): A :class:`~cassandra.tls.DefaultTLSSessionCache` is automatically created
+* ``None``: Disable TLS session caching entirely
+* :class:`~cassandra.tls.TLSSessionCacheOptions`: Configure cache size, TTL, and other options
+* :class:`~cassandra.tls.TLSSessionCache` subclass: Provide a custom cache implementation
 
 Example with default settings (session caching enabled):
 
@@ -363,14 +356,17 @@ Example with custom cache settings:
 .. code-block:: python
 
     from cassandra.cluster import Cluster
+    from cassandra.tls import TLSSessionCacheOptions
     import ssl
 
     ssl_context = ssl.create_default_context(cafile='/path/to/ca.crt')
     cluster = Cluster(
         contact_points=['127.0.0.1'],
         ssl_context=ssl_context,
-        tls_session_cache_size=200,  # Cache up to 200 sessions
-        tls_session_cache_ttl=7200   # Sessions expire after 2 hours
+        tls_session_cache=TLSSessionCacheOptions(
+            max_size=200,  # Cache up to 200 sessions
+            ttl=7200       # Sessions expire after 2 hours
+        )
     )
     session = cluster.connect()
 
@@ -385,7 +381,7 @@ Example with session caching disabled:
     cluster = Cluster(
         contact_points=['127.0.0.1'],
         ssl_context=ssl_context,
-        tls_session_cache_enabled=False
+        tls_session_cache=None
     )
     session = cluster.connect()
 
