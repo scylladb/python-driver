@@ -1241,7 +1241,6 @@ class EC2MultiRegionTranslator(AddressTranslator):
                 pass
         return addr
 
-
 class SpeculativeExecutionPolicy(object):
     """
     Interface for specifying speculative execution plans
