@@ -30,7 +30,7 @@ from cassandra.util import Date, Time, Duration
 from cassandra.cqlengine.statements import SelectStatement, DeleteStatement, WhereClause
 from cassandra.cqlengine.operators import EqualsOperator
 
-from tests.integration import PROTOCOL_VERSION, greaterthanorequalcass3_10
+from tests.integration import greaterthanorequalcass3_10
 from tests.integration.cqlengine.base import BaseCassEngTestCase
 from tests.integration.cqlengine import DEFAULT_KEYSPACE
 from tests.util import assertSetEqual
@@ -247,9 +247,6 @@ class TestModelIO(BaseCassEngTestCase):
 
         @test_category data_types:primitive
         """
-
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Protocol v4 datatypes require native protocol 4+, currently using: {0}".format(PROTOCOL_VERSION))
 
         class v4DatatypesModel(Model):
             id = columns.Integer(primary_key=True)
@@ -672,24 +669,14 @@ class TestQuerying(BaseCassEngTestCase):
 
     @classmethod
     def setUpClass(cls):
-        if PROTOCOL_VERSION < 4:
-            return
-
         super(TestQuerying, cls).setUpClass()
         drop_table(TestQueryModel)
         sync_table(TestQueryModel)
 
     @classmethod
     def tearDownClass(cls):
-        if PROTOCOL_VERSION < 4:
-            return
-
         super(TestQuerying, cls).tearDownClass()
         drop_table(TestQueryModel)
-
-    def setUp(self):
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Date query tests require native protocol 4+, currently using: {0}".format(PROTOCOL_VERSION))
 
     def test_query_with_date(self):
         uid = uuid4()
@@ -770,7 +757,7 @@ class TestModelRoutingKeys(BaseCassEngTestCase):
           """.format(DEFAULT_KEYSPACE))
         bound = prepared.bind((1, 2))
 
-        mrk = BasicModelNoRouting._routing_key_from_values([1], self.session.cluster.protocol_version)
+        mrk = BasicModelNoRouting._routing_key_from_values([1])
         simple = SimpleStatement("")
         simple.routing_key = mrk
         assert bound.routing_key != simple.routing_key
@@ -802,7 +789,7 @@ class TestModelRoutingKeys(BaseCassEngTestCase):
           """.format(DEFAULT_KEYSPACE))
         bound = prepared.bind((1, 2))
 
-        mrk = BasicModel._routing_key_from_values([1], self.session.cluster.protocol_version)
+        mrk = BasicModel._routing_key_from_values([1])
         simple = SimpleStatement("")
         simple.routing_key = mrk
         assert bound.routing_key == simple.routing_key
@@ -823,7 +810,7 @@ class TestModelRoutingKeys(BaseCassEngTestCase):
           INSERT INTO {0}.basic_model_routing_multi (k, v) VALUES  (?, ?)
           """.format(DEFAULT_KEYSPACE))
         bound = prepared.bind((1, 2))
-        mrk = BasicModelMulti._routing_key_from_values([1, 2], self.session.cluster.protocol_version)
+        mrk = BasicModelMulti._routing_key_from_values([1, 2])
         simple = SimpleStatement("")
         simple.routing_key = mrk
         assert bound.routing_key == simple.routing_key
@@ -849,7 +836,7 @@ class TestModelRoutingKeys(BaseCassEngTestCase):
         float = 1.2
         text_2 = "text_2"
         bound = prepared.bind((partition, cluster, count, text, float, text_2))
-        mrk = ComplexModelRouting._routing_key_from_values([partition, cluster, text, float], self.session.cluster.protocol_version)
+        mrk = ComplexModelRouting._routing_key_from_values([partition, cluster, text, float])
         simple = SimpleStatement("")
         simple.routing_key = mrk
         assert bound.routing_key == simple.routing_key

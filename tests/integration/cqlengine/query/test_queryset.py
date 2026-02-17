@@ -17,7 +17,6 @@ import unittest
 
 from datetime import datetime
 from uuid import uuid4
-from packaging.version import Version
 import uuid
 
 from cassandra.cluster import Session
@@ -38,8 +37,7 @@ from cassandra.cqlengine import statements
 from cassandra.cqlengine import operators
 from cassandra.util import uuid_from_time
 from cassandra.cqlengine.connection import get_session
-from tests.integration import PROTOCOL_VERSION, CASSANDRA_VERSION, greaterthancass20, greaterthancass21, \
-    greaterthanorequalcass30, TestCluster, requires_collection_indexes
+from tests.integration import greaterthanorequalcass30, TestCluster, requires_collection_indexes
 from tests.integration.cqlengine import execute_count, DEFAULT_KEYSPACE
 import pytest
 
@@ -362,22 +360,21 @@ class BaseQuerySetUsage(BaseCassEngTestCase):
         IndexedTestModel.objects.create(test_id=11, attempt_id=3, description='try12', expected_result=75,
                                         test_result=45)
 
-        if CASSANDRA_VERSION >= Version('2.1'):
-            drop_table(IndexedCollectionsTestModel)
-            sync_table(IndexedCollectionsTestModel)
-            IndexedCollectionsTestModel.objects.create(test_id=12, attempt_id=3, description='list12', expected_result=75,
-                                                       test_result=45, test_list=[1, 2, 42], test_set=set([1, 2, 3]),
-                                                       test_map={'1': 1, '2': 2, '3': 3})
-            IndexedCollectionsTestModel.objects.create(test_id=13, attempt_id=3, description='list13', expected_result=75,
-                                                       test_result=45, test_list=[3, 4, 5], test_set=set([4, 5, 42]),
-                                                       test_map={'1': 5, '2': 6, '3': 7})
-            IndexedCollectionsTestModel.objects.create(test_id=14, attempt_id=3, description='list14', expected_result=75,
-                                                       test_result=45, test_list=[1, 2, 3], test_set=set([1, 2, 3]),
-                                                       test_map={'1': 1, '2': 2, '3': 42})
+        drop_table(IndexedCollectionsTestModel)
+        sync_table(IndexedCollectionsTestModel)
+        IndexedCollectionsTestModel.objects.create(test_id=12, attempt_id=3, description='list12', expected_result=75,
+                                                   test_result=45, test_list=[1, 2, 42], test_set=set([1, 2, 3]),
+                                                   test_map={'1': 1, '2': 2, '3': 3})
+        IndexedCollectionsTestModel.objects.create(test_id=13, attempt_id=3, description='list13', expected_result=75,
+                                                   test_result=45, test_list=[3, 4, 5], test_set=set([4, 5, 42]),
+                                                   test_map={'1': 5, '2': 6, '3': 7})
+        IndexedCollectionsTestModel.objects.create(test_id=14, attempt_id=3, description='list14', expected_result=75,
+                                                   test_result=45, test_list=[1, 2, 3], test_set=set([1, 2, 3]),
+                                                   test_map={'1': 1, '2': 2, '3': 42})
 
-            IndexedCollectionsTestModel.objects.create(test_id=15, attempt_id=4, description='list14', expected_result=75,
-                                                       test_result=45, test_list_no_index=[1, 2, 3], test_set_no_index=set([1, 2, 3]),
-                                                       test_map_no_index={'1': 1, '2': 2, '3': 42})
+        IndexedCollectionsTestModel.objects.create(test_id=15, attempt_id=4, description='list14', expected_result=75,
+                                                   test_result=45, test_list_no_index=[1, 2, 3], test_set_no_index=set([1, 2, 3]),
+                                                   test_map_no_index={'1': 1, '2': 2, '3': 42})
 
     @classmethod
     def tearDownClass(cls):
@@ -590,7 +587,6 @@ class TestQuerySetDistinct(BaseQuerySetUsage):
         q = TestModel.objects.distinct(['test_id']).filter(test_id__in=[52])
         assert len(q) == 0
 
-    @greaterthancass21
     @execute_count(2)
     def test_distinct_with_explicit_count(self):
         q = TestModel.objects.distinct(['test_id'])
@@ -723,7 +719,6 @@ class TestQuerySetValidation(BaseQuerySetUsage):
             q = TestModel.objects(test_id__gt=0)
             list([i for i in q])
 
-    @greaterthancass20
     @execute_count(7)
     def test_indexed_field_can_be_queried(self):
         """
@@ -1005,7 +1000,6 @@ class TestInOperator(BaseQuerySetUsage):
         assert len(list(bool_model2.objects(k__in=(True, False)))) == 2
 
 
-@greaterthancass20
 @requires_collection_indexes
 class TestContainsOperator(BaseQuerySetUsage):
 
@@ -1097,9 +1091,6 @@ class TestObjectsProperty(BaseQuerySetUsage):
 class PageQueryTests(BaseCassEngTestCase):
     @execute_count(3)
     def test_paged_result_handling(self):
-        if PROTOCOL_VERSION < 2:
-            raise unittest.SkipTest("Paging requires native protocol 2+, currently using: {0}".format(PROTOCOL_VERSION))
-
         # addresses #225
         class PagingTest(Model):
             id = columns.Integer(primary_key=True)

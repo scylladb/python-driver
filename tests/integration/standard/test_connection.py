@@ -31,7 +31,7 @@ from cassandra.policies import HostFilterPolicy, RoundRobinPolicy, HostStateList
 
 from tests import is_monkey_patched
 from tests.integration import use_singledc, get_node, CASSANDRA_IP, local, \
-    requiresmallclockgranularity, greaterthancass20, TestCluster
+    requiresmallclockgranularity, TestCluster
 
 try:
     import cassandra.io.asyncorereactor
@@ -125,7 +125,6 @@ class HeartbeatTest(unittest.TestCase):
         self.cluster.shutdown()
 
     @local
-    @greaterthancass20
     def test_heart_beat_timeout(self):
         # Setup a host listener to ensure the nodes don't go down
         test_listener = TestHostListener()

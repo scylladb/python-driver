@@ -38,8 +38,8 @@ from cassandra.util import sortedset, Duration, OrderedMap
 from tests.unit.cython.utils import cythontest
 from tests.util import assertEqual
 
-from tests.integration import use_singledc, execute_until_pass, notprotocolv1, \
-    BasicSharedKeyspaceUnitTestCase, greaterthancass21, lessthancass30, \
+from tests.integration import use_singledc, execute_until_pass, \
+    BasicSharedKeyspaceUnitTestCase, \
     greaterthanorequalcass3_10, TestCluster, requires_composite_type, greaterthanorequalcass50
 from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES, COLLECTION_TYPES, PRIMITIVE_DATATYPES_KEYS, \
     get_sample, get_all_samples, get_collection_sample
@@ -430,9 +430,6 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         Basic test of tuple functionality
         """
 
-        if self.cass_version < (2, 1, 0):
-            raise unittest.SkipTest("The tuple type was introduced in Cassandra 2.1")
-
         c = TestCluster()
         s = c.connect(self.keyspace_name)
 
@@ -483,9 +480,6 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         as expected.
         """
 
-        if self.cass_version < (2, 1, 0):
-            raise unittest.SkipTest("The tuple type was introduced in Cassandra 2.1")
-
         c = TestCluster(
             execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=dict_factory)}
         )
@@ -523,9 +517,6 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         Ensure tuple subtypes are appropriately handled.
         """
 
-        if self.cass_version < (2, 1, 0):
-            raise unittest.SkipTest("The tuple type was introduced in Cassandra 2.1")
-
         c = TestCluster()
         s = c.connect(self.keyspace_name)
         s.encoder.mapping[tuple] = s.encoder.cql_encode_tuple
@@ -550,9 +541,6 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         """
         Ensure tuple subtypes are appropriately handled for maps, sets, and lists.
         """
-
-        if self.cass_version < (2, 1, 0):
-            raise unittest.SkipTest("The tuple type was introduced in Cassandra 2.1")
 
         c = TestCluster(
             execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=dict_factory)}
@@ -650,9 +638,6 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         Ensure nested are appropriately handled.
         """
 
-        if self.cass_version < (2, 1, 0):
-            raise unittest.SkipTest("The tuple type was introduced in Cassandra 2.1")
-
         c = TestCluster(
             execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=dict_factory)}
         )
@@ -689,9 +674,6 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         """
         Test tuples with null and empty string fields.
         """
-
-        if self.cass_version < (2, 1, 0):
-            raise unittest.SkipTest("The tuple type was introduced in Cassandra 2.1")
 
         s = self.session
 
@@ -792,7 +774,6 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         assert 0 == result.a
         assert ('abc',) == result.b
 
-    @notprotocolv1
     def test_special_float_cql_encoding(self):
         """
         Test to insure that Infinity -Infinity and NaN are supported by the python driver.
@@ -904,85 +885,6 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         with pytest.raises(ValueError):
             self.session.execute(prepared,
                           (1, Duration(int("8FFFFFFFFFFFFFF0", 16), 0, 0)))
-
-class TypeTestsProtocol(BasicSharedKeyspaceUnitTestCase):
-
-    @greaterthancass21
-    @lessthancass30
-    def test_nested_types_with_protocol_version(self):
-        """
-        Test to validate that nested type serialization works on various protocol versions. Provided
-        the version of cassandra is greater the 2.1.3 we would expect to nested to types to work at all protocol versions.
-
-        @since 3.0.0
-        @jira_ticket PYTHON-215
-        @expected_result no exceptions are thrown
-
-        @test_category data_types serialization
-        """
-        ddl = '''CREATE TABLE {0}.t (
-                k int PRIMARY KEY,
-                v list<frozen<set<int>>>)'''.format(self.keyspace_name)
-
-        self.session.execute(ddl)
-        ddl = '''CREATE TABLE {0}.u (
-                k int PRIMARY KEY,
-                v set<frozen<list<int>>>)'''.format(self.keyspace_name)
-        self.session.execute(ddl)
-        ddl = '''CREATE TABLE {0}.v (
-                k int PRIMARY KEY,
-                v map<frozen<set<int>>, frozen<list<int>>>,
-                v1 frozen<tuple<int, text>>)'''.format(self.keyspace_name)
-        self.session.execute(ddl)
-
-        self.session.execute("CREATE TYPE {0}.typ (v0 frozen<map<int, frozen<list<int>>>>, v1 frozen<list<int>>)".format(self.keyspace_name))
-
-        ddl = '''CREATE TABLE {0}.w (
-                k int PRIMARY KEY,
-                v frozen<typ>)'''.format(self.keyspace_name)
-
-        self.session.execute(ddl)
-
-        for pvi in range(3, 5):
-            self.run_inserts_at_version(pvi)
-            for pvr in range(3, 5):
-                self.read_inserts_at_level(pvr)
-
-    def read_inserts_at_level(self, proto_ver):
-        session = TestCluster(protocol_version=proto_ver).connect(self.keyspace_name)
-        try:
-            results = session.execute('select * from t').one()
-            assert "[SortedSet([1, 2]), SortedSet([3, 5])]" == str(results.v)
-
-            results = session.execute('select * from u').one()
-            assert "SortedSet([[1, 2], [3, 5]])" == str(results.v)
-
-            results = session.execute('select * from v').one()
-            assert "{SortedSet([1, 2]): [1, 2, 3], SortedSet([3, 5]): [4, 5, 6]}" == str(results.v)
-
-            results = session.execute('select * from w').one()
-            assert "typ(v0=OrderedMapSerializedKey([(1, [1, 2, 3]), (2, [4, 5, 6])]), v1=[7, 8, 9])" == str(results.v)
-
-        finally:
-            session.cluster.shutdown()
-
-    def run_inserts_at_version(self, proto_ver):
-        session = TestCluster(protocol_version=proto_ver).connect(self.keyspace_name)
-        try:
-            p = session.prepare('insert into t (k, v) values (?, ?)')
-            session.execute(p, (0, [{1, 2}, {3, 5}]))
-
-            p = session.prepare('insert into u (k, v) values (?, ?)')
-            session.execute(p, (0, {(1, 2), (3, 5)}))
-
-            p = session.prepare('insert into v (k, v, v1) values (?, ?, ?)')
-            session.execute(p, (0, {(1, 2): [1, 2, 3], (3, 5): [4, 5, 6]}, (123, 'four')))
-
-            p = session.prepare('insert into w (k, v) values (?, ?)')
-            session.execute(p, (0, ({1: [1, 2, 3], 2: [4, 5, 6]}, [7, 8, 9])))
-
-        finally:
-            session.cluster.shutdown()
 
 @greaterthanorequalcass50
 class TypeTestsVector(BasicSharedKeyspaceUnitTestCase):

@@ -21,7 +21,7 @@ Map a Class to a UDT
 
 .. code-block:: python
 
-    cluster = Cluster(protocol_version=3)
+    cluster = Cluster(protocol_version=4)
     session = cluster.connect()
     session.set_keyspace('mykeyspace')
     session.execute("CREATE TYPE address (street text, zipcode int)")
@@ -50,7 +50,7 @@ Map a dict to a UDT
 
 .. code-block:: python
 
-    cluster = Cluster(protocol_version=3)
+    cluster = Cluster(protocol_version=4)
     session = cluster.connect()
     session.set_keyspace('mykeyspace')
     session.execute("CREATE TYPE address (street text, zipcode int)")
@@ -80,7 +80,7 @@ for the UDT:
 
 .. code-block:: python
 
-    cluster = Cluster(protocol_version=3)
+    cluster = Cluster(protocol_version=4)
     session = cluster.connect()
     session.set_keyspace('mykeyspace')
     session.execute("CREATE TYPE address (street text, zipcode int)")

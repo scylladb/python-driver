@@ -449,25 +449,6 @@ class AuthenticateMessage(_MessageType):
         return cls(authenticator=authname)
 
 
-class CredentialsMessage(_MessageType):
-    opcode = 0x04
-    name = 'CREDENTIALS'
-
-    def __init__(self, creds):
-        self.creds = creds
-
-    def send_body(self, f, protocol_version):
-        if protocol_version > 1:
-            raise UnsupportedOperation(
-                "Credentials-based authentication is not supported with "
-                "protocol version 2 or higher.  Use the SASL authentication "
-                "mechanism instead.")
-        write_short(f, len(self.creds))
-        for credkey, credval in self.creds.items():
-            write_string(f, credkey)
-            write_string(f, credval)
-
-
 class AuthChallengeMessage(_MessageType):
     opcode = 0x0E
     name = 'AUTH_CHALLENGE'
@@ -695,7 +676,7 @@ class ResultMessage(_MessageType):
         if self.kind == RESULT_KIND_VOID:
             return
         elif self.kind == RESULT_KIND_ROWS:
-            self.recv_results_rows(f, protocol_version, user_type_map, result_metadata, column_encryption_policy)
+            self.recv_results_rows(f, user_type_map, result_metadata, column_encryption_policy)
         elif self.kind == RESULT_KIND_SET_KEYSPACE:
             self.new_keyspace = read_string(f)
         elif self.kind == RESULT_KIND_PREPARED:
@@ -712,7 +693,7 @@ class ResultMessage(_MessageType):
         msg.recv(f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy)
         return msg
 
-    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
+    def recv_results_rows(self, f, user_type_map, result_metadata, column_encryption_policy):
         self.recv_results_metadata(f, user_type_map)
         column_metadata = self.column_metadata or result_metadata
         rowcount = read_int(f)
@@ -725,7 +706,7 @@ class ResultMessage(_MessageType):
             uses_ce = column_encryption_policy and column_encryption_policy.contains_column(col_desc)
             col_type = column_encryption_policy.column_type(col_desc) if uses_ce else col_md[3]
             raw_bytes = column_encryption_policy.decrypt(col_desc, val) if uses_ce else val
-            return col_type.from_binary(raw_bytes, protocol_version)
+            return col_type.from_binary(raw_bytes)
 
         def decode_row(row):
             return tuple(decode_val(val, col_md, col_desc) for val, col_md, col_desc in zip(row, column_metadata, col_descs))
@@ -748,7 +729,7 @@ class ResultMessage(_MessageType):
             self.result_metadata_id = read_binary_string(f)
         else:
             self.result_metadata_id = None
-        self.recv_prepared_metadata(f, protocol_version, protocol_features, user_type_map)
+        self.recv_prepared_metadata(f, protocol_features, user_type_map)
 
     def recv_results_metadata(self, f, user_type_map):
         flags = read_int(f)
@@ -786,14 +767,13 @@ class ResultMessage(_MessageType):
 
         self.column_metadata = column_metadata
 
-    def recv_prepared_metadata(self, f, protocol_version, protocol_features, user_type_map):
+    def recv_prepared_metadata(self, f, protocol_features, user_type_map):
         flags = read_int(f)
         self.is_lwt = protocol_features.lwt_info.get_lwt_flag(flags) if protocol_features.lwt_info is not None else False
         colcount = read_int(f)
         pk_indexes = None
-        if protocol_version >= 4:
-            num_pk_indexes = read_int(f)
-            pk_indexes = [read_short(f) for _ in range(num_pk_indexes)]
+        num_pk_indexes = read_int(f)
+        pk_indexes = [read_short(f) for _ in range(num_pk_indexes)]
 
         glob_tblspec = bool(flags & self._FLAGS_GLOBAL_TABLES_SPEC)
         if glob_tblspec:
@@ -1086,8 +1066,6 @@ class _ProtocolHandler(object):
         """
         flags = 0
         if msg.custom_payload:
-            if protocol_version < 4:
-                raise UnsupportedOperation("Custom key/value payloads can only be used with protocol version 4 or higher")
             flags |= CUSTOM_PAYLOAD_FLAG
 
         if msg.tracing:

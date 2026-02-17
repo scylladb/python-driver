@@ -26,18 +26,17 @@ cdef class Deserializer:
     # paragraph 6)
     cdef bint empty_binary_ok
 
-    cdef deserialize(self, Buffer *buf, int protocol_version)
-    # cdef deserialize(self, CString byts, protocol_version)
+    cdef deserialize(self, Buffer *buf)
+    # cdef deserialize(self, CString byts)
 
 
 cdef inline object from_binary(Deserializer deserializer,
-                               Buffer *buf,
-                               int protocol_version):
+                               Buffer *buf):
     if buf.size < 0:
         return None
     elif buf.size == 0 and not deserializer.empty_binary_ok:
         return _ret_empty(deserializer, buf.size)
     else:
-        return deserializer.deserialize(buf, protocol_version)
+        return deserializer.deserialize(buf)
 
 cdef _ret_empty(Deserializer deserializer, Py_ssize_t buf_size)

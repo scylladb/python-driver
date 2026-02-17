@@ -136,13 +136,6 @@ class ProtocolVersion(object):
     Defines native protocol versions supported by this driver.
     """
 
-    V3 = 3
-    """
-    v3, supported in Cassandra 2.1-->3.x+;
-    added support for protocol-level client-side timestamps (see :attr:`.Session.use_client_timestamp`),
-    serial consistency levels for :class:`~.BatchStatement`, and an improved connection pool.
-    """
-
     V4 = 4
     """
     v4, supported in Cassandra 2.2-->3.x+;
@@ -170,9 +163,9 @@ class ProtocolVersion(object):
     DSE private protocol v2, supported in DSE 6.0+
     """
 
-    SUPPORTED_VERSIONS = (V5, V4, V3)
+    SUPPORTED_VERSIONS = (V5, V4)
     """
-    A tuple of all supported protocol versions for ScyllaDB, including future v5 version.
+    A tuple of all supported protocol versions for ScyllaDB.
     """
 
     BETA_VERSIONS = (V6,)

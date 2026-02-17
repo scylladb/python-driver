@@ -12,8 +12,8 @@ from cassandra.cython_deps import HAVE_CYTHON, HAVE_NUMPY
 from cassandra.protocol import ProtocolHandler, LazyProtocolHandler, NumpyProtocolHandler
 from cassandra.query import tuple_factory
 from tests import VERIFY_CYTHON
-from tests.integration import use_singledc, notprotocolv1, \
-    drop_keyspace_shutdown_cluster, BasicSharedKeyspaceUnitTestCase, greaterthancass21, TestCluster
+from tests.integration import use_singledc, \
+    drop_keyspace_shutdown_cluster, BasicSharedKeyspaceUnitTestCase, TestCluster
 from tests.integration.datatype_utils import update_datatypes
 from tests.integration.standard.utils import (
     create_table_with_all_types, get_all_primitive_params, get_primitive_datatypes)
@@ -78,7 +78,6 @@ class CythonProtocolHandlerTest(unittest.TestCase):
 
         cluster.shutdown()
 
-    @notprotocolv1
     @numpytest
     def test_numpy_parser(self):
         """
@@ -89,7 +88,6 @@ class CythonProtocolHandlerTest(unittest.TestCase):
         assert not result.has_more_pages
         self._verify_numpy_page(result[0])
 
-    @notprotocolv1
     @numpytest
     def test_numpy_results_paged(self):
         """
@@ -251,7 +249,6 @@ class NumpyWideTableTest(unittest.TestCase):
     def tearDownClass(cls):
         drop_keyspace_shutdown_cluster("test_wide_table", cls.session, cls.cluster)
 
-    @notprotocolv1
     @numpytest
     def test_numpy_wide_table_paging(self):
         """
@@ -287,7 +284,6 @@ class NumpyWideTableTest(unittest.TestCase):
 
         cluster.shutdown()
 
-    @notprotocolv1
     @numpytest
     def test_numpy_wide_table_no_fetch_size(self):
         """
@@ -328,7 +324,6 @@ class NumpyNullTest(BasicSharedKeyspaceUnitTestCase):
         cls.common_setup(1, execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)})
 
     @numpytest
-    @greaterthancass21
     def test_null_types(self):
         """
         Test to validate that the numpy protocol handler can deal with null values.

@@ -21,11 +21,9 @@ from cassandra.cqlengine.management import sync_table, drop_table
 from cassandra.cqlengine.models import Model
 
 from tests.integration.cqlengine.base import BaseCassEngTestCase
-from tests.integration import PROTOCOL_VERSION
 
-# TODO: is this really a protocol limitation, or is it just C* version?
-# good enough proxy for now
-STATIC_SUPPORTED = PROTOCOL_VERSION >= 2
+# Static columns are supported for all currently supported protocol versions (v4+)
+STATIC_SUPPORTED = True
 
 class TestStaticModel(Model):
     __test__ = False
