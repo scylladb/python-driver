@@ -4709,6 +4709,10 @@ class ResponseFuture(object):
                     log.warning("Host %s error: %s.", host, response.summary)
                     if self._metrics is not None:
                         self._metrics.on_other_error()
+                    # TruncateError should not be retried as it indicates a permanent failure
+                    if isinstance(response, TruncateError):
+                        self._set_final_exception(response.to_exception())
+                        return
                     cl = getattr(self.message, 'consistency_level', None)
                     retry = retry_policy.on_request_error(
                         self.query, cl, error=response,
