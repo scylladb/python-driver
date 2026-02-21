@@ -354,6 +354,10 @@ static void prepare_callback(struct ev_loop *loop, ev_prepare *watcher, int reve
     PyObject *result = NULL;
     PyGILState_STATE gstate;
 
+    if (!self || !self->callback) {
+        return;  // Skip callback if object is being destroyed
+    }
+
     gstate = PyGILState_Ensure();
     result = PyObject_CallFunction(self->callback, "O", self);
     if (!result) {
