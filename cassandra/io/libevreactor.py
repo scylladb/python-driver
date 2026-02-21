@@ -116,6 +116,10 @@ class LibevLoop(object):
         if not self._thread:
             return
 
+        # Stop the prepare watcher first to prevent race conditions
+        if self._preparer:
+            self._preparer.stop()
+
         for conn in self._live_conns | self._new_conns | self._closed_conns:
             conn.close()
             for watcher in (conn._write_watcher, conn._read_watcher):
@@ -125,8 +129,9 @@ class LibevLoop(object):
         self.notify()  # wake the timer watcher
 
         # PYTHON-752 Thread might have just been created and not started
+        # Use longer timeout to allow proper cleanup
         with self._lock_thread:
-            self._thread.join(timeout=1.0)
+            self._thread.join(timeout=5.0)
 
         if self._thread.is_alive():
             log.warning(
