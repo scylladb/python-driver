@@ -118,7 +118,13 @@ IO_dealloc(libevwrapper_IO *self) {
 static void io_callback(struct ev_loop *loop, ev_io *watcher, int revents) {
     libevwrapper_IO *self = watcher->data;
     PyObject *result;
-    PyGILState_STATE gstate = PyGILState_Ensure();
+    PyGILState_STATE gstate;
+
+    if (!self || !self->callback) {
+        return;  // Skip callback if object is being destroyed
+    }
+
+    gstate = PyGILState_Ensure();
     if (revents & EV_ERROR && errno) {
         result = PyObject_CallFunction(self->callback, "Obi", self, revents, errno);
     } else {
@@ -476,6 +482,10 @@ static void timer_callback(struct ev_loop *loop, ev_timer *watcher, int revents)
 
     PyObject *result = NULL;
     PyGILState_STATE gstate;
+
+    if (!self || !self->callback) {
+        return;  // Skip callback if object is being destroyed
+    }
 
     gstate = PyGILState_Ensure();
     result = PyObject_CallFunction(self->callback, NULL);
