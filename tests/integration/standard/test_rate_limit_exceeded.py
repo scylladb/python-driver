@@ -4,7 +4,7 @@ from cassandra import OperationType, RateLimitReached
 from cassandra.cluster import Cluster
 from cassandra.policies import ConstantReconnectionPolicy, RoundRobinPolicy, TokenAwarePolicy
 
-from tests.integration import PROTOCOL_VERSION, use_cluster
+from tests.integration import PROTOCOL_VERSION, use_cluster, scylla_only
 import pytest
 
 LOGGER = logging.getLogger(__name__)
@@ -12,6 +12,8 @@ LOGGER = logging.getLogger(__name__)
 def setup_module():
     use_cluster('rate_limit', [3], start=True)
 
+# RateLimitExceededException is a scylla only feature, cassandra doesn't generate this error
+@scylla_only
 class TestRateLimitExceededException(unittest.TestCase):
     @classmethod
     def setup_class(cls):

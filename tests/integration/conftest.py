@@ -16,8 +16,9 @@ def cleanup_clusters():
     yield
 
     if not os.environ.get('DISABLE_CLUSTER_CLEANUP'):
-        for cluster_name in [CLUSTER_NAME, SINGLE_NODE_CLUSTER_NAME, MULTIDC_CLUSTER_NAME,
-                             'shared_aware', 'sni_proxy', 'test_ip_change']:
+        for cluster_name in [CLUSTER_NAME, SINGLE_NODE_CLUSTER_NAME, MULTIDC_CLUSTER_NAME, 'cluster_tests', 'ipv6_test_cluster',
+                             'shared_aware', 'sni_proxy', 'test_ip_change', 'tablets', 'test_down_then_removed',
+                             'test_concurrent_schema_change_and_node_kill', 'rate_limit', 'shard_aware']:
             try:
                 cluster = CCMClusterFactory.load(ccm_path, cluster_name)
                 logging.debug("Using external CCM cluster {0}".format(cluster.name))

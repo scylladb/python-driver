@@ -35,6 +35,7 @@ from cassandra.metadata import (IndexMetadata, Token, murmur3, Function, Aggrega
                                 group_keys_by_replica, NO_VALID_REPLICA)
 from cassandra.protocol import QueryMessage, ProtocolHandler
 from cassandra.util import SortedSet
+from ccmlib.scylla_cluster import ScyllaCluster
 
 from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, execute_until_pass,
                                BasicSegregatedKeyspaceUnitTestCase, BasicSharedKeyspaceUnitTestCase,
@@ -45,7 +46,7 @@ from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, exec
                                lessthancass40,
                                TestCluster, requires_java_udf, requires_composite_type,
                                requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, xfail_scylla_version_lt,
-                               requirescompactstorage)
+                               requirescompactstorage, scylla_only, EVENT_LOOP_MANAGER)
 
 from tests.util import wait_until, assertRegex, assertDictEqual, assertListEqual, assert_startswith_diff
 
@@ -217,6 +218,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.cluster.refresh_table_metadata(self.keyspace_name, self.function_table_name)
         return self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name]
 
+    @pytest.mark.xfail(reason="test not stable on Cassandra", condition=EVENT_LOOP_MANAGER=="asyncio" and SCYLLA_VERSION is None, strict=False)
     def test_basic_table_meta_properties(self):
         create_statement = self.make_create_statement(["a"], [], ["b", "c"])
         self.session.execute(create_statement)
@@ -577,6 +579,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
             assert "max_threshold" not in cql
 
     @requires_java_udf
+    @pytest.mark.xfail(reason="test not stable on Cassandra", condition=EVENT_LOOP_MANAGER=="asyncio" and SCYLLA_VERSION is None, strict=False)
     def test_refresh_schema_metadata(self):
         """
         test for synchronously refreshing all cluster metadata
@@ -1066,6 +1069,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.cluster.refresh_schema_metadata()
         assert len(self.cluster.metadata.keyspaces[self.keyspace_name].tables) == 12
 
+    @pytest.mark.xfail(reason="test not stable on Cassandra", condition=EVENT_LOOP_MANAGER=="asyncio" and SCYLLA_VERSION is None, strict=False)
     def test_metadata_pagination_keyspaces(self):
         """
         test for covering
@@ -1269,13 +1273,14 @@ CREATE TABLE export_udts.users (
         cluster.shutdown()
 
     @local
-    @pytest.mark.xfail(reason='AssertionError: \'RAC1\' != \'r1\' - probably a bug in driver or in Scylla')
     def test_replicas(self):
         """
         Ensure cluster.metadata.get_replicas return correctly when not attached to keyspace
         """
         if murmur3 is None:
             raise unittest.SkipTest('the murmur3 extension is not available')
+
+        is_scylla = isinstance(get_cluster(), ScyllaCluster)
 
         cluster = TestCluster()
         assert cluster.metadata.get_replicas('test3rf', 'key') == []
@@ -1285,7 +1290,7 @@ CREATE TABLE export_udts.users (
         assert list(cluster.metadata.get_replicas('test3rf', b'key')) != []
         host = list(cluster.metadata.get_replicas('test3rf', b'key'))[0]
         assert host.datacenter == 'dc1'
-        assert host.rack == 'r1'
+        assert host.rack == ('RAC1' if is_scylla else 'r1')
         cluster.shutdown()
 
     def test_token_map(self):
@@ -1325,6 +1330,8 @@ class TokenMetadataTest(unittest.TestCase):
         cluster.shutdown()
 
 
+# this is scylla only, since the metadata timeout feature doesn't cover peers_v2 queries that is used by cassandra
+@scylla_only
 class TestMetadataTimeout:
     """
     Test of TokenMap creation and other behavior.

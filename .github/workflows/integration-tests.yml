@@ -1,5 +1,8 @@
 name: Integration tests
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:
@@ -93,3 +96,67 @@ jobs:
           export PYTHON_GIL=0
         fi
         uv run pytest tests/integration/standard/ tests/integration/cqlengine/
+
+  tests-cassandra:
+    name: test cassandra ${{ matrix.event_loop_manager }} (${{ matrix.python-version }})
+    if: "!contains(github.event.pull_request.labels.*.name, 'disable-integration-tests')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11"]
+        event_loop_manager: ["libev", "asyncio"]
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up JDK 11
+      uses: actions/setup-java@v5
+      with:
+        java-version: 11
+        distribution: 'adopt'
+
+    - name: Install libev
+      run: sudo apt-get install libev4 libev-dev
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    # This is to get honest accounting of test time vs download time vs build time.
+    # Not strictly necessary for running tests.
+    - name: Build driver
+      run: uv sync
+
+    - name: Get latest Cassandra version
+      id: cassandra-version
+      run: |
+        CASSANDRA_VERSION=$(curl -s "https://api.github.com/repos/apache/cassandra/tags?per_page=100" | \
+          python3 -c "
+        import sys, json, re
+        from packaging.version import Version
+        tags = json.load(sys.stdin)
+        versions = [re.match(r'^cassandra-(\d+\.\d+\.\d+)$', t['name']).group(1)
+                    for t in tags
+                    if re.match(r'^cassandra-(\d+\.\d+\.\d+)$', t['name'])]
+        versions.sort(key=lambda v: Version(v), reverse=True)
+        print(versions[0])")
+        echo "version=$CASSANDRA_VERSION" >> $GITHUB_OUTPUT
+
+    # This is to get honest accounting of test time vs download time vs build time.
+    # Not strictly necessary for running tests.
+    - name: Download Cassandra
+      run: |
+        uv run ccm create cassandra-driver-temp -n 1 --version ${{ steps.cassandra-version.outputs.version }}
+        uv run ccm remove
+
+    - name: Test with cassandra
+      env:
+        EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
+        CASSANDRA_VERSION: ${{ steps.cassandra-version.outputs.version }}
+        MAPPED_CASSANDRA_VERSION: ${{ steps.cassandra-version.outputs.version }}
+        PROTOCOL_VERSION: 4
+      run: |
+        uv run pytest tests/integration/standard/
