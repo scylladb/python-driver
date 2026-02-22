@@ -92,8 +92,6 @@ def execute_concurrent(session, statements_and_parameters, concurrency=100, rais
 
 class _ConcurrentExecutor(object):
 
-    max_error_recursion = 100
-
     def __init__(self, session, statements_and_params, execution_profile):
         self.session = session
         self._enum_statements = enumerate(iter(statements_and_params))
@@ -103,7 +101,7 @@ class _ConcurrentExecutor(object):
         self._results_queue = []
         self._current = 0
         self._exec_count = 0
-        self._exec_depth = 0
+        self._executing = False
 
     def execute(self, concurrency, fail_fast):
         self._fail_fast = fail_fast
@@ -127,22 +125,34 @@ class _ConcurrentExecutor(object):
             pass
 
     def _execute(self, idx, statement, params):
-        self._exec_depth += 1
+        # When execute_async completes synchronously (e.g. immediate timeout),
+        # the errback fires inline: _on_error -> _put_result -> _execute_next
+        # -> _execute.  Without protection this recurses once per remaining
+        # statement and blows the stack.
+        #
+        # ``_executing`` marks that we are already inside this method higher up
+        # the call stack.  When a synchronous callback re-enters, we just stash
+        # the pending work in ``_pending_executions`` and let the outermost
+        # invocation drain it in a loop -- no recursion.
+        if self._executing:
+            self._pending_executions.append((idx, statement, params))
+            return
+
+        self._executing = True
+        self._pending_executions = [(idx, statement, params)]
         try:
-            future = self.session.execute_async(statement, params, timeout=None, execution_profile=self._execution_profile)
-            args = (future, idx)
-            future.add_callbacks(
-                callback=self._on_success, callback_args=args,
-                errback=self._on_error, errback_args=args)
-        except Exception as exc:
-            # If we're not failing fast and all executions are raising, there is a chance of recursing
-            # here as subsequent requests are attempted. If we hit this threshold, schedule this result/retry
-            # and let the event loop thread return.
-            if self._exec_depth < self.max_error_recursion:
-                self._put_result(exc, idx, False)
-            else:
-                self.session.submit(self._put_result, exc, idx, False)
-        self._exec_depth -= 1
+            while self._pending_executions:
+                p_idx, p_statement, p_params = self._pending_executions.pop(0)
+                try:
+                    future = self.session.execute_async(p_statement, p_params, timeout=None, execution_profile=self._execution_profile)
+                    args = (future, p_idx)
+                    future.add_callbacks(
+                        callback=self._on_success, callback_args=args,
+                        errback=self._on_error, errback_args=args)
+                except Exception as exc:
+                    self._put_result(exc, p_idx, False)
+        finally:
+            self._executing = False
 
     def _on_success(self, result, future, idx):
         future.clear_callbacks()

@@ -258,3 +258,52 @@ class ConcurrencyTest((unittest.TestCase)):
         for r in results:
             assert not r[0]
             assert isinstance(r[1], TypeError)
+
+    def test_no_recursion_on_synchronous_errback(self):
+        """
+        Verify that execute_concurrent does not blow the stack when every
+        future completes with an error *before* add_callbacks is called
+        (i.e. the errback fires synchronously inside add_callbacks).
+
+        This exercises a different code path from test_recursion_limited:
+        that test covers execute_async raising an exception, while this one
+        covers execute_async returning a future whose errback fires inline.
+        """
+        count = sys.getrecursionlimit()
+        error = Exception("immediate failure")
+
+        class AlreadyFailedFuture:
+            """A future that already has _final_exception set."""
+            _query_trace = None
+            _col_names = None
+            _col_types = None
+            has_more_pages = False
+
+            def add_callback(self, fn, *args, **kwargs):
+                pass
+
+            def add_errback(self, fn, *args, **kwargs):
+                # Fire errback synchronously, mimicking a future that
+                # completed before add_callbacks was called.
+                fn(error, *args, **kwargs)
+
+            def add_callbacks(self, callback, errback,
+                              callback_args=(), callback_kwargs=None,
+                              errback_args=(), errback_kwargs=None):
+                self.add_callback(callback, *callback_args, **(callback_kwargs or {}))
+                self.add_errback(errback, *errback_args, **(errback_kwargs or {}))
+
+            def clear_callbacks(self):
+                pass
+
+        mock_session = Mock()
+        mock_session.execute_async.return_value = AlreadyFailedFuture()
+
+        statements_and_params = [("SELECT 1", ())] * count
+        results = execute_concurrent(mock_session, statements_and_params,
+                                     raise_on_first_error=False)
+
+        assert len(results) == count
+        for success, result in results:
+            assert not success
+            assert result is error
