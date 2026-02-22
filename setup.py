@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import shutil
 import sys
 import json
 import warnings
@@ -201,8 +200,6 @@ try_extensions = "--no-extensions" not in sys.argv and is_supported_platform and
 try_murmur3 = try_extensions and "--no-murmur3" not in sys.argv
 try_libev = try_extensions and "--no-libev" not in sys.argv and not is_pypy and not os.environ.get('CASS_DRIVER_NO_LIBEV')
 try_cython = try_extensions and "--no-cython" not in sys.argv and not is_pypy and not os.environ.get('CASS_DRIVER_NO_CYTHON')
-try_cython &= 'egg_info' not in sys.argv  # bypass setup_requires for pip egg_info calls, which will never have --install-option"--no-cython" coming fomr pip
-
 sys.argv = [a for a in sys.argv if a not in ("--no-murmur3", "--no-libev", "--no-cython", "--no-extensions")]
 
 build_concurrency = int(os.environ.get('CASS_DRIVER_BUILD_CONCURRENCY', '0'))
@@ -358,79 +355,11 @@ def fix_extension_class(ext: Extension) -> Extension:
     return ext
 
 
-def pre_build_check():
-    """
-    Try to verify build tools
-    """
-    if os.environ.get('CASS_DRIVER_NO_PRE_BUILD_CHECK'):
-        return True
-
-    try:
-        from setuptools._distutils.ccompiler import new_compiler
-        from setuptools._distutils.sysconfig import customize_compiler
-        from setuptools.dist import Distribution
-
-        # base build_ext just to emulate compiler option setup
-        be = build_ext(Distribution())
-        be.initialize_options()
-        be.finalize_options()
-
-        # First, make sure we have a Python include directory
-        have_python_include = any(os.path.isfile(os.path.join(p, 'Python.h')) for p in be.include_dirs)
-        if not have_python_include:
-            sys.stderr.write("Did not find 'Python.h' in %s.\n" % (be.include_dirs,))
-            return False
-
-        compiler = new_compiler(compiler=be.compiler)
-        customize_compiler(compiler)
-
-        try:
-            # We must be able to initialize the compiler if it has that method
-            if hasattr(compiler, "initialize"):
-                compiler.initialize()
-        except:
-            return False
-
-        executables = []
-        if compiler.compiler_type in ('unix', 'cygwin'):
-            executables = [compiler.executables[exe][0] for exe in ('compiler_so', 'linker_so')]
-        elif compiler.compiler_type == 'nt':
-            executables = [getattr(compiler, exe) for exe in ('cc', 'linker')]
-
-        if executables:
-            for exe in executables:
-                if not shutil.which(exe):
-                    sys.stderr.write("Failed to find %s for compiler type %s.\n" % (exe, compiler.compiler_type))
-                    return False
-
-    except Exception as exc:
-        sys.stderr.write('%s\n' % str(exc))
-        sys.stderr.write("Failed pre-build check. Attempting anyway.\n")
-
-    # if we are unable to positively id the compiler type, or one of these assumptions fails,
-    # just proceed as we would have without the check
-    return True
-
-
 def run_setup(extensions):
 
     kw = {'cmdclass': {'doc': DocCommand}}
     kw['cmdclass']['build_ext'] = build_extensions
     kw['ext_modules'] = [Extension('DUMMY', [])]  # dummy extension makes sure build_ext is called for install
-
-    if try_cython:
-        # precheck compiler before adding to setup_requires
-        # we don't actually negate try_cython because:
-        # 1.) build_ext eats errors at compile time, letting the install complete while producing useful feedback
-        # 2.) there could be a case where the python environment has cython installed but the system doesn't have build tools
-        if pre_build_check():
-            cython_dep = 'Cython>=3.0.11,<4'
-            user_specified_cython_version = os.environ.get('CASS_DRIVER_ALLOWED_CYTHON_VERSION')
-            if user_specified_cython_version is not None:
-                cython_dep = 'Cython==%s' % (user_specified_cython_version,)
-            kw['setup_requires'] = [cython_dep]
-        else:
-            sys.stderr.write("Bypassing Cython setup requirement\n")
 
     setup(**kw)
 
