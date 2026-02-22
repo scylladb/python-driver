@@ -24,7 +24,7 @@ from cassandra import util
 from cassandra.cqltypes import (
     CassandraType, DateRangeType, DateType, DecimalType,
     EmptyValue, LongType, SetType, UTF8Type,
-    cql_typename, int8_pack, int64_pack, lookup_casstype,
+    cql_typename, int8_pack, int64_pack, int64_unpack, lookup_casstype,
     lookup_casstype_simple, parse_casstype_args,
     int32_pack, Int32Type, ListType, MapType, VectorType,
     FloatType
@@ -240,6 +240,21 @@ class TypeTests(unittest.TestCase):
         # Large date overflow (PYTHON-452)
         expected = 2177403010.123
         assert DateType.deserialize(int64_pack(int(1000 * expected)), 0) == datetime.datetime(2038, 12, 31, 10, 10, 10, 123000, tzinfo=datetime.timezone.utc).replace(tzinfo=None)
+
+        # Large timestamp precision (GH-532) - timestamps far from epoch must
+        # not lose precision due to floating-point conversions.
+        # 2300-01-01 00:00:00.001 UTC
+        ts_ms = 10413792000001
+        deserialized = DateType.deserialize(int64_pack(ts_ms), 0)
+        assert deserialized == datetime.datetime(2300, 1, 1, 0, 0, 0, 1000)
+        # Round-trip: serialize the deserialized datetime back to milliseconds
+        assert int64_unpack(DateType.serialize(deserialized, 0)) == ts_ms
+
+        # Negative large timestamp: 1600-01-01 00:00:00.001 UTC
+        ts_ms_neg = -11676096000000 + 1  # -11676095999999
+        deserialized_neg = DateType.deserialize(int64_pack(ts_ms_neg), 0)
+        assert deserialized_neg == datetime.datetime(1600, 1, 1, 0, 0, 0, 1000)
+        assert int64_unpack(DateType.serialize(deserialized_neg, 0)) == ts_ms_neg
 
     def test_collection_null_support(self):
         """

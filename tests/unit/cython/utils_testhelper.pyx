@@ -14,10 +14,23 @@
 
 import datetime
 
-from cassandra.cython_utils cimport datetime_from_timestamp
+from cassandra.cython_utils cimport datetime_from_timestamp, datetime_from_ms_timestamp
 
 
 def test_datetime_from_timestamp():
     assert datetime_from_timestamp(1454781157.123456) == datetime.datetime(2016, 2, 6, 17, 52, 37, 123456)
     # PYTHON-452
     assert datetime_from_timestamp(2177403010.123456) == datetime.datetime(2038, 12, 31, 10, 10, 10, 123456)
+
+
+def test_datetime_from_ms_timestamp():
+    # epoch
+    assert datetime_from_ms_timestamp(0) == datetime.datetime(1970, 1, 1)
+    # positive with millisecond precision
+    assert datetime_from_ms_timestamp(1454781157123) == datetime.datetime(2016, 2, 6, 17, 52, 37, 123000)
+    # large positive far from epoch (GH-532)
+    assert datetime_from_ms_timestamp(10413792000001) == datetime.datetime(2300, 1, 1, 0, 0, 0, 1000)
+    # negative timestamp
+    assert datetime_from_ms_timestamp(-770172256000) == datetime.datetime(1945, 8, 5, 23, 15, 44)
+    # large negative with millisecond precision
+    assert datetime_from_ms_timestamp(-11676095999999) == datetime.datetime(1600, 1, 1, 0, 0, 0, 1000)

@@ -62,6 +62,16 @@ def datetime_from_timestamp(timestamp):
     return dt
 
 
+def datetime_from_ms_timestamp(timestamp_ms):
+    """
+    Creates a timezone-agnostic datetime from a timestamp in milliseconds,
+    using integer arithmetic to preserve precision for large values.
+
+    :param timestamp_ms: a unix timestamp, in milliseconds (integer)
+    """
+    return DATETIME_EPOC + datetime.timedelta(milliseconds=timestamp_ms)
+
+
 def utc_datetime_from_ms_timestamp(timestamp):
     """
     Creates a UTC datetime from a timestamp in milliseconds. See
