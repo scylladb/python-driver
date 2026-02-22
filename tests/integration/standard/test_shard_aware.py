@@ -26,7 +26,7 @@ from cassandra.cluster import Cluster
 from cassandra.policies import TokenAwarePolicy, RoundRobinPolicy, ConstantReconnectionPolicy
 from cassandra import OperationTimedOut, ConsistencyLevel
 
-from tests.integration import use_cluster, get_node, PROTOCOL_VERSION
+from tests.integration import use_cluster, get_node, PROTOCOL_VERSION, scylla_only
 
 LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ def setup_module():
     use_cluster('shard_aware', [3], start=True)
 
 
+@scylla_only
 class TestShardAwareIntegration(unittest.TestCase):
     @classmethod
     def setup_class(cls):

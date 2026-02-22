@@ -84,7 +84,27 @@ jobs:
         uv run ccm create scylla-driver-temp -n 1 --scylla --version ${SCYLLA_VERSION}
         uv run ccm remove
 
-    - name: Test with pytest
+    - name: Get latest Cassandra version
+      id: cassandra-version
+      run: |
+        CASSANDRA_VERSION=$(curl -s "https://api.github.com/repos/apache/cassandra/tags?per_page=100" | \
+          python3 -c "
+        import sys, json, re
+        from packaging.version import Version
+        tags = json.load(sys.stdin)
+        versions = [re.match(r'^cassandra-(\d+\.\d+\.\d+)$', t['name']).group(1)
+                    for t in tags
+                    if re.match(r'^cassandra-(\d+\.\d+\.\d+)$', t['name'])]
+        versions.sort(key=lambda v: Version(v), reverse=True)
+        print(versions[0])")
+        echo "version=$CASSANDRA_VERSION" >> $GITHUB_OUTPUT
+
+    - name: Download Cassandra
+      run: |
+        uv run ccm create cassandra-driver-temp -n 1 --version ${{ steps.cassandra-version.outputs.version }}
+        uv run ccm remove
+
+    - name: Test with scylla
       env:
         EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
         PROTOCOL_VERSION: 4
@@ -93,3 +113,16 @@ jobs:
           export PYTHON_GIL=0
         fi
         uv run pytest tests/integration/standard/ tests/integration/cqlengine/
+
+    - name: Test with cassandra
+      env:
+        EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
+        CASSANDRA_VERSION: ${{ steps.cassandra-version.outputs.version }}
+        MAPPED_CASSANDRA_VERSION: ${{ steps.cassandra-version.outputs.version }}
+        SCYLLA_VERSION: ""
+        PROTOCOL_VERSION: 4
+      run: |
+        if [[ "${{ matrix.python-version }}" =~ t$ ]]; then
+          export PYTHON_GIL=0
+        fi
+        uv run pytest tests/integration/standard/

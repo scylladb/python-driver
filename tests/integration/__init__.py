@@ -127,7 +127,7 @@ KEEP_TEST_CLUSTER = bool(os.getenv('KEEP_TEST_CLUSTER', False))
 SIMULACRON_JAR = os.getenv('SIMULACRON_JAR', None)
 
 # Supported Clusters: Cassandra, Scylla
-SCYLLA_VERSION = os.getenv('SCYLLA_VERSION', None)
+SCYLLA_VERSION = os.getenv('SCYLLA_VERSION') or None
 if SCYLLA_VERSION:
     cv_string = SCYLLA_VERSION
     mcv_string = os.getenv('MAPPED_SCYLLA_VERSION', '3.11.4') # Assume that scylla matches cassandra `3.11.4` behavior
@@ -299,6 +299,7 @@ requires_custom_payload = pytest.mark.skipif(SCYLLA_VERSION is not None or PROTO
                                             reason='Scylla does not support custom payloads. Cassandra requires native protocol v4.0+')
 xfail_scylla = lambda reason, *args, **kwargs: pytest.mark.xfail(SCYLLA_VERSION is not None, reason=reason, *args, **kwargs)
 incorrect_test = lambda reason='This test seems to be incorrect and should be fixed', *args, **kwargs: pytest.mark.xfail(reason=reason, *args, **kwargs)
+scylla_only = pytest.mark.skipif(SCYLLA_VERSION is None, reason='Scylla only test')
 
 pypy = unittest.skipUnless(platform.python_implementation() == "PyPy", "Test is skipped unless it's on PyPy")
 requiresmallclockgranularity = unittest.skipIf("Windows" in platform.system() or "asyncore" in EVENT_LOOP_MANAGER,
@@ -481,7 +482,15 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
                     '4.1') else Cassandra41CCMCluster
                 CCM_CLUSTER = ccm_cluster_clz(path, cluster_name, **ccm_options)
                 CCM_CLUSTER.set_configuration_options({'start_native_transport': True})
-            if Version(cassandra_version) >= Version('2.2'):
+            if Version(cassandra_version) >= Version('4.1'):
+                CCM_CLUSTER.set_configuration_options({
+                    'user_defined_functions_enabled': True,
+                    'scripted_user_defined_functions_enabled': True,
+                    'materialized_views_enabled': True,
+                    'sasi_indexes_enabled': True,
+                    'transient_replication_enabled': True,
+                })
+            elif Version(cassandra_version) >= Version('2.2'):
                 CCM_CLUSTER.set_configuration_options({'enable_user_defined_functions': True})
                 if Version(cassandra_version) >= Version('3.0'):
                     # The config.yml option below is deprecated in C* 4.0 per CASSANDRA-17280

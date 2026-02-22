@@ -31,7 +31,7 @@ from cassandra.policies import HostFilterPolicy, RoundRobinPolicy, HostStateList
 
 from tests import is_monkey_patched
 from tests.integration import use_singledc, get_node, CASSANDRA_IP, local, \
-    requiresmallclockgranularity, greaterthancass20, TestCluster
+    requiresmallclockgranularity, greaterthancass20, TestCluster, EVENT_LOOP_MANAGER, SCYLLA_VERSION
 
 try:
     import cassandra.io.asyncorereactor
@@ -126,6 +126,7 @@ class HeartbeatTest(unittest.TestCase):
 
     @local
     @greaterthancass20
+    @pytest.mark.xfail(reason="test not stable on Cassandra", condition=EVENT_LOOP_MANAGER=="asyncio" and SCYLLA_VERSION is None, strict=False)
     def test_heart_beat_timeout(self):
         # Setup a host listener to ensure the nodes don't go down
         test_listener = TestHostListener()

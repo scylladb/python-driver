@@ -40,7 +40,7 @@ from tests.util import assertEqual
 
 from tests.integration import use_singledc, execute_until_pass, notprotocolv1, \
     BasicSharedKeyspaceUnitTestCase, greaterthancass21, lessthancass30, \
-    greaterthanorequalcass3_10, TestCluster, requires_composite_type, greaterthanorequalcass50
+    greaterthanorequalcass3_10, TestCluster, requires_composite_type, greaterthanorequalcass50, scylla_only
 from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES, COLLECTION_TYPES, PRIMITIVE_DATATYPES_KEYS, \
     get_sample, get_all_samples, get_collection_sample
 import pytest
@@ -712,6 +712,7 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         assert ('', None, None, b'') == result.one().t
         assert ('', None, None, b'') == s.execute(read).one().t
 
+    @scylla_only
     def test_insert_collection_with_null_fails(self):
         """
         NULLs in list / sets / maps are forbidden.

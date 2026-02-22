@@ -5,7 +5,7 @@ import pytest
 from cassandra.cluster import Cluster, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.policies import ConstantReconnectionPolicy, RoundRobinPolicy, TokenAwarePolicy
 
-from tests.integration import PROTOCOL_VERSION, use_cluster, get_cluster
+from tests.integration import PROTOCOL_VERSION, use_cluster, get_cluster, scylla_only
 from tests.unit.test_host_connection_pool import LOGGER
 
 
@@ -13,6 +13,7 @@ def setup_module():
     use_cluster('tablets', [3], start=True)
 
 
+@scylla_only
 class TestTabletsIntegration:
     @classmethod
     def setup_class(cls):
