@@ -142,7 +142,7 @@ class Encoder(object):
         with millisecond precision.
         """
         timestamp = calendar.timegm(val.utctimetuple())
-        return str(int(timestamp * 1e3 + getattr(val, 'microsecond', 0) / 1e3))
+        return str(timestamp * 1000 + getattr(val, 'microsecond', 0) // 1000)
 
     def cql_encode_date(self, val):
         """

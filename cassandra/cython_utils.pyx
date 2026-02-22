@@ -60,3 +60,22 @@ cdef datetime_from_timestamp(double timestamp):
     microseconds += <int>tmp
 
     return DATETIME_EPOC + timedelta_new(days, seconds, microseconds)
+
+
+cdef datetime_from_ms_timestamp(int64_t timestamp_ms):
+    """
+    Creates a datetime from a timestamp in milliseconds using integer
+    arithmetic to preserve precision for large values.
+    """
+    cdef int64_t total_seconds = timestamp_ms // 1000
+    cdef int microseconds = <int>((timestamp_ms % 1000) * 1000)
+    # For negative timestamps, ensure microseconds is non-negative
+    if microseconds < 0:
+        total_seconds -= 1
+        microseconds += 1000000
+    cdef int days = <int>(total_seconds // 86400)
+    cdef int seconds = <int>(total_seconds % 86400)
+    if seconds < 0:
+        days -= 1
+        seconds += 86400
+    return DATETIME_EPOC + timedelta_new(days, seconds, microseconds)

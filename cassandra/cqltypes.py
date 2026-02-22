@@ -636,24 +636,24 @@ class DateType(_CassandraType):
             except ValueError:
                 continue
             # scale seconds to millis for the raw value
-            return (calendar.timegm(tval) + offset) * 1e3
+            return (calendar.timegm(tval) + offset) * 1000
         else:
             raise ValueError("can't interpret %r as a date" % (val,))
 
     @staticmethod
     def deserialize(byts, protocol_version):
-        timestamp = int64_unpack(byts) / 1000.0
-        return util.datetime_from_timestamp(timestamp)
+        timestamp_ms = int64_unpack(byts)
+        return util.datetime_from_ms_timestamp(timestamp_ms)
 
     @staticmethod
     def serialize(v, protocol_version):
         try:
             # v is datetime
             timestamp_seconds = calendar.timegm(v.utctimetuple())
-            timestamp = timestamp_seconds * 1e3 + getattr(v, 'microsecond', 0) / 1e3
+            timestamp = timestamp_seconds * 1000 + getattr(v, 'microsecond', 0) // 1000
         except AttributeError:
             try:
-                timestamp = calendar.timegm(v.timetuple()) * 1e3
+                timestamp = calendar.timegm(v.timetuple()) * 1000
             except AttributeError:
                 # Ints and floats are valid timestamps too
                 if type(v) not in _number_types:
