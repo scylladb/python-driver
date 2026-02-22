@@ -483,13 +483,16 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
                 CCM_CLUSTER = ccm_cluster_clz(path, cluster_name, **ccm_options)
                 CCM_CLUSTER.set_configuration_options({'start_native_transport': True})
             if Version(cassandra_version) >= Version('4.1'):
-                CCM_CLUSTER.set_configuration_options({
+                options = {
                     'user_defined_functions_enabled': True,
-                    'scripted_user_defined_functions_enabled': True,
                     'materialized_views_enabled': True,
                     'sasi_indexes_enabled': True,
                     'transient_replication_enabled': True,
-                })
+                }
+                # scripted (JavaScript) UDFs were removed in Cassandra 5.0 (replaced by WASM UDFs)
+                if Version(cassandra_version) < Version('5.0'):
+                    options['scripted_user_defined_functions_enabled'] = True
+                CCM_CLUSTER.set_configuration_options(options)
             elif Version(cassandra_version) >= Version('2.2'):
                 CCM_CLUSTER.set_configuration_options({'enable_user_defined_functions': True})
                 if Version(cassandra_version) >= Version('3.0'):
