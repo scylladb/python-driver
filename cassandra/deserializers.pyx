@@ -13,11 +13,11 @@
 # limitations under the License.
 
 
-from libc.stdint cimport int32_t, uint16_t
+from libc.stdint cimport int32_t, uint16_t, int64_t
 
 include 'cython_marshal.pyx'
 from cassandra.buffer cimport Buffer, to_bytes, slice_buffer
-from cassandra.cython_utils cimport datetime_from_timestamp
+from cassandra.cython_utils cimport datetime_from_timestamp_ms
 
 from cython.view cimport array as cython_array
 from cassandra.tuple cimport tuple_new, tuple_set
@@ -135,8 +135,8 @@ cdef class DesCounterColumnType(DesLongType):
 
 cdef class DesDateType(Deserializer):
     cdef deserialize(self, Buffer *buf, int protocol_version):
-        cdef double timestamp = unpack_num[int64_t](buf) / 1000.0
-        return datetime_from_timestamp(timestamp)
+        cdef int64_t timestamp_ms = unpack_num[int64_t](buf)
+        return datetime_from_timestamp_ms(timestamp_ms)
 
 
 cdef class TimestampType(DesDateType):

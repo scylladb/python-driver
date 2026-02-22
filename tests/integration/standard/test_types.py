@@ -425,6 +425,55 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         result = s.execute("SELECT b FROM tz_aware WHERE a='key2'").one().b
         assert dt.utctimetuple() == result.utctimetuple()
 
+    def test_large_timestamp_precision(self):
+        """
+        Test that large timestamp values (far from epoch) maintain precision
+        through round-trip serialization/deserialization.
+        
+        Verifies the fix for precision loss issue where timestamps more than
+        ~300 years from Unix epoch would lose millisecond precision due to
+        floating-point conversion.
+        
+        @jira_ticket PYTHON-XXXXX
+        @expected_result Timestamps far from epoch should round-trip with exact precision
+        """
+        s = self.session
+        s.execute("CREATE TABLE large_timestamps (pk timestamp PRIMARY KEY)")
+        
+        # Test timestamps far from epoch (year 2300 and year 1640)
+        # These would lose precision with float conversion
+        test_timestamps = [
+            datetime(2300, 1, 1, 0, 0, 0, 1000),   # 1 millisecond in year 2300
+            datetime(2300, 1, 1, 0, 0, 0, 999000),  # 999 milliseconds in year 2300
+            datetime(1640, 1, 1, 0, 0, 0, 1000),   # 1 millisecond in year 1640
+            datetime(2500, 12, 31, 23, 59, 59, 999000),  # Very far future
+        ]
+        
+        for original_timestamp in test_timestamps:
+            with self.subTest(timestamp=original_timestamp):
+                # Insert using prepared statement (uses serialization)
+                insert = s.prepare("INSERT INTO large_timestamps (pk) VALUES (?)")
+                s.execute(insert, [original_timestamp])
+                
+                # Retrieve the timestamp (uses deserialization)
+                result = s.execute("SELECT pk FROM large_timestamps WHERE pk = ?", [original_timestamp]).one()
+                assert result is not None, f"Failed to retrieve timestamp {original_timestamp}"
+                retrieved_timestamp = result.pk
+                
+                # Verify exact equality - microseconds should match
+                assert retrieved_timestamp == original_timestamp, \
+                    f"Timestamp mismatch: original={original_timestamp}, retrieved={retrieved_timestamp}"
+                
+                # Verify we can query using the retrieved timestamp (round-trip test)
+                result2 = s.execute("SELECT pk FROM large_timestamps WHERE pk = ?", [retrieved_timestamp]).one()
+                assert result2 is not None, \
+                    f"Failed to query with retrieved timestamp {retrieved_timestamp}"
+                assert result2.pk == original_timestamp, \
+                    f"Second round-trip failed: expected={original_timestamp}, got={result2.pk}"
+                
+                # Clean up for next test
+                s.execute("DELETE FROM large_timestamps WHERE pk = ?", [original_timestamp])
+
     def test_can_insert_tuples(self):
         """
         Basic test of tuple functionality
