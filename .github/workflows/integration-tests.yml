@@ -101,6 +101,7 @@ jobs:
     name: test cassandra ${{ matrix.event_loop_manager }} (${{ matrix.python-version }})
     if: "!contains(github.event.pull_request.labels.*.name, 'disable-integration-tests')"
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:

@@ -1001,5 +1001,17 @@ class Cassandra41CCMCluster(CCMCluster):
         return v
 
     def set_configuration_options(self, values=None, *args, **kwargs):
-        new_values = {self._get_config_key(k, str(v)):self._get_config_val(k, str(v)) for (k,v) in values.items()}
+        new_values = {}
+        for k, v in values.items():
+            new_key = self._get_config_key(k, str(v))
+            # Only convert the value to a string for duration (_in_ms) and size (_in_kb)
+            # options where a unit suffix must be appended.  For all other options
+            # (including booleans) preserve the original Python type so that ruamel.yaml
+            # writes a proper YAML scalar (e.g. ``true`` not ``'True'``).
+            if self.IN_MS_REGEX.match(k):
+                new_values[new_key] = "%sms" % v
+            elif self.IN_KB_REGEX.match(k):
+                new_values[new_key] = "%sKiB" % v
+            else:
+                new_values[new_key] = v
         super(Cassandra41CCMCluster, self).set_configuration_options(values=new_values, *args, **kwargs)
