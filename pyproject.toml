@@ -110,7 +110,6 @@ cache-keys = [
     { env = "CASS_DRIVER_NO_CYTHON" },
     { env = "CASS_DRIVER_BUILD_CONCURRENCY" },
     { env = "CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST" },
-    { env = "CASS_DRIVER_ALLOWED_CYTHON_VERSION" },
 
     # used by setuptools_scm
     { git = { commit = true, tags = true } },
