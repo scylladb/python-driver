@@ -84,6 +84,49 @@ jobs:
         uv run ccm create scylla-driver-temp -n 1 --scylla --version ${SCYLLA_VERSION}
         uv run ccm remove
 
+    - name: Test with pytest
+      env:
+        EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
+        PROTOCOL_VERSION: 4
+      run: |
+        if [[ "${{ matrix.python-version }}" =~ t$ ]]; then
+          export PYTHON_GIL=0
+        fi
+        uv run pytest tests/integration/standard/ tests/integration/cqlengine/
+
+  tests-cassandra:
+    name: test cassandra ${{ matrix.event_loop_manager }} (${{ matrix.python-version }})
+    if: "!contains(github.event.pull_request.labels.*.name, 'disable-integration-tests')"
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        java-version: [8]
+        python-version: ["3.11"]
+        event_loop_manager: ["libev", "asyncio"]
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up JDK ${{ matrix.java-version }}
+      uses: actions/setup-java@v5
+      with:
+        java-version: ${{ matrix.java-version }}
+        distribution: 'adopt'
+
+    - name: Install libev
+      run: sudo apt-get install libev4 libev-dev
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    # This is to get honest accounting of test time vs download time vs build time.
+    # Not strictly necessary for running tests.
+    - name: Build driver
+      run: uv sync
+
     - name: Get latest Cassandra version
       id: cassandra-version
       run: |
@@ -99,30 +142,18 @@ jobs:
         print(versions[0])")
         echo "version=$CASSANDRA_VERSION" >> $GITHUB_OUTPUT
 
+    # This is to get honest accounting of test time vs download time vs build time.
+    # Not strictly necessary for running tests.
     - name: Download Cassandra
       run: |
         uv run ccm create cassandra-driver-temp -n 1 --version ${{ steps.cassandra-version.outputs.version }}
         uv run ccm remove
-
-    - name: Test with scylla
-      env:
-        EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
-        PROTOCOL_VERSION: 4
-      run: |
-        if [[ "${{ matrix.python-version }}" =~ t$ ]]; then
-          export PYTHON_GIL=0
-        fi
-        uv run pytest tests/integration/standard/ tests/integration/cqlengine/
 
     - name: Test with cassandra
       env:
         EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
         CASSANDRA_VERSION: ${{ steps.cassandra-version.outputs.version }}
         MAPPED_CASSANDRA_VERSION: ${{ steps.cassandra-version.outputs.version }}
-        SCYLLA_VERSION: ""
         PROTOCOL_VERSION: 4
       run: |
-        if [[ "${{ matrix.python-version }}" =~ t$ ]]; then
-          export PYTHON_GIL=0
-        fi
         uv run pytest tests/integration/standard/
