@@ -2589,10 +2589,7 @@ class Session(object):
             futures = wait_futures(futures.not_done, return_when=FIRST_COMPLETED)
 
         if not any(f.result() for f in self._initial_connect_futures):
-            msg = "Unable to connect to any servers"
-            if self.keyspace:
-                msg += " using keyspace '%s'" % self.keyspace
-            raise NoHostAvailable(msg, [h.address for h in hosts])
+            log.warning("No host pools available; queries will use the control connection")
 
         self.session_id = uuid.uuid4()
 
@@ -4495,6 +4492,13 @@ class ResponseFuture(object):
             if self.timeout is not None and time.time() - self._start_time > self.timeout:
                 self._on_timeout()
                 return True
+        # Fallback: try control connection when no pools are available
+        if not self.session._pools:
+            req_id = self._query_control_connection()
+            if req_id is not None:
+                self._req_id = req_id
+                return True
+
         if error_no_hosts:
             self._set_final_exception(NoHostAvailable(
                 "Unable to complete the operation against any hosts", self._errors))
@@ -4548,6 +4552,43 @@ class ResponseFuture(object):
                 pool.return_connection(connection)
 
         return None
+
+    def _query_control_connection(self):
+        """
+        Fallback: execute a query on the control connection when no host
+        pools are available (e.g. all hosts are IGNORED by the load-balancing
+        policy).
+        """
+        conn = self.session.cluster.control_connection._connection
+        if not conn or conn.is_closed or conn.is_defunct:
+            return None
+
+        message = self.message
+
+        try:
+            with conn.lock:
+                if conn.in_flight >= conn.max_request_id:
+                    return None
+                conn.in_flight += 1
+                request_id = conn.get_request_id()
+
+            def cb(response):
+                with conn.lock:
+                    conn.in_flight -= 1
+                self._set_result(None, conn, None, response)
+
+            result_meta = self.prepared_statement.result_metadata if self.prepared_statement else []
+            self.request_encoded_size = conn.send_msg(
+                message, request_id, cb=cb,
+                encoder=self._protocol_handler.encode_message,
+                decoder=self._protocol_handler.decode_message,
+                result_metadata=result_meta)
+            return request_id
+        except Exception as exc:
+            with conn.lock:
+                conn.in_flight -= 1
+            self._errors['control_connection'] = exc
+            return None
 
     @property
     def has_more_pages(self):
