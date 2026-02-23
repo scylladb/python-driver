@@ -1,0 +1,1194 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             cassandra.cqlengine.query | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../../../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../../../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../../../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../../../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../../../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://python-driver.docs.scylladb.com/stable/api/cassandra/cqlengine/query.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
+            
+        
+    
+        
+        
+            
+        <script type="text/javascript" src="../../../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../../../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../../../_static/documentation_options.js?v=be4f90db"></script>
+            
+        
+            
+                <script src="../../../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../../../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+    </head>
+
+    <body class="brand-product">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University Live | Free Virtual Training Event</div>
+            <a class="promo-banner__button button button--reverse" href="#"
+               target="_blank" rel="noopener noreferrer">Learn more</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../../../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../../../index.html"
+           class="bread__highlight">
+            Scylla Python Driver
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="../../index.html" class="bread__highlight">
+                API Documentation
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last">cassandra.cqlengine.query</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+                    
+
+                    <section id="cassandra-cqlengine-query">
+<h1>cassandra.cqlengine.query<a class="headerlink" href="#cassandra-cqlengine-query" title="Link to this heading">¶</a></h1>
+<p>Query and filter model objects</p>
+<section id="queryset">
+<span id="module-cassandra.cqlengine.query"></span><h2>QuerySet<a class="headerlink" href="#queryset" title="Link to this heading">¶</a></h2>
+<p>QuerySet objects are typically obtained by calling <code class="xref py py-meth docutils literal notranslate"><span class="pre">objects()</span></code> on a model class.
+The methods here are used to filter, order, and constrain results.</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.cqlengine.query.</span></span><span class="sig-name descname"><span class="pre">ModelQuerySet</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet" title="Link to this definition">¶</a></dt>
+<dd><dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.all">
+<span class="sig-name descname"><span class="pre">all</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.all" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a queryset matching all rows</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">user</span> <span class="ow">in</span> <span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="p">()</span><span class="o">.</span><span class="n">all</span><span class="p">():</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.batch">
+<span class="sig-name descname"><span class="pre">batch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">batch_obj</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.batch" title="Link to this definition">¶</a></dt>
+<dd><p>Set a batch object to run the query on.</p>
+<p>Note: running a select query with a batch object will raise an exception</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.consistency">
+<span class="sig-name descname"><span class="pre">consistency</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">consistency</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.consistency" title="Link to this definition">¶</a></dt>
+<dd><p>Sets the consistency level for the operation. See <a class="reference internal" href="../../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a>.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">user</span> <span class="ow">in</span> <span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">consistency</span><span class="p">(</span><span class="n">CL</span><span class="o">.</span><span class="n">ONE</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.count">
+<span class="sig-name descname"><span class="pre">count</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.count" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of rows matched by this query.</p>
+<p><em>Note: This function executes a SELECT COUNT() and has a performance cost on large datasets</em></p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.len">
+<span class="sig-name descname"><span class="pre">len</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">queryset</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.len" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of rows matched by this query. This function uses <a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.count" title="cassandra.cqlengine.query.ModelQuerySet.count"><code class="xref py py-meth docutils literal notranslate"><span class="pre">count()</span></code></a> internally.</p>
+<p><em>Note: This function executes a SELECT COUNT() and has a performance cost on large datasets</em></p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.distinct">
+<span class="sig-name descname"><span class="pre">distinct</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">distinct_fields</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.distinct" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the DISTINCT rows matched by this query.</p>
+<p>distinct_fields default to the partition key fields if not specified.</p>
+<p><em>Note: distinct_fields must be a partition key or a static column</em></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">Automobile</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">manufacturer</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Text</span><span class="p">(</span><span class="n">partition_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">year</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Integer</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Text</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">price</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Decimal</span><span class="p">()</span>
+
+<span class="n">sync_table</span><span class="p">(</span><span class="n">Automobile</span><span class="p">)</span>
+
+<span class="c1"># create rows</span>
+
+<span class="n">Automobile</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">distinct</span><span class="p">()</span>
+
+<span class="c1"># or</span>
+
+<span class="n">Automobile</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">distinct</span><span class="p">([</span><span class="s1">&#39;manufacturer&#39;</span><span class="p">])</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.filter">
+<span class="sig-name descname"><span class="pre">filter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.filter" title="Link to this definition">¶</a></dt>
+<dd><p>Adds WHERE arguments to the queryset, returning a new queryset</p>
+<p>See <a class="reference internal" href="../../../cqlengine/queryset.html#retrieving-objects-with-filters"><span class="std std-ref">Retrieving objects with filters</span></a></p>
+<p>Returns a QuerySet filtered on the keyword arguments</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.get">
+<span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.get" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a single instance matching this query, optionally with additional filter kwargs.</p>
+<p>See <a class="reference internal" href="../../../cqlengine/queryset.html#retrieving-objects-with-filters"><span class="std std-ref">Retrieving objects with filters</span></a></p>
+<p>Returns a single object matching the QuerySet.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">user</span> <span class="o">=</span> <span class="n">User</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>If no objects are matched, a <a class="reference internal" href="#cassandra.cqlengine.query.DoesNotExist" title="cassandra.cqlengine.query.DoesNotExist"><code class="xref py py-class docutils literal notranslate"><span class="pre">DoesNotExist</span></code></a> exception is raised.</p>
+<p>If more than one object is found, a <a class="reference internal" href="#cassandra.cqlengine.query.MultipleObjectsReturned" title="cassandra.cqlengine.query.MultipleObjectsReturned"><code class="xref py py-class docutils literal notranslate"><span class="pre">MultipleObjectsReturned</span></code></a> exception is raised.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.limit">
+<span class="sig-name descname"><span class="pre">limit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">v</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.limit" title="Link to this definition">¶</a></dt>
+<dd><p>Limits the number of results returned by Cassandra. Use <em>0</em> or <em>None</em> to disable.</p>
+<p><em>Note that CQL’s default limit is 10,000, so all queries without a limit set explicitly will have an implicit limit of 10,000</em></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Fetch 100 users</span>
+<span class="k">for</span> <span class="n">user</span> <span class="ow">in</span> <span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="p">()</span><span class="o">.</span><span class="n">limit</span><span class="p">(</span><span class="mi">100</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+
+<span class="c1"># Fetch all users</span>
+<span class="k">for</span> <span class="n">user</span> <span class="ow">in</span> <span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="p">()</span><span class="o">.</span><span class="n">limit</span><span class="p">(</span><span class="kc">None</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.fetch_size">
+<span class="sig-name descname"><span class="pre">fetch_size</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">v</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.fetch_size" title="Link to this definition">¶</a></dt>
+<dd><p>Sets the number of rows that are fetched at a time.</p>
+<p><em>Note that driver’s default fetch size is 5000.</em></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">user</span> <span class="ow">in</span> <span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="p">()</span><span class="o">.</span><span class="n">fetch_size</span><span class="p">(</span><span class="mi">500</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.if_not_exists">
+<span class="sig-name descname"><span class="pre">if_not_exists</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.if_not_exists" title="Link to this definition">¶</a></dt>
+<dd><p>Check the existence of an object before insertion.</p>
+<p>If the insertion isn’t applied, a LWTException is raised.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.if_exists">
+<span class="sig-name descname"><span class="pre">if_exists</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.if_exists" title="Link to this definition">¶</a></dt>
+<dd><p>Check the existence of an object before an update or delete.</p>
+<p>If the update or delete isn’t applied, a LWTException is raised.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.order_by">
+<span class="sig-name descname"><span class="pre">order_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">colnames</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.order_by" title="Link to this definition">¶</a></dt>
+<dd><p>Sets the column(s) to be used for ordering</p>
+<p>Default order is ascending, prepend a ‘-’ to any column name for descending</p>
+<p><em>Note: column names must be a clustering key</em></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">uuid</span><span class="w"> </span><span class="kn">import</span> <span class="n">uuid1</span><span class="p">,</span><span class="n">uuid4</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">Comment</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">photo_id</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">comment_id</span> <span class="o">=</span> <span class="n">TimeUUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="n">uuid1</span><span class="p">)</span> <span class="c1"># second primary key component is a clustering key</span>
+    <span class="n">comment</span> <span class="o">=</span> <span class="n">Text</span><span class="p">()</span>
+
+<span class="n">sync_table</span><span class="p">(</span><span class="n">Comment</span><span class="p">)</span>
+
+<span class="n">u</span> <span class="o">=</span> <span class="n">uuid4</span><span class="p">()</span>
+<span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">5</span><span class="p">):</span>
+    <span class="n">Comment</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">photo_id</span><span class="o">=</span><span class="n">u</span><span class="p">,</span> <span class="n">comment</span><span class="o">=</span><span class="s2">&quot;test </span><span class="si">%d</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">x</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Normal&quot;</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">comment</span> <span class="ow">in</span> <span class="n">Comment</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="n">photo_id</span><span class="o">=</span><span class="n">u</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">comment</span><span class="o">.</span><span class="n">comment_id</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Reversed&quot;</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">comment</span> <span class="ow">in</span> <span class="n">Comment</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="n">photo_id</span><span class="o">=</span><span class="n">u</span><span class="p">)</span><span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="s2">&quot;-comment_id&quot;</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">comment</span><span class="o">.</span><span class="n">comment_id</span><span class="p">)</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.allow_filtering">
+<span class="sig-name descname"><span class="pre">allow_filtering</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.allow_filtering" title="Link to this definition">¶</a></dt>
+<dd><p>Enables the (usually) unwise practive of querying on a clustering key without also defining a partition key</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.only">
+<span class="sig-name descname"><span class="pre">only</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fields</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.only" title="Link to this definition">¶</a></dt>
+<dd><p>Load only these fields for the returned query</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.defer">
+<span class="sig-name descname"><span class="pre">defer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fields</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.defer" title="Link to this definition">¶</a></dt>
+<dd><p>Don’t load these fields for the returned query</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.timestamp">
+<span class="sig-name descname"><span class="pre">timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.timestamp" title="Link to this definition">¶</a></dt>
+<dd><p>Allows for custom timestamps to be saved with the record.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.ttl">
+<span class="sig-name descname"><span class="pre">ttl</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ttl</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.ttl" title="Link to this definition">¶</a></dt>
+<dd><p>Sets the ttl (in seconds) for modified data.</p>
+<p><em>Note that running a select query with a ttl value will raise an exception</em></p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.using">
+<span class="sig-name descname"><span class="pre">using</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keyspace</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">connection</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.using" title="Link to this definition">¶</a></dt>
+<dd><p>Change the context on-the-fly of the Model class (keyspace, connection)</p>
+</dd></dl>
+
+<dl class="py method" id="blind-updates">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ModelQuerySet.update">
+<span class="sig-name descname"><span class="pre">update</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">values</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ModelQuerySet.update" title="Link to this definition">¶</a></dt>
+<dd><p>Performs an update on the row selected by the queryset. Include values to update in the
+update like so:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">Model</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="n">n</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">value</span><span class="o">=</span><span class="s1">&#39;x&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Passing in updates for columns which are not part of the model will raise a ValidationError.</p>
+<p>Per column validation will be performed, but instance level validation will not
+(i.e., <cite>Model.validate</cite> is not called).  This is sometimes referred to as a blind update.</p>
+<p>For example:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">User</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+    <span class="nb">id</span> <span class="o">=</span> <span class="n">Integer</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">Text</span><span class="p">()</span>
+
+<span class="n">setup</span><span class="p">([</span><span class="s2">&quot;localhost&quot;</span><span class="p">],</span> <span class="s2">&quot;test&quot;</span><span class="p">)</span>
+<span class="n">sync_table</span><span class="p">(</span><span class="n">User</span><span class="p">)</span>
+
+<span class="n">u</span> <span class="o">=</span> <span class="n">User</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;jon&quot;</span><span class="p">)</span>
+
+<span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Steve&quot;</span><span class="p">)</span>
+
+<span class="c1"># sets name to null</span>
+<span class="n">User</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Also supported is blindly adding and removing elements from container columns,
+without loading a model instance from Cassandra.</p>
+<p>Using the syntax <cite>.update(column_name={x, y, z})</cite> will overwrite the contents of the container, like updating a
+non container column. However, adding <cite>__&lt;operation&gt;</cite> to the end of the keyword arg, makes the update call add
+or remove items from the collection, without overwriting then entire column.</p>
+<p>Given the model below, here are the operations that can be performed on the different container columns:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">Row</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">row_id</span>      <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Integer</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">set_column</span>  <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Set</span><span class="p">(</span><span class="n">Integer</span><span class="p">)</span>
+    <span class="n">list_column</span> <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">List</span><span class="p">(</span><span class="n">Integer</span><span class="p">)</span>
+    <span class="n">map_column</span>  <span class="o">=</span> <span class="n">columns</span><span class="o">.</span><span class="n">Map</span><span class="p">(</span><span class="n">Integer</span><span class="p">,</span> <span class="n">Integer</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="xref py py-class docutils literal notranslate"><span class="pre">Set</span></code></p>
+<ul class="simple">
+<li><p><cite>add</cite>: adds the elements of the given set to the column</p></li>
+<li><p><cite>remove</cite>: removes the elements of the given set to the column</p></li>
+</ul>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># add elements to a set</span>
+<span class="n">Row</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="n">row_id</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">set_column__add</span><span class="o">=</span><span class="p">{</span><span class="mi">6</span><span class="p">})</span>
+
+<span class="c1"># remove elements to a set</span>
+<span class="n">Row</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="n">row_id</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">set_column__remove</span><span class="o">=</span><span class="p">{</span><span class="mi">4</span><span class="p">})</span>
+</pre></div>
+</div>
+<p><code class="xref py py-class docutils literal notranslate"><span class="pre">List</span></code></p>
+<ul class="simple">
+<li><p><cite>append</cite>: appends the elements of the given list to the end of the column</p></li>
+<li><p><cite>prepend</cite>: prepends the elements of the given list to the beginning of the column</p></li>
+</ul>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># append items to a list</span>
+<span class="n">Row</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="n">row_id</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">list_column__append</span><span class="o">=</span><span class="p">[</span><span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">])</span>
+
+<span class="c1"># prepend items to a list</span>
+<span class="n">Row</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="n">row_id</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">list_column__prepend</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
+</pre></div>
+</div>
+<p><code class="xref py py-class docutils literal notranslate"><span class="pre">Map</span></code></p>
+<ul class="simple">
+<li><p><cite>update</cite>: adds the given keys/values to the columns, creating new entries if they didn’t exist, and overwriting old ones if they did</p></li>
+</ul>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># add items to a map</span>
+<span class="n">Row</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="n">row_id</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">map_column__update</span><span class="o">=</span><span class="p">{</span><span class="mi">1</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">:</span> <span class="mi">4</span><span class="p">})</span>
+
+<span class="c1"># remove items from a map</span>
+<span class="n">Row</span><span class="o">.</span><span class="n">objects</span><span class="p">(</span><span class="n">row_id</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">map_column__remove</span><span class="o">=</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">})</span>
+</pre></div>
+</div>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.BatchQuery">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.cqlengine.query.</span></span><span class="sig-name descname"><span class="pre">BatchQuery</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">batch_type=None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timestamp=None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">consistency=None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">execute_on_exception=False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout=&lt;object</span> <span class="pre">object&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">connection=None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.BatchQuery" title="Link to this definition">¶</a></dt>
+<dd><p>Handles the batching of queries</p>
+<p><a class="reference external" href="http://docs.datastax.com/en/cql/3.0/cql/cql_reference/batch_r.html">http://docs.datastax.com/en/cql/3.0/cql/cql_reference/batch_r.html</a></p>
+<p>See <a class="reference internal" href="../../../cqlengine/batches.html"><span class="doc">Batch Queries</span></a> for more details.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>batch_type</strong> (<a class="reference internal" href="../query.html#cassandra.query.BatchType" title="cassandra.query.BatchType"><em>BatchType</em></a><em>, </em><em>str</em><em> or </em><em>None</em>) – (optional) One of batch type values available through BatchType enum</p></li>
+<li><p><strong>timestamp</strong> (<em>datetime</em><em> or </em><em>timedelta</em><em> or </em><em>None</em>) – (optional) A datetime or timedelta object with desired timestamp to be applied
+to the batch conditional.</p></li>
+<li><p><strong>consistency</strong> (The <a class="reference internal" href="../../cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a> to be used for the batch query, or None.) – (optional) One of consistency values (“ANY”, “ONE”, “QUORUM” etc)</p></li>
+<li><p><strong>execute_on_exception</strong> (<em>bool</em>) – (Defaults to False) Indicates that when the BatchQuery instance is used
+as a context manager the queries accumulated within the context must be executed despite
+encountering an error within the context. By default, any exception raised from within
+the context scope will cause the batched queries not to be executed.</p></li>
+<li><p><strong>timeout</strong> (<em>float</em><em> or </em><em>None</em>) – (optional) Timeout for the entire batch (in seconds), if not specified fallback
+to default session timeout</p></li>
+<li><p><strong>connection</strong> (<em>str</em>) – Connection name to use for the batch execution</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.BatchQuery.add_query">
+<span class="sig-name descname"><span class="pre">add_query</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">query</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.BatchQuery.add_query" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.BatchQuery.execute">
+<span class="sig-name descname"><span class="pre">execute</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.BatchQuery.execute" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.BatchQuery.add_callback">
+<span class="sig-name descname"><span class="pre">add_callback</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fn</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.BatchQuery.add_callback" title="Link to this definition">¶</a></dt>
+<dd><p>Add a function and arguments to be passed to it to be executed after the batch executes.</p>
+<p>A batch can support multiple callbacks.</p>
+<p>Note, that if the batch does not execute, the callbacks are not executed.
+A callback, thus, is an “on batch success” handler.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>fn</strong> (<em>callable</em>) – Callable object</p></li>
+<li><p><strong>args</strong> – Positional arguments to be passed to the callback at the time of execution</p></li>
+<li><p><strong>kwargs</strong> – Named arguments to be passed to the callback at the time of execution</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.ContextQuery">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.cqlengine.query.</span></span><span class="sig-name descname"><span class="pre">ContextQuery</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.ContextQuery" title="Link to this definition">¶</a></dt>
+<dd><p>A Context manager to allow a Model to switch context easily. Presently, the context only
+specifies a keyspace for model IO.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>args</strong> – One or more models. A model should be a class type, not an instance.</p></li>
+<li><p><strong>kwargs</strong> – (optional) Context parameters: can be <em>keyspace</em> or <em>connection</em></p></li>
+</ul>
+</dd>
+</dl>
+<p>For example:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">ContextQuery</span><span class="p">(</span><span class="n">Automobile</span><span class="p">,</span> <span class="n">keyspace</span><span class="o">=</span><span class="s1">&#39;test2&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">A</span><span class="p">:</span>
+    <span class="n">A</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">manufacturer</span><span class="o">=</span><span class="s1">&#39;honda&#39;</span><span class="p">,</span> <span class="n">year</span><span class="o">=</span><span class="mi">2008</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s1">&#39;civic&#39;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">all</span><span class="p">()))</span>  <span class="c1"># 1 result</span>
+
+<span class="k">with</span> <span class="n">ContextQuery</span><span class="p">(</span><span class="n">Automobile</span><span class="p">,</span> <span class="n">keyspace</span><span class="o">=</span><span class="s1">&#39;test4&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">A</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">all</span><span class="p">()))</span>  <span class="c1"># 0 result</span>
+
+<span class="c1"># Multiple models</span>
+<span class="k">with</span> <span class="n">ContextQuery</span><span class="p">(</span><span class="n">Automobile</span><span class="p">,</span> <span class="n">Automobile2</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="s1">&#39;cluster2&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">A2</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">all</span><span class="p">()))</span>
+    <span class="nb">print</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">A2</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">all</span><span class="p">()))</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.DoesNotExist">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.cqlengine.query.</span></span><span class="sig-name descname"><span class="pre">DoesNotExist</span></span><a class="headerlink" href="#cassandra.cqlengine.query.DoesNotExist" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.MultipleObjectsReturned">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.cqlengine.query.</span></span><span class="sig-name descname"><span class="pre">MultipleObjectsReturned</span></span><a class="headerlink" href="#cassandra.cqlengine.query.MultipleObjectsReturned" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.cqlengine.query.LWTException">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.cqlengine.query.</span></span><span class="sig-name descname"><span class="pre">LWTException</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">existing</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.cqlengine.query.LWTException" title="Link to this definition">¶</a></dt>
+<dd><p>Lightweight conditional exception.</p>
+<p>This exception will be raised when a write using an <cite>IF</cite> clause could not be
+applied due to existing data violating the condition. The existing data is
+available through the <code class="docutils literal notranslate"><span class="pre">existing</span></code> attribute.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>existing</strong> – The current state of the data which prevented the write.</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page cassandra.cqlengine.query&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.29.8-scylla/api/cassandra/cqlengine/query%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="columns.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />cassandra.cqlengine.columns
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="connection.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />cassandra.cqlengine.connection
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <div class="notice">
+<p>
+ScyllaDB Python Driver is available under the <a href="https://www.apache.org/licenses/LICENSE-2.0.html">Apache v2 License</a>.
+ScyllaDB Python Driver is a fork of <a href="https://github.com/datastax/python-driver">DataStax Python Driver</a>.
+See Copyright <a href="https://python-driver.docs.scylladb.com/stable/#copyright">here</a>.</p>
+</div>
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page cassandra.cqlengine.query&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.29.8-scylla/api/cassandra/cqlengine/query%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/python-driver/edit/master/docs/api/cassandra/cqlengine/query.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">cassandra.cqlengine.query</a><ul>
+<li><a class="reference internal" href="#queryset">QuerySet</a><ul>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.all"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.all()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.batch"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.batch()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.consistency"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.consistency()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.count"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.count()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.len"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.len()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.distinct"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.distinct()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.filter"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.filter()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.get"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.get()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.limit"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.limit()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.fetch_size"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.fetch_size()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.if_not_exists"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.if_not_exists()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.if_exists"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.if_exists()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.order_by"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.order_by()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.allow_filtering"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.allow_filtering()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.only"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.only()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.defer"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.defer()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.timestamp"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.timestamp()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.ttl"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.ttl()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.using"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.using()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ModelQuerySet.update"><code class="docutils literal notranslate"><span class="pre">ModelQuerySet.update()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.BatchQuery"><code class="docutils literal notranslate"><span class="pre">BatchQuery</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.BatchQuery.add_query"><code class="docutils literal notranslate"><span class="pre">BatchQuery.add_query()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.BatchQuery.execute"><code class="docutils literal notranslate"><span class="pre">BatchQuery.execute()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.BatchQuery.add_callback"><code class="docutils literal notranslate"><span class="pre">BatchQuery.add_callback()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.ContextQuery"><code class="docutils literal notranslate"><span class="pre">ContextQuery</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.DoesNotExist"><code class="docutils literal notranslate"><span class="pre">DoesNotExist</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.MultipleObjectsReturned"><code class="docutils literal notranslate"><span class="pre">MultipleObjectsReturned</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.cqlengine.query.LWTException"><code class="docutils literal notranslate"><span class="pre">LWTException</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../../../index.html">Scylla Python Driver</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                3.29.8
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+            
+            
+                
+                    <li>
+                        <a href="query.html">
+                            3.29.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.29.7-scylla/api/cassandra/cqlengine/query.html">
+                            3.29.7
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.29.6-scylla/api/cassandra/cqlengine/query.html">
+                            3.29.6
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.29.5-scylla/api/cassandra/cqlengine/query.html">
+                            3.29.5
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.29.4-scylla/api/cassandra/cqlengine/query.html">
+                            3.29.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.29.3-scylla/api/cassandra/cqlengine/query.html">
+                            3.29.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.29.2-scylla/api/cassandra/cqlengine/query.html">
+                            3.29.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.29.0-scylla/api/cassandra/cqlengine/query.html">
+                            3.29.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.28.2-scylla/api/cassandra/cqlengine/query.html">
+                            3.28.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.28.1-scylla/api/cassandra/cqlengine/query.html">
+                            3.28.1
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.28.0-scylla/api/cassandra/cqlengine/query.html">
+                            3.28.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.26.9-scylla/api/cassandra/cqlengine/query.html">
+                            3.26.9
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.25.11-scylla/api/cassandra/cqlengine/query.html">
+                            3.25.11
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.25.4-scylla/api/cassandra/cqlengine/query.html">
+                            3.25.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.24.8-scylla/api/cassandra/cqlengine/query.html">
+                            3.24.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.22.3-scylla/api/cassandra/cqlengine/query.html">
+                            3.22.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../3.21.0-scylla/api/cassandra/cqlengine/query.html">
+                            3.21.0
+                        </a>
+                    </li>
+                
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../../index.html">API Documentation</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../../cassandra.html">cassandra</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cluster.html">cassandra.cluster</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../policies.html">cassandra.policies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../auth.html">cassandra.auth</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../metadata.html">cassandra.metadata</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../metrics.html">cassandra.metrics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../query.html">cassandra.query</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../pool.html">cassandra.pool</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../protocol.html">cassandra.protocol</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../encoder.html">cassandra.encoder</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../decoder.html">cassandra.decoder</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../concurrent.html">cassandra.concurrent</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../connection.html">cassandra.connection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../util.html">cassandra.util</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../timestamps.html">cassandra.timestamps</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../io/asyncioreactor.html">cassandra.io.asyncioreactor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../io/asyncorereactor.html">cassandra.io.asyncorereactor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../io/eventletreactor.html">cassandra.io.eventletreactor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../io/libevreactor.html">cassandra.io.libevreactor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../io/geventreactor.html">cassandra.io.geventreactor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../io/twistedreactor.html">cassandra.io.twistedreactor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="models.html">cassandra.cqlengine.models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="columns.html">cassandra.cqlengine.columns</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">cassandra.cqlengine.query</a></li>
+<li class="toctree-l2"><a class="reference internal" href="connection.html">cassandra.cqlengine.connection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="management.html">cassandra.cqlengine.management</a></li>
+<li class="toctree-l2"><a class="reference internal" href="usertype.html">cassandra.cqlengine.usertype</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../scylla-specific.html">Scylla Specific Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../execution-profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../query-paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../user-defined-types.html">User Defined Types</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../object-mapper.html">Object Mapper</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../cqlengine/upgrade-guide.html">Upgrade Guide</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cqlengine/models.html">Models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cqlengine/queryset.html">Making Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cqlengine/batches.html">Batch Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cqlengine/connections.html">Connections</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cqlengine/third-party.html">Third party integrations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cqlengine/faq.html">Frequently Asked Questions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dates-and-times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../scylla-cloud.html">ScyllaDB Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; ScyllaDB 2021 and © DataStax 2013-2017
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.2.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

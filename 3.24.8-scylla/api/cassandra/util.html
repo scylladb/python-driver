@@ -1,0 +1,1393 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             cassandra.util - Utilities | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://python-driver.docs.scylladb.com/stable/api/cassandra/util.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+            
+        
+    
+        
+        
+            
+        <script type="text/javascript" src="../../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../../_static/documentation_options.js?v=be4f90db"></script>
+            
+        
+            
+                <script src="../../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+    </head>
+
+    <body class="brand-product">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University Live | Free Virtual Training Event</div>
+            <a class="promo-banner__button button button--reverse" href="#"
+               target="_blank" rel="noopener noreferrer">Learn more</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../../index.html"
+           class="bread__highlight">
+            Scylla Python Driver
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="../index.html" class="bread__highlight">
+                API Documentation
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last"><code class="docutils literal notranslate"><span class="pre">cassandra.util</span></code> - Utilities</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+    <div class="admonition caution">
+        <p class="admonition-title">Caution</p>
+        <p>
+            
+                You're viewing documentation for a deprecated version of Scylla Python Driver.
+            
+            <a href="../../../stable/api/cassandra/util.html">Switch to the latest stable version.</a>
+        </p>
+    </div>
+
+                    
+
+                    <section id="module-cassandra.util">
+<span id="cassandra-util-utilities"></span><h1><code class="docutils literal notranslate"><span class="pre">cassandra.util</span></code> - Utilities<a class="headerlink" href="#module-cassandra.util" title="Link to this heading">¶</a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="cassandra.util.datetime_from_timestamp">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">datetime_from_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.datetime_from_timestamp" title="Link to this definition">¶</a></dt>
+<dd><p>Creates a timezone-agnostic datetime from timestamp (in seconds) in a consistent manner.
+Works around a Windows issue with large negative timestamps (PYTHON-119),
+and rounding differences in Python 3.4 (PYTHON-340).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>timestamp</strong> – a unix timestamp, in seconds</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="cassandra.util.datetime_from_ms_timestamp">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">datetime_from_ms_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp_ms</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.datetime_from_ms_timestamp" title="Link to this definition">¶</a></dt>
+<dd><p>Creates a timezone-agnostic datetime from a timestamp in milliseconds,
+using integer arithmetic to preserve precision for large values.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>timestamp_ms</strong> – a unix timestamp, in milliseconds (integer)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="cassandra.util.utc_datetime_from_ms_timestamp">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">utc_datetime_from_ms_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.utc_datetime_from_ms_timestamp" title="Link to this definition">¶</a></dt>
+<dd><p>Creates a UTC datetime from a timestamp in milliseconds. See
+<a class="reference internal" href="#cassandra.util.datetime_from_timestamp" title="cassandra.util.datetime_from_timestamp"><code class="xref py py-meth docutils literal notranslate"><span class="pre">datetime_from_timestamp()</span></code></a>.</p>
+<p>Raises an <cite>OverflowError</cite> if the timestamp is out of range for
+<code class="xref py py-class docutils literal notranslate"><span class="pre">datetime</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>timestamp</strong> – timestamp, in milliseconds</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="cassandra.util.ms_timestamp_from_datetime">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">ms_timestamp_from_datetime</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dt</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.ms_timestamp_from_datetime" title="Link to this definition">¶</a></dt>
+<dd><p>Converts a datetime to a timestamp expressed in milliseconds.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>dt</strong> – a <code class="xref py py-class docutils literal notranslate"><span class="pre">datetime.datetime</span></code></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="cassandra.util.unix_time_from_uuid1">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">unix_time_from_uuid1</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">uuid_arg</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.unix_time_from_uuid1" title="Link to this definition">¶</a></dt>
+<dd><p>Converts a version 1 <code class="xref py py-class docutils literal notranslate"><span class="pre">uuid.UUID</span></code> to a timestamp with the same precision
+as <code class="xref py py-meth docutils literal notranslate"><span class="pre">time.time()</span></code> returns.  This is useful for examining the
+results of queries returning a v1 <code class="xref py py-class docutils literal notranslate"><span class="pre">UUID</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>uuid_arg</strong> – a version 1 <code class="xref py py-class docutils literal notranslate"><span class="pre">UUID</span></code></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="cassandra.util.datetime_from_uuid1">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">datetime_from_uuid1</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">uuid_arg</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.datetime_from_uuid1" title="Link to this definition">¶</a></dt>
+<dd><p>Creates a timezone-agnostic datetime from the timestamp in the
+specified type-1 UUID.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>uuid_arg</strong> – a version 1 <code class="xref py py-class docutils literal notranslate"><span class="pre">UUID</span></code></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="cassandra.util.min_uuid_from_time">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">min_uuid_from_time</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.min_uuid_from_time" title="Link to this definition">¶</a></dt>
+<dd><p>Generates the minimum TimeUUID (type 1) for a given timestamp, as compared by Cassandra.</p>
+<p>See <a class="reference internal" href="#cassandra.util.uuid_from_time" title="cassandra.util.uuid_from_time"><code class="xref py py-func docutils literal notranslate"><span class="pre">uuid_from_time()</span></code></a> for argument and return types.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="cassandra.util.max_uuid_from_time">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">max_uuid_from_time</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.max_uuid_from_time" title="Link to this definition">¶</a></dt>
+<dd><p>Generates the maximum TimeUUID (type 1) for a given timestamp, as compared by Cassandra.</p>
+<p>See <a class="reference internal" href="#cassandra.util.uuid_from_time" title="cassandra.util.uuid_from_time"><code class="xref py py-func docutils literal notranslate"><span class="pre">uuid_from_time()</span></code></a> for argument and return types.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="cassandra.util.uuid_from_time">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">uuid_from_time</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">time_arg</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">node</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">clock_seq</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.uuid_from_time" title="Link to this definition">¶</a></dt>
+<dd><p>Converts a datetime or timestamp to a type 1 <code class="xref py py-class docutils literal notranslate"><span class="pre">uuid.UUID</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>time_arg</strong> – The time to use for the timestamp portion of the UUID.
+This can either be a <code class="xref py py-class docutils literal notranslate"><span class="pre">datetime</span></code> object or a timestamp
+in seconds (as returned from <code class="xref py py-meth docutils literal notranslate"><span class="pre">time.time()</span></code>).</p></li>
+<li><p><strong>node</strong> (<em>long</em>) – None integer for the UUID (up to 48 bits). If not specified, this
+field is randomized.</p></li>
+<li><p><strong>clock_seq</strong> (<em>int</em>) – Clock sequence field for the UUID (up to 14 bits). If not specified,
+a random sequence is generated.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">uuid.UUID</span></code></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py data">
+<dt class="sig sig-object py" id="cassandra.util.LOWEST_TIME_UUID">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">LOWEST_TIME_UUID</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">UUID('00000000-0000-1000-8080-808080808080')</span></em><a class="headerlink" href="#cassandra.util.LOWEST_TIME_UUID" title="Link to this definition">¶</a></dt>
+<dd><p>The lowest possible TimeUUID, as sorted by Cassandra.</p>
+</dd></dl>
+
+<dl class="py data">
+<dt class="sig sig-object py" id="cassandra.util.HIGHEST_TIME_UUID">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">HIGHEST_TIME_UUID</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">UUID('ffffffff-ffff-1fff-bf7f-7f7f7f7f7f7f')</span></em><a class="headerlink" href="#cassandra.util.HIGHEST_TIME_UUID" title="Link to this definition">¶</a></dt>
+<dd><p>The highest possible TimeUUID, as sorted by Cassandra.</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.SortedSet">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">SortedSet</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">iterable</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">()</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.SortedSet" title="Link to this definition">¶</a></dt>
+<dd><p>A sorted set based on sorted list</p>
+<p>A sorted set implementation is used in this case because it does not
+require its elements to be immutable/hashable.</p>
+<p>#Not implemented: update functions, inplace operators</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.sortedset">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">sortedset</span></span><a class="headerlink" href="#cassandra.util.sortedset" title="Link to this definition">¶</a></dt>
+<dd><p>alias of <a class="reference internal" href="#cassandra.util.SortedSet" title="cassandra.util.SortedSet"><code class="xref py py-class docutils literal notranslate"><span class="pre">SortedSet</span></code></a></p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.OrderedMap">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">OrderedMap</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.OrderedMap" title="Link to this definition">¶</a></dt>
+<dd><p>An ordered map that accepts non-hashable types for keys. It also maintains the
+insertion order of items, behaving as OrderedDict in that regard. These maps
+are constructed and read just as normal mapping types, except that they may
+contain arbitrary collections and other non-hashable items as keys:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">od</span> <span class="o">=</span> <span class="n">OrderedMap</span><span class="p">([({</span><span class="s1">&#39;one&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;two&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">},</span> <span class="s1">&#39;value&#39;</span><span class="p">),</span>
+<span class="gp">... </span>                 <span class="p">({</span><span class="s1">&#39;three&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span> <span class="s1">&#39;four&#39;</span><span class="p">:</span> <span class="mi">4</span><span class="p">},</span> <span class="s1">&#39;value2&#39;</span><span class="p">)])</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">list</span><span class="p">(</span><span class="n">od</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+<span class="go">[{&#39;two&#39;: 2, &#39;one&#39;: 1}, {&#39;three&#39;: 3, &#39;four&#39;: 4}]</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">list</span><span class="p">(</span><span class="n">od</span><span class="o">.</span><span class="n">values</span><span class="p">())</span>
+<span class="go">[&#39;value&#39;, &#39;value2&#39;]</span>
+</pre></div>
+</div>
+<p>These constructs are needed to support nested collections in Cassandra 2.1.3+,
+where frozen collections can be specified as parameters to others:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">example</span> <span class="p">(</span>
+    <span class="o">...</span>
+    <span class="n">value</span> <span class="nb">map</span><span class="o">&lt;</span><span class="n">frozen</span><span class="o">&lt;</span><span class="nb">map</span><span class="o">&lt;</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="o">&gt;&gt;</span><span class="p">,</span> <span class="n">double</span><span class="o">&gt;</span>
+    <span class="o">...</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>This class derives from the (immutable) Mapping API. Objects in these maps
+are not intended be modified.</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.OrderedMapSerializedKey">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">OrderedMapSerializedKey</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cass_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">protocol_version</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.OrderedMapSerializedKey" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.Time">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">Time</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.Time" title="Link to this definition">¶</a></dt>
+<dd><p>Idealized time, independent of day.</p>
+<p>Up to nanosecond resolution</p>
+<p>Initializer value can be:</p>
+<ul class="simple">
+<li><p>integer_type: absolute nanoseconds in the day</p></li>
+<li><p>datetime.time: built-in time</p></li>
+<li><p>string_type: a string time of the form “HH:MM:SS[.mmmuuunnn]”</p></li>
+</ul>
+<dl class="py property">
+<dt class="sig sig-object py" id="cassandra.util.Time.hour">
+<em class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">hour</span></span><a class="headerlink" href="#cassandra.util.Time.hour" title="Link to this definition">¶</a></dt>
+<dd><p>The hour component of this time (0-23)</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="cassandra.util.Time.minute">
+<em class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">minute</span></span><a class="headerlink" href="#cassandra.util.Time.minute" title="Link to this definition">¶</a></dt>
+<dd><p>The minute component of this time (0-59)</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="cassandra.util.Time.second">
+<em class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">second</span></span><a class="headerlink" href="#cassandra.util.Time.second" title="Link to this definition">¶</a></dt>
+<dd><p>The second component of this time (0-59)</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="cassandra.util.Time.nanosecond">
+<em class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">nanosecond</span></span><a class="headerlink" href="#cassandra.util.Time.nanosecond" title="Link to this definition">¶</a></dt>
+<dd><p>The fractional seconds component of the time, in nanoseconds</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.util.Time.time">
+<span class="sig-name descname"><span class="pre">time</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.Time.time" title="Link to this definition">¶</a></dt>
+<dd><p>Return a built-in datetime.time (nanosecond precision truncated to micros).</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.Date">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">Date</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.Date" title="Link to this definition">¶</a></dt>
+<dd><p>Idealized date: year, month, day</p>
+<p>Offers wider year range than datetime.date. For Dates that cannot be represented
+as a datetime.date (because datetime.MINYEAR, datetime.MAXYEAR), this type falls back
+to printing days_from_epoch offset.</p>
+<p>Initializer value can be:</p>
+<ul class="simple">
+<li><p>integer_type: absolute days from epoch (1970, 1, 1). Can be negative.</p></li>
+<li><p>datetime.date: built-in date</p></li>
+<li><p>string_type: a string time of the form “yyyy-mm-dd”</p></li>
+</ul>
+<dl class="py property">
+<dt class="sig sig-object py" id="cassandra.util.Date.seconds">
+<em class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">seconds</span></span><a class="headerlink" href="#cassandra.util.Date.seconds" title="Link to this definition">¶</a></dt>
+<dd><p>Absolute seconds from epoch (can be negative)</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.util.Date.date">
+<span class="sig-name descname"><span class="pre">date</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.Date.date" title="Link to this definition">¶</a></dt>
+<dd><p>Return a built-in datetime.date for Dates falling in the years [datetime.MINYEAR, datetime.MAXYEAR]</p>
+<p>ValueError is raised for Dates outside this range.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.Point">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">Point</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">nan</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">nan</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.Point" title="Link to this definition">¶</a></dt>
+<dd><p>Represents a point geometry for DSE</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.Point.x">
+<span class="sig-name descname"><span class="pre">x</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.util.Point.x" title="Link to this definition">¶</a></dt>
+<dd><p>x coordinate of the point</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.Point.y">
+<span class="sig-name descname"><span class="pre">y</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.util.Point.y" title="Link to this definition">¶</a></dt>
+<dd><p>y coordinate of the point</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.util.Point.from_wkt">
+<em class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_wkt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.Point.from_wkt" title="Link to this definition">¶</a></dt>
+<dd><p>Parse a Point geometry from a wkt string and return a new Point object.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.LineString">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">LineString</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">coords</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">()</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.LineString" title="Link to this definition">¶</a></dt>
+<dd><p>Represents a linestring geometry for DSE</p>
+<p>‘coords`: a sequence of (x, y) coordinates of points in the linestring</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.LineString.coords">
+<span class="sig-name descname"><span class="pre">coords</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.util.LineString.coords" title="Link to this definition">¶</a></dt>
+<dd><p>Tuple of (x, y) coordinates in the linestring</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.util.LineString.from_wkt">
+<em class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_wkt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.LineString.from_wkt" title="Link to this definition">¶</a></dt>
+<dd><p>Parse a LineString geometry from a wkt string and return a new LineString object.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.Polygon">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">Polygon</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">exterior</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">()</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">interiors</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.Polygon" title="Link to this definition">¶</a></dt>
+<dd><p>Represents a polygon geometry for DSE</p>
+<p>‘exterior`: a sequence of (x, y) coordinates of points in the linestring
+<cite>interiors</cite>: None, or a sequence of sequences or (x, y) coordinates of points describing interior linear rings</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.Polygon.exterior">
+<span class="sig-name descname"><span class="pre">exterior</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.util.Polygon.exterior" title="Link to this definition">¶</a></dt>
+<dd><p>_LinearRing representing the exterior of the polygon</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.Polygon.interiors">
+<span class="sig-name descname"><span class="pre">interiors</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.util.Polygon.interiors" title="Link to this definition">¶</a></dt>
+<dd><p>Tuple of _LinearRings representing interior holes in the polygon</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.util.Polygon.from_wkt">
+<em class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_wkt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.Polygon.from_wkt" title="Link to this definition">¶</a></dt>
+<dd><p>Parse a Polygon geometry from a wkt string and return a new Polygon object.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.Distance">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">Distance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">nan</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">nan</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radius</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">nan</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.Distance" title="Link to this definition">¶</a></dt>
+<dd><p>Represents a Distance geometry for DSE</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.Distance.x">
+<span class="sig-name descname"><span class="pre">x</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.util.Distance.x" title="Link to this definition">¶</a></dt>
+<dd><p>x coordinate of the center point</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.Distance.y">
+<span class="sig-name descname"><span class="pre">y</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.util.Distance.y" title="Link to this definition">¶</a></dt>
+<dd><p>y coordinate of the center point</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.Distance.radius">
+<span class="sig-name descname"><span class="pre">radius</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.util.Distance.radius" title="Link to this definition">¶</a></dt>
+<dd><p>radius to represent the distance from the center point</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.util.Distance.from_wkt">
+<em class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_wkt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.Distance.from_wkt" title="Link to this definition">¶</a></dt>
+<dd><p>Parse a Distance geometry from a wkt string and return a new Distance object.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.Duration">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">Duration</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">months</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">days</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nanoseconds</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.Duration" title="Link to this definition">¶</a></dt>
+<dd><p>Cassandra Duration Type</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.Duration.months">
+<span class="sig-name descname"><span class="pre">months</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0</span></em><a class="headerlink" href="#cassandra.util.Duration.months" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.Duration.days">
+<span class="sig-name descname"><span class="pre">days</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0</span></em><a class="headerlink" href="#cassandra.util.Duration.days" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.Duration.nanoseconds">
+<span class="sig-name descname"><span class="pre">nanoseconds</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0</span></em><a class="headerlink" href="#cassandra.util.Duration.nanoseconds" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.DateRangePrecision">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">DateRangePrecision</span></span><a class="headerlink" href="#cassandra.util.DateRangePrecision" title="Link to this definition">¶</a></dt>
+<dd><p>An “enum” representing the valid values for <code class="xref py py-attr docutils literal notranslate"><span class="pre">DateRange.precision</span></code>.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRangePrecision.YEAR">
+<span class="sig-name descname"><span class="pre">YEAR</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'YEAR'</span></em><a class="headerlink" href="#cassandra.util.DateRangePrecision.YEAR" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRangePrecision.MONTH">
+<span class="sig-name descname"><span class="pre">MONTH</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'MONTH'</span></em><a class="headerlink" href="#cassandra.util.DateRangePrecision.MONTH" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRangePrecision.DAY">
+<span class="sig-name descname"><span class="pre">DAY</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'DAY'</span></em><a class="headerlink" href="#cassandra.util.DateRangePrecision.DAY" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRangePrecision.HOUR">
+<span class="sig-name descname"><span class="pre">HOUR</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'HOUR'</span></em><a class="headerlink" href="#cassandra.util.DateRangePrecision.HOUR" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRangePrecision.MINUTE">
+<span class="sig-name descname"><span class="pre">MINUTE</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'MINUTE'</span></em><a class="headerlink" href="#cassandra.util.DateRangePrecision.MINUTE" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRangePrecision.SECOND">
+<span class="sig-name descname"><span class="pre">SECOND</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'SECOND'</span></em><a class="headerlink" href="#cassandra.util.DateRangePrecision.SECOND" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRangePrecision.MILLISECOND">
+<span class="sig-name descname"><span class="pre">MILLISECOND</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'MILLISECOND'</span></em><a class="headerlink" href="#cassandra.util.DateRangePrecision.MILLISECOND" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRangePrecision.PRECISIONS">
+<span class="sig-name descname"><span class="pre">PRECISIONS</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">('YEAR',</span> <span class="pre">'MONTH',</span> <span class="pre">'DAY',</span> <span class="pre">'HOUR',</span> <span class="pre">'MINUTE',</span> <span class="pre">'SECOND',</span> <span class="pre">'MILLISECOND')</span></em><a class="headerlink" href="#cassandra.util.DateRangePrecision.PRECISIONS" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.DateRangeBound">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">DateRangeBound</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">precision</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.DateRangeBound" title="Link to this definition">¶</a></dt>
+<dd><p>Represents a single date value and its precision for <a class="reference internal" href="#cassandra.util.DateRange" title="cassandra.util.DateRange"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRange</span></code></a>.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRangeBound.milliseconds">
+<span class="sig-name descname"><span class="pre">milliseconds</span></span><a class="headerlink" href="#cassandra.util.DateRangeBound.milliseconds" title="Link to this definition">¶</a></dt>
+<dd><p>Integer representing milliseconds since the UNIX epoch. May be negative.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRangeBound.precision">
+<span class="sig-name descname"><span class="pre">precision</span></span><a class="headerlink" href="#cassandra.util.DateRangeBound.precision" title="Link to this definition">¶</a></dt>
+<dd><p>String representing the precision of a bound. Must be a valid
+<a class="reference internal" href="#cassandra.util.DateRangePrecision" title="cassandra.util.DateRangePrecision"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRangePrecision</span></code></a> member.</p>
+</dd></dl>
+
+<p><a class="reference internal" href="#cassandra.util.DateRangeBound" title="cassandra.util.DateRangeBound"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRangeBound</span></code></a> uses a millisecond offset from the UNIX epoch to
+allow <a class="reference internal" href="#cassandra.util.DateRange" title="cassandra.util.DateRange"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRange</span></code></a> to represent values <cite>datetime.datetime</cite> cannot.
+For such values, string representions will show this offset rather than the
+CQL representation.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>value</strong> – a value representing ms since the epoch. Accepts an
+integer or a datetime.</p></li>
+<li><p><strong>precision</strong> – a string representing precision</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.util.DateRangeBound.datetime">
+<span class="sig-name descname"><span class="pre">datetime</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.DateRangeBound.datetime" title="Link to this definition">¶</a></dt>
+<dd><p>Return <a class="reference internal" href="#cassandra.util.DateRangeBound.milliseconds" title="cassandra.util.DateRangeBound.milliseconds"><code class="xref py py-attr docutils literal notranslate"><span class="pre">milliseconds</span></code></a> as a <code class="xref py py-class docutils literal notranslate"><span class="pre">datetime.datetime</span></code> if possible.
+Raises an <cite>OverflowError</cite> if the value is out of range.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.util.DateRangeBound.from_value">
+<em class="property"><span class="k"><span class="pre">classmethod</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.DateRangeBound.from_value" title="Link to this definition">¶</a></dt>
+<dd><p>Construct a new <a class="reference internal" href="#cassandra.util.DateRangeBound" title="cassandra.util.DateRangeBound"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRangeBound</span></code></a> from a given value. If
+possible, use the <cite>value[‘milliseconds’]</cite> and <cite>value[‘precision’]</cite> keys
+of the argument. Otherwise, use the argument as a <cite>(milliseconds,
+precision)</cite> iterable.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>value</strong> – a dictlike or iterable object</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py data">
+<dt class="sig sig-object py" id="cassandra.util.OPEN_BOUND">
+<span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">OPEN_BOUND</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">DateRangeBound(milliseconds=None,</span> <span class="pre">precision=None)</span></em><a class="headerlink" href="#cassandra.util.OPEN_BOUND" title="Link to this definition">¶</a></dt>
+<dd><p>Represents <cite>*</cite>, an open value or bound for <a class="reference internal" href="#cassandra.util.DateRange" title="cassandra.util.DateRange"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRange</span></code></a>.</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.DateRange">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">DateRange</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">lower_bound</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">upper_bound</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.DateRange" title="Link to this definition">¶</a></dt>
+<dd><p>DSE DateRange Type</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRange.lower_bound">
+<span class="sig-name descname"><span class="pre">lower_bound</span></span><a class="headerlink" href="#cassandra.util.DateRange.lower_bound" title="Link to this definition">¶</a></dt>
+<dd><p><a class="reference internal" href="#cassandra.util.DateRangeBound" title="cassandra.util.DateRangeBound"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRangeBound</span></code></a> representing the lower bound of a bounded range.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRange.upper_bound">
+<span class="sig-name descname"><span class="pre">upper_bound</span></span><a class="headerlink" href="#cassandra.util.DateRange.upper_bound" title="Link to this definition">¶</a></dt>
+<dd><p><a class="reference internal" href="#cassandra.util.DateRangeBound" title="cassandra.util.DateRangeBound"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRangeBound</span></code></a> representing the upper bound of a bounded range.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.util.DateRange.value">
+<span class="sig-name descname"><span class="pre">value</span></span><a class="headerlink" href="#cassandra.util.DateRange.value" title="Link to this definition">¶</a></dt>
+<dd><p><a class="reference internal" href="#cassandra.util.DateRangeBound" title="cassandra.util.DateRangeBound"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRangeBound</span></code></a> representing the value of a single-value range.</p>
+</dd></dl>
+
+<p>As noted in its documentation, <a class="reference internal" href="#cassandra.util.DateRangeBound" title="cassandra.util.DateRangeBound"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRangeBound</span></code></a> uses a millisecond
+offset from the UNIX epoch to allow <a class="reference internal" href="#cassandra.util.DateRange" title="cassandra.util.DateRange"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRange</span></code></a> to represent values
+<cite>datetime.datetime</cite> cannot. For such values, string representions will show
+this offset rather than the CQL representation.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>lower_bound</strong> – a <a class="reference internal" href="#cassandra.util.DateRangeBound" title="cassandra.util.DateRangeBound"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRangeBound</span></code></a> or object accepted by
+<a class="reference internal" href="#cassandra.util.DateRangeBound.from_value" title="cassandra.util.DateRangeBound.from_value"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DateRangeBound.from_value()</span></code></a> to be used as a
+<a class="reference internal" href="#cassandra.util.DateRange.lower_bound" title="cassandra.util.DateRange.lower_bound"><code class="xref py py-attr docutils literal notranslate"><span class="pre">lower_bound</span></code></a>. Mutually exclusive with <cite>value</cite>. If
+<cite>upper_bound</cite> is specified and this is not, the <a class="reference internal" href="#cassandra.util.DateRange.lower_bound" title="cassandra.util.DateRange.lower_bound"><code class="xref py py-attr docutils literal notranslate"><span class="pre">lower_bound</span></code></a>
+will be open.</p></li>
+<li><p><strong>upper_bound</strong> – a <a class="reference internal" href="#cassandra.util.DateRangeBound" title="cassandra.util.DateRangeBound"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRangeBound</span></code></a> or object accepted by
+<a class="reference internal" href="#cassandra.util.DateRangeBound.from_value" title="cassandra.util.DateRangeBound.from_value"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DateRangeBound.from_value()</span></code></a> to be used as a
+<a class="reference internal" href="#cassandra.util.DateRange.upper_bound" title="cassandra.util.DateRange.upper_bound"><code class="xref py py-attr docutils literal notranslate"><span class="pre">upper_bound</span></code></a>. Mutually exclusive with <cite>value</cite>. If
+<cite>lower_bound</cite> is specified and this is not, the <a class="reference internal" href="#cassandra.util.DateRange.upper_bound" title="cassandra.util.DateRange.upper_bound"><code class="xref py py-attr docutils literal notranslate"><span class="pre">upper_bound</span></code></a>
+will be open.</p></li>
+<li><p><strong>value</strong> – a <a class="reference internal" href="#cassandra.util.DateRangeBound" title="cassandra.util.DateRangeBound"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateRangeBound</span></code></a> or object accepted by
+<a class="reference internal" href="#cassandra.util.DateRangeBound.from_value" title="cassandra.util.DateRangeBound.from_value"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DateRangeBound.from_value()</span></code></a> to be used as <a class="reference internal" href="#cassandra.util.DateRange.value" title="cassandra.util.DateRange.value"><code class="xref py py-attr docutils literal notranslate"><span class="pre">value</span></code></a>. Mutually
+exclusive with <cite>lower_bound</cite> and <cite>lower_bound</cite>.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.util.Version">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.util.</span></span><span class="sig-name descname"><span class="pre">Version</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">version</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.util.Version" title="Link to this definition">¶</a></dt>
+<dd><p>Internal minimalist class to compare versions.
+A valid version is: &lt;int&gt;.&lt;int&gt;.&lt;int&gt;.&lt;int or str&gt;.</p>
+<p>TODO: when python2 support is removed, use packaging.version.</p>
+</dd></dl>
+
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page cassandra.util - Utilities&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.24.8-scylla/api/cassandra/util%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="connection.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br /><code class="docutils literal notranslate"><span class="pre">cassandra.connection</span></code> - Low Level Connection Info
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="timestamps.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br /><code class="docutils literal notranslate"><span class="pre">cassandra.timestamps</span></code> - Timestamp Generation
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <div class="notice">
+<p>
+ScyllaDB Python Driver is available under the <a href="https://www.apache.org/licenses/LICENSE-2.0.html">Apache v2 License</a>.
+ScyllaDB Python Driver is a fork of <a href="https://github.com/datastax/python-driver">DataStax Python Driver</a>.
+See Copyright <a href="https://python-driver.docs.scylladb.com/stable/#copyright">here</a>.</p>
+</div>
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page cassandra.util - Utilities&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.24.8-scylla/api/cassandra/util%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/python-driver/edit/master/docs/api/cassandra/util.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#"><code class="docutils literal notranslate"><span class="pre">cassandra.util</span></code> - Utilities</a><ul>
+<li><a class="reference internal" href="#cassandra.util.datetime_from_timestamp"><code class="docutils literal notranslate"><span class="pre">datetime_from_timestamp()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.datetime_from_ms_timestamp"><code class="docutils literal notranslate"><span class="pre">datetime_from_ms_timestamp()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.utc_datetime_from_ms_timestamp"><code class="docutils literal notranslate"><span class="pre">utc_datetime_from_ms_timestamp()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.ms_timestamp_from_datetime"><code class="docutils literal notranslate"><span class="pre">ms_timestamp_from_datetime()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.unix_time_from_uuid1"><code class="docutils literal notranslate"><span class="pre">unix_time_from_uuid1()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.datetime_from_uuid1"><code class="docutils literal notranslate"><span class="pre">datetime_from_uuid1()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.min_uuid_from_time"><code class="docutils literal notranslate"><span class="pre">min_uuid_from_time()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.max_uuid_from_time"><code class="docutils literal notranslate"><span class="pre">max_uuid_from_time()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.uuid_from_time"><code class="docutils literal notranslate"><span class="pre">uuid_from_time()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.LOWEST_TIME_UUID"><code class="docutils literal notranslate"><span class="pre">LOWEST_TIME_UUID</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.HIGHEST_TIME_UUID"><code class="docutils literal notranslate"><span class="pre">HIGHEST_TIME_UUID</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.SortedSet"><code class="docutils literal notranslate"><span class="pre">SortedSet</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.sortedset"><code class="docutils literal notranslate"><span class="pre">sortedset</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.OrderedMap"><code class="docutils literal notranslate"><span class="pre">OrderedMap</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.OrderedMapSerializedKey"><code class="docutils literal notranslate"><span class="pre">OrderedMapSerializedKey</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Time"><code class="docutils literal notranslate"><span class="pre">Time</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.util.Time.hour"><code class="docutils literal notranslate"><span class="pre">Time.hour</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Time.minute"><code class="docutils literal notranslate"><span class="pre">Time.minute</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Time.second"><code class="docutils literal notranslate"><span class="pre">Time.second</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Time.nanosecond"><code class="docutils literal notranslate"><span class="pre">Time.nanosecond</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Time.time"><code class="docutils literal notranslate"><span class="pre">Time.time()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.util.Date"><code class="docutils literal notranslate"><span class="pre">Date</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.util.Date.seconds"><code class="docutils literal notranslate"><span class="pre">Date.seconds</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Date.date"><code class="docutils literal notranslate"><span class="pre">Date.date()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.util.Point"><code class="docutils literal notranslate"><span class="pre">Point</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.util.Point.x"><code class="docutils literal notranslate"><span class="pre">Point.x</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Point.y"><code class="docutils literal notranslate"><span class="pre">Point.y</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Point.from_wkt"><code class="docutils literal notranslate"><span class="pre">Point.from_wkt()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.util.LineString"><code class="docutils literal notranslate"><span class="pre">LineString</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.util.LineString.coords"><code class="docutils literal notranslate"><span class="pre">LineString.coords</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.LineString.from_wkt"><code class="docutils literal notranslate"><span class="pre">LineString.from_wkt()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.util.Polygon"><code class="docutils literal notranslate"><span class="pre">Polygon</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.util.Polygon.exterior"><code class="docutils literal notranslate"><span class="pre">Polygon.exterior</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Polygon.interiors"><code class="docutils literal notranslate"><span class="pre">Polygon.interiors</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Polygon.from_wkt"><code class="docutils literal notranslate"><span class="pre">Polygon.from_wkt()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.util.Distance"><code class="docutils literal notranslate"><span class="pre">Distance</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.util.Distance.x"><code class="docutils literal notranslate"><span class="pre">Distance.x</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Distance.y"><code class="docutils literal notranslate"><span class="pre">Distance.y</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Distance.radius"><code class="docutils literal notranslate"><span class="pre">Distance.radius</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Distance.from_wkt"><code class="docutils literal notranslate"><span class="pre">Distance.from_wkt()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.util.Duration"><code class="docutils literal notranslate"><span class="pre">Duration</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.util.Duration.months"><code class="docutils literal notranslate"><span class="pre">Duration.months</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Duration.days"><code class="docutils literal notranslate"><span class="pre">Duration.days</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.Duration.nanoseconds"><code class="docutils literal notranslate"><span class="pre">Duration.nanoseconds</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.util.DateRangePrecision"><code class="docutils literal notranslate"><span class="pre">DateRangePrecision</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.util.DateRangePrecision.YEAR"><code class="docutils literal notranslate"><span class="pre">DateRangePrecision.YEAR</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRangePrecision.MONTH"><code class="docutils literal notranslate"><span class="pre">DateRangePrecision.MONTH</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRangePrecision.DAY"><code class="docutils literal notranslate"><span class="pre">DateRangePrecision.DAY</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRangePrecision.HOUR"><code class="docutils literal notranslate"><span class="pre">DateRangePrecision.HOUR</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRangePrecision.MINUTE"><code class="docutils literal notranslate"><span class="pre">DateRangePrecision.MINUTE</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRangePrecision.SECOND"><code class="docutils literal notranslate"><span class="pre">DateRangePrecision.SECOND</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRangePrecision.MILLISECOND"><code class="docutils literal notranslate"><span class="pre">DateRangePrecision.MILLISECOND</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRangePrecision.PRECISIONS"><code class="docutils literal notranslate"><span class="pre">DateRangePrecision.PRECISIONS</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.util.DateRangeBound"><code class="docutils literal notranslate"><span class="pre">DateRangeBound</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.util.DateRangeBound.milliseconds"><code class="docutils literal notranslate"><span class="pre">DateRangeBound.milliseconds</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRangeBound.precision"><code class="docutils literal notranslate"><span class="pre">DateRangeBound.precision</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRangeBound.datetime"><code class="docutils literal notranslate"><span class="pre">DateRangeBound.datetime()</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRangeBound.from_value"><code class="docutils literal notranslate"><span class="pre">DateRangeBound.from_value()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.util.OPEN_BOUND"><code class="docutils literal notranslate"><span class="pre">OPEN_BOUND</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRange"><code class="docutils literal notranslate"><span class="pre">DateRange</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.util.DateRange.lower_bound"><code class="docutils literal notranslate"><span class="pre">DateRange.lower_bound</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRange.upper_bound"><code class="docutils literal notranslate"><span class="pre">DateRange.upper_bound</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.util.DateRange.value"><code class="docutils literal notranslate"><span class="pre">DateRange.value</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.util.Version"><code class="docutils literal notranslate"><span class="pre">Version</span></code></a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../../index.html">Scylla Python Driver</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                3.24.8
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+            
+            
+                
+                    <li>
+                        <a href="../../../stable/api/cassandra/util.html">
+                            3.29.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.7-scylla/api/cassandra/util.html">
+                            3.29.7
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.6-scylla/api/cassandra/util.html">
+                            3.29.6
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.5-scylla/api/cassandra/util.html">
+                            3.29.5
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.4-scylla/api/cassandra/util.html">
+                            3.29.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.3-scylla/api/cassandra/util.html">
+                            3.29.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.2-scylla/api/cassandra/util.html">
+                            3.29.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.29.0-scylla/api/cassandra/util.html">
+                            3.29.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.28.2-scylla/api/cassandra/util.html">
+                            3.28.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.28.1-scylla/api/cassandra/util.html">
+                            3.28.1
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.28.0-scylla/api/cassandra/util.html">
+                            3.28.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.26.9-scylla/api/cassandra/util.html">
+                            3.26.9
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.25.11-scylla/api/cassandra/util.html">
+                            3.25.11
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.25.4-scylla/api/cassandra/util.html">
+                            3.25.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="util.html">
+                            3.24.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.22.3-scylla/api/cassandra/util.html">
+                            3.22.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../3.21.0-scylla/api/cassandra/util.html">
+                            3.21.0
+                        </a>
+                    </li>
+                
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../index.html">API Documentation</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../cassandra.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra</span></code> - Exceptions and Enums</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cluster.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cluster</span></code> - Clusters and Sessions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="policies.html"><code class="docutils literal notranslate"><span class="pre">cassandra.policies</span></code> - Load balancing and Failure Handling Policies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="auth.html"><code class="docutils literal notranslate"><span class="pre">cassandra.auth</span></code> - Authentication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="graph.html"><code class="docutils literal notranslate"><span class="pre">cassandra.graph</span></code> - Graph Statements, Options, and Row Factories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="metadata.html"><code class="docutils literal notranslate"><span class="pre">cassandra.metadata</span></code> - Schema and Ring Topology</a></li>
+<li class="toctree-l2"><a class="reference internal" href="metrics.html"><code class="docutils literal notranslate"><span class="pre">cassandra.metrics</span></code> - Performance Metrics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="query.html"><code class="docutils literal notranslate"><span class="pre">cassandra.query</span></code> - Prepared Statements, Batch Statements, Tracing, and Row Factories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="pool.html"><code class="docutils literal notranslate"><span class="pre">cassandra.pool</span></code> - Hosts and Connection Pools</a></li>
+<li class="toctree-l2"><a class="reference internal" href="protocol.html"><code class="docutils literal notranslate"><span class="pre">cassandra.protocol</span></code> - Protocol Features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="encoder.html"><code class="docutils literal notranslate"><span class="pre">cassandra.encoder</span></code> - Encoders for non-prepared Statements</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decoder.html"><code class="docutils literal notranslate"><span class="pre">cassandra.decoder</span></code> - Data Return Formats</a></li>
+<li class="toctree-l2"><a class="reference internal" href="concurrent.html"><code class="docutils literal notranslate"><span class="pre">cassandra.concurrent</span></code> - Utilities for Concurrent Statement Execution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="connection.html"><code class="docutils literal notranslate"><span class="pre">cassandra.connection</span></code> - Low Level Connection Info</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#"><code class="docutils literal notranslate"><span class="pre">cassandra.util</span></code> - Utilities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="timestamps.html"><code class="docutils literal notranslate"><span class="pre">cassandra.timestamps</span></code> - Timestamp Generation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/asyncioreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.asyncioreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">asyncio</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/asyncorereactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.asyncorereactor</span></code> - <code class="docutils literal notranslate"><span class="pre">asyncore</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/eventletreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.eventletreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">eventlet</span></code>-compatible Connection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/libevreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.libevreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">libev</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/geventreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.geventreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">gevent</span></code>-compatible Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="io/twistedreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.twistedreactor</span></code> - Twisted Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/models.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.models</span></code> - Table models for object mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/columns.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.columns</span></code> - Column types for object mapping models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/query.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.query</span></code> - Query and filter model objects</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/connection.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.connection</span></code> - Connection management for cqlengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/management.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.management</span></code> - Schema management for cqlengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/usertype.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.usertype</span></code> - Model classes for User Defined Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="datastax/graph/index.html"><code class="docutils literal notranslate"><span class="pre">cassandra.datastax.graph</span></code> - Graph Statements, Options, and Row Factories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="datastax/graph/fluent/index.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="datastax/graph/fluent/query.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent.query</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="datastax/graph/fluent/predicates.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra.datastax.graph.fluent.predicates</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../scylla_specific.html">Scylla Specific Features</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../upgrading.html">Upgrading</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="simple">
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../execution_profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../query_paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user_defined_types.html">User Defined Types</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../object_mapper.html">Object Mapper</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/upgrade_guide.html">Upgrade Guide</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/models.html">Models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/queryset.html">Making Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/batches.html">Batch Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/connections.html">Connections</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/third_party.html">Third party integrations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cqlengine/faq.html">Frequently Asked Questions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../dates_and_times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../scylla_cloud.html">Scylla Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; ScyllaDB 2021 and © DataStax 2013-2017
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.2.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

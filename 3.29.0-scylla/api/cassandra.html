@@ -1,0 +1,1358 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             cassandra - Exceptions and Enums | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://python-driver.docs.scylladb.com/stable/api/cassandra.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+            
+        
+    
+        
+        
+            
+        <script type="text/javascript" src="../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../_static/documentation_options.js?v=be4f90db"></script>
+            
+        
+            
+                <script src="../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+    </head>
+
+    <body class="brand-product">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University Live | Free Virtual Training Event</div>
+            <a class="promo-banner__button button button--reverse" href="#"
+               target="_blank" rel="noopener noreferrer">Learn more</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../index.html"
+           class="bread__highlight">
+            Scylla Python Driver
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="index.html" class="bread__highlight">
+                API Documentation
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra</span></code> - Exceptions and Enums</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+    <div class="admonition caution">
+        <p class="admonition-title">Caution</p>
+        <p>
+            
+                You're viewing documentation for a previous version of Scylla Python Driver.
+            
+            <a href="../../stable/api/cassandra.html">Switch to the latest stable version.</a>
+        </p>
+    </div>
+
+                    
+
+                    <section id="module-cassandra">
+<span id="cassandra-exceptions-and-enums"></span><h1><a class="reference internal" href="#module-cassandra" title="cassandra"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra</span></code></a> - Exceptions and Enums<a class="headerlink" href="#module-cassandra" title="Link to this heading">¶</a></h1>
+<dl class="py data">
+<dt class="sig sig-object py" id="cassandra.__version_info__">
+<span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">__version_info__</span></span><a class="headerlink" href="#cassandra.__version_info__" title="Link to this definition">¶</a></dt>
+<dd><p>The version of the driver in a tuple format</p>
+</dd></dl>
+
+<dl class="py data">
+<dt class="sig sig-object py" id="cassandra.__version__">
+<span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">__version__</span></span><a class="headerlink" href="#cassandra.__version__" title="Link to this definition">¶</a></dt>
+<dd><p>The version of the driver in a string format</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.ConsistencyLevel">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">ConsistencyLevel</span></span><a class="headerlink" href="#cassandra.ConsistencyLevel" title="Link to this definition">¶</a></dt>
+<dd><p>Spcifies how many replicas must respond for an operation to be considered
+a success.  By default, <code class="docutils literal notranslate"><span class="pre">ONE</span></code> is used for all operations.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ConsistencyLevel.ANY">
+<span class="sig-name descname"><span class="pre">ANY</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0</span></em><a class="headerlink" href="#cassandra.ConsistencyLevel.ANY" title="Link to this definition">¶</a></dt>
+<dd><p>Only requires that one replica receives the write <em>or</em> the coordinator
+stores a hint to replay later. Valid only for writes.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ConsistencyLevel.ONE">
+<span class="sig-name descname"><span class="pre">ONE</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">1</span></em><a class="headerlink" href="#cassandra.ConsistencyLevel.ONE" title="Link to this definition">¶</a></dt>
+<dd><p>Only one replica needs to respond to consider the operation a success</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ConsistencyLevel.TWO">
+<span class="sig-name descname"><span class="pre">TWO</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">2</span></em><a class="headerlink" href="#cassandra.ConsistencyLevel.TWO" title="Link to this definition">¶</a></dt>
+<dd><p>Two replicas must respond to consider the operation a success</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ConsistencyLevel.THREE">
+<span class="sig-name descname"><span class="pre">THREE</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">3</span></em><a class="headerlink" href="#cassandra.ConsistencyLevel.THREE" title="Link to this definition">¶</a></dt>
+<dd><p>Three replicas must respond to consider the operation a success</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ConsistencyLevel.QUORUM">
+<span class="sig-name descname"><span class="pre">QUORUM</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">4</span></em><a class="headerlink" href="#cassandra.ConsistencyLevel.QUORUM" title="Link to this definition">¶</a></dt>
+<dd><p><code class="docutils literal notranslate"><span class="pre">ceil(RF/2)</span> <span class="pre">+</span> <span class="pre">1</span></code> replicas must respond to consider the operation a success</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ConsistencyLevel.ALL">
+<span class="sig-name descname"><span class="pre">ALL</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">5</span></em><a class="headerlink" href="#cassandra.ConsistencyLevel.ALL" title="Link to this definition">¶</a></dt>
+<dd><p>All replicas must respond to consider the operation a success</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ConsistencyLevel.LOCAL_QUORUM">
+<span class="sig-name descname"><span class="pre">LOCAL_QUORUM</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">6</span></em><a class="headerlink" href="#cassandra.ConsistencyLevel.LOCAL_QUORUM" title="Link to this definition">¶</a></dt>
+<dd><p>Requires a quorum of replicas in the local datacenter</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ConsistencyLevel.EACH_QUORUM">
+<span class="sig-name descname"><span class="pre">EACH_QUORUM</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">7</span></em><a class="headerlink" href="#cassandra.ConsistencyLevel.EACH_QUORUM" title="Link to this definition">¶</a></dt>
+<dd><p>Requires a quorum of replicas in each datacenter</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ConsistencyLevel.SERIAL">
+<span class="sig-name descname"><span class="pre">SERIAL</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">8</span></em><a class="headerlink" href="#cassandra.ConsistencyLevel.SERIAL" title="Link to this definition">¶</a></dt>
+<dd><p>For conditional inserts/updates that utilize Cassandra’s lightweight
+transactions, this requires consensus among all replicas for the
+modified data.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ConsistencyLevel.LOCAL_SERIAL">
+<span class="sig-name descname"><span class="pre">LOCAL_SERIAL</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">9</span></em><a class="headerlink" href="#cassandra.ConsistencyLevel.LOCAL_SERIAL" title="Link to this definition">¶</a></dt>
+<dd><p>Like <a class="reference internal" href="#cassandra.ConsistencyLevel.SERIAL" title="cassandra.ConsistencyLevel.SERIAL"><code class="xref py py-attr docutils literal notranslate"><span class="pre">SERIAL</span></code></a>, but only requires consensus
+among replicas in the local datacenter.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ConsistencyLevel.LOCAL_ONE">
+<span class="sig-name descname"><span class="pre">LOCAL_ONE</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">10</span></em><a class="headerlink" href="#cassandra.ConsistencyLevel.LOCAL_ONE" title="Link to this definition">¶</a></dt>
+<dd><p>Sends a request only to replicas in the local datacenter and waits for
+one response.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.ProtocolVersion">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">ProtocolVersion</span></span><a class="headerlink" href="#cassandra.ProtocolVersion" title="Link to this definition">¶</a></dt>
+<dd><p>Defines native protocol versions supported by this driver.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ProtocolVersion.V3">
+<span class="sig-name descname"><span class="pre">V3</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">3</span></em><a class="headerlink" href="#cassandra.ProtocolVersion.V3" title="Link to this definition">¶</a></dt>
+<dd><p>v3, supported in Cassandra 2.1–&gt;3.x+;
+added support for protocol-level client-side timestamps (see <a class="reference internal" href="cassandra/cluster.html#cassandra.cluster.Session.use_client_timestamp" title="cassandra.cluster.Session.use_client_timestamp"><code class="xref py py-attr docutils literal notranslate"><span class="pre">Session.use_client_timestamp</span></code></a>),
+serial consistency levels for <a class="reference internal" href="cassandra/query.html#cassandra.query.BatchStatement" title="cassandra.query.BatchStatement"><code class="xref py py-class docutils literal notranslate"><span class="pre">BatchStatement</span></code></a>, and an improved connection pool.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ProtocolVersion.V4">
+<span class="sig-name descname"><span class="pre">V4</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">4</span></em><a class="headerlink" href="#cassandra.ProtocolVersion.V4" title="Link to this definition">¶</a></dt>
+<dd><p>v4, supported in Cassandra 2.2–&gt;3.x+;
+added a number of new types, server warnings, new failure messages, and custom payloads. Details in the
+<a class="reference external" href="https://github.com/apache/cassandra/blob/trunk/doc/native_protocol_v4.spec">project docs</a></p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ProtocolVersion.V5">
+<span class="sig-name descname"><span class="pre">V5</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">5</span></em><a class="headerlink" href="#cassandra.ProtocolVersion.V5" title="Link to this definition">¶</a></dt>
+<dd><p>v5, in beta from 3.x+. Finalised in 4.0-beta5</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ProtocolVersion.V6">
+<span class="sig-name descname"><span class="pre">V6</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">6</span></em><a class="headerlink" href="#cassandra.ProtocolVersion.V6" title="Link to this definition">¶</a></dt>
+<dd><p>v6, in beta from 4.0-beta5</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ProtocolVersion.DSE_V1">
+<span class="sig-name descname"><span class="pre">DSE_V1</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">65</span></em><a class="headerlink" href="#cassandra.ProtocolVersion.DSE_V1" title="Link to this definition">¶</a></dt>
+<dd><p>DSE private protocol v1, supported in DSE 5.1+</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ProtocolVersion.DSE_V2">
+<span class="sig-name descname"><span class="pre">DSE_V2</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">66</span></em><a class="headerlink" href="#cassandra.ProtocolVersion.DSE_V2" title="Link to this definition">¶</a></dt>
+<dd><p>DSE private protocol v2, supported in DSE 6.0+</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ProtocolVersion.SUPPORTED_VERSIONS">
+<span class="sig-name descname"><span class="pre">SUPPORTED_VERSIONS</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">(5,</span> <span class="pre">4,</span> <span class="pre">3)</span></em><a class="headerlink" href="#cassandra.ProtocolVersion.SUPPORTED_VERSIONS" title="Link to this definition">¶</a></dt>
+<dd><p>A tuple of all supported protocol versions for ScyllaDB, including future v5 version.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ProtocolVersion.BETA_VERSIONS">
+<span class="sig-name descname"><span class="pre">BETA_VERSIONS</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">(6,)</span></em><a class="headerlink" href="#cassandra.ProtocolVersion.BETA_VERSIONS" title="Link to this definition">¶</a></dt>
+<dd><p>A tuple of all beta protocol versions</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ProtocolVersion.MIN_SUPPORTED">
+<span class="sig-name descname"><span class="pre">MIN_SUPPORTED</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">3</span></em><a class="headerlink" href="#cassandra.ProtocolVersion.MIN_SUPPORTED" title="Link to this definition">¶</a></dt>
+<dd><p>Minimum protocol version supported by this driver.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ProtocolVersion.MAX_SUPPORTED">
+<span class="sig-name descname"><span class="pre">MAX_SUPPORTED</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">5</span></em><a class="headerlink" href="#cassandra.ProtocolVersion.MAX_SUPPORTED" title="Link to this definition">¶</a></dt>
+<dd><p>Maximum protocol version supported by this driver.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="cassandra.ProtocolVersion.get_lower_supported">
+<em class="property"><span class="k"><span class="pre">classmethod</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">get_lower_supported</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">previous_version</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.ProtocolVersion.get_lower_supported" title="Link to this definition">¶</a></dt>
+<dd><p>Return the lower supported protocol version. Beta versions are omitted.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.UserFunctionDescriptor">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">UserFunctionDescriptor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">argument_types</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.UserFunctionDescriptor" title="Link to this definition">¶</a></dt>
+<dd><p>Describes a User function by name and argument signature</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.UserFunctionDescriptor.name">
+<span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.UserFunctionDescriptor.name" title="Link to this definition">¶</a></dt>
+<dd><p>name of the function</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.UserFunctionDescriptor.argument_types">
+<span class="sig-name descname"><span class="pre">argument_types</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.UserFunctionDescriptor.argument_types" title="Link to this definition">¶</a></dt>
+<dd><p>Ordered list of CQL argument type names comprising the type signature</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="cassandra.UserFunctionDescriptor.signature">
+<em class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">signature</span></span><a class="headerlink" href="#cassandra.UserFunctionDescriptor.signature" title="Link to this definition">¶</a></dt>
+<dd><p>function signature string in the form ‘name([type0[,type1[…]]])’</p>
+<p>can be used to uniquely identify overloaded function names within a keyspace</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="cassandra.UserAggregateDescriptor">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">UserAggregateDescriptor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">argument_types</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#cassandra.UserAggregateDescriptor" title="Link to this definition">¶</a></dt>
+<dd><p>Describes a User aggregate function by name and argument signature</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.UserAggregateDescriptor.name">
+<span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.UserAggregateDescriptor.name" title="Link to this definition">¶</a></dt>
+<dd><p>name of the aggregate</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.UserAggregateDescriptor.argument_types">
+<span class="sig-name descname"><span class="pre">argument_types</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.UserAggregateDescriptor.argument_types" title="Link to this definition">¶</a></dt>
+<dd><p>Ordered list of CQL argument type names comprising the type signature</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="cassandra.UserAggregateDescriptor.signature">
+<em class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">signature</span></span><a class="headerlink" href="#cassandra.UserAggregateDescriptor.signature" title="Link to this definition">¶</a></dt>
+<dd><p>function signature string in the form ‘name([type0[,type1[…]]])’</p>
+<p>can be used to uniquely identify overloaded function names within a keyspace</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.DriverException">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">DriverException</span></span><a class="headerlink" href="#cassandra.DriverException" title="Link to this definition">¶</a></dt>
+<dd><p>Base for all exceptions explicitly raised by the driver.</p>
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.RequestExecutionException">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">RequestExecutionException</span></span><a class="headerlink" href="#cassandra.RequestExecutionException" title="Link to this definition">¶</a></dt>
+<dd><p>Base for request execution exceptions returned from the server.</p>
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.Unavailable">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">Unavailable</span></span><a class="headerlink" href="#cassandra.Unavailable" title="Link to this definition">¶</a></dt>
+<dd><p>There were not enough live replicas to satisfy the requested consistency
+level, so the coordinator node immediately failed the request without
+forwarding it to any replicas.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.Unavailable.consistency">
+<span class="sig-name descname"><span class="pre">consistency</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.Unavailable.consistency" title="Link to this definition">¶</a></dt>
+<dd><p>The requested <a class="reference internal" href="#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a></p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.Unavailable.required_replicas">
+<span class="sig-name descname"><span class="pre">required_replicas</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.Unavailable.required_replicas" title="Link to this definition">¶</a></dt>
+<dd><p>The number of replicas that needed to be live to complete the operation</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.Unavailable.alive_replicas">
+<span class="sig-name descname"><span class="pre">alive_replicas</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.Unavailable.alive_replicas" title="Link to this definition">¶</a></dt>
+<dd><p>The number of replicas that were actually alive</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.Timeout">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">Timeout</span></span><a class="headerlink" href="#cassandra.Timeout" title="Link to this definition">¶</a></dt>
+<dd><p>Replicas failed to respond to the coordinator node before timing out.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.Timeout.consistency">
+<span class="sig-name descname"><span class="pre">consistency</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.Timeout.consistency" title="Link to this definition">¶</a></dt>
+<dd><p>The requested <a class="reference internal" href="#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a></p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.Timeout.required_responses">
+<span class="sig-name descname"><span class="pre">required_responses</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.Timeout.required_responses" title="Link to this definition">¶</a></dt>
+<dd><p>The number of required replica responses</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.Timeout.received_responses">
+<span class="sig-name descname"><span class="pre">received_responses</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.Timeout.received_responses" title="Link to this definition">¶</a></dt>
+<dd><p>The number of replicas that responded before the coordinator timed out
+the operation</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.ReadTimeout">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">ReadTimeout</span></span><a class="headerlink" href="#cassandra.ReadTimeout" title="Link to this definition">¶</a></dt>
+<dd><p>A subclass of <a class="reference internal" href="#cassandra.Timeout" title="cassandra.Timeout"><code class="xref py py-exc docutils literal notranslate"><span class="pre">Timeout</span></code></a> for read operations.</p>
+<p>This indicates that the replicas failed to respond to the coordinator
+node before the configured timeout. This timeout is configured in
+<code class="docutils literal notranslate"><span class="pre">cassandra.yaml</span></code> with the <code class="docutils literal notranslate"><span class="pre">read_request_timeout_in_ms</span></code>
+and <code class="docutils literal notranslate"><span class="pre">range_request_timeout_in_ms</span></code> options.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ReadTimeout.data_retrieved">
+<span class="sig-name descname"><span class="pre">data_retrieved</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.ReadTimeout.data_retrieved" title="Link to this definition">¶</a></dt>
+<dd><p>A boolean indicating whether the requested data was retrieved
+by the coordinator from any replicas before it timed out the
+operation</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.WriteTimeout">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">WriteTimeout</span></span><a class="headerlink" href="#cassandra.WriteTimeout" title="Link to this definition">¶</a></dt>
+<dd><p>A subclass of <a class="reference internal" href="#cassandra.Timeout" title="cassandra.Timeout"><code class="xref py py-exc docutils literal notranslate"><span class="pre">Timeout</span></code></a> for write operations.</p>
+<p>This indicates that the replicas failed to respond to the coordinator
+node before the configured timeout. This timeout is configured in
+<code class="docutils literal notranslate"><span class="pre">cassandra.yaml</span></code> with the <code class="docutils literal notranslate"><span class="pre">write_request_timeout_in_ms</span></code>
+option.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.WriteTimeout.write_type">
+<span class="sig-name descname"><span class="pre">write_type</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.WriteTimeout.write_type" title="Link to this definition">¶</a></dt>
+<dd><p>The type of write operation, enum on <a class="reference internal" href="cassandra/policies.html#cassandra.policies.WriteType" title="cassandra.policies.WriteType"><code class="xref py py-class docutils literal notranslate"><span class="pre">WriteType</span></code></a></p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.CoordinationFailure">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">CoordinationFailure</span></span><a class="headerlink" href="#cassandra.CoordinationFailure" title="Link to this definition">¶</a></dt>
+<dd><p>Replicas sent a failure to the coordinator.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.CoordinationFailure.consistency">
+<span class="sig-name descname"><span class="pre">consistency</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.CoordinationFailure.consistency" title="Link to this definition">¶</a></dt>
+<dd><p>The requested <a class="reference internal" href="#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a></p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.CoordinationFailure.required_responses">
+<span class="sig-name descname"><span class="pre">required_responses</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.CoordinationFailure.required_responses" title="Link to this definition">¶</a></dt>
+<dd><p>The number of required replica responses</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.CoordinationFailure.received_responses">
+<span class="sig-name descname"><span class="pre">received_responses</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.CoordinationFailure.received_responses" title="Link to this definition">¶</a></dt>
+<dd><p>The number of replicas that responded before the coordinator timed out
+the operation</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.CoordinationFailure.failures">
+<span class="sig-name descname"><span class="pre">failures</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.CoordinationFailure.failures" title="Link to this definition">¶</a></dt>
+<dd><p>The number of replicas that sent a failure message</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.CoordinationFailure.error_code_map">
+<span class="sig-name descname"><span class="pre">error_code_map</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.CoordinationFailure.error_code_map" title="Link to this definition">¶</a></dt>
+<dd><p>A map of inet addresses to error codes representing replicas that sent
+a failure message.  Only set when <cite>protocol_version</cite> is 5 or higher.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.ReadFailure">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">ReadFailure</span></span><a class="headerlink" href="#cassandra.ReadFailure" title="Link to this definition">¶</a></dt>
+<dd><p>A subclass of <a class="reference internal" href="#cassandra.CoordinationFailure" title="cassandra.CoordinationFailure"><code class="xref py py-exc docutils literal notranslate"><span class="pre">CoordinationFailure</span></code></a> for read operations.</p>
+<p>This indicates that the replicas sent a failure message to the coordinator.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.ReadFailure.data_retrieved">
+<span class="sig-name descname"><span class="pre">data_retrieved</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.ReadFailure.data_retrieved" title="Link to this definition">¶</a></dt>
+<dd><p>A boolean indicating whether the requested data was retrieved
+by the coordinator from any replicas before it timed out the
+operation</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.WriteFailure">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">WriteFailure</span></span><a class="headerlink" href="#cassandra.WriteFailure" title="Link to this definition">¶</a></dt>
+<dd><p>A subclass of <a class="reference internal" href="#cassandra.CoordinationFailure" title="cassandra.CoordinationFailure"><code class="xref py py-exc docutils literal notranslate"><span class="pre">CoordinationFailure</span></code></a> for write operations.</p>
+<p>This indicates that the replicas sent a failure message to the coordinator.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.WriteFailure.write_type">
+<span class="sig-name descname"><span class="pre">write_type</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.WriteFailure.write_type" title="Link to this definition">¶</a></dt>
+<dd><p>The type of write operation, enum on <a class="reference internal" href="cassandra/policies.html#cassandra.policies.WriteType" title="cassandra.policies.WriteType"><code class="xref py py-class docutils literal notranslate"><span class="pre">WriteType</span></code></a></p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.FunctionFailure">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">FunctionFailure</span></span><a class="headerlink" href="#cassandra.FunctionFailure" title="Link to this definition">¶</a></dt>
+<dd><p>User Defined Function failed during execution</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.FunctionFailure.keyspace">
+<span class="sig-name descname"><span class="pre">keyspace</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.FunctionFailure.keyspace" title="Link to this definition">¶</a></dt>
+<dd><p>Keyspace of the function</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.FunctionFailure.function">
+<span class="sig-name descname"><span class="pre">function</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.FunctionFailure.function" title="Link to this definition">¶</a></dt>
+<dd><p>Name of the function</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.FunctionFailure.arg_types">
+<span class="sig-name descname"><span class="pre">arg_types</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.FunctionFailure.arg_types" title="Link to this definition">¶</a></dt>
+<dd><p>List of argument type names of the function</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.RequestValidationException">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">RequestValidationException</span></span><a class="headerlink" href="#cassandra.RequestValidationException" title="Link to this definition">¶</a></dt>
+<dd><p>Server request validation failed</p>
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.ConfigurationException">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">ConfigurationException</span></span><a class="headerlink" href="#cassandra.ConfigurationException" title="Link to this definition">¶</a></dt>
+<dd><p>Server indicated request errro due to current configuration</p>
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.AlreadyExists">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">AlreadyExists</span></span><a class="headerlink" href="#cassandra.AlreadyExists" title="Link to this definition">¶</a></dt>
+<dd><p>An attempt was made to create a keyspace or table that already exists.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.AlreadyExists.keyspace">
+<span class="sig-name descname"><span class="pre">keyspace</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.AlreadyExists.keyspace" title="Link to this definition">¶</a></dt>
+<dd><p>The name of the keyspace that already exists, or, if an attempt was
+made to create a new table, the keyspace that the table is in.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.AlreadyExists.table">
+<span class="sig-name descname"><span class="pre">table</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.AlreadyExists.table" title="Link to this definition">¶</a></dt>
+<dd><p>The name of the table that already exists, or, if an attempt was
+make to create a keyspace, <code class="xref py py-const docutils literal notranslate"><span class="pre">None</span></code>.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.InvalidRequest">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">InvalidRequest</span></span><a class="headerlink" href="#cassandra.InvalidRequest" title="Link to this definition">¶</a></dt>
+<dd><p>A query was made that was invalid for some reason, such as trying to set
+the keyspace for a connection to a nonexistent keyspace.</p>
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.Unauthorized">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">Unauthorized</span></span><a class="headerlink" href="#cassandra.Unauthorized" title="Link to this definition">¶</a></dt>
+<dd><p>The current user is not authorized to perform the requested operation.</p>
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.AuthenticationFailed">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">AuthenticationFailed</span></span><a class="headerlink" href="#cassandra.AuthenticationFailed" title="Link to this definition">¶</a></dt>
+<dd><p>Failed to authenticate.</p>
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="cassandra.OperationTimedOut">
+<em class="property"><span class="k"><span class="pre">exception</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">cassandra.</span></span><span class="sig-name descname"><span class="pre">OperationTimedOut</span></span><a class="headerlink" href="#cassandra.OperationTimedOut" title="Link to this definition">¶</a></dt>
+<dd><p>The operation took longer than the specified (client-side) timeout
+to complete.  This is not an error generated by Cassandra, only
+the driver.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.OperationTimedOut.errors">
+<span class="sig-name descname"><span class="pre">errors</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.OperationTimedOut.errors" title="Link to this definition">¶</a></dt>
+<dd><p>A dict of errors keyed by the <a class="reference internal" href="cassandra/pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> against which they occurred.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="cassandra.OperationTimedOut.last_host">
+<span class="sig-name descname"><span class="pre">last_host</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#cassandra.OperationTimedOut.last_host" title="Link to this definition">¶</a></dt>
+<dd><p>The last <a class="reference internal" href="cassandra/pool.html#cassandra.pool.Host" title="cassandra.pool.Host"><code class="xref py py-class docutils literal notranslate"><span class="pre">Host</span></code></a> this operation was attempted against.</p>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page cassandra - Exceptions and Enums&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.29.0-scylla/api/cassandra%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="index.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />API Documentation
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="cassandra/cluster.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br /><code class="docutils literal notranslate"><span class="pre">cassandra.cluster</span></code> - Clusters and Sessions
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <div class="notice">
+<p>
+ScyllaDB Python Driver is available under the <a href="https://www.apache.org/licenses/LICENSE-2.0.html">Apache v2 License</a>.
+ScyllaDB Python Driver is a fork of <a href="https://github.com/datastax/python-driver">DataStax Python Driver</a>.
+See Copyright <a href="https://python-driver.docs.scylladb.com/stable/#copyright">here</a>.</p>
+</div>
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page cassandra - Exceptions and Enums&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.29.0-scylla/api/cassandra%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/python-driver/edit/master/docs/api/cassandra.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra</span></code> - Exceptions and Enums</a><ul>
+<li><a class="reference internal" href="#cassandra.__version_info__"><code class="docutils literal notranslate"><span class="pre">__version_info__</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.__version__"><code class="docutils literal notranslate"><span class="pre">__version__</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ConsistencyLevel"><code class="docutils literal notranslate"><span class="pre">ConsistencyLevel</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.ConsistencyLevel.ANY"><code class="docutils literal notranslate"><span class="pre">ConsistencyLevel.ANY</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ConsistencyLevel.ONE"><code class="docutils literal notranslate"><span class="pre">ConsistencyLevel.ONE</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ConsistencyLevel.TWO"><code class="docutils literal notranslate"><span class="pre">ConsistencyLevel.TWO</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ConsistencyLevel.THREE"><code class="docutils literal notranslate"><span class="pre">ConsistencyLevel.THREE</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ConsistencyLevel.QUORUM"><code class="docutils literal notranslate"><span class="pre">ConsistencyLevel.QUORUM</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ConsistencyLevel.ALL"><code class="docutils literal notranslate"><span class="pre">ConsistencyLevel.ALL</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ConsistencyLevel.LOCAL_QUORUM"><code class="docutils literal notranslate"><span class="pre">ConsistencyLevel.LOCAL_QUORUM</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ConsistencyLevel.EACH_QUORUM"><code class="docutils literal notranslate"><span class="pre">ConsistencyLevel.EACH_QUORUM</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ConsistencyLevel.SERIAL"><code class="docutils literal notranslate"><span class="pre">ConsistencyLevel.SERIAL</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ConsistencyLevel.LOCAL_SERIAL"><code class="docutils literal notranslate"><span class="pre">ConsistencyLevel.LOCAL_SERIAL</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ConsistencyLevel.LOCAL_ONE"><code class="docutils literal notranslate"><span class="pre">ConsistencyLevel.LOCAL_ONE</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.ProtocolVersion"><code class="docutils literal notranslate"><span class="pre">ProtocolVersion</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.ProtocolVersion.V3"><code class="docutils literal notranslate"><span class="pre">ProtocolVersion.V3</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ProtocolVersion.V4"><code class="docutils literal notranslate"><span class="pre">ProtocolVersion.V4</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ProtocolVersion.V5"><code class="docutils literal notranslate"><span class="pre">ProtocolVersion.V5</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ProtocolVersion.V6"><code class="docutils literal notranslate"><span class="pre">ProtocolVersion.V6</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ProtocolVersion.DSE_V1"><code class="docutils literal notranslate"><span class="pre">ProtocolVersion.DSE_V1</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ProtocolVersion.DSE_V2"><code class="docutils literal notranslate"><span class="pre">ProtocolVersion.DSE_V2</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ProtocolVersion.SUPPORTED_VERSIONS"><code class="docutils literal notranslate"><span class="pre">ProtocolVersion.SUPPORTED_VERSIONS</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ProtocolVersion.BETA_VERSIONS"><code class="docutils literal notranslate"><span class="pre">ProtocolVersion.BETA_VERSIONS</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ProtocolVersion.MIN_SUPPORTED"><code class="docutils literal notranslate"><span class="pre">ProtocolVersion.MIN_SUPPORTED</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ProtocolVersion.MAX_SUPPORTED"><code class="docutils literal notranslate"><span class="pre">ProtocolVersion.MAX_SUPPORTED</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ProtocolVersion.get_lower_supported"><code class="docutils literal notranslate"><span class="pre">ProtocolVersion.get_lower_supported()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.UserFunctionDescriptor"><code class="docutils literal notranslate"><span class="pre">UserFunctionDescriptor</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.UserFunctionDescriptor.name"><code class="docutils literal notranslate"><span class="pre">UserFunctionDescriptor.name</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.UserFunctionDescriptor.argument_types"><code class="docutils literal notranslate"><span class="pre">UserFunctionDescriptor.argument_types</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.UserFunctionDescriptor.signature"><code class="docutils literal notranslate"><span class="pre">UserFunctionDescriptor.signature</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.UserAggregateDescriptor"><code class="docutils literal notranslate"><span class="pre">UserAggregateDescriptor</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.UserAggregateDescriptor.name"><code class="docutils literal notranslate"><span class="pre">UserAggregateDescriptor.name</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.UserAggregateDescriptor.argument_types"><code class="docutils literal notranslate"><span class="pre">UserAggregateDescriptor.argument_types</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.UserAggregateDescriptor.signature"><code class="docutils literal notranslate"><span class="pre">UserAggregateDescriptor.signature</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.DriverException"><code class="docutils literal notranslate"><span class="pre">DriverException</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.RequestExecutionException"><code class="docutils literal notranslate"><span class="pre">RequestExecutionException</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.Unavailable"><code class="docutils literal notranslate"><span class="pre">Unavailable</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.Unavailable.consistency"><code class="docutils literal notranslate"><span class="pre">Unavailable.consistency</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.Unavailable.required_replicas"><code class="docutils literal notranslate"><span class="pre">Unavailable.required_replicas</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.Unavailable.alive_replicas"><code class="docutils literal notranslate"><span class="pre">Unavailable.alive_replicas</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.Timeout"><code class="docutils literal notranslate"><span class="pre">Timeout</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.Timeout.consistency"><code class="docutils literal notranslate"><span class="pre">Timeout.consistency</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.Timeout.required_responses"><code class="docutils literal notranslate"><span class="pre">Timeout.required_responses</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.Timeout.received_responses"><code class="docutils literal notranslate"><span class="pre">Timeout.received_responses</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.ReadTimeout"><code class="docutils literal notranslate"><span class="pre">ReadTimeout</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.ReadTimeout.data_retrieved"><code class="docutils literal notranslate"><span class="pre">ReadTimeout.data_retrieved</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.WriteTimeout"><code class="docutils literal notranslate"><span class="pre">WriteTimeout</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.WriteTimeout.write_type"><code class="docutils literal notranslate"><span class="pre">WriteTimeout.write_type</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.CoordinationFailure"><code class="docutils literal notranslate"><span class="pre">CoordinationFailure</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.CoordinationFailure.consistency"><code class="docutils literal notranslate"><span class="pre">CoordinationFailure.consistency</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.CoordinationFailure.required_responses"><code class="docutils literal notranslate"><span class="pre">CoordinationFailure.required_responses</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.CoordinationFailure.received_responses"><code class="docutils literal notranslate"><span class="pre">CoordinationFailure.received_responses</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.CoordinationFailure.failures"><code class="docutils literal notranslate"><span class="pre">CoordinationFailure.failures</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.CoordinationFailure.error_code_map"><code class="docutils literal notranslate"><span class="pre">CoordinationFailure.error_code_map</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.ReadFailure"><code class="docutils literal notranslate"><span class="pre">ReadFailure</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.ReadFailure.data_retrieved"><code class="docutils literal notranslate"><span class="pre">ReadFailure.data_retrieved</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.WriteFailure"><code class="docutils literal notranslate"><span class="pre">WriteFailure</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.WriteFailure.write_type"><code class="docutils literal notranslate"><span class="pre">WriteFailure.write_type</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.FunctionFailure"><code class="docutils literal notranslate"><span class="pre">FunctionFailure</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.FunctionFailure.keyspace"><code class="docutils literal notranslate"><span class="pre">FunctionFailure.keyspace</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.FunctionFailure.function"><code class="docutils literal notranslate"><span class="pre">FunctionFailure.function</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.FunctionFailure.arg_types"><code class="docutils literal notranslate"><span class="pre">FunctionFailure.arg_types</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.RequestValidationException"><code class="docutils literal notranslate"><span class="pre">RequestValidationException</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.ConfigurationException"><code class="docutils literal notranslate"><span class="pre">ConfigurationException</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.AlreadyExists"><code class="docutils literal notranslate"><span class="pre">AlreadyExists</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.AlreadyExists.keyspace"><code class="docutils literal notranslate"><span class="pre">AlreadyExists.keyspace</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.AlreadyExists.table"><code class="docutils literal notranslate"><span class="pre">AlreadyExists.table</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cassandra.InvalidRequest"><code class="docutils literal notranslate"><span class="pre">InvalidRequest</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.Unauthorized"><code class="docutils literal notranslate"><span class="pre">Unauthorized</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.AuthenticationFailed"><code class="docutils literal notranslate"><span class="pre">AuthenticationFailed</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.OperationTimedOut"><code class="docutils literal notranslate"><span class="pre">OperationTimedOut</span></code></a><ul>
+<li><a class="reference internal" href="#cassandra.OperationTimedOut.errors"><code class="docutils literal notranslate"><span class="pre">OperationTimedOut.errors</span></code></a></li>
+<li><a class="reference internal" href="#cassandra.OperationTimedOut.last_host"><code class="docutils literal notranslate"><span class="pre">OperationTimedOut.last_host</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../index.html">Scylla Python Driver</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                3.29.0
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+            
+            
+                
+                    <li>
+                        <a href="../../stable/api/cassandra.html">
+                            3.29.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.29.7-scylla/api/cassandra.html">
+                            3.29.7
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.29.6-scylla/api/cassandra.html">
+                            3.29.6
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.29.5-scylla/api/cassandra.html">
+                            3.29.5
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.29.4-scylla/api/cassandra.html">
+                            3.29.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.29.3-scylla/api/cassandra.html">
+                            3.29.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.29.2-scylla/api/cassandra.html">
+                            3.29.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="cassandra.html">
+                            3.29.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.28.2-scylla/api/cassandra.html">
+                            3.28.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.28.1-scylla/api/cassandra.html">
+                            3.28.1
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.28.0-scylla/api/cassandra.html">
+                            3.28.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.26.9-scylla/api/cassandra.html">
+                            3.26.9
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.25.11-scylla/api/cassandra.html">
+                            3.25.11
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.25.4-scylla/api/cassandra.html">
+                            3.25.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.24.8-scylla/api/cassandra.html">
+                            3.24.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.22.3-scylla/api/cassandra.html">
+                            3.22.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.21.0-scylla/api/cassandra.html">
+                            3.21.0
+                        </a>
+                    </li>
+                
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">API Documentation</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra</span></code> - Exceptions and Enums</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/cluster.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cluster</span></code> - Clusters and Sessions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/policies.html"><code class="docutils literal notranslate"><span class="pre">cassandra.policies</span></code> - Load balancing and Failure Handling Policies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/auth.html"><code class="docutils literal notranslate"><span class="pre">cassandra.auth</span></code> - Authentication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/metadata.html"><code class="docutils literal notranslate"><span class="pre">cassandra.metadata</span></code> - Schema and Ring Topology</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/metrics.html"><code class="docutils literal notranslate"><span class="pre">cassandra.metrics</span></code> - Performance Metrics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/query.html"><code class="docutils literal notranslate"><span class="pre">cassandra.query</span></code> - Prepared Statements, Batch Statements, Tracing, and Row Factories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/pool.html"><code class="docutils literal notranslate"><span class="pre">cassandra.pool</span></code> - Hosts and Connection Pools</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/protocol.html"><code class="docutils literal notranslate"><span class="pre">cassandra.protocol</span></code> - Protocol Features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/encoder.html"><code class="docutils literal notranslate"><span class="pre">cassandra.encoder</span></code> - Encoders for non-prepared Statements</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/decoder.html"><code class="docutils literal notranslate"><span class="pre">cassandra.decoder</span></code> - Data Return Formats</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/concurrent.html"><code class="docutils literal notranslate"><span class="pre">cassandra.concurrent</span></code> - Utilities for Concurrent Statement Execution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/connection.html"><code class="docutils literal notranslate"><span class="pre">cassandra.connection</span></code> - Low Level Connection Info</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/util.html"><code class="docutils literal notranslate"><span class="pre">cassandra.util</span></code> - Utilities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/timestamps.html"><code class="docutils literal notranslate"><span class="pre">cassandra.timestamps</span></code> - Timestamp Generation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/io/asyncioreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.asyncioreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">asyncio</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/io/asyncorereactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.asyncorereactor</span></code> - <code class="docutils literal notranslate"><span class="pre">asyncore</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/io/eventletreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.eventletreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">eventlet</span></code>-compatible Connection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/io/libevreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.libevreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">libev</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/io/geventreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.geventreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">gevent</span></code>-compatible Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/io/twistedreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.twistedreactor</span></code> - Twisted Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/cqlengine/models.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.models</span></code> - Table models for object mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/cqlengine/columns.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.columns</span></code> - Column types for object mapping models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/cqlengine/query.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.query</span></code> - Query and filter model objects</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/cqlengine/connection.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.connection</span></code> - Connection management for cqlengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/cqlengine/management.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.management</span></code> - Schema management for cqlengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cassandra/cqlengine/usertype.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.usertype</span></code> - Model classes for User Defined Types</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../scylla-specific.html">Scylla Specific Features</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../upgrading.html">Upgrading</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="simple">
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../execution-profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../query-paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-defined-types.html">User Defined Types</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../object-mapper.html">Object Mapper</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../cqlengine/upgrade-guide.html">Upgrade Guide</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cqlengine/models.html">Models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cqlengine/queryset.html">Making Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cqlengine/batches.html">Batch Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cqlengine/connections.html">Connections</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cqlengine/third-party.html">Third party integrations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cqlengine/faq.html">Frequently Asked Questions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../dates-and-times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../scylla-cloud.html">ScyllaDB Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../scylla-cloud-serverless.html">ScyllaDB Cloud Serverless</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; ScyllaDB 2021 and © DataStax 2013-2017
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.2.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

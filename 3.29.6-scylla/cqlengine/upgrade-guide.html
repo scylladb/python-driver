@@ -1,0 +1,963 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             Upgrade Guide | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://python-driver.docs.scylladb.com/stable/cqlengine/upgrade-guide.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+            
+        
+    
+        
+        
+            
+        <script type="text/javascript" src="../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../_static/documentation_options.js?v=be4f90db"></script>
+            
+        
+            
+                <script src="../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+    </head>
+
+    <body class="brand-product">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University Live | Free Virtual Training Event</div>
+            <a class="promo-banner__button button button--reverse" href="#"
+               target="_blank" rel="noopener noreferrer">Learn more</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../index.html"
+           class="bread__highlight">
+            Scylla Python Driver
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="../object-mapper.html" class="bread__highlight">
+                Object Mapper
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last">Upgrade Guide</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+    <div class="admonition caution">
+        <p class="admonition-title">Caution</p>
+        <p>
+            
+                You're viewing documentation for a previous version of Scylla Python Driver.
+            
+            <a href="../../stable/cqlengine/upgrade-guide.html">Switch to the latest stable version.</a>
+        </p>
+    </div>
+
+                    
+
+                    <section id="upgrade-guide">
+<h1>Upgrade Guide<a class="headerlink" href="#upgrade-guide" title="Link to this heading">¶</a></h1>
+<p>This is an overview of things that changed as the cqlengine project was merged into
+scylla-driver. While efforts were taken to preserve the API and most functionality exactly,
+conversion to this package will still require certain minimal updates (namely, imports).</p>
+<p><strong>THERE IS ONE FUNCTIONAL CHANGE</strong>, described in the first section below.</p>
+<section id="functional-changes">
+<h2>Functional Changes<a class="headerlink" href="#functional-changes" title="Link to this heading">¶</a></h2>
+<section id="list-prepend-reversing">
+<h3>List Prepend Reversing<a class="headerlink" href="#list-prepend-reversing" title="Link to this heading">¶</a></h3>
+<p>Legacy cqlengine included a workaround for a Cassandra bug in which prepended list segments were
+reversed (<a class="reference external" href="https://issues.apache.org/jira/browse/CASSANDRA-8733">CASSANDRA-8733</a>). As of
+this integration, this workaround is removed. The first released integrated version emits
+a warning when prepend is used. Subsequent versions will have this warning removed.</p>
+</section>
+<section id="date-column-type">
+<h3>Date Column Type<a class="headerlink" href="#date-column-type" title="Link to this heading">¶</a></h3>
+<p>The Date column type in legacy cqlengine used a <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> CQL type and truncated the time.
+Going forward, the <a class="reference internal" href="../api/cassandra/cqlengine/columns.html#cassandra.cqlengine.columns.Date" title="cassandra.cqlengine.columns.Date"><code class="xref py py-class docutils literal notranslate"><span class="pre">Date</span></code></a> type represents a <code class="docutils literal notranslate"><span class="pre">date</span></code> for Cassandra 2.2+
+(<a class="reference external" href="https://datastax-oss.atlassian.net/browse/PYTHON-245">PYTHON-245</a>).
+Users of the legacy functionality should convert models to use <a class="reference internal" href="../api/cassandra/cqlengine/columns.html#cassandra.cqlengine.columns.DateTime" title="cassandra.cqlengine.columns.DateTime"><code class="xref py py-class docutils literal notranslate"><span class="pre">DateTime</span></code></a> (which
+uses <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> internally), and use the build-in <code class="docutils literal notranslate"><span class="pre">datetime.date</span></code> for input values.</p>
+</section>
+</section>
+<section id="remove-cqlengine">
+<h2>Remove cqlengine<a class="headerlink" href="#remove-cqlengine" title="Link to this heading">¶</a></h2>
+<p>To avoid confusion or mistakes using the legacy package in your application, it
+is prudent to remove the cqlengine package when upgrading to the integrated version.</p>
+<p>The driver setup script will warn if the legacy package is detected during install,
+but it will not prevent side-by-side installation.</p>
+</section>
+<section id="organization">
+<h2>Organization<a class="headerlink" href="#organization" title="Link to this heading">¶</a></h2>
+<section id="imports">
+<h3>Imports<a class="headerlink" href="#imports" title="Link to this heading">¶</a></h3>
+<p>cqlengine is now integrated as a sub-package of the driver base package ‘cassandra’.
+Upgrading will require adjusting imports to cqlengine. For example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">cassandra.cqlengine</span><span class="w"> </span><span class="kn">import</span> <span class="n">columns</span>
+</pre></div>
+</div>
+<p>is now:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">cassandra.cqlengine</span><span class="w"> </span><span class="kn">import</span> <span class="n">columns</span>
+</pre></div>
+</div>
+</section>
+<section id="package-level-aliases">
+<h3>Package-Level Aliases<a class="headerlink" href="#package-level-aliases" title="Link to this heading">¶</a></h3>
+<p>Legacy cqlengine defined a number of aliases at the package level, which became redundant
+when the package was integrated for a driver. These have been removed in favor of absolute
+imports, and referring to cannonical definitions. For example, <code class="docutils literal notranslate"><span class="pre">cqlengine.ONE</span></code> was an alias
+of <code class="docutils literal notranslate"><span class="pre">cassandra.ConsistencyLevel.ONE</span></code>. In the integrated package, only the
+<a class="reference internal" href="../api/cassandra.html#cassandra.ConsistencyLevel" title="cassandra.ConsistencyLevel"><code class="xref py py-class docutils literal notranslate"><span class="pre">cassandra.ConsistencyLevel</span></code></a> remains.</p>
+<p>Additionally, submodule aliases are removed from cqlengine in favor of absolute imports.</p>
+<p>These aliases are removed, and not deprecated because they should be straightforward to iron out
+at module load time.</p>
+</section>
+<section id="exceptions">
+<h3>Exceptions<a class="headerlink" href="#exceptions" title="Link to this heading">¶</a></h3>
+<p>The legacy cqlengine.exceptions module had a number of Exception classes that were variously
+common to the package, or only used in specific modules. Common exceptions were relocated to
+cqlengine, and specialized exceptions were placed in the module that raises them. Below is a
+listing of updated locations:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Exception class</p></th>
+<th class="head"><p>New module</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>CQLEngineException</p></td>
+<td><p>cassandra.cqlengine</p></td>
+</tr>
+<tr class="row-odd"><td><p>ModelException</p></td>
+<td><p>cassandra.cqlengine.models</p></td>
+</tr>
+<tr class="row-even"><td><p>ValidationError</p></td>
+<td><p>cassandra.cqlengine</p></td>
+</tr>
+<tr class="row-odd"><td><p>UndefinedKeyspaceException</p></td>
+<td><p>cassandra.cqlengine.connection</p></td>
+</tr>
+<tr class="row-even"><td><p>LWTException</p></td>
+<td><p>cassandra.cqlengine.query</p></td>
+</tr>
+<tr class="row-odd"><td><p>IfNotExistsWithCounterColumn</p></td>
+<td><p>cassandra.cqlengine.query</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="unicodemixin-consolidation">
+<h3>UnicodeMixin Consolidation<a class="headerlink" href="#unicodemixin-consolidation" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">class</span> <span class="pre">UnicodeMixin</span></code> was defined in several cqlengine modules. This has been consolidated
+to a single definition in the cqlengine package init file. This is not technically part of
+the API, but noted here for completeness.</p>
+</section>
+</section>
+<section id="api-deprecations">
+<h2>API Deprecations<a class="headerlink" href="#api-deprecations" title="Link to this heading">¶</a></h2>
+<p>This upgrade served as a good juncture to deprecate certain API features and invite users to upgrade
+to new ones. The first released version does not change functionality – only introduces deprecation
+warnings. Future releases will remove these features in favor of the alternatives.</p>
+<section id="float-double-overload">
+<h3>Float/Double Overload<a class="headerlink" href="#float-double-overload" title="Link to this heading">¶</a></h3>
+<p>Previously there was no <code class="docutils literal notranslate"><span class="pre">Double</span></code> column type. Doubles were modeled by specifying <code class="docutils literal notranslate"><span class="pre">Float(double_precision=True)</span></code>.
+This inititializer parameter is now deprecated. Applications should use <a class="reference internal" href="../api/cassandra/cqlengine/columns.html#cassandra.cqlengine.columns.Double" title="cassandra.cqlengine.columns.Double"><code class="xref py py-class docutils literal notranslate"><span class="pre">Double</span></code></a> for CQL <code class="docutils literal notranslate"><span class="pre">double</span></code>, and <a class="reference internal" href="../api/cassandra/cqlengine/columns.html#cassandra.cqlengine.columns.Float" title="cassandra.cqlengine.columns.Float"><code class="xref py py-class docutils literal notranslate"><span class="pre">Float</span></code></a>
+for CQL <code class="docutils literal notranslate"><span class="pre">float</span></code>.</p>
+</section>
+<section id="schema-management">
+<h3>Schema Management<a class="headerlink" href="#schema-management" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.management.create_keyspace</span></code> is deprecated. Instead, use the new replication-strategy-specific
+functions that accept explicit options for known strategies:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="../api/cassandra/cqlengine/management.html#cassandra.cqlengine.management.create_keyspace_simple" title="cassandra.cqlengine.management.create_keyspace_simple"><code class="xref py py-func docutils literal notranslate"><span class="pre">create_keyspace_simple()</span></code></a></p></li>
+<li><p><a class="reference internal" href="../api/cassandra/cqlengine/management.html#cassandra.cqlengine.management.create_keyspace_network_topology" title="cassandra.cqlengine.management.create_keyspace_network_topology"><code class="xref py py-func docutils literal notranslate"><span class="pre">create_keyspace_network_topology()</span></code></a></p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.management.delete_keyspace</span></code> is deprecated in favor of a new function, <a class="reference internal" href="../api/cassandra/cqlengine/management.html#cassandra.cqlengine.management.drop_keyspace" title="cassandra.cqlengine.management.drop_keyspace"><code class="xref py py-func docutils literal notranslate"><span class="pre">drop_keyspace()</span></code></a>. The
+intent is simply to make the function match the CQL verb it invokes.</p>
+</section>
+<section id="model-inheritance">
+<h3>Model Inheritance<a class="headerlink" href="#model-inheritance" title="Link to this heading">¶</a></h3>
+<p>The names for class attributes controlling model inheritance are changing. Changes are as follows:</p>
+<ul class="simple">
+<li><p>Replace ‘polymorphic_key’ in the base class Column definition with <a class="reference internal" href="../api/cassandra/cqlengine/columns.html#cassandra.cqlengine.columns.Column.discriminator_column" title="cassandra.cqlengine.columns.Column.discriminator_column"><code class="xref py py-attr docutils literal notranslate"><span class="pre">discriminator_column</span></code></a></p></li>
+<li><p>Replace the ‘__polymorphic_key__’ class attribute the derived classes with <a class="reference internal" href="../api/cassandra/cqlengine/models.html#cassandra.cqlengine.models.Model.__discriminator_value__" title="cassandra.cqlengine.models.Model.__discriminator_value__"><code class="xref py py-attr docutils literal notranslate"><span class="pre">__discriminator_value__</span></code></a></p></li>
+</ul>
+<p>The functionality is unchanged – the intent here is to make the names and language around these attributes more precise.
+For now, the old names are just deprecated, and the mapper will emit warnings if they are used. The old names
+will be removed in a future version.</p>
+<p>The example below shows a simple translation:</p>
+<p>Before:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">Pet</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">__table_name__</span> <span class="o">=</span> <span class="s1">&#39;pet&#39;</span>
+    <span class="n">owner_id</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">pet_id</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">pet_type</span> <span class="o">=</span> <span class="n">Text</span><span class="p">(</span><span class="n">polymorphic_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">Text</span><span class="p">()</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">Cat</span><span class="p">(</span><span class="n">Pet</span><span class="p">):</span>
+    <span class="n">__polymorphic_key__</span> <span class="o">=</span> <span class="s1">&#39;cat&#39;</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">Dog</span><span class="p">(</span><span class="n">Pet</span><span class="p">):</span>
+    <span class="n">__polymorphic_key__</span> <span class="o">=</span> <span class="s1">&#39;dog&#39;</span>
+</pre></div>
+</div>
+<p>After:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">Pet</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">__table_name__</span> <span class="o">=</span> <span class="s1">&#39;pet&#39;</span>
+    <span class="n">owner_id</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">pet_id</span> <span class="o">=</span> <span class="n">UUID</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">pet_type</span> <span class="o">=</span> <span class="n">Text</span><span class="p">(</span><span class="n">discriminator_column</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">Text</span><span class="p">()</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">Cat</span><span class="p">(</span><span class="n">Pet</span><span class="p">):</span>
+    <span class="n">__discriminator_value__</span> <span class="o">=</span> <span class="s1">&#39;cat&#39;</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">Dog</span><span class="p">(</span><span class="n">Pet</span><span class="p">):</span>
+    <span class="n">__discriminator_value__</span> <span class="o">=</span> <span class="s1">&#39;dog&#39;</span>
+</pre></div>
+</div>
+</section>
+<section id="timeuuid-from-datetime">
+<h3>TimeUUID.from_datetime<a class="headerlink" href="#timeuuid-from-datetime" title="Link to this heading">¶</a></h3>
+<p>This function is deprecated in favor of the core utility function <a class="reference internal" href="../api/cassandra/util.html#cassandra.util.uuid_from_time" title="cassandra.util.uuid_from_time"><code class="xref py py-func docutils literal notranslate"><span class="pre">uuid_from_time()</span></code></a>.</p>
+</section>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page Upgrade Guide&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.29.6-scylla/cqlengine/upgrade-guide%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="../object-mapper.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />Object Mapper
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="models.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />Models
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <div class="notice">
+<p>
+ScyllaDB Python Driver is available under the <a href="https://www.apache.org/licenses/LICENSE-2.0.html">Apache v2 License</a>.
+ScyllaDB Python Driver is a fork of <a href="https://github.com/datastax/python-driver">DataStax Python Driver</a>.
+See Copyright <a href="https://python-driver.docs.scylladb.com/stable/#copyright">here</a>.</p>
+</div>
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page Upgrade Guide&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.29.6-scylla/cqlengine/upgrade-guide%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/python-driver/edit/master/docs/cqlengine/upgrade-guide.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">Upgrade Guide</a><ul>
+<li><a class="reference internal" href="#functional-changes">Functional Changes</a><ul>
+<li><a class="reference internal" href="#list-prepend-reversing">List Prepend Reversing</a></li>
+<li><a class="reference internal" href="#date-column-type">Date Column Type</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#remove-cqlengine">Remove cqlengine</a></li>
+<li><a class="reference internal" href="#organization">Organization</a><ul>
+<li><a class="reference internal" href="#imports">Imports</a></li>
+<li><a class="reference internal" href="#package-level-aliases">Package-Level Aliases</a></li>
+<li><a class="reference internal" href="#exceptions">Exceptions</a></li>
+<li><a class="reference internal" href="#unicodemixin-consolidation">UnicodeMixin Consolidation</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#api-deprecations">API Deprecations</a><ul>
+<li><a class="reference internal" href="#float-double-overload">Float/Double Overload</a></li>
+<li><a class="reference internal" href="#schema-management">Schema Management</a></li>
+<li><a class="reference internal" href="#model-inheritance">Model Inheritance</a></li>
+<li><a class="reference internal" href="#timeuuid-from-datetime">TimeUUID.from_datetime</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../index.html">Scylla Python Driver</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                3.29.6
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+            
+            
+                
+                    <li>
+                        <a href="../../stable/cqlengine/upgrade-guide.html">
+                            3.29.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.29.7-scylla/cqlengine/upgrade-guide.html">
+                            3.29.7
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="upgrade-guide.html">
+                            3.29.6
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.29.5-scylla/cqlengine/upgrade-guide.html">
+                            3.29.5
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.29.4-scylla/cqlengine/upgrade-guide.html">
+                            3.29.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.29.3-scylla/cqlengine/upgrade-guide.html">
+                            3.29.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.29.2-scylla/cqlengine/upgrade-guide.html">
+                            3.29.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.29.0-scylla/cqlengine/upgrade-guide.html">
+                            3.29.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.28.2-scylla/cqlengine/upgrade-guide.html">
+                            3.28.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.28.1-scylla/cqlengine/upgrade-guide.html">
+                            3.28.1
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.28.0-scylla/cqlengine/upgrade-guide.html">
+                            3.28.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.26.9-scylla/cqlengine/upgrade-guide.html">
+                            3.26.9
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.25.11-scylla/index.html">
+                            3.25.11
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.25.4-scylla/index.html">
+                            3.25.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.24.8-scylla/index.html">
+                            3.24.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.22.3-scylla/index.html">
+                            3.22.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../3.21.0-scylla/index.html">
+                            3.21.0
+                        </a>
+                    </li>
+                
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../api/index.html">API Documentation</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra.html">cassandra</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/cluster.html">cassandra.cluster</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/policies.html">cassandra.policies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/auth.html">cassandra.auth</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/metadata.html">cassandra.metadata</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/metrics.html">cassandra.metrics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/query.html">cassandra.query</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/pool.html">cassandra.pool</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/protocol.html">cassandra.protocol</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/encoder.html">cassandra.encoder</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/decoder.html">cassandra.decoder</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/concurrent.html">cassandra.concurrent</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/connection.html">cassandra.connection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/util.html">cassandra.util</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/timestamps.html">cassandra.timestamps</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/io/asyncioreactor.html">cassandra.io.asyncioreactor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/io/asyncorereactor.html">cassandra.io.asyncorereactor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/io/eventletreactor.html">cassandra.io.eventletreactor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/io/libevreactor.html">cassandra.io.libevreactor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/io/geventreactor.html">cassandra.io.geventreactor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/io/twistedreactor.html">cassandra.io.twistedreactor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/cqlengine/models.html">cassandra.cqlengine.models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/cqlengine/columns.html">cassandra.cqlengine.columns</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/cqlengine/query.html">cassandra.cqlengine.query</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/cqlengine/connection.html">cassandra.cqlengine.connection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/cqlengine/management.html">cassandra.cqlengine.management</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api/cassandra/cqlengine/usertype.html">cassandra.cqlengine.usertype</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting-started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../scylla-specific.html">Scylla Specific Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../execution-profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../query-paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-defined-types.html">User Defined Types</a></li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../object-mapper.html">Object Mapper</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">Upgrade Guide</a></li>
+<li class="toctree-l2"><a class="reference internal" href="models.html">Models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="queryset.html">Making Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="batches.html">Batch Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="connections.html">Connections</a></li>
+<li class="toctree-l2"><a class="reference internal" href="third-party.html">Third party integrations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../dates-and-times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../scylla-cloud.html">ScyllaDB Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; ScyllaDB 2021 and © DataStax 2013-2017
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.2.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>
