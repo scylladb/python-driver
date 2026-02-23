@@ -57,8 +57,11 @@ class InternalError(Exception):
 class BytesReader:
     """
     Lightweight reader for bytes data without BytesIO overhead.
-    Provides the same read() interface but operates directly on a
-    bytes or memoryview object, avoiding internal buffer copies.
+    Provides the same read() interface as BytesIO but operates directly
+    on a bytes or memoryview object, avoiding internal buffer copies.
+
+    read(n) behaves like BytesIO.read(n): returns up to n bytes and
+    returns fewer bytes (or empty bytes) when the end of data is reached.
     """
     __slots__ = ('_data', '_pos', '_size')
 
@@ -72,9 +75,7 @@ class BytesReader:
             result = self._data[self._pos:]
             self._pos = self._size
         else:
-            end = self._pos + n
-            if end > self._size:
-                raise EOFError("Cannot read past the end of the buffer")
+            end = min(self._pos + n, self._size)
             result = self._data[self._pos:end]
             self._pos = end
         # Return bytes to maintain compatibility with unpack functions

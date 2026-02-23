@@ -22,7 +22,8 @@ from cassandra import OperationTimedOut
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, _Frame, Timer, TimerManager,
-                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
+                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator,
+                                  _ConnectionIOBuffer)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 SupportedMessage, ProtocolHandler)
@@ -571,3 +572,80 @@ class TestShardawarePortGenerator(unittest.TestCase):
         second_run = list(itertools.islice(gen.generate(0, 2), 5))
 
         assert first_run == second_run
+
+
+class TestConnectionIOBufferReset(unittest.TestCase):
+    """Verify _reset_buffer and reset_cql_frame_buffer position semantics."""
+
+    def test_reset_buffer_discards_consumed_data(self):
+        buf = BytesIO(b'\x01\x02\x03\x04\x05')
+        buf.seek(0)
+        # Consume first 3 bytes
+        assert buf.read(3) == b'\x01\x02\x03'
+        new_buf = _ConnectionIOBuffer._reset_buffer(buf)
+        # New buffer should contain only unconsumed data
+        new_buf.seek(0)
+        assert new_buf.read() == b'\x04\x05'
+
+    def test_reset_buffer_position_at_end(self):
+        buf = BytesIO(b'\x01\x02\x03')
+        buf.seek(0)
+        buf.read(1)
+        new_buf = _ConnectionIOBuffer._reset_buffer(buf)
+        # Position should be at end (ready for appending)
+        assert new_buf.tell() == 2
+
+    def test_reset_buffer_fully_consumed(self):
+        buf = BytesIO(b'\x01\x02')
+        buf.seek(0)
+        buf.read(2)
+        new_buf = _ConnectionIOBuffer._reset_buffer(buf)
+        new_buf.seek(0)
+        assert new_buf.read() == b''
+
+    def test_reset_buffer_nothing_consumed(self):
+        buf = BytesIO(b'\x01\x02\x03')
+        buf.seek(0)
+        new_buf = _ConnectionIOBuffer._reset_buffer(buf)
+        new_buf.seek(0)
+        assert new_buf.read() == b'\x01\x02\x03'
+
+    @staticmethod
+    def _make_iobuf(checksumming=False):
+        conn = Mock()
+        conn._is_checksumming_enabled = checksumming
+        iobuf = _ConnectionIOBuffer(conn)
+        # Keep a strong reference so the weakref.proxy inside iobuf stays valid
+        iobuf._conn_ref = conn
+        if checksumming:
+            iobuf.set_checksumming_buffer()
+        return iobuf
+
+    def test_reset_cql_frame_buffer_checksumming_uses_tell_position(self):
+        """
+        When checksumming is enabled, reset_cql_frame_buffer delegates to
+        _reset_buffer which relies on tell() to determine consumed data.
+        Verify that seeking to an arbitrary position before reset correctly
+        preserves only the unconsumed tail.
+        """
+        iobuf = self._make_iobuf(checksumming=True)
+        # Write some data into the cql_frame_buffer
+        iobuf.cql_frame_buffer.write(b'\xAA\xBB\xCC\xDD\xEE')
+        # Seek to position 3, simulating that first 3 bytes were consumed
+        iobuf.cql_frame_buffer.seek(3)
+        iobuf.reset_cql_frame_buffer()
+        # After reset, only the unconsumed tail should remain
+        iobuf.cql_frame_buffer.seek(0)
+        assert iobuf.cql_frame_buffer.read() == b'\xDD\xEE'
+
+    def test_reset_cql_frame_buffer_no_checksumming_resets_io_buffer(self):
+        """
+        Without checksumming, reset_cql_frame_buffer delegates to
+        reset_io_buffer (since cql_frame_buffer IS the io_buffer).
+        """
+        iobuf = self._make_iobuf(checksumming=False)
+        iobuf.io_buffer.write(b'\x01\x02\x03\x04')
+        iobuf.io_buffer.seek(2)
+        iobuf.reset_cql_frame_buffer()
+        iobuf.io_buffer.seek(0)
+        assert iobuf.io_buffer.read() == b'\x03\x04'

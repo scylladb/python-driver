@@ -21,7 +21,7 @@ from cassandra.protocol import (
     PrepareMessage, QueryMessage, ExecuteMessage, UnsupportedOperation,
     _PAGING_OPTIONS_FLAG, _WITH_SERIAL_CONSISTENCY_FLAG,
     _PAGE_SIZE_FLAG, _WITH_PAGING_STATE_FLAG,
-    BatchMessage
+    BatchMessage, BytesReader
 )
 from cassandra.query import BatchType
 from cassandra.marshal import uint32_unpack
@@ -189,3 +189,61 @@ class MessageTest(unittest.TestCase):
              (b'\x00\x03',),
              (b'\x00\x00\x00\x80',), (b'\x00\x02',), (b'ks',))
         )
+
+
+class BytesReaderTest(unittest.TestCase):
+
+    def test_read_exact_n_bytes(self):
+        reader = BytesReader(b'\x01\x02\x03\x04\x05')
+        assert reader.read(3) == b'\x01\x02\x03'
+
+    def test_read_all_with_negative(self):
+        reader = BytesReader(b'hello')
+        assert reader.read(-1) == b'hello'
+
+    def test_read_all_default(self):
+        reader = BytesReader(b'hello')
+        reader.read(2)
+        assert reader.read(-1) == b'llo'
+
+    def test_sequential_reads(self):
+        reader = BytesReader(b'\x01\x02\x03\x04')
+        assert reader.read(2) == b'\x01\x02'
+        assert reader.read(2) == b'\x03\x04'
+
+    def test_read_past_end_returns_partial(self):
+        reader = BytesReader(b'\x01\x02')
+        assert reader.read(3) == b'\x01\x02'
+
+    def test_read_past_end_after_partial_consume(self):
+        reader = BytesReader(b'\x01\x02\x03')
+        reader.read(2)
+        assert reader.read(2) == b'\x03'
+
+    def test_read_at_end_returns_empty(self):
+        reader = BytesReader(b'\x01\x02')
+        reader.read(2)
+        assert reader.read(1) == b''
+
+    def test_read_zero_bytes(self):
+        reader = BytesReader(b'abc')
+        assert reader.read(0) == b''
+
+    def test_memoryview_input_returns_bytes(self):
+        data = b'\x01\x02\x03\x04'
+        reader = BytesReader(memoryview(data))
+        result = reader.read(2)
+        assert isinstance(result, bytes)
+        assert result == b'\x01\x02'
+
+    def test_memoryview_read_all_returns_bytes(self):
+        data = b'\x01\x02\x03'
+        reader = BytesReader(memoryview(data))
+        result = reader.read(-1)
+        assert isinstance(result, bytes)
+        assert result == b'\x01\x02\x03'
+
+    def test_empty_input(self):
+        reader = BytesReader(b'')
+        assert reader.read(-1) == b''
+        assert reader.read(1) == b''
