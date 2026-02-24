@@ -12,8 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import logging
 import re
+from typing import TYPE_CHECKING, TypeVar
 from warnings import warn
 
 from cassandra.cqlengine import CQLEngineException, ValidationError
@@ -327,6 +330,9 @@ class ColumnDescriptor(object):
                 instance._values[self.column.column_name].delval()
             else:
                 raise AttributeError('cannot delete {0} columns'.format(self.column.column_name))
+
+
+M = TypeVar('M', bound='BaseModel')
 
 
 class BaseModel(object):
@@ -657,7 +663,7 @@ class BaseModel(object):
         return values
 
     @classmethod
-    def create(cls, **kwargs):
+    def create(cls: type[M], **kwargs) -> M:
         """
         Create an instance of this model in the database.
 
@@ -672,7 +678,7 @@ class BaseModel(object):
         return cls.objects.create(**kwargs)
 
     @classmethod
-    def all(cls):
+    def all(cls: type[M]) -> query.ModelQuerySet:
         """
         Returns a queryset representing all stored objects
 
@@ -681,7 +687,7 @@ class BaseModel(object):
         return cls.objects.all()
 
     @classmethod
-    def filter(cls, *args, **kwargs):
+    def filter(cls: type[M], *args, **kwargs) -> query.ModelQuerySet:
         """
         Returns a queryset based on filter parameters.
 
@@ -690,7 +696,7 @@ class BaseModel(object):
         return cls.objects.filter(*args, **kwargs)
 
     @classmethod
-    def get(cls, *args, **kwargs):
+    def get(cls: type[M], *args, **kwargs) -> M:
         """
         Returns a single object based on the passed filter constraints.
 
@@ -698,7 +704,7 @@ class BaseModel(object):
         """
         return cls.objects.get(*args, **kwargs)
 
-    def timeout(self, timeout):
+    def timeout(self: M, timeout: float | None) -> M:
         """
         Sets a timeout for use in :meth:`~.save`, :meth:`~.update`, and :meth:`~.delete`
         operations
@@ -707,7 +713,7 @@ class BaseModel(object):
         self._timeout = timeout
         return self
 
-    def save(self):
+    def save(self: M) -> M:
         """
         Saves an object to the database.
 
@@ -743,7 +749,7 @@ class BaseModel(object):
 
         return self
 
-    def update(self, **values):
+    def update(self: M, **values) -> M:
         """
         Performs an update on the model instance. You can pass in values to set on the model
         for updating, or you can call without values to execute an update against any modified
