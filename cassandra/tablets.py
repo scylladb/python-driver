@@ -8,10 +8,13 @@ class Tablet(object):
     Represents a single ScyllaDB tablet.
     It stores information about each replica, its host and shard,
     and the token interval in the format (first_token, last_token].
+
+    Attributes:
+        first_token: The start of the token range (exclusive)
+        last_token: The end of the token range (inclusive)
+        replicas: List of replicas for this tablet, each containing (host_id, shard)
     """
-    first_token = 0
-    last_token = 0
-    replicas = None
+    __slots__ = ('first_token', 'last_token', 'replicas')
 
     def __init__(self, first_token=0, last_token=0, replicas=None):
         self.first_token = first_token
@@ -42,8 +45,14 @@ class Tablet(object):
 
 
 class Tablets(object):
-    _lock = None
-    _tablets = {}
+    """
+    Manages the tablet mapping for ScyllaDB tables.
+
+    Attributes:
+        _tablets: Dictionary mapping (keyspace, table) tuples to lists of Tablet objects
+        _lock: Thread lock for synchronizing access to the tablets dictionary
+    """
+    __slots__ = ('_tablets', '_lock')
 
     def __init__(self, tablets):
         self._tablets = tablets
