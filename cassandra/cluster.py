@@ -2963,9 +2963,10 @@ class Session(object):
                     "2 or higher (supported in Cassandra 2.0 and higher).  Consider "
                     "setting Cluster.protocol_version to 2 to support this operation.")
             statement_keyspace = query.keyspace if ProtocolVersion.uses_keyspace_flag(self._protocol_version) else None
+            batch_timestamp = query.timestamp if query.timestamp is not None else timestamp
             message = BatchMessage(
                 query.batch_type, query._statements_and_parameters, cl,
-                serial_cl, timestamp, statement_keyspace)
+                serial_cl, batch_timestamp, statement_keyspace)
         elif isinstance(query, GraphStatement):
             # the statement_keyspace is not aplicable to GraphStatement
             message = QueryMessage(query.query, cl, serial_cl, fetch_size,
