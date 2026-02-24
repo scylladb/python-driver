@@ -866,6 +866,9 @@ class Connection(object):
             if conn.is_unsupported_proto_version:
                 raise ProtocolVersionUnsupported(endpoint, conn.protocol_version)
             raise conn.last_error
+        elif conn.is_closed or conn.is_defunct:
+            raise ConnectionShutdown(
+                "Connection to %s was closed during setup" % (endpoint,))
         elif not conn.connected_event.is_set():
             conn.close()
             raise OperationTimedOut("Timed out creating connection (%s seconds)" % timeout)
