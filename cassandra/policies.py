@@ -1210,8 +1210,26 @@ class AddressTranslator(object):
     def translate(self, addr):
         """
         Accepts the node ip address, and returns a translated address to be used connecting to this node.
+
+        Legacy V1 API for backward compatibility. New implementations should override translate_with_host.
         """
         raise NotImplementedError()
+
+    def translate_with_host_id(self, addr, host_id):
+        """
+        V2 API: Accepts the node ip address and optional Host ID, returns translated address.
+
+        :param addr: The node IP address to translate
+        :param host_id: Host ID
+        :return: Translated address to be used for connecting
+
+        This method provides access to Host metadata (especially host_id) which is required
+        for PrivateLink and similar scenarios where translation is keyed by Host ID rather
+        than IP address.
+
+        Default implementation delegates to translate() for backward compatibility.
+        """
+        return self.translate(addr)
 
 
 class IdentityTranslator(AddressTranslator):
@@ -1219,6 +1237,9 @@ class IdentityTranslator(AddressTranslator):
     Returns the endpoint with no translation
     """
     def translate(self, addr):
+        return addr
+
+    def translate_with_host_id(self, addr, host_id):
         return addr
 
 
@@ -1240,7 +1261,6 @@ class EC2MultiRegionTranslator(AddressTranslator):
             except Exception:
                 pass
         return addr
-
 
 class SpeculativeExecutionPolicy(object):
     """

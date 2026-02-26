@@ -1442,7 +1442,7 @@ class AddressTranslatorTest(unittest.TestCase):
     def test_ec2_multi_region_translator(self, *_):
         ec2t = EC2MultiRegionTranslator()
         addr = '127.0.0.1'
-        translated = ec2t.translate(addr)
+        translated = ec2t.translate_with_host_id(addr, "")
         assert translated is not addr  # verifies that the resolver path is followed
         assert translated == addr  # and that it resolves to the same address
 

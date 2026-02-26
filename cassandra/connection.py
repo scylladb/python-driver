@@ -244,11 +244,19 @@ class DefaultEndPointFactory(EndPointFactory):
         if port is None:
             port = self.port if self.port else 9042
 
+        # Extract host metadata for V2 address translation
+        host_id = row.get("host_id")
+
+        # Use V2 API if available, fall back to V1
+        translator = self.cluster.address_translator
+        if hasattr(translator, 'translate_with_host_id'):
+            translated_addr = translator.translate_with_host_id(addr, host_id)
+        else:
+            translated_addr = translator.translate(addr)
+
         # create the endpoint with the translated address
         # TODO next major, create a TranslatedEndPoint type
-        return DefaultEndPoint(
-            self.cluster.address_translator.translate(addr),
-            port)
+        return DefaultEndPoint(translated_addr, port)
 
 
 @total_ordering
