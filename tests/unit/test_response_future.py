@@ -621,6 +621,66 @@ class ResponseFutureTests(unittest.TestCase):
         with pytest.raises(ValueError):
             rf.result()
 
+    def test_prepared_query_not_found_uses_local_prepared_context(self):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Mock(spec=Connection)
+        pool.borrow_connection.return_value = (connection, 1)
+
+        rf = self.make_response_future(session)
+        rf.send_request()
+
+        session.cluster.protocol_version = ProtocolVersion.V4
+        session.cluster._prepared_statements = {}
+        rf._connection.keyspace = "FooKeyspace"
+
+        rf.prepared_statement = Mock()
+        rf.prepared_statement.query_id = b"known-query-id"
+        rf.prepared_statement.query_string = "SELECT * FROM foobar"
+        rf.prepared_statement.keyspace = "FooKeyspace"
+
+        # Different query id in UNPREPARED response should not prevent reprepare when local context exists.
+        result = Mock(spec=PreparedQueryNotFound, info=b"other-query-id")
+        rf._set_result(None, None, None, result)
+
+        assert session.submit.call_args
+        args, _ = session.submit.call_args
+        assert rf._reprepare == args[-5]
+        assert isinstance(args[-4], PrepareMessage)
+        assert args[-4].query == "SELECT * FROM foobar"
+
+    def test_prepared_query_not_found_prefers_returned_id_from_cache(self):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Mock(spec=Connection)
+        pool.borrow_connection.return_value = (connection, 1)
+
+        rf = self.make_response_future(session)
+        rf.send_request()
+
+        session.cluster.protocol_version = ProtocolVersion.V4
+        rf._connection.keyspace = "FooKeyspace"
+
+        rf.prepared_statement = Mock()
+        rf.prepared_statement.query_id = b"local-id"
+        rf.prepared_statement.query_string = "SELECT * FROM local_ctx"
+        rf.prepared_statement.keyspace = "FooKeyspace"
+
+        cached_stmt = Mock()
+        cached_stmt.query_id = b"returned-id"
+        cached_stmt.query_string = "SELECT * FROM returned_ctx"
+        cached_stmt.keyspace = "FooKeyspace"
+        session.cluster._prepared_statements = {cached_stmt.query_id: cached_stmt}
+
+        result = Mock(spec=PreparedQueryNotFound, info=cached_stmt.query_id)
+        rf._set_result(None, None, None, result)
+
+        assert session.submit.call_args
+        args, _ = session.submit.call_args
+        assert rf._reprepare == args[-5]
+        assert isinstance(args[-4], PrepareMessage)
+        assert args[-4].query == "SELECT * FROM returned_ctx"
+
     def test_repeat_orig_query_after_succesful_reprepare(self):
         query_id = b'abc123'  # Just a random binary string so we don't hit id mismatch exception
         session = self.make_session()
