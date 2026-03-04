@@ -31,15 +31,45 @@ from cassandra.metadata import UserType
 from cassandra.util import Polygon, Point, LineString, Duration
 from cassandra.datastax.graph.types import Vertex, VertexProperty, Edge, Path, T
 
-__all__ = ['GraphSON1Serializer', 'GraphSON1Deserializer', 'GraphSON1TypeDeserializer',
-           'GraphSON2Serializer', 'GraphSON2Deserializer', 'GraphSON2Reader',
-           'GraphSON3Serializer', 'GraphSON3Deserializer', 'GraphSON3Reader',
-           'to_bigint', 'to_int', 'to_double', 'to_float', 'to_smallint',
-           'BooleanTypeIO', 'Int16TypeIO', 'Int32TypeIO', 'DoubleTypeIO',
-           'FloatTypeIO', 'UUIDTypeIO', 'BigDecimalTypeIO', 'DurationTypeIO', 'InetTypeIO',
-           'InstantTypeIO', 'LocalDateTypeIO', 'LocalTimeTypeIO', 'Int64TypeIO', 'BigIntegerTypeIO',
-           'LocalDateTypeIO', 'PolygonTypeIO', 'PointTypeIO', 'LineStringTypeIO', 'BlobTypeIO',
-           'GraphSON3Serializer', 'GraphSON3Deserializer', 'UserTypeIO', 'TypeWrapperTypeIO']
+__all__ = [
+    "GraphSON1Serializer",
+    "GraphSON1Deserializer",
+    "GraphSON1TypeDeserializer",
+    "GraphSON2Serializer",
+    "GraphSON2Deserializer",
+    "GraphSON2Reader",
+    "GraphSON3Serializer",
+    "GraphSON3Deserializer",
+    "GraphSON3Reader",
+    "to_bigint",
+    "to_int",
+    "to_double",
+    "to_float",
+    "to_smallint",
+    "BooleanTypeIO",
+    "Int16TypeIO",
+    "Int32TypeIO",
+    "DoubleTypeIO",
+    "FloatTypeIO",
+    "UUIDTypeIO",
+    "BigDecimalTypeIO",
+    "DurationTypeIO",
+    "InetTypeIO",
+    "InstantTypeIO",
+    "LocalDateTypeIO",
+    "LocalTimeTypeIO",
+    "Int64TypeIO",
+    "BigIntegerTypeIO",
+    "LocalDateTypeIO",
+    "PolygonTypeIO",
+    "PointTypeIO",
+    "LineStringTypeIO",
+    "BlobTypeIO",
+    "GraphSON3Serializer",
+    "GraphSON3Deserializer",
+    "UserTypeIO",
+    "TypeWrapperTypeIO",
+]
 
 """
 Supported types:
@@ -56,18 +86,18 @@ uuid         | g:UUID         | g:UUID         | UUID
 bigdecimal   | gx:BigDecimal  | gx:BigDecimal  | Decimal
 duration     | gx:Duration    | N/A            | timedelta              (Classic graph only)
 DSE Duration | N/A            | dse:Duration   | Duration               (Core graph only)
-inet         | gx:InetAddress | gx:InetAddress | str (unicode), IPV4Address/IPV6Address (PY3)
+inet         | gx:InetAddress | gx:InetAddress | str, IPV4Address/IPV6Address
 timestamp    | gx:Instant     | gx:Instant     | datetime.datetime
 date         | gx:LocalDate   | gx:LocalDate   | datetime.date
 time         | gx:LocalTime   | gx:LocalTime   | datetime.time
 smallint     | gx:Int16       | gx:Int16       | int
-varint       | gx:BigInteger  | gx:BigInteger  | long
+varint       | gx:BigInteger  | gx:BigInteger  | int
 date         | gx:LocalDate   | gx:LocalDate   | Date
 polygon      | dse:Polygon    | dse:Polygon    | Polygon
 point        | dse:Point      | dse:Point      | Point
 linestring   | dse:Linestring | dse:LineString | LineString
-blob         | dse:Blob       | dse:Blob       | bytearray, buffer (PY2), memoryview (PY3), bytes (PY3)
-blob         | gx:ByteBuffer  | gx:ByteBuffer  | bytearray, buffer (PY2), memoryview (PY3), bytes (PY3)
+blob         | dse:Blob       | dse:Blob       | bytearray, memoryview, bytes
+blob         | gx:ByteBuffer  | gx:ByteBuffer  | bytearray, memoryview, bytes
 list         | N/A            | g:List         | list                   (Core graph only)
 map          | N/A            | g:Map          | dict                   (Core graph only)
 set          | N/A            | g:Set          | set or list            (Core graph only)
@@ -76,8 +106,8 @@ tuple        | N/A            | dse:Tuple      | tuple                  (Core gr
 udt          | N/A            | dse:UDT        | class or namedtuple    (Core graph only)
 """
 
-MAX_INT32 = 2 ** 32 - 1
-MIN_INT32 = -2 ** 31
+MAX_INT32 = 2**32 - 1
+MIN_INT32 = -(2**31)
 
 log = logging.getLogger(__name__)
 
@@ -93,13 +123,13 @@ class _GraphSONTypeType(type):
 class GraphSONTypeIO(object, metaclass=_GraphSONTypeType):
     """Represent a serializable GraphSON type"""
 
-    prefix = 'g'
+    prefix = "g"
     graphson_base_type = None
     cql_type = None
 
     @classmethod
     def definition(cls, value, writer=None):
-        return {'cqlType': cls.cql_type}
+        return {"cqlType": cls.cql_type}
 
     @classmethod
     def serialize(cls, value, writer=None):
@@ -115,12 +145,12 @@ class GraphSONTypeIO(object, metaclass=_GraphSONTypeType):
 
 
 class TextTypeIO(GraphSONTypeIO):
-    cql_type = 'text'
+    cql_type = "text"
 
 
 class BooleanTypeIO(GraphSONTypeIO):
     graphson_base_type = None
-    cql_type = 'boolean'
+    cql_type = "boolean"
 
     @classmethod
     def serialize(cls, value, writer=None):
@@ -128,7 +158,6 @@ class BooleanTypeIO(GraphSONTypeIO):
 
 
 class IntegerTypeIO(GraphSONTypeIO):
-
     @classmethod
     def serialize(cls, value, writer=None):
         return value
@@ -142,19 +171,19 @@ class IntegerTypeIO(GraphSONTypeIO):
 
 
 class Int16TypeIO(IntegerTypeIO):
-    prefix = 'gx'
-    graphson_base_type = 'Int16'
-    cql_type = 'smallint'
+    prefix = "gx"
+    graphson_base_type = "Int16"
+    cql_type = "smallint"
 
 
 class Int32TypeIO(IntegerTypeIO):
-    graphson_base_type = 'Int32'
-    cql_type = 'int'
+    graphson_base_type = "Int32"
+    cql_type = "int"
 
 
 class Int64TypeIO(IntegerTypeIO):
-    graphson_base_type = 'Int64'
-    cql_type = 'bigint'
+    graphson_base_type = "Int64"
+    cql_type = "bigint"
 
     @classmethod
     def deserialize(cls, value, reader=None):
@@ -162,8 +191,8 @@ class Int64TypeIO(IntegerTypeIO):
 
 
 class FloatTypeIO(GraphSONTypeIO):
-    graphson_base_type = 'Float'
-    cql_type = 'float'
+    graphson_base_type = "Float"
+    cql_type = "float"
 
     @classmethod
     def serialize(cls, value, writer=None):
@@ -175,21 +204,21 @@ class FloatTypeIO(GraphSONTypeIO):
 
 
 class DoubleTypeIO(FloatTypeIO):
-    graphson_base_type = 'Double'
-    cql_type = 'double'
+    graphson_base_type = "Double"
+    cql_type = "double"
 
 
 class BigIntegerTypeIO(IntegerTypeIO):
-    prefix = 'gx'
-    graphson_base_type = 'BigInteger'
+    prefix = "gx"
+    graphson_base_type = "BigInteger"
 
 
 class LocalDateTypeIO(GraphSONTypeIO):
-    FORMAT = '%Y-%m-%d'
+    FORMAT = "%Y-%m-%d"
 
-    prefix = 'gx'
-    graphson_base_type = 'LocalDate'
-    cql_type = 'date'
+    prefix = "gx"
+    graphson_base_type = "LocalDate"
+    cql_type = "date"
 
     @classmethod
     def serialize(cls, value, writer=None):
@@ -205,14 +234,16 @@ class LocalDateTypeIO(GraphSONTypeIO):
 
 
 class InstantTypeIO(GraphSONTypeIO):
-    prefix = 'gx'
-    graphson_base_type = 'Instant'
-    cql_type = 'timestamp'
+    prefix = "gx"
+    graphson_base_type = "Instant"
+    cql_type = "timestamp"
 
     @classmethod
     def serialize(cls, value, writer=None):
         if isinstance(value, datetime.datetime):
-            value = datetime.datetime(*value.utctimetuple()[:6]).replace(microsecond=value.microsecond)
+            value = datetime.datetime(*value.utctimetuple()[:6]).replace(
+                microsecond=value.microsecond
+            )
         else:
             value = datetime.datetime.combine(value, datetime.datetime.min.time())
 
@@ -221,22 +252,18 @@ class InstantTypeIO(GraphSONTypeIO):
     @classmethod
     def deserialize(cls, value, reader=None):
         try:
-            d = datetime.datetime.strptime(value, '%Y-%m-%dT%H:%M:%S.%fZ')
+            d = datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
         except ValueError:
-            d = datetime.datetime.strptime(value, '%Y-%m-%dT%H:%M:%SZ')
+            d = datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
         return d
 
 
 class LocalTimeTypeIO(GraphSONTypeIO):
-    FORMATS = [
-        '%H:%M',
-        '%H:%M:%S',
-        '%H:%M:%S.%f'
-    ]
+    FORMATS = ["%H:%M", "%H:%M:%S", "%H:%M:%S.%f"]
 
-    prefix = 'gx'
-    graphson_base_type = 'LocalTime'
-    cql_type = 'time'
+    prefix = "gx"
+    graphson_base_type = "LocalTime"
+    cql_type = "time"
 
     @classmethod
     def serialize(cls, value, writer=None):
@@ -253,20 +280,20 @@ class LocalTimeTypeIO(GraphSONTypeIO):
                 continue
 
         if dt is None:
-            raise ValueError('Unable to decode LocalTime: {0}'.format(value))
+            raise ValueError("Unable to decode LocalTime: {0}".format(value))
 
         return dt.time()
 
 
 class BlobTypeIO(GraphSONTypeIO):
-    prefix = 'dse'
-    graphson_base_type = 'Blob'
-    cql_type = 'blob'
+    prefix = "dse"
+    graphson_base_type = "Blob"
+    cql_type = "blob"
 
     @classmethod
     def serialize(cls, value, writer=None):
         value = base64.b64encode(value)
-        value = value.decode('utf-8')
+        value = value.decode("utf-8")
         return value
 
     @classmethod
@@ -275,13 +302,13 @@ class BlobTypeIO(GraphSONTypeIO):
 
 
 class ByteBufferTypeIO(BlobTypeIO):
-    prefix = 'gx'
-    graphson_base_type = 'ByteBuffer'
+    prefix = "gx"
+    graphson_base_type = "ByteBuffer"
 
 
 class UUIDTypeIO(GraphSONTypeIO):
-    graphson_base_type = 'UUID'
-    cql_type = 'uuid'
+    graphson_base_type = "UUID"
+    cql_type = "uuid"
 
     @classmethod
     def deserialize(cls, value, reader=None):
@@ -289,9 +316,9 @@ class UUIDTypeIO(GraphSONTypeIO):
 
 
 class BigDecimalTypeIO(GraphSONTypeIO):
-    prefix = 'gx'
-    graphson_base_type = 'BigDecimal'
-    cql_type = 'bigdecimal'
+    prefix = "gx"
+    graphson_base_type = "BigDecimal"
+    cql_type = "bigdecimal"
 
     @classmethod
     def deserialize(cls, value, reader=None):
@@ -299,16 +326,19 @@ class BigDecimalTypeIO(GraphSONTypeIO):
 
 
 class DurationTypeIO(GraphSONTypeIO):
-    prefix = 'gx'
-    graphson_base_type = 'Duration'
-    cql_type = 'duration'
+    prefix = "gx"
+    graphson_base_type = "Duration"
+    cql_type = "duration"
 
-    _duration_regex = re.compile(r"""
+    _duration_regex = re.compile(
+        r"""
         ^P((?P<days>\d+)D)?
         T((?P<hours>\d+)H)?
         ((?P<minutes>\d+)M)?
         ((?P<seconds>[0-9.]+)S)?$
-    """, re.VERBOSE)
+    """,
+        re.VERBOSE,
+    )
     _duration_format = "P{days}DT{hours}H{minutes}M{seconds}S"
 
     _seconds_in_minute = 60
@@ -324,48 +354,51 @@ class DurationTypeIO(GraphSONTypeIO):
         total_seconds += value.microseconds / 1e6
 
         return cls._duration_format.format(
-            days=int(days), hours=int(hours), minutes=int(minutes), seconds=total_seconds
+            days=int(days),
+            hours=int(hours),
+            minutes=int(minutes),
+            seconds=total_seconds,
         )
 
     @classmethod
     def deserialize(cls, value, reader=None):
         duration = cls._duration_regex.match(value)
         if duration is None:
-            raise ValueError('Invalid duration: {0}'.format(value))
+            raise ValueError("Invalid duration: {0}".format(value))
 
-        duration = {k: float(v) if v is not None else 0
-                    for k, v in duration.groupdict().items()}
-        return datetime.timedelta(days=duration['days'], hours=duration['hours'],
-                                  minutes=duration['minutes'], seconds=duration['seconds'])
+        duration = {
+            k: float(v) if v is not None else 0 for k, v in duration.groupdict().items()
+        }
+        return datetime.timedelta(
+            days=duration["days"],
+            hours=duration["hours"],
+            minutes=duration["minutes"],
+            seconds=duration["seconds"],
+        )
 
 
 class DseDurationTypeIO(GraphSONTypeIO):
-    prefix = 'dse'
-    graphson_base_type = 'Duration'
-    cql_type = 'duration'
+    prefix = "dse"
+    graphson_base_type = "Duration"
+    cql_type = "duration"
 
     @classmethod
     def serialize(cls, value, writer=None):
-        return {
-            'months': value.months,
-            'days': value.days,
-            'nanos': value.nanoseconds
-        }
+        return {"months": value.months, "days": value.days, "nanos": value.nanoseconds}
 
     @classmethod
     def deserialize(cls, value, reader=None):
         return Duration(
-            reader.deserialize(value['months']),
-            reader.deserialize(value['days']),
-            reader.deserialize(value['nanos'])
+            reader.deserialize(value["months"]),
+            reader.deserialize(value["days"]),
+            reader.deserialize(value["nanos"]),
         )
 
 
 class TypeWrapperTypeIO(GraphSONTypeIO):
-
     @classmethod
     def definition(cls, value, writer=None):
-        return {'cqlType': value.type_io.cql_type}
+        return {"cqlType": value.type_io.cql_type}
 
     @classmethod
     def serialize(cls, value, writer=None):
@@ -377,8 +410,8 @@ class TypeWrapperTypeIO(GraphSONTypeIO):
 
 
 class PointTypeIO(GraphSONTypeIO):
-    prefix = 'dse'
-    graphson_base_type = 'Point'
+    prefix = "dse"
+    graphson_base_type = "Point"
     cql_type = "org.apache.cassandra.db.marshal.PointType"
 
     @classmethod
@@ -387,8 +420,8 @@ class PointTypeIO(GraphSONTypeIO):
 
 
 class LineStringTypeIO(GraphSONTypeIO):
-    prefix = 'dse'
-    graphson_base_type = 'LineString'
+    prefix = "dse"
+    graphson_base_type = "LineString"
     cql_type = "org.apache.cassandra.db.marshal.LineStringType"
 
     @classmethod
@@ -397,8 +430,8 @@ class LineStringTypeIO(GraphSONTypeIO):
 
 
 class PolygonTypeIO(GraphSONTypeIO):
-    prefix = 'dse'
-    graphson_base_type = 'Polygon'
+    prefix = "dse"
+    graphson_base_type = "Polygon"
     cql_type = "org.apache.cassandra.db.marshal.PolygonType"
 
     @classmethod
@@ -407,62 +440,70 @@ class PolygonTypeIO(GraphSONTypeIO):
 
 
 class InetTypeIO(GraphSONTypeIO):
-    prefix = 'gx'
-    graphson_base_type = 'InetAddress'
-    cql_type = 'inet'
+    prefix = "gx"
+    graphson_base_type = "InetAddress"
+    cql_type = "inet"
 
 
 class VertexTypeIO(GraphSONTypeIO):
-    graphson_base_type = 'Vertex'
+    graphson_base_type = "Vertex"
 
     @classmethod
     def deserialize(cls, value, reader=None):
-        vertex = Vertex(id=reader.deserialize(value["id"]),
-                        label=value["label"] if "label" in value else "vertex",
-                        type='vertex',
-                        properties={})
+        vertex = Vertex(
+            id=reader.deserialize(value["id"]),
+            label=value["label"] if "label" in value else "vertex",
+            type="vertex",
+            properties={},
+        )
         # avoid the properties processing in Vertex.__init__
-        vertex.properties = reader.deserialize(value.get('properties', {}))
+        vertex.properties = reader.deserialize(value.get("properties", {}))
         return vertex
 
 
 class VertexPropertyTypeIO(GraphSONTypeIO):
-    graphson_base_type = 'VertexProperty'
+    graphson_base_type = "VertexProperty"
 
     @classmethod
     def deserialize(cls, value, reader=None):
-        return VertexProperty(label=value['label'],
-                              value=reader.deserialize(value["value"]),
-                              properties=reader.deserialize(value.get('properties', {})))
+        return VertexProperty(
+            label=value["label"],
+            value=reader.deserialize(value["value"]),
+            properties=reader.deserialize(value.get("properties", {})),
+        )
 
 
 class EdgeTypeIO(GraphSONTypeIO):
-    graphson_base_type = 'Edge'
+    graphson_base_type = "Edge"
 
     @classmethod
     def deserialize(cls, value, reader=None):
-        in_vertex = Vertex(id=reader.deserialize(value["inV"]),
-                           label=value['inVLabel'],
-                           type='vertex',
-                           properties={})
-        out_vertex = Vertex(id=reader.deserialize(value["outV"]),
-                            label=value['outVLabel'],
-                            type='vertex',
-                            properties={})
+        in_vertex = Vertex(
+            id=reader.deserialize(value["inV"]),
+            label=value["inVLabel"],
+            type="vertex",
+            properties={},
+        )
+        out_vertex = Vertex(
+            id=reader.deserialize(value["outV"]),
+            label=value["outVLabel"],
+            type="vertex",
+            properties={},
+        )
         return Edge(
             id=reader.deserialize(value["id"]),
             label=value["label"] if "label" in value else "vertex",
-            type='edge',
+            type="edge",
             properties=reader.deserialize(value.get("properties", {})),
             inV=in_vertex,
-            inVLabel=value['inVLabel'],
+            inVLabel=value["inVLabel"],
             outV=out_vertex,
-            outVLabel=value['outVLabel']
+            outVLabel=value["outVLabel"],
         )
 
 
 class PropertyTypeIO(GraphSONTypeIO):
-    graphson_base_type = 'Property'
+    graphson_base_type = "Property"
 
     @classmethod
     def deserialize(cls, value, reader=None):
@@ -470,19 +511,19 @@ class PropertyTypeIO(GraphSONTypeIO):
 
 
 class PathTypeIO(GraphSONTypeIO):
-    graphson_base_type = 'Path'
+    graphson_base_type = "Path"
 
     @classmethod
     def deserialize(cls, value, reader=None):
-        labels = [set(label) for label in reader.deserialize(value['labels'])]
-        objects = [obj for obj in reader.deserialize(value['objects'])]
+        labels = [set(label) for label in reader.deserialize(value["labels"])]
+        objects = [obj for obj in reader.deserialize(value["objects"])]
         p = Path(labels, [])
         p.objects = objects  # avoid the object processing in Path.__init__
         return p
 
 
 class TraversalMetricsTypeIO(GraphSONTypeIO):
-    graphson_base_type = 'TraversalMetrics'
+    graphson_base_type = "TraversalMetrics"
 
     @classmethod
     def deserialize(cls, value, reader=None):
@@ -490,7 +531,7 @@ class TraversalMetricsTypeIO(GraphSONTypeIO):
 
 
 class MetricsTypeIO(GraphSONTypeIO):
-    graphson_base_type = 'Metrics'
+    graphson_base_type = "Metrics"
 
     @classmethod
     def deserialize(cls, value, reader=None):
@@ -512,17 +553,17 @@ class JsonMapTypeIO(GraphSONTypeIO):
 class MapTypeIO(GraphSONTypeIO):
     """In GraphSON3, dict has its own type"""
 
-    graphson_base_type = 'Map'
-    cql_type = 'map'
+    graphson_base_type = "Map"
+    cql_type = "map"
 
     @classmethod
     def definition(cls, value, writer=None):
-        out = OrderedDict([('cqlType', cls.cql_type)])
-        out['definition'] = []
+        out = OrderedDict([("cqlType", cls.cql_type)])
+        out["definition"] = []
         for k, v in value.items():
             # we just need the first pair to write the def
-            out['definition'].append(writer.definition(k))
-            out['definition'].append(writer.definition(v))
+            out["definition"].append(writer.definition(k))
+            out["definition"].append(writer.definition(v))
             break
         return out
 
@@ -540,8 +581,7 @@ class MapTypeIO(GraphSONTypeIO):
         out = {}
         a, b = itertools.tee(value)
         for key, val in zip(
-            itertools.islice(a, 0, None, 2),
-            itertools.islice(b, 1, None, 2)
+            itertools.islice(a, 0, None, 2), itertools.islice(b, 1, None, 2)
         ):
             out[reader.deserialize(key)] = reader.deserialize(val)
         return out
@@ -550,15 +590,15 @@ class MapTypeIO(GraphSONTypeIO):
 class ListTypeIO(GraphSONTypeIO):
     """In GraphSON3, list has its own type"""
 
-    graphson_base_type = 'List'
-    cql_type = 'list'
+    graphson_base_type = "List"
+    cql_type = "list"
 
     @classmethod
     def definition(cls, value, writer=None):
-        out = OrderedDict([('cqlType', cls.cql_type)])
-        out['definition'] = []
+        out = OrderedDict([("cqlType", cls.cql_type)])
+        out["definition"] = []
         if value:
-            out['definition'].append(writer.definition(value[0]))
+            out["definition"].append(writer.definition(value[0]))
         return out
 
     @classmethod
@@ -573,16 +613,16 @@ class ListTypeIO(GraphSONTypeIO):
 class SetTypeIO(GraphSONTypeIO):
     """In GraphSON3, set has its own type"""
 
-    graphson_base_type = 'Set'
-    cql_type = 'set'
+    graphson_base_type = "Set"
+    cql_type = "set"
 
     @classmethod
     def definition(cls, value, writer=None):
-        out = OrderedDict([('cqlType', cls.cql_type)])
-        out['definition'] = []
+        out = OrderedDict([("cqlType", cls.cql_type)])
+        out["definition"] = []
         for v in value:
             # we only take into account the first value for the definition
-            out['definition'].append(writer.definition(v))
+            out["definition"].append(writer.definition(v))
             break
         return out
 
@@ -596,8 +636,10 @@ class SetTypeIO(GraphSONTypeIO):
 
         s = set(lst)
         if len(s) != len(lst):
-            log.warning("Coercing g:Set to list due to numerical values returned by Java. "
-                        "See TINKERPOP-1844 for details.")
+            log.warning(
+                "Coercing g:Set to list due to numerical values returned by Java. "
+                "See TINKERPOP-1844 for details."
+            )
             return lst
 
         return s
@@ -612,8 +654,7 @@ class BulkSetTypeIO(GraphSONTypeIO):
 
         a, b = itertools.tee(value)
         for val, bulk in zip(
-            itertools.islice(a, 0, None, 2),
-            itertools.islice(b, 1, None, 2)
+            itertools.islice(a, 0, None, 2), itertools.islice(b, 1, None, 2)
         ):
             val = reader.deserialize(val)
             bulk = reader.deserialize(bulk)
@@ -624,58 +665,64 @@ class BulkSetTypeIO(GraphSONTypeIO):
 
 
 class TupleTypeIO(GraphSONTypeIO):
-    prefix = 'dse'
-    graphson_base_type = 'Tuple'
-    cql_type = 'tuple'
+    prefix = "dse"
+    graphson_base_type = "Tuple"
+    cql_type = "tuple"
 
     @classmethod
     def definition(cls, value, writer=None):
         out = OrderedDict()
-        out['cqlType'] = cls.cql_type
+        out["cqlType"] = cls.cql_type
         serializers = [writer.get_serializer(s) for s in value]
-        out['definition'] = [s.definition(v, writer) for v, s in zip(value, serializers)]
+        out["definition"] = [
+            s.definition(v, writer) for v, s in zip(value, serializers)
+        ]
         return out
 
     @classmethod
     def serialize(cls, value, writer=None):
         out = cls.definition(value, writer)
-        out['value'] = [writer.serialize(v, writer) for v in value]
+        out["value"] = [writer.serialize(v, writer) for v in value]
         return out
 
     @classmethod
     def deserialize(cls, value, reader=None):
-        return tuple(reader.deserialize(obj) for obj in value['value'])
+        return tuple(reader.deserialize(obj) for obj in value["value"])
 
 
 class UserTypeIO(GraphSONTypeIO):
-    prefix = 'dse'
-    graphson_base_type = 'UDT'
-    cql_type = 'udt'
+    prefix = "dse"
+    graphson_base_type = "UDT"
+    cql_type = "udt"
 
     FROZEN_REMOVAL_REGEX = re.compile(r'frozen<"*([^"]+)"*>')
 
     @classmethod
     def cql_types_from_string(cls, typ):
         # sanitizing: remove frozen references and double quotes...
-        return cql_types_from_string(
-            re.sub(cls.FROZEN_REMOVAL_REGEX, r'\1', typ)
-        )
+        return cql_types_from_string(re.sub(cls.FROZEN_REMOVAL_REGEX, r"\1", typ))
 
     @classmethod
     def get_udt_definition(cls, value, writer):
         user_type_name = writer.user_types[type(value)]
-        keyspace = writer.context['graph_name']
-        return writer.context['cluster'].metadata.keyspaces[keyspace].user_types[user_type_name]
+        keyspace = writer.context["graph_name"]
+        return (
+            writer.context["cluster"]
+            .metadata.keyspaces[keyspace]
+            .user_types[user_type_name]
+        )
 
     @classmethod
     def is_collection(cls, typ):
-        return typ in ['list', 'tuple', 'map', 'set']
+        return typ in ["list", "tuple", "map", "set"]
 
     @classmethod
     def is_udt(cls, typ, writer):
-        keyspace = writer.context['graph_name']
-        if keyspace in writer.context['cluster'].metadata.keyspaces:
-            return typ in writer.context['cluster'].metadata.keyspaces[keyspace].user_types
+        keyspace = writer.context["graph_name"]
+        if keyspace in writer.context["cluster"].metadata.keyspaces:
+            return (
+                typ in writer.context["cluster"].metadata.keyspaces[keyspace].user_types
+            )
         return False
 
     @classmethod
@@ -684,7 +731,7 @@ class UserTypeIO(GraphSONTypeIO):
         Build the udt field definition. This is required when we have a complex udt type.
         """
         index = -1
-        out = [OrderedDict() if name is None else OrderedDict([('fieldName', name)])]
+        out = [OrderedDict() if name is None else OrderedDict([("fieldName", name)])]
 
         while types:
             index += 1
@@ -693,52 +740,72 @@ class UserTypeIO(GraphSONTypeIO):
                 out.append(OrderedDict())
 
             if cls.is_udt(typ, writer):
-                keyspace = writer.context['graph_name']
-                udt = writer.context['cluster'].metadata.keyspaces[keyspace].user_types[typ]
+                keyspace = writer.context["graph_name"]
+                udt = (
+                    writer.context["cluster"]
+                    .metadata.keyspaces[keyspace]
+                    .user_types[typ]
+                )
                 out[index].update(cls.definition(udt, writer))
             elif cls.is_collection(typ):
-                out[index]['cqlType'] = typ
+                out[index]["cqlType"] = typ
                 definition = cls.field_definition(types, writer)
-                out[index]['definition'] = definition if isinstance(definition, list) else [definition]
+                out[index]["definition"] = (
+                    definition if isinstance(definition, list) else [definition]
+                )
             else:
-                out[index]['cqlType'] = typ
+                out[index]["cqlType"] = typ
 
         return out if len(out) > 1 else out[0]
 
     @classmethod
     def definition(cls, value, writer=None):
-        udt = value if isinstance(value, UserType) else cls.get_udt_definition(value, writer)
-        return OrderedDict([
-            ('cqlType', cls.cql_type),
-            ('keyspace', udt.keyspace),
-            ('name', udt.name),
-            ('definition', [
-                cls.field_definition(cls.cql_types_from_string(typ), writer, name=name)
-                for name, typ in zip(udt.field_names, udt.field_types)])
-        ])
+        udt = (
+            value
+            if isinstance(value, UserType)
+            else cls.get_udt_definition(value, writer)
+        )
+        return OrderedDict(
+            [
+                ("cqlType", cls.cql_type),
+                ("keyspace", udt.keyspace),
+                ("name", udt.name),
+                (
+                    "definition",
+                    [
+                        cls.field_definition(
+                            cls.cql_types_from_string(typ), writer, name=name
+                        )
+                        for name, typ in zip(udt.field_names, udt.field_types)
+                    ],
+                ),
+            ]
+        )
 
     @classmethod
     def serialize(cls, value, writer=None):
         udt = cls.get_udt_definition(value, writer)
         out = cls.definition(value, writer)
-        out['value'] = []
+        out["value"] = []
         for name, typ in zip(udt.field_names, udt.field_types):
-            out['value'].append(writer.serialize(getattr(value, name), writer))
+            out["value"].append(writer.serialize(getattr(value, name), writer))
         return out
 
     @classmethod
     def deserialize(cls, value, reader=None):
-        udt_class = reader.context['cluster']._user_types[value['keyspace']][value['name']]
+        udt_class = reader.context["cluster"]._user_types[value["keyspace"]][
+            value["name"]
+        ]
         kwargs = zip(
-            list(map(lambda v: v['fieldName'], value['definition'])),
-            [reader.deserialize(v) for v in value['value']]
+            list(map(lambda v: v["fieldName"], value["definition"])),
+            [reader.deserialize(v) for v in value["value"]],
         )
         return udt_class(**dict(kwargs))
 
 
 class TTypeIO(GraphSONTypeIO):
-    prefix = 'g'
-    graphson_base_type = 'T'
+    prefix = "g"
+    graphson_base_type = "T"
 
     @classmethod
     def deserialize(cls, value, reader=None):
@@ -746,7 +813,6 @@ class TTypeIO(GraphSONTypeIO):
 
 
 class _BaseGraphSONSerializer(object):
-
     _serializers = OrderedDict()
 
     @classmethod
@@ -814,22 +880,24 @@ class GraphSON1Serializer(_BaseGraphSONSerializer):
     # When we fall back to a superclass's serializer, we iterate over this map.
     # We want that iteration order to be consistent, so we use an OrderedDict,
     # not a dict.
-    _serializers = OrderedDict([
-        (str, TextTypeIO),
-        (bool, BooleanTypeIO),
-        (bytearray, ByteBufferTypeIO),
-        (Decimal, BigDecimalTypeIO),
-        (datetime.date, LocalDateTypeIO),
-        (datetime.time, LocalTimeTypeIO),
-        (datetime.timedelta, DurationTypeIO),
-        (datetime.datetime, InstantTypeIO),
-        (uuid.UUID, UUIDTypeIO),
-        (Polygon, PolygonTypeIO),
-        (Point, PointTypeIO),
-        (LineString, LineStringTypeIO),
-        (dict, JsonMapTypeIO),
-        (float, FloatTypeIO)
-    ])
+    _serializers = OrderedDict(
+        [
+            (str, TextTypeIO),
+            (bool, BooleanTypeIO),
+            (bytearray, ByteBufferTypeIO),
+            (Decimal, BigDecimalTypeIO),
+            (datetime.date, LocalDateTypeIO),
+            (datetime.time, LocalTimeTypeIO),
+            (datetime.timedelta, DurationTypeIO),
+            (datetime.datetime, InstantTypeIO),
+            (uuid.UUID, UUIDTypeIO),
+            (Polygon, PolygonTypeIO),
+            (Point, PointTypeIO),
+            (LineString, LineStringTypeIO),
+            (dict, JsonMapTypeIO),
+            (float, FloatTypeIO),
+        ]
+    )
 
 
 GraphSON1Serializer.register(ipaddress.IPv4Address, InetTypeIO)
@@ -839,7 +907,6 @@ GraphSON1Serializer.register(bytes, ByteBufferTypeIO)
 
 
 class _BaseGraphSONDeserializer(object):
-
     _deserializers = {}
 
     @classmethod
@@ -855,7 +922,9 @@ class _BaseGraphSONDeserializer(object):
         try:
             return cls._deserializers[graphson_type]
         except KeyError:
-            raise ValueError('Invalid `graphson_type` specified: {}'.format(graphson_type))
+            raise ValueError(
+                "Invalid `graphson_type` specified: {}".format(graphson_type)
+            )
 
     @classmethod
     def deserialize(cls, graphson_type, value):
@@ -872,14 +941,23 @@ class GraphSON1Deserializer(_BaseGraphSONDeserializer):
     """
     Deserialize graphson1 types to python objects.
     """
-    _TYPES = [UUIDTypeIO, BigDecimalTypeIO, InstantTypeIO, BlobTypeIO, ByteBufferTypeIO,
-              PointTypeIO, LineStringTypeIO, PolygonTypeIO, LocalDateTypeIO,
-              LocalTimeTypeIO, DurationTypeIO, InetTypeIO]
 
-    _deserializers = {
-        t.graphson_type: t
-        for t in _TYPES
-    }
+    _TYPES = [
+        UUIDTypeIO,
+        BigDecimalTypeIO,
+        InstantTypeIO,
+        BlobTypeIO,
+        ByteBufferTypeIO,
+        PointTypeIO,
+        LineStringTypeIO,
+        PolygonTypeIO,
+        LocalDateTypeIO,
+        LocalTimeTypeIO,
+        DurationTypeIO,
+        InetTypeIO,
+    ]
+
+    _deserializers = {t.graphson_type: t for t in _TYPES}
 
     @classmethod
     def deserialize_date(cls, value):
@@ -969,7 +1047,9 @@ class GraphSON2Serializer(_BaseGraphSONSerializer):
         """
         serializer = self.get_serializer(value)
         if not serializer:
-            raise ValueError("Unable to find a serializer for value of type: ".format(type(value)))
+            raise ValueError(
+                "Unable to find a serializer for value of type: {}".format(type(value))
+            )
 
         val = serializer.serialize(value, writer or self)
         if serializer is TypeWrapperTypeIO:
@@ -993,16 +1073,23 @@ GraphSON2Serializer.register(int, IntegerTypeIO)
 
 
 class GraphSON2Deserializer(_BaseGraphSONDeserializer):
-
     _TYPES = GraphSON1Deserializer._TYPES + [
-        Int16TypeIO, Int32TypeIO, Int64TypeIO, DoubleTypeIO, FloatTypeIO,
-        BigIntegerTypeIO, VertexTypeIO, VertexPropertyTypeIO, EdgeTypeIO,
-        PathTypeIO, PropertyTypeIO, TraversalMetricsTypeIO, MetricsTypeIO]
+        Int16TypeIO,
+        Int32TypeIO,
+        Int64TypeIO,
+        DoubleTypeIO,
+        FloatTypeIO,
+        BigIntegerTypeIO,
+        VertexTypeIO,
+        VertexPropertyTypeIO,
+        EdgeTypeIO,
+        PathTypeIO,
+        PropertyTypeIO,
+        TraversalMetricsTypeIO,
+        MetricsTypeIO,
+    ]
 
-    _deserializers = {
-        t.graphson_type: t
-        for t in _TYPES
-    }
+    _deserializers = {t.graphson_type: t for t in _TYPES}
 
 
 class GraphSON2Reader(object):
@@ -1066,7 +1153,6 @@ to_float = partial(_wrap_value, FloatTypeIO)
 
 
 class GraphSON3Serializer(GraphSON2Serializer):
-
     _serializers = GraphSON2Serializer.get_type_definitions()
 
     context = None
@@ -1084,17 +1170,23 @@ class GraphSON3Serializer(GraphSON2Serializer):
         """Custom get_serializer to support UDT/Tuple"""
 
         serializer = super(GraphSON3Serializer, self).get_serializer(value)
-        is_namedtuple_udt = serializer is TupleTypeIO and hasattr(value, '_fields')
+        is_namedtuple_udt = serializer is TupleTypeIO and hasattr(value, "_fields")
         if not serializer or is_namedtuple_udt:
             # Check if UDT
             if self.user_types is None:
                 try:
-                    user_types = self.context['cluster']._user_types[self.context['graph_name']]
+                    user_types = self.context["cluster"]._user_types[
+                        self.context["graph_name"]
+                    ]
                     self.user_types = dict(map(reversed, user_types.items()))
                 except KeyError:
                     self.user_types = {}
 
-            serializer = UserTypeIO if (is_namedtuple_udt or (type(value) in self.user_types)) else serializer
+            serializer = (
+                UserTypeIO
+                if (is_namedtuple_udt or (type(value) in self.user_types))
+                else serializer
+            )
 
         return serializer
 
@@ -1108,10 +1200,16 @@ GraphSON3Serializer.register(TypeIOWrapper, TypeWrapperTypeIO)
 
 
 class GraphSON3Deserializer(GraphSON2Deserializer):
-    _TYPES = GraphSON2Deserializer._TYPES + [MapTypeIO, ListTypeIO,
-                                             SetTypeIO, TupleTypeIO,
-                                             UserTypeIO, DseDurationTypeIO,
-                                             TTypeIO, BulkSetTypeIO]
+    _TYPES = GraphSON2Deserializer._TYPES + [
+        MapTypeIO,
+        ListTypeIO,
+        SetTypeIO,
+        TupleTypeIO,
+        UserTypeIO,
+        DseDurationTypeIO,
+        TTypeIO,
+        BulkSetTypeIO,
+    ]
 
     _deserializers = {t.graphson_type: t for t in _TYPES}
 
