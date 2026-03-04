@@ -25,7 +25,3 @@ class CQLEngineException(Exception):
 
 class ValidationError(CQLEngineException):
     pass
-
-
-class UnicodeMixin(object):
-    __str__ = lambda x: x.__unicode__()
