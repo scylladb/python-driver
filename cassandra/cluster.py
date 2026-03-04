@@ -6346,10 +6346,8 @@ class ResultSet(object):
         self._enter_list_mode("index operator")
         return self._current_rows[i]
 
-    def __nonzero__(self):
+    def __bool__(self):
         return bool(self._current_rows)
-
-    __bool__ = __nonzero__
 
     def get_query_trace(self, max_wait_sec=None):
         """
