@@ -20,7 +20,7 @@ from collections import deque
 from threading import Barrier, Event, RLock, Thread
 from unittest.mock import Mock, MagicMock, ANY, patch
 
-from cassandra import ConsistencyLevel, InvalidRequest, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
+from cassandra import ConsistencyLevel, DriverException, InvalidRequest, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
 from cassandra.cluster import (Session, ResponseFuture, NoHostAvailable, ProtocolVersion,
                                ControlConnection, ControlConnectionQueryFallback, _NOT_SET)
 from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
@@ -2307,7 +2307,8 @@ class ResponseFutureTests(unittest.TestCase):
         prepared_response = Mock(spec=ResultMessage, kind=RESULT_KIND_PREPARED)
         connection.send_msg.call_args_list[1][1]['cb'](prepared_response)
         session.submit.assert_called_once_with(
-            rf._execute_after_prepare, host, connection, None, prepared_response)
+            rf._execute_after_prepare, host, connection, None, prepared_response,
+            prepared_statement=_NOT_SET)
 
     def test_control_connection_fallback_not_used_when_pool_can_serve(self):
         session = self.make_basic_session()
@@ -2714,6 +2715,160 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(None, None, None, result)
         with pytest.raises(ValueError):
             rf.result()
+
+    def test_prepared_query_not_found_uses_local_prepared_context(self):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Mock(spec=Connection)
+        pool.borrow_connection.return_value = (connection, 1)
+
+        rf = self.make_response_future(session)
+        rf.send_request()
+
+        session.cluster.protocol_version = ProtocolVersion.V4
+        session.cluster._prepared_statements = {}
+        rf._connection.keyspace = "FooKeyspace"
+
+        rf.prepared_statement = Mock()
+        rf.prepared_statement.query_id = b"known-query-id"
+        rf.prepared_statement.query_string = "SELECT * FROM foobar"
+        rf.prepared_statement.keyspace = "FooKeyspace"
+
+        # Different query id in UNPREPARED response should not prevent reprepare when local context exists.
+        result = Mock(spec=PreparedQueryNotFound, info=b"other-query-id")
+        rf._set_result(None, None, None, result)
+
+        assert session.submit.call_args
+        args, _ = session.submit.call_args
+        assert rf._reprepare == args[-5]
+        assert isinstance(args[-4], PrepareMessage)
+        assert args[-4].query == "SELECT * FROM foobar"
+
+    def test_prepared_query_not_found_prefers_returned_id_from_cache(self):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Mock(spec=Connection)
+        pool.borrow_connection.return_value = (connection, 1)
+
+        rf = self.make_response_future(session)
+        rf.send_request()
+
+        session.cluster.protocol_version = ProtocolVersion.V4
+        rf._connection.keyspace = "FooKeyspace"
+
+        rf.prepared_statement = Mock()
+        rf.prepared_statement.query_id = b"local-id"
+        rf.prepared_statement.query_string = "SELECT * FROM local_ctx"
+        rf.prepared_statement.keyspace = "FooKeyspace"
+
+        cached_stmt = Mock()
+        cached_stmt.query_id = b"returned-id"
+        cached_stmt.query_string = "SELECT * FROM returned_ctx"
+        cached_stmt.keyspace = "FooKeyspace"
+        session.cluster._prepared_statements = {cached_stmt.query_id: cached_stmt}
+
+        result = Mock(spec=PreparedQueryNotFound, info=cached_stmt.query_id)
+        rf._set_result(None, None, None, result)
+
+        assert session.submit.call_args
+        args, _ = session.submit.call_args
+        assert rf._reprepare == args[-5]
+        assert isinstance(args[-4], PrepareMessage)
+        assert args[-4].query == "SELECT * FROM returned_ctx"
+
+    def _reprepare_and_capture_callbacks(self, rf, session, missing_ids):
+        """
+        Feed one UNPREPARED response per id into ``rf`` (as separate attempts of
+        the same future would) and return the PREPARE callbacks, in order.
+        """
+        session.submit.side_effect = lambda fn, *args, **kwargs: fn(*args, **kwargs)
+        rf._query = Mock(return_value=1)
+        for query_id in missing_ids:
+            rf._set_result('host', None, None, Mock(spec=PreparedQueryNotFound, info=query_id))
+        prepare_calls = [c for c in rf._query.call_args_list if 'cb' in c[1]]
+        assert len(prepare_calls) == len(missing_ids)
+        rf._query.reset_mock()
+        return [c[1]['cb'] for c in prepare_calls]
+
+    def _prepared_response(self, query_id, column_metadata):
+        return Mock(spec=ResultMessage, kind=RESULT_KIND_PREPARED, query_id=query_id,
+                    column_metadata=column_metadata, result_metadata_id=query_id + b'-meta')
+
+    def test_reprepare_of_two_statements_on_one_future_keeps_completions_apart(self):
+        """
+        Two attempts of one future (e.g. speculative executions of a batch) can each
+        get UNPREPARED for a different statement before either PREPARE completes.
+        Each PREPARED response must be matched against the statement it was sent
+        for, not against whichever statement was reported missing last.
+        """
+        session = self.make_session()
+        session.cluster.protocol_version = ProtocolVersion.V4
+        stmt_a = self._make_prepared_statement([], None, query_id=b'id-a')
+        stmt_b = self._make_prepared_statement([], None, query_id=b'id-b')
+        session.cluster._prepared_statements = {b'id-a': stmt_a, b'id-b': stmt_b}
+
+        rf = self.make_response_future(session)
+        rf.send_request()
+        rf._connection.keyspace = 'ks'
+        assert rf.prepared_statement is None
+
+        cb_a, cb_b = self._reprepare_and_capture_callbacks(rf, session, [b'id-a', b'id-b'])
+        assert rf.prepared_statement is None
+
+        meta_a = [('ks', 'tb', 'a', Mock())]
+        meta_b = [('ks', 'tb', 'b', Mock())]
+        cb_a(self._prepared_response(b'id-a', meta_a))
+        cb_b(self._prepared_response(b'id-b', meta_b))
+
+        assert rf._final_exception is None
+        assert stmt_a.result_metadata is meta_a
+        assert stmt_b.result_metadata is meta_b
+        assert rf._query.call_count == 2
+
+    def test_reprepare_of_returned_id_keeps_execution_context(self):
+        """
+        EXECUTE(A) answered with UNPREPARED(B) for a cached B reprepares B, but the
+        future keeps executing A: A's statement and metadata must stay untouched.
+        """
+        session = self.make_session()
+        session.cluster.protocol_version = ProtocolVersion.V4
+        meta_a = [('ks', 'tb', 'a', Mock())]
+        stmt_a = self._make_prepared_statement(meta_a, b'meta-a', query_id=b'id-a')
+        stmt_b = self._make_prepared_statement([], None, query_id=b'id-b')
+        session.cluster._prepared_statements = {b'id-b': stmt_b}
+
+        rf = self.make_response_future(session)
+        rf.prepared_statement = stmt_a
+        rf.send_request()
+        rf._connection.keyspace = 'ks'
+
+        cb_b, = self._reprepare_and_capture_callbacks(rf, session, [b'id-b'])
+        assert rf.prepared_statement is stmt_a
+
+        meta_b = [('ks', 'tb', 'b', Mock())]
+        cb_b(self._prepared_response(b'id-b', meta_b))
+
+        assert rf._final_exception is None
+        assert rf.prepared_statement is stmt_a
+        assert stmt_a.result_metadata_and_id == (meta_a, b'meta-a')
+        assert stmt_b.result_metadata is meta_b
+        rf._query.assert_called_once_with('host')
+
+    def test_reprepare_id_mismatch_does_not_retry_or_update_metadata(self):
+        session = self.make_session()
+        meta = [('ks', 'tb', 'old', Mock())]
+        stmt = self._make_prepared_statement(meta, b'old-meta', query_id=b'id-a')
+        rf = self.make_response_future(session)
+        rf._query = Mock(return_value=1)
+
+        rf._execute_after_prepare('host', None, None,
+                                  self._prepared_response(b'id-other', []),
+                                  prepared_statement=stmt)
+
+        with pytest.raises(DriverException, match="ID mismatch"):
+            rf.result()
+        assert stmt.result_metadata_and_id == (meta, b'old-meta')
+        rf._query.assert_not_called()
 
     def test_repeat_orig_query_after_succesful_reprepare(self):
         query_id = b'abc123'  # Just a random binary string so we don't hit id mismatch exception
