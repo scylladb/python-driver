@@ -34,7 +34,12 @@ try:
 except ImportError as e:
     pass
 
-from cassandra import SignatureDescriptor, ConsistencyLevel, InvalidRequest, Unauthorized
+from cassandra import (
+    SignatureDescriptor,
+    ConsistencyLevel,
+    InvalidRequest,
+    Unauthorized,
+)
 import cassandra.cqltypes as types
 from cassandra.encoder import Encoder
 from cassandra.marshal import varint_unpack
@@ -48,41 +53,272 @@ from cassandra.util import maybe_add_timeout_to_query
 
 log = logging.getLogger(__name__)
 
-cql_keywords = set((
-    'add', 'aggregate', 'all', 'allow', 'alter', 'and', 'apply', 'as', 'asc', 'ascii', 'authorize', 'batch', 'begin',
-    'bigint', 'blob', 'boolean', 'by', 'cast', 'called', 'clustering', 'columnfamily', 'compact', 'contains', 'count',
-    'counter', 'create', 'custom', 'date', 'decimal', 'default', 'delete', 'desc', 'describe', 'deterministic', 'distinct', 'double', 'drop',
-    'entries', 'execute', 'exists', 'filtering', 'finalfunc', 'float', 'from', 'frozen', 'full', 'function',
-    'functions', 'grant', 'if', 'in', 'index', 'inet', 'infinity', 'initcond', 'input', 'insert', 'int', 'into', 'is', 'json',
-    'key', 'keys', 'keyspace', 'keyspaces', 'language', 'limit', 'list', 'login', 'map', 'materialized', 'mbean', 'mbeans', 'modify', 'monotonic',
-    'nan', 'nologin', 'norecursive', 'nosuperuser', 'not', 'null', 'of', 'on', 'options', 'or', 'order', 'password', 'permission',
-    'permissions', 'primary', 'rename', 'replace', 'returns', 'revoke', 'role', 'roles', 'schema', 'scylla_clustering_bound',
-    'scylla_counter_shard_list', 'scylla_timeuuid_list_index', 'select', 'set', 'sfunc', 'smallint', 'static', 'storage', 'stype', 'superuser',
-    'table', 'text', 'time', 'timestamp', 'timeuuid', 'tinyint', 'to', 'token', 'trigger', 'truncate', 'ttl', 'tuple', 'type', 'unlogged',
-    'unset', 'update', 'use', 'user', 'users', 'using', 'uuid', 'values', 'varchar', 'varint', 'view', 'where', 'with', 'writetime',
-
-    # DSE specifics
-    "node", "nodes", "plan", "active", "application", "applications", "java", "executor", "executors", "std_out", "std_err",
-    "renew", "delegation", "no", "redact", "token", "lowercasestring", "cluster", "authentication", "schemes", "scheme",
-    "internal", "ldap", "kerberos", "remote", "object", "method", "call", "calls", "search", "schema", "config", "rows",
-    "columns", "profiles", "commit", "reload", "rebuild", "field", "workpool", "any", "submission", "indices",
-    "restrict", "unrestrict"
-))
+cql_keywords = set(
+    (
+        "add",
+        "aggregate",
+        "all",
+        "allow",
+        "alter",
+        "and",
+        "apply",
+        "as",
+        "asc",
+        "ascii",
+        "authorize",
+        "batch",
+        "begin",
+        "bigint",
+        "blob",
+        "boolean",
+        "by",
+        "cast",
+        "called",
+        "clustering",
+        "columnfamily",
+        "compact",
+        "contains",
+        "count",
+        "counter",
+        "create",
+        "custom",
+        "date",
+        "decimal",
+        "default",
+        "delete",
+        "desc",
+        "describe",
+        "deterministic",
+        "distinct",
+        "double",
+        "drop",
+        "entries",
+        "execute",
+        "exists",
+        "filtering",
+        "finalfunc",
+        "float",
+        "from",
+        "frozen",
+        "full",
+        "function",
+        "functions",
+        "grant",
+        "if",
+        "in",
+        "index",
+        "inet",
+        "infinity",
+        "initcond",
+        "input",
+        "insert",
+        "int",
+        "into",
+        "is",
+        "json",
+        "key",
+        "keys",
+        "keyspace",
+        "keyspaces",
+        "language",
+        "limit",
+        "list",
+        "login",
+        "map",
+        "materialized",
+        "mbean",
+        "mbeans",
+        "modify",
+        "monotonic",
+        "nan",
+        "nologin",
+        "norecursive",
+        "nosuperuser",
+        "not",
+        "null",
+        "of",
+        "on",
+        "options",
+        "or",
+        "order",
+        "password",
+        "permission",
+        "permissions",
+        "primary",
+        "rename",
+        "replace",
+        "returns",
+        "revoke",
+        "role",
+        "roles",
+        "schema",
+        "scylla_clustering_bound",
+        "scylla_counter_shard_list",
+        "scylla_timeuuid_list_index",
+        "select",
+        "set",
+        "sfunc",
+        "smallint",
+        "static",
+        "storage",
+        "stype",
+        "superuser",
+        "table",
+        "text",
+        "time",
+        "timestamp",
+        "timeuuid",
+        "tinyint",
+        "to",
+        "token",
+        "trigger",
+        "truncate",
+        "ttl",
+        "tuple",
+        "type",
+        "unlogged",
+        "unset",
+        "update",
+        "use",
+        "user",
+        "users",
+        "using",
+        "uuid",
+        "values",
+        "varchar",
+        "varint",
+        "view",
+        "where",
+        "with",
+        "writetime",
+        # DSE specifics
+        "node",
+        "nodes",
+        "plan",
+        "active",
+        "application",
+        "applications",
+        "java",
+        "executor",
+        "executors",
+        "std_out",
+        "std_err",
+        "renew",
+        "delegation",
+        "no",
+        "redact",
+        "token",
+        "lowercasestring",
+        "cluster",
+        "authentication",
+        "schemes",
+        "scheme",
+        "internal",
+        "ldap",
+        "kerberos",
+        "remote",
+        "object",
+        "method",
+        "call",
+        "calls",
+        "search",
+        "schema",
+        "config",
+        "rows",
+        "columns",
+        "profiles",
+        "commit",
+        "reload",
+        "rebuild",
+        "field",
+        "workpool",
+        "any",
+        "submission",
+        "indices",
+        "restrict",
+        "unrestrict",
+    )
+)
 """
 Set of keywords in CQL.
 
 Derived from .../cassandra/src/java/org/apache/cassandra/cql3/Cql.g
 """
 
-cql_keywords_unreserved = set((
-    'aggregate', 'all', 'as', 'ascii', 'bigint', 'blob', 'boolean', 'called', 'clustering', 'compact', 'contains',
-    'count', 'counter', 'custom', 'date', 'decimal', 'deterministic', 'distinct', 'double', 'exists', 'filtering', 'finalfunc', 'float',
-    'frozen', 'function', 'functions', 'inet', 'initcond', 'input', 'int', 'json', 'key', 'keys', 'keyspaces',
-    'language', 'list', 'login', 'map', 'monotonic', 'nologin', 'nosuperuser', 'options', 'password', 'permission', 'permissions',
-    'returns', 'role', 'roles', 'sfunc', 'smallint', 'static', 'storage', 'stype', 'superuser', 'text', 'time',
-    'timestamp', 'timeuuid', 'tinyint', 'trigger', 'ttl', 'tuple', 'type', 'user', 'users', 'uuid', 'values', 'varchar',
-    'varint', 'writetime'
-))
+cql_keywords_unreserved = set(
+    (
+        "aggregate",
+        "all",
+        "as",
+        "ascii",
+        "bigint",
+        "blob",
+        "boolean",
+        "called",
+        "clustering",
+        "compact",
+        "contains",
+        "count",
+        "counter",
+        "custom",
+        "date",
+        "decimal",
+        "deterministic",
+        "distinct",
+        "double",
+        "exists",
+        "filtering",
+        "finalfunc",
+        "float",
+        "frozen",
+        "function",
+        "functions",
+        "inet",
+        "initcond",
+        "input",
+        "int",
+        "json",
+        "key",
+        "keys",
+        "keyspaces",
+        "language",
+        "list",
+        "login",
+        "map",
+        "monotonic",
+        "nologin",
+        "nosuperuser",
+        "options",
+        "password",
+        "permission",
+        "permissions",
+        "returns",
+        "role",
+        "roles",
+        "sfunc",
+        "smallint",
+        "static",
+        "storage",
+        "stype",
+        "superuser",
+        "text",
+        "time",
+        "timestamp",
+        "timeuuid",
+        "tinyint",
+        "trigger",
+        "ttl",
+        "tuple",
+        "type",
+        "user",
+        "users",
+        "uuid",
+        "values",
+        "varchar",
+        "varint",
+        "writetime",
+    )
+)
 """
 Set of unreserved keywords in CQL.
 
@@ -136,13 +372,28 @@ class Metadata(object):
         """
         return "\n\n".join(ks.export_as_string() for ks in self.keyspaces.values())
 
-    def refresh(self, connection, timeout, target_type=None, change_type=None, fetch_size=None,
-                metadata_request_timeout=None, **kwargs):
+    def refresh(
+        self,
+        connection,
+        timeout,
+        target_type=None,
+        change_type=None,
+        fetch_size=None,
+        metadata_request_timeout=None,
+        **kwargs,
+    ):
 
         host = self.get_host(connection.original_endpoint)
         server_version = host.release_version if host else None
         dse_version = host.dse_version if host else None
-        parser = get_schema_parser(connection, server_version, dse_version, timeout, metadata_request_timeout, fetch_size)
+        parser = get_schema_parser(
+            connection,
+            server_version,
+            dse_version,
+            timeout,
+            metadata_request_timeout,
+            fetch_size,
+        )
 
         if not target_type:
             self._rebuild_all(parser)
@@ -150,13 +401,13 @@ class Metadata(object):
 
         tt_lower = target_type.lower()
         try:
-            parse_method = getattr(parser, 'get_' + tt_lower)
+            parse_method = getattr(parser, "get_" + tt_lower)
             meta = parse_method(self.keyspaces, **kwargs)
             if meta:
-                update_method = getattr(self, '_update_' + tt_lower)
+                update_method = getattr(self, "_update_" + tt_lower)
                 update_method(meta)
             else:
-                drop_method = getattr(self, '_drop_' + tt_lower)
+                drop_method = getattr(self, "_drop_" + tt_lower)
                 drop_method(**kwargs)
         except AttributeError:
             raise ValueError("Unknown schema target_type: '%s'" % target_type)
@@ -165,7 +416,9 @@ class Metadata(object):
         current_keyspaces = set()
         for keyspace_meta in parser.get_all_keyspaces():
             current_keyspaces.add(keyspace_meta.name)
-            old_keyspace_meta: Optional[KeyspaceMetadata] = self.keyspaces.get(keyspace_meta.name, None)
+            old_keyspace_meta: Optional[KeyspaceMetadata] = self.keyspaces.get(
+                keyspace_meta.name, None
+            )
             self.keyspaces[keyspace_meta.name] = keyspace_meta
             if old_keyspace_meta:
                 self._keyspace_updated(keyspace_meta.name)
@@ -176,10 +429,14 @@ class Metadata(object):
                 self._keyspace_added(keyspace_meta.name)
 
         # remove not-just-added keyspaces
-        removed_keyspaces = [name for name in self.keyspaces.keys()
-                             if name not in current_keyspaces]
-        self.keyspaces = dict((name, meta) for name, meta in self.keyspaces.items()
-                              if name in current_keyspaces)
+        removed_keyspaces = [
+            name for name in self.keyspaces.keys() if name not in current_keyspaces
+        ]
+        self.keyspaces = dict(
+            (name, meta)
+            for name, meta in self.keyspaces.items()
+            if name in current_keyspaces
+        )
         for ksname in removed_keyspaces:
             self._keyspace_removed(ksname)
 
@@ -189,12 +446,19 @@ class Metadata(object):
         self.keyspaces[ks_name] = keyspace_meta
         if old_keyspace_meta:
             keyspace_meta.tables = old_keyspace_meta.tables
-            keyspace_meta.user_types = new_user_types if new_user_types is not None else old_keyspace_meta.user_types
+            keyspace_meta.user_types = (
+                new_user_types
+                if new_user_types is not None
+                else old_keyspace_meta.user_types
+            )
             keyspace_meta.indexes = old_keyspace_meta.indexes
             keyspace_meta.functions = old_keyspace_meta.functions
             keyspace_meta.aggregates = old_keyspace_meta.aggregates
             keyspace_meta.views = old_keyspace_meta.views
-            if (keyspace_meta.replication_strategy != old_keyspace_meta.replication_strategy):
+            if (
+                keyspace_meta.replication_strategy
+                != old_keyspace_meta.replication_strategy
+            ):
                 self._keyspace_updated(ks_name)
         else:
             self._keyspace_added(ks_name)
@@ -242,7 +506,9 @@ class Metadata(object):
 
     def _update_function(self, function_meta):
         try:
-            self.keyspaces[function_meta.keyspace].functions[function_meta.signature] = function_meta
+            self.keyspaces[function_meta.keyspace].functions[
+                function_meta.signature
+            ] = function_meta
         except KeyError:
             # can happen if keyspace disappears while processing async event
             pass
@@ -255,7 +521,9 @@ class Metadata(object):
 
     def _update_aggregate(self, aggregate_meta):
         try:
-            self.keyspaces[aggregate_meta.keyspace].aggregates[aggregate_meta.signature] = aggregate_meta
+            self.keyspaces[aggregate_meta.keyspace].aggregates[
+                aggregate_meta.signature
+            ] = aggregate_meta
         except KeyError:
             pass
 
@@ -289,11 +557,11 @@ class Metadata(object):
         For internal use only.
         """
         self.partitioner = partitioner
-        if partitioner.endswith('RandomPartitioner'):
+        if partitioner.endswith("RandomPartitioner"):
             token_class = MD5Token
-        elif partitioner.endswith('Murmur3Partitioner'):
+        elif partitioner.endswith("Murmur3Partitioner"):
             token_class = Murmur3Token
-        elif partitioner.endswith('ByteOrderedPartitioner'):
+        elif partitioner.endswith("ByteOrderedPartitioner"):
             token_class = BytesToken
         else:
             self.token_map = None
@@ -308,8 +576,7 @@ class Metadata(object):
                 token_to_host_owner[token] = host
 
         all_tokens = sorted(ring)
-        self.token_map = TokenMap(
-            token_class, token_to_host_owner, all_tokens, self)
+        self.token_map = TokenMap(token_class, token_to_host_owner, all_tokens, self)
 
     def get_replicas(self, keyspace, key):
         """
@@ -325,7 +592,7 @@ class Metadata(object):
             return []
 
     def can_support_partitioner(self):
-        if self.partitioner.endswith('Murmur3Partitioner') and murmur3 is None:
+        if self.partitioner.endswith("Murmur3Partitioner") and murmur3 is None:
             return False
         else:
             return True
@@ -385,8 +652,11 @@ class Metadata(object):
 
     def _get_host_by_address(self, address, port=None):
         for host in self._hosts.values():
-            if (host.broadcast_rpc_address == address and
-                    (port is None or host.broadcast_rpc_port is None or host.broadcast_rpc_port == port)):
+            if host.broadcast_rpc_address == address and (
+                port is None
+                or host.broadcast_rpc_port is None
+                or host.broadcast_rpc_port == port
+            ):
                 return host
 
         return None
@@ -408,7 +678,7 @@ REPLICATION_STRATEGY_CLASS_PREFIX = "org.apache.cassandra.locator."
 
 def trim_if_startswith(s, prefix):
     if s.startswith(prefix):
-        return s[len(prefix):]
+        return s[len(prefix) :]
     return s
 
 
@@ -417,12 +687,11 @@ _replication_strategies = {}
 
 class ReplicationStrategyTypeType(type):
     def __new__(metacls, name, bases, dct):
-        dct.setdefault('name', name)
+        dct.setdefault("name", name)
         cls = type.__new__(metacls, name, bases, dct)
-        if not name.startswith('_'):
+        if not name.startswith("_"):
             _replication_strategies[name] = cls
         return cls
-
 
 
 class _ReplicationStrategy(object, metaclass=ReplicationStrategyTypeType):
@@ -433,7 +702,9 @@ class _ReplicationStrategy(object, metaclass=ReplicationStrategyTypeType):
         if not strategy_class:
             return None
 
-        strategy_name = trim_if_startswith(strategy_class, REPLICATION_STRATEGY_CLASS_PREFIX)
+        strategy_name = trim_if_startswith(
+            strategy_class, REPLICATION_STRATEGY_CLASS_PREFIX
+        )
 
         rs_class = _replication_strategies.get(strategy_name, None)
         if rs_class is None:
@@ -443,7 +714,12 @@ class _ReplicationStrategy(object, metaclass=ReplicationStrategyTypeType):
         try:
             rs_instance = rs_class(options_map)
         except Exception as exc:
-            log.warning("Failed creating %s with options %s: %s", strategy_name, options_map, exc)
+            log.warning(
+                "Failed creating %s with options %s: %s",
+                strategy_name,
+                options_map,
+                exc,
+            )
             return None
 
         return rs_instance
@@ -471,12 +747,14 @@ class _UnknownStrategy(ReplicationStrategy):
     def __init__(self, name, options_map):
         self.name = name
         self.options_map = options_map.copy() if options_map is not None else dict()
-        self.options_map['class'] = self.name
+        self.options_map["class"] = self.name
 
     def __eq__(self, other):
-        return (isinstance(other, _UnknownStrategy) and
-                self.name == other.name and
-                self.options_map == other.options_map)
+        return (
+            isinstance(other, _UnknownStrategy)
+            and self.name == other.name
+            and self.options_map == other.options_map
+        )
 
     def export_for_schema(self):
         """
@@ -484,8 +762,10 @@ class _UnknownStrategy(ReplicationStrategy):
         suitable for use in a CREATE KEYSPACE statement.
         """
         if self.options_map:
-            return dict((str(key), str(value)) for key, value in self.options_map.items())
-        return "{'class': '%s'}" % (self.name, )
+            return dict(
+                (str(key), str(value)) for key, value in self.options_map.items()
+            )
+        return "{'class': '%s'}" % (self.name,)
 
     def make_token_replica_map(self, token_to_host_owner, ring):
         return {}
@@ -517,7 +797,9 @@ class ReplicationFactor(object):
     def __init__(self, all_replicas, transient_replicas=None):
         self.all_replicas = all_replicas
         self.transient_replicas = transient_replicas
-        self.full_replicas = (all_replicas - transient_replicas) if transient_replicas else all_replicas
+        self.full_replicas = (
+            (all_replicas - transient_replicas) if transient_replicas else all_replicas
+        )
 
     @staticmethod
     def create(rf):
@@ -529,26 +811,33 @@ class ReplicationFactor(object):
             all_replicas = int(rf)
         except ValueError:
             try:
-                rf = rf.split('/')
+                rf = rf.split("/")
                 all_replicas, transient_replicas = int(rf[0]), int(rf[1])
             except Exception:
-                raise ValueError("Unable to determine replication factor from: {}".format(rf))
+                raise ValueError(
+                    "Unable to determine replication factor from: {}".format(rf)
+                )
 
         return ReplicationFactor(all_replicas, transient_replicas)
 
     def __str__(self):
-        return ("%d/%d" % (self.all_replicas, self.transient_replicas) if self.transient_replicas
-                else "%d" % self.all_replicas)
+        return (
+            "%d/%d" % (self.all_replicas, self.transient_replicas)
+            if self.transient_replicas
+            else "%d" % self.all_replicas
+        )
 
     def __eq__(self, other):
         if not isinstance(other, ReplicationFactor):
             return False
 
-        return self.all_replicas == other.all_replicas and self.full_replicas == other.full_replicas
+        return (
+            self.all_replicas == other.all_replicas
+            and self.full_replicas == other.full_replicas
+        )
 
 
 class SimpleStrategy(ReplicationStrategy):
-
     replication_factor_info = None
     """
     A :class:`cassandra.metadata.ReplicationFactor` instance.
@@ -566,7 +855,9 @@ class SimpleStrategy(ReplicationStrategy):
         return self.replication_factor_info.full_replicas
 
     def __init__(self, options_map):
-        self.replication_factor_info = ReplicationFactor.create(options_map['replication_factor'])
+        self.replication_factor_info = ReplicationFactor.create(
+            options_map["replication_factor"]
+        )
 
     def make_token_replica_map(self, token_to_host_owner, ring):
         replica_map = {}
@@ -588,8 +879,9 @@ class SimpleStrategy(ReplicationStrategy):
         Returns a string version of these replication options which are
         suitable for use in a CREATE KEYSPACE statement.
         """
-        return "{'class': 'SimpleStrategy', 'replication_factor': '%s'}" \
-               % (str(self.replication_factor_info),)
+        return "{'class': 'SimpleStrategy', 'replication_factor': '%s'}" % (
+            str(self.replication_factor_info),
+        )
 
     def __eq__(self, other):
         if not isinstance(other, SimpleStrategy):
@@ -599,7 +891,6 @@ class SimpleStrategy(ReplicationStrategy):
 
 
 class NetworkTopologyStrategy(ReplicationStrategy):
-
     dc_replication_factors_info = None
     """
     A map of datacenter names to the :class:`cassandra.metadata.ReplicationFactor` instance for that DC.
@@ -615,14 +906,20 @@ class NetworkTopologyStrategy(ReplicationStrategy):
 
     def __init__(self, dc_replication_factors):
         self.dc_replication_factors_info = dict(
-            (str(k), ReplicationFactor.create(v)) for k, v in dc_replication_factors.items())
+            (str(k), ReplicationFactor.create(v))
+            for k, v in dc_replication_factors.items()
+        )
         self.dc_replication_factors = dict(
-            (dc, rf.full_replicas) for dc, rf in self.dc_replication_factors_info.items())
+            (dc, rf.full_replicas)
+            for dc, rf in self.dc_replication_factors_info.items()
+        )
 
     def make_token_replica_map(self, token_to_host_owner, ring):
         dc_rf_map = dict(
-            (dc, full_replicas) for dc, full_replicas in self.dc_replication_factors.items()
-            if full_replicas > 0)
+            (dc, full_replicas)
+            for dc, full_replicas in self.dc_replication_factors.items()
+            if full_replicas > 0
+        )
 
         # build a map of DCs to lists of indexes into `ring` for tokens that
         # belong to that DC
@@ -650,7 +947,6 @@ class NetworkTopologyStrategy(ReplicationStrategy):
 
             # go through each DC and find the replicas in that DC
             for dc in dc_to_token_offset.keys():
-
                 # advance our per-DC index until we're up to at least the
                 # current token in the ring
                 token_offsets = dc_to_token_offset[dc]
@@ -667,8 +963,11 @@ class NetworkTopologyStrategy(ReplicationStrategy):
                 num_racks_this_dc = len(dc_racks[dc])
                 num_hosts_this_dc = len(hosts_per_dc[dc])
 
-                for token_offset_index in range(index, index+num_tokens):
-                    if replicas_remaining == 0 or num_replicas_this_dc == num_hosts_this_dc:
+                for token_offset_index in range(index, index + num_tokens):
+                    if (
+                        replicas_remaining == 0
+                        or num_replicas_this_dc == num_hosts_this_dc
+                    ):
                         break
 
                     if token_offset_index >= num_tokens:
@@ -679,7 +978,10 @@ class NetworkTopologyStrategy(ReplicationStrategy):
                     if host in replicas:
                         continue
 
-                    if host.rack in racks_placed and len(racks_placed) < num_racks_this_dc:
+                    if (
+                        host.rack in racks_placed
+                        and len(racks_placed) < num_racks_this_dc
+                    ):
                         skipped_hosts.append(host)
                         continue
 
@@ -804,10 +1106,14 @@ class KeyspaceMetadata(object):
     _exc_info = None
     """ set if metadata parsing failed """
 
-    def __init__(self, name, durable_writes, strategy_class, strategy_options, graph_engine=None):
+    def __init__(
+        self, name, durable_writes, strategy_class, strategy_options, graph_engine=None
+    ):
         self.name = name
         self.durable_writes = durable_writes
-        self.replication_strategy = ReplicationStrategy.create(strategy_class, strategy_options)
+        self.replication_strategy = ReplicationStrategy.create(
+            strategy_class, strategy_options
+        )
         self.tables = {}
         self.indexes = {}
         self.user_types = {}
@@ -826,29 +1132,40 @@ class KeyspaceMetadata(object):
         including user-defined types and tables.
         """
         # Make sure tables with vertex are exported before tables with edges
-        tables_with_vertex = [t for t in self.tables.values() if hasattr(t, 'vertex') and t.vertex]
+        tables_with_vertex = [
+            t for t in self.tables.values() if hasattr(t, "vertex") and t.vertex
+        ]
         other_tables = [t for t in self.tables.values() if t not in tables_with_vertex]
 
         cql = "\n\n".join(
-            [self.as_cql_query() + ';'] +
-            self.user_type_strings() +
-            [f.export_as_string() for f in self.functions.values()] +
-            [a.export_as_string() for a in self.aggregates.values()] +
-            [t.export_as_string() for t in tables_with_vertex + other_tables])
+            [self.as_cql_query() + ";"]
+            + self.user_type_strings()
+            + [f.export_as_string() for f in self.functions.values()]
+            + [a.export_as_string() for a in self.aggregates.values()]
+            + [t.export_as_string() for t in tables_with_vertex + other_tables]
+        )
 
         if self._exc_info:
             import traceback
-            ret = "/*\nWarning: Keyspace %s is incomplete because of an error processing metadata.\n" % \
-                  (self.name)
+
+            ret = (
+                "/*\nWarning: Keyspace %s is incomplete because of an error processing metadata.\n"
+                % (self.name)
+            )
             for line in traceback.format_exception(*self._exc_info):
                 ret += line
-            ret += "\nApproximate structure, for reference:\n(this should not be used to reproduce this schema)\n\n%s\n*/" % cql
+            ret += (
+                "\nApproximate structure, for reference:\n(this should not be used to reproduce this schema)\n\n%s\n*/"
+                % cql
+            )
             return ret
         if self.virtual:
-            return ("/*\nWarning: Keyspace {ks} is a virtual keyspace and cannot be recreated with CQL.\n"
-                    "Structure, for reference:*/\n"
-                    "{cql}\n"
-                    "").format(ks=self.name, cql=cql)
+            return (
+                "/*\nWarning: Keyspace {ks} is a virtual keyspace and cannot be recreated with CQL.\n"
+                "Structure, for reference:*/\n"
+                "{cql}\n"
+                ""
+            ).format(ks=self.name, cql=cql)
         return cql
 
     def as_cql_query(self):
@@ -860,8 +1177,11 @@ class KeyspaceMetadata(object):
             return "// VIRTUAL KEYSPACE {}".format(protect_name(self.name))
         ret = "CREATE KEYSPACE %s WITH replication = %s " % (
             protect_name(self.name),
-            self.replication_strategy.export_for_schema())
-        ret = ret + (' AND durable_writes = %s' % ("true" if self.durable_writes else "false"))
+            self.replication_strategy.export_for_schema(),
+        )
+        ret = ret + (
+            " AND durable_writes = %s" % ("true" if self.durable_writes else "false")
+        )
         if self.graph_engine is not None:
             ret = ret + (" AND graph_engine = '%s'" % self.graph_engine)
         return ret
@@ -921,7 +1241,9 @@ class KeyspaceMetadata(object):
 
     def _add_view_metadata(self, view_metadata):
         try:
-            self.tables[view_metadata.base_table_name].views[view_metadata.name] = view_metadata
+            self.tables[view_metadata.base_table_name].views[view_metadata.name] = (
+                view_metadata
+            )
             self.views[view_metadata.name] = view_metadata
         except KeyError:
             pass
@@ -972,7 +1294,8 @@ class UserType(object):
         ret = "CREATE TYPE %s.%s (%s" % (
             protect_name(self.keyspace),
             protect_name(self.name),
-            "\n" if formatted else "")
+            "\n" if formatted else "",
+        )
 
         if formatted:
             field_join = ",\n"
@@ -990,7 +1313,7 @@ class UserType(object):
         return ret
 
     def export_as_string(self):
-        return self.as_cql_query(formatted=True) + ';'
+        return self.as_cql_query(formatted=True) + ";"
 
 
 class Aggregate(object):
@@ -1048,9 +1371,18 @@ class Aggregate(object):
     for a particular input and state. This is available only with DSE >=6.0.
     """
 
-    def __init__(self, keyspace, name, argument_types, state_func,
-                 state_type, final_func, initial_condition, return_type,
-                 deterministic):
+    def __init__(
+        self,
+        keyspace,
+        name,
+        argument_types,
+        state_func,
+        state_type,
+        final_func,
+        initial_condition,
+        return_type,
+        deterministic,
+    ):
         self.keyspace = keyspace
         self.name = name
         self.argument_types = argument_types
@@ -1067,25 +1399,37 @@ class Aggregate(object):
         If `formatted` is set to :const:`True`, extra whitespace will
         be added to make the query more readable.
         """
-        sep = '\n    ' if formatted else ' '
+        sep = "\n    " if formatted else " "
         keyspace = protect_name(self.keyspace)
         name = protect_name(self.name)
-        type_list = ', '.join([types.strip_frozen(arg_type) for arg_type in self.argument_types])
+        type_list = ", ".join(
+            [types.strip_frozen(arg_type) for arg_type in self.argument_types]
+        )
         state_func = protect_name(self.state_func)
         state_type = types.strip_frozen(self.state_type)
 
-        ret = "CREATE AGGREGATE %(keyspace)s.%(name)s(%(type_list)s)%(sep)s" \
-              "SFUNC %(state_func)s%(sep)s" \
-              "STYPE %(state_type)s" % locals()
+        ret = (
+            "CREATE AGGREGATE %(keyspace)s.%(name)s(%(type_list)s)%(sep)s"
+            "SFUNC %(state_func)s%(sep)s"
+            "STYPE %(state_type)s" % locals()
+        )
 
-        ret += ''.join((sep, 'FINALFUNC ', protect_name(self.final_func))) if self.final_func else ''
-        ret += ''.join((sep, 'INITCOND ', self.initial_condition)) if self.initial_condition is not None else ''
-        ret += '{}DETERMINISTIC'.format(sep) if self.deterministic else ''
+        ret += (
+            "".join((sep, "FINALFUNC ", protect_name(self.final_func)))
+            if self.final_func
+            else ""
+        )
+        ret += (
+            "".join((sep, "INITCOND ", self.initial_condition))
+            if self.initial_condition is not None
+            else ""
+        )
+        ret += "{}DETERMINISTIC".format(sep) if self.deterministic else ""
 
         return ret
 
     def export_as_string(self):
-        return self.as_cql_query(formatted=True) + ';'
+        return self.as_cql_query(formatted=True) + ";"
 
     @property
     def signature(self):
@@ -1160,9 +1504,20 @@ class Function(object):
     monotonic. This is available only for DSE >=6.0.
     """
 
-    def __init__(self, keyspace, name, argument_types, argument_names,
-                 return_type, language, body, called_on_null_input,
-                 deterministic, monotonic, monotonic_on):
+    def __init__(
+        self,
+        keyspace,
+        name,
+        argument_types,
+        argument_names,
+        return_type,
+        language,
+        body,
+        called_on_null_input,
+        deterministic,
+        monotonic,
+        monotonic_on,
+    ):
         self.keyspace = keyspace
         self.name = name
         self.argument_types = argument_types
@@ -1183,39 +1538,44 @@ class Function(object):
         If `formatted` is set to :const:`True`, extra whitespace will
         be added to make the query more readable.
         """
-        sep = '\n    ' if formatted else ' '
+        sep = "\n    " if formatted else " "
         keyspace = protect_name(self.keyspace)
         name = protect_name(self.name)
-        arg_list = ', '.join(["%s %s" % (protect_name(n), types.strip_frozen(t))
-                             for n, t in zip(self.argument_names, self.argument_types)])
+        arg_list = ", ".join(
+            [
+                "%s %s" % (protect_name(n), types.strip_frozen(t))
+                for n, t in zip(self.argument_names, self.argument_types)
+            ]
+        )
         typ = self.return_type
         lang = self.language
         body = self.body
         on_null = "CALLED" if self.called_on_null_input else "RETURNS NULL"
-        deterministic_token = ('DETERMINISTIC{}'.format(sep)
-                               if self.deterministic else
-                               '')
-        monotonic_tokens = ''  # default for nonmonotonic function
+        deterministic_token = (
+            "DETERMINISTIC{}".format(sep) if self.deterministic else ""
+        )
+        monotonic_tokens = ""  # default for nonmonotonic function
         if self.monotonic:
             # monotonic on all arguments; ignore self.monotonic_on
-            monotonic_tokens = 'MONOTONIC{}'.format(sep)
+            monotonic_tokens = "MONOTONIC{}".format(sep)
         elif self.monotonic_on:
             # if monotonic == False and monotonic_on is nonempty, we know that
             # monotonicity was specified with MONOTONIC ON <arg>, so there's
             # exactly 1 value there
-            monotonic_tokens = 'MONOTONIC ON {}{}'.format(self.monotonic_on[0],
-                                                          sep)
+            monotonic_tokens = "MONOTONIC ON {}{}".format(self.monotonic_on[0], sep)
 
-        return "CREATE FUNCTION %(keyspace)s.%(name)s(%(arg_list)s)%(sep)s" \
-               "%(on_null)s ON NULL INPUT%(sep)s" \
-               "RETURNS %(typ)s%(sep)s" \
-               "%(deterministic_token)s" \
-               "%(monotonic_tokens)s" \
-               "LANGUAGE %(lang)s%(sep)s" \
-               "AS $$%(body)s$$" % locals()
+        return (
+            "CREATE FUNCTION %(keyspace)s.%(name)s(%(arg_list)s)%(sep)s"
+            "%(on_null)s ON NULL INPUT%(sep)s"
+            "RETURNS %(typ)s%(sep)s"
+            "%(deterministic_token)s"
+            "%(monotonic_tokens)s"
+            "LANGUAGE %(lang)s%(sep)s"
+            "AS $$%(body)s$$" % locals()
+        )
 
     def export_as_string(self):
-        return self.as_cql_query(formatted=True) + ';'
+        return self.as_cql_query(formatted=True) + ";"
 
     @property
     def signature(self):
@@ -1279,7 +1639,8 @@ class TableMetadata(object):
     compaction_options = {
         "min_compaction_threshold": "min_threshold",
         "max_compaction_threshold": "max_threshold",
-        "compaction_strategy_class": "class"}
+        "compaction_strategy_class": "class",
+    }
 
     triggers = None
     """
@@ -1309,13 +1670,15 @@ class TableMetadata(object):
         """
         if self.virtual:
             return False
-        comparator = getattr(self, 'comparator', None)
+        comparator = getattr(self, "comparator", None)
         if comparator:
             # no compact storage with more than one column beyond PK if there
             # are clustering columns
-            incompatible = (self.is_compact_storage and
-                            len(self.columns) > len(self.primary_key) + 1 and
-                            len(self.clustering_key) >= 1)
+            incompatible = (
+                self.is_compact_storage
+                and len(self.columns) > len(self.primary_key) + 1
+                and len(self.clustering_key) >= 1
+            )
 
             return not incompatible
         return True
@@ -1325,7 +1688,17 @@ class TableMetadata(object):
     Metadata describing configuration for table extensions
     """
 
-    def __init__(self, keyspace_name, name, partition_key=None, clustering_key=None, columns=None, triggers=None, options=None, virtual=False):
+    def __init__(
+        self,
+        keyspace_name,
+        name,
+        partition_key=None,
+        clustering_key=None,
+        columns=None,
+        triggers=None,
+        options=None,
+        virtual=False,
+    ):
         self.keyspace_name = keyspace_name
         self.name = name
         self.partition_key = [] if partition_key is None else partition_key
@@ -1346,20 +1719,33 @@ class TableMetadata(object):
         """
         if self._exc_info:
             import traceback
-            ret = "/*\nWarning: Table %s.%s is incomplete because of an error processing metadata.\n" % \
-                  (self.keyspace_name, self.name)
+
+            ret = (
+                "/*\nWarning: Table %s.%s is incomplete because of an error processing metadata.\n"
+                % (self.keyspace_name, self.name)
+            )
             for line in traceback.format_exception(*self._exc_info):
                 ret += line
-            ret += "\nApproximate structure, for reference:\n(this should not be used to reproduce this schema)\n\n%s\n*/" % self._all_as_cql()
+            ret += (
+                "\nApproximate structure, for reference:\n(this should not be used to reproduce this schema)\n\n%s\n*/"
+                % self._all_as_cql()
+            )
         elif not self.is_cql_compatible:
             # If we can't produce this table with CQL, comment inline
-            ret = "/*\nWarning: Table %s.%s omitted because it has constructs not compatible with CQL (was created via legacy API).\n" % \
-                  (self.keyspace_name, self.name)
-            ret += "\nApproximate structure, for reference:\n(this should not be used to reproduce this schema)\n\n%s\n*/" % self._all_as_cql()
+            ret = (
+                "/*\nWarning: Table %s.%s omitted because it has constructs not compatible with CQL (was created via legacy API).\n"
+                % (self.keyspace_name, self.name)
+            )
+            ret += (
+                "\nApproximate structure, for reference:\n(this should not be used to reproduce this schema)\n\n%s\n*/"
+                % self._all_as_cql()
+            )
         elif self.virtual:
-            ret = ('/*\nWarning: Table {ks}.{tab} is a virtual table and cannot be recreated with CQL.\n'
-                   'Structure, for reference:\n'
-                   '{cql}\n*/').format(ks=self.keyspace_name, tab=self.name, cql=self._all_as_cql())
+            ret = (
+                "/*\nWarning: Table {ks}.{tab} is a virtual table and cannot be recreated with CQL.\n"
+                "Structure, for reference:\n"
+                "{cql}\n*/"
+            ).format(ks=self.keyspace_name, tab=self.name, cql=self._all_as_cql())
 
         else:
             ret = self._all_as_cql()
@@ -1381,7 +1767,9 @@ class TableMetadata(object):
 
         if self.extensions:
             registry = _RegisteredExtensionType._extension_registry
-            for k in registry.keys() & self.extensions:  # no viewkeys on OrderedMapSerializeKey
+            for k in (
+                registry.keys() & self.extensions
+            ):  # no viewkeys on OrderedMapSerializeKey
                 ext = registry[k]
                 cql = ext.after_table_cql(self, k, self.extensions[k])
                 if cql:
@@ -1396,10 +1784,11 @@ class TableMetadata(object):
         extra whitespace will be added to make the query human readable.
         """
         ret = "%s TABLE %s.%s (%s" % (
-            ('VIRTUAL' if self.virtual else 'CREATE'),
+            ("VIRTUAL" if self.virtual else "CREATE"),
             protect_name(self.keyspace_name),
             protect_name(self.name),
-            "\n" if formatted else "")
+            "\n" if formatted else "",
+        )
 
         if formatted:
             column_join = ",\n"
@@ -1410,7 +1799,14 @@ class TableMetadata(object):
 
         columns = []
         for col in self.columns.values():
-            columns.append("%s %s%s" % (protect_name(col.name), col.cql_type, ' static' if col.is_static else ''))
+            columns.append(
+                "%s %s%s"
+                % (
+                    protect_name(col.name),
+                    col.cql_type,
+                    " static" if col.is_static else "",
+                )
+            )
 
         if len(self.partition_key) == 1 and not self.clustering_key:
             columns[0] += " PRIMARY KEY"
@@ -1422,23 +1818,31 @@ class TableMetadata(object):
             ret += "%s%sPRIMARY KEY (" % (column_join, padding)
 
             if len(self.partition_key) > 1:
-                ret += "(%s)" % ", ".join(protect_name(col.name) for col in self.partition_key)
+                ret += "(%s)" % ", ".join(
+                    protect_name(col.name) for col in self.partition_key
+                )
             else:
                 ret += protect_name(self.partition_key[0].name)
 
             if self.clustering_key:
-                ret += ", %s" % ", ".join(protect_name(col.name) for col in self.clustering_key)
+                ret += ", %s" % ", ".join(
+                    protect_name(col.name) for col in self.clustering_key
+                )
 
             ret += ")"
 
         # properties
         ret += "%s) WITH " % ("\n" if formatted else "")
-        ret += self._property_string(formatted, self.clustering_key, self.options, self.is_compact_storage)
+        ret += self._property_string(
+            formatted, self.clustering_key, self.options, self.is_compact_storage
+        )
 
         return ret
 
     @classmethod
-    def _property_string(cls, formatted, clustering_key, options_map, is_compact_storage=False):
+    def _property_string(
+        cls, formatted, clustering_key, options_map, is_compact_storage=False
+    ):
         properties = []
         if is_compact_storage:
             properties.append("COMPACT STORAGE")
@@ -1464,21 +1868,25 @@ class TableMetadata(object):
         ret = []
         options_copy = dict(options_map.items())
 
-        actual_options = json.loads(options_copy.pop('compaction_strategy_options', '{}'))
+        actual_options = json.loads(
+            options_copy.pop("compaction_strategy_options", "{}")
+        )
         value = options_copy.pop("compaction_strategy_class", None)
         actual_options.setdefault("class", value)
 
-        compaction_option_strings = ["'%s': '%s'" % (k, v) for k, v in actual_options.items()]
-        ret.append('compaction = {%s}' % ', '.join(compaction_option_strings))
+        compaction_option_strings = [
+            "'%s': '%s'" % (k, v) for k, v in actual_options.items()
+        ]
+        ret.append("compaction = {%s}" % ", ".join(compaction_option_strings))
 
         for system_table_name in cls.compaction_options.keys():
             options_copy.pop(system_table_name, None)  # delete if present
-        options_copy.pop('compaction_strategy_option', None)
+        options_copy.pop("compaction_strategy_option", None)
 
-        if not options_copy.get('compression'):
-            params = json.loads(options_copy.pop('compression_parameters', '{}'))
+        if not options_copy.get("compression"):
+            params = json.loads(options_copy.pop("compression_parameters", "{}"))
             param_strings = ["'%s': '%s'" % (k, v) for k, v in params.items()]
-            ret.append('compression = {%s}' % ', '.join(param_strings))
+            ret.append("compression = {%s}" % ", ".join(param_strings))
 
         for name, value in options_copy.items():
             if value is not None:
@@ -1494,11 +1902,14 @@ class TableMetadataV3(TableMetadata):
     For C* 3.0+. `option_maps` take a superset of map names, so if  nothing
     changes structurally, new option maps can just be appended to the list.
     """
+
     compaction_options = {}
 
     option_maps = [
-        'compaction', 'compression', 'caching',
-        'nodesync'  # added DSE 6.0
+        "compaction",
+        "compression",
+        "caching",
+        "nodesync",  # added DSE 6.0
     ]
 
     @property
@@ -1515,7 +1926,7 @@ class TableMetadataV3(TableMetadata):
             if isinstance(value, Mapping):
                 del options_copy[option]
                 params = ("'%s': '%s'" % (k, v) for k, v in value.items())
-                ret.append("%s = {%s}" % (option, ', '.join(params)))
+                ret.append("%s = {%s}" % (option, ", ".join(params)))
 
         for name, value in options_copy.items():
             if value is not None:
@@ -1527,7 +1938,6 @@ class TableMetadataV3(TableMetadata):
 
 
 class TableMetadataDSE68(TableMetadataV3):
-
     vertex = None
     """A :class:`.VertexMetadata` instance, if graph enabled"""
 
@@ -1546,18 +1956,21 @@ class TableMetadataDSE68(TableMetadataV3):
             ret += self._export_edge_as_cql(
                 self.edge.from_label,
                 self.edge.from_partition_key_columns,
-                self.edge.from_clustering_columns, "FROM")
+                self.edge.from_clustering_columns,
+                "FROM",
+            )
 
             ret += self._export_edge_as_cql(
                 self.edge.to_label,
                 self.edge.to_partition_key_columns,
-                self.edge.to_clustering_columns, "TO")
+                self.edge.to_clustering_columns,
+                "TO",
+            )
 
         return ret
 
     @staticmethod
-    def _export_edge_as_cql(label_name, partition_keys,
-                            clustering_columns, keyword):
+    def _export_edge_as_cql(label_name, partition_keys, clustering_columns, keyword):
         ret = " %s %s(" % (keyword, protect_name(label_name))
 
         if len(partition_keys) == 1:
@@ -1576,6 +1989,7 @@ class TableExtensionInterface(object):
     """
     Defines CQL/DDL for Cassandra table extensions.
     """
+
     # limited API for now. Could be expanded as new extension types materialize -- "extend_option_strings", for example
     @classmethod
     def after_table_cql(cls, ext_key, ext_blob):
@@ -1587,20 +2001,22 @@ class TableExtensionInterface(object):
 
 
 class _RegisteredExtensionType(type):
-
     _extension_registry = {}
 
     def __new__(mcs, name, bases, dct):
         cls = super(_RegisteredExtensionType, mcs).__new__(mcs, name, bases, dct)
-        if name != 'RegisteredTableExtension':
+        if name != "RegisteredTableExtension":
             mcs._extension_registry[cls.name] = cls
         return cls
 
 
-class RegisteredTableExtension(TableExtensionInterface, metaclass=_RegisteredExtensionType):
+class RegisteredTableExtension(
+    TableExtensionInterface, metaclass=_RegisteredExtensionType
+):
     """
     Extending this class registers it by name (associated by key in the `system_schema.tables.extensions` map).
     """
+
     name = None
     """
     Name of the extension (key in the map)
@@ -1617,13 +2033,13 @@ def protect_names(names):
 
 def protect_value(value):
     if value is None:
-        return 'NULL'
+        return "NULL"
     if isinstance(value, (int, float, bool)):
         return str(value).lower()
     return "'%s'" % value.replace("'", "''")
 
 
-valid_cql3_word_re = re.compile(r'^[a-z][0-9a-z_]*$')
+valid_cql3_word_re = re.compile(r"^[a-z][0-9a-z_]*$")
 
 
 def is_valid_name(name):
@@ -1673,7 +2089,9 @@ class ColumnMetadata(object):
 
     _cass_type = None
 
-    def __init__(self, table_metadata, column_name, cql_type, is_static=False, is_reversed=False):
+    def __init__(
+        self, table_metadata, column_name, cql_type, is_static=False, is_reversed=False
+    ):
         self.table = table_metadata
         self.name = column_name
         self.cql_type = cql_type
@@ -1688,6 +2106,7 @@ class IndexMetadata(object):
     """
     A representation of a secondary index on a column.
     """
+
     keyspace_name = None
     """ A string name of the keyspace. """
 
@@ -1721,7 +2140,8 @@ class IndexMetadata(object):
                 protect_name(self.name),
                 protect_name(self.keyspace_name),
                 protect_name(self.table_name),
-                index_target)
+                index_target,
+            )
         else:
             class_name = options.pop("class_name")
             ret = "CREATE CUSTOM INDEX %s ON %s.%s (%s) USING '%s'" % (
@@ -1729,10 +2149,13 @@ class IndexMetadata(object):
                 protect_name(self.keyspace_name),
                 protect_name(self.table_name),
                 index_target,
-                class_name)
+                class_name,
+            )
             if options:
                 # PYTHON-1008: `ret` will always be a unicode
-                opts_cql_encoded = _encoder.cql_encode_all_types(options, as_text_type=True)
+                opts_cql_encoded = _encoder.cql_encode_all_types(
+                    options, as_text_type=True
+                )
                 ret += " WITH OPTIONS = %s" % opts_cql_encoded
             return ret
 
@@ -1740,7 +2163,7 @@ class IndexMetadata(object):
         """
         Returns a CQL query string that can be used to recreate this index.
         """
-        return self.as_cql_query() + ';'
+        return self.as_cql_query() + ";"
 
 
 class TokenMap(object):
@@ -1784,16 +2207,24 @@ class TokenMap(object):
         with self._rebuild_lock:
             try:
                 current = self.tokens_to_hosts_by_ks.get(keyspace, None)
-                if (build_if_absent and current is None) or (not build_if_absent and current is not None):
+                if (build_if_absent and current is None) or (
+                    not build_if_absent and current is not None
+                ):
                     ks_meta = self._metadata.keyspaces.get(keyspace)
                     if ks_meta:
-                        replica_map = self.replica_map_for_keyspace(self._metadata.keyspaces[keyspace])
+                        replica_map = self.replica_map_for_keyspace(
+                            self._metadata.keyspaces[keyspace]
+                        )
                         self.tokens_to_hosts_by_ks[keyspace] = replica_map
             except Exception:
                 # should not happen normally, but we don't want to blow up queries because of unexpected meta state
                 # bypass until new map is generated
                 self.tokens_to_hosts_by_ks[keyspace] = {}
-                log.exception("Failed creating a token map for keyspace '%s' with %s. PLEASE REPORT THIS: https://datastax-oss.atlassian.net/projects/PYTHON", keyspace, self.token_to_host_owner)
+                log.exception(
+                    "Failed creating a token map for keyspace '%s' with %s. PLEASE REPORT THIS: https://datastax-oss.atlassian.net/projects/PYTHON",
+                    keyspace,
+                    self.token_to_host_owner,
+                )
 
     def replica_map_for_keyspace(self, ks_metadata):
         strategy = ks_metadata.replication_strategy
@@ -1858,11 +2289,12 @@ class Token(object):
 
     def __repr__(self):
         return "<%s: %s>" % (self.__class__.__name__, self.value)
+
     __str__ = __repr__
 
 
-MIN_LONG = -(2 ** 63)
-MAX_LONG = (2 ** 63) - 1
+MIN_LONG = -(2**63)
+MAX_LONG = (2**63) - 1
 
 
 class NoMurmur3(Exception):
@@ -1870,10 +2302,9 @@ class NoMurmur3(Exception):
 
 
 class HashToken(Token):
-
     @classmethod
     def from_string(cls, token_string):
-        """ `token_string` should be the string representation from the server. """
+        """`token_string` should be the string representation from the server."""
         # The hash partitioners just store the deciman value
         return cls(int(token_string))
 
@@ -1892,7 +2323,7 @@ class Murmur3Token(HashToken):
             raise NoMurmur3()
 
     def __init__(self, token):
-        """ `token` is an int or string representing the token. """
+        """`token` is an int or string representing the token."""
         super().__init__(int(token))
 
 
@@ -1904,7 +2335,7 @@ class MD5Token(HashToken):
     @classmethod
     def hash_fn(cls, key):
         if isinstance(key, str):
-            key = key.encode('UTF-8')
+            key = key.encode("UTF-8")
         return abs(varint_unpack(md5(key).digest()))
 
 
@@ -1915,10 +2346,10 @@ class BytesToken(Token):
 
     @classmethod
     def from_string(cls, token_string):
-        """ `token_string` should be the string representation from the server. """
+        """`token_string` should be the string representation from the server."""
         # unhexlify works fine with unicode input in everythin but pypy3, where it Raises "TypeError: 'str' does not support the buffer interface"
         if isinstance(token_string, str):
-            token_string = token_string.encode('ascii')
+            token_string = token_string.encode("ascii")
         # The BOP stores a hex string
         return cls(unhexlify(token_string))
 
@@ -1939,6 +2370,7 @@ class TriggerMetadata(object):
     A dict mapping trigger option names to their specific settings for this
     table.
     """
+
     def __init__(self, table_metadata, trigger_name, options=None):
         self.table = table_metadata
         self.name = trigger_name
@@ -1949,12 +2381,12 @@ class TriggerMetadata(object):
             protect_name(self.name),
             protect_name(self.table.keyspace_name),
             protect_name(self.table.name),
-            protect_value(self.options['class'])
+            protect_value(self.options["class"]),
         )
         return ret
 
     def export_as_string(self):
-        return self.as_cql_query() + ';'
+        return self.as_cql_query() + ";"
 
 
 class _SchemaParser(object):
@@ -1964,7 +2396,9 @@ class _SchemaParser(object):
         self.fetch_size = fetch_size
         self.metadata_request_timeout = metadata_request_timeout
 
-    def _handle_results(self, success, result, expected_failures=tuple(), query_msg=None, timeout=None):
+    def _handle_results(
+        self, success, result, expected_failures=tuple(), query_msg=None, timeout=None
+    ):
         """
         Given a bool and a ResultSet (the form returned per result from
         Connection.wait_for_responses), return a dictionary containing the
@@ -1990,13 +2424,21 @@ class _SchemaParser(object):
             return []
         elif success:
             if result.paging_state and query_msg:
+
                 def get_next_pages():
                     next_result = None
                     while True:
-                        query_msg.paging_state = next_result.paging_state if next_result else result.paging_state
-                        next_success, next_result = self.connection.wait_for_response(query_msg, timeout=timeout,
-                                                                                      fail_on_error=False)
-                        if not next_success and isinstance(next_result, expected_failures):
+                        query_msg.paging_state = (
+                            next_result.paging_state
+                            if next_result
+                            else result.paging_state
+                        )
+                        next_success, next_result = self.connection.wait_for_response(
+                            query_msg, timeout=timeout, fail_on_error=False
+                        )
+                        if not next_success and isinstance(
+                            next_result, expected_failures
+                        ):
                             continue
                         elif not next_success:
                             raise next_result
@@ -2007,7 +2449,9 @@ class _SchemaParser(object):
                         yield next_result.parsed_rows
 
                 result.parsed_rows += itertools.chain(*get_next_pages())
-            return dict_factory(result.column_names, result.parsed_rows) if result else []
+            return (
+                dict_factory(result.column_names, result.parsed_rows) if result else []
+            )
         else:
             raise result
 
@@ -2016,11 +2460,20 @@ class _SchemaParser(object):
         return result[0] if result else None
 
     def _query_build_rows(self, query_string, build_func):
-        query = QueryMessage(query=maybe_add_timeout_to_query(query_string, self.metadata_request_timeout),
-                             consistency_level=ConsistencyLevel.ONE, fetch_size=self.fetch_size)
-        responses = self.connection.wait_for_responses((query), timeout=self.timeout, fail_on_error=False)
+        query = QueryMessage(
+            query=maybe_add_timeout_to_query(
+                query_string, self.metadata_request_timeout
+            ),
+            consistency_level=ConsistencyLevel.ONE,
+            fetch_size=self.fetch_size,
+        )
+        responses = self.connection.wait_for_responses(
+            (query), timeout=self.timeout, fail_on_error=False
+        )
         (success, response) = responses[0]
-        results = self._handle_results(success, response, expected_failures=(InvalidRequest), query_msg=query)
+        results = self._handle_results(
+            success, response, expected_failures=(InvalidRequest), query_msg=query
+        )
         if not results:
             log.debug("user types table not found")
         return [build_func(row) for row in results]
@@ -2030,6 +2483,7 @@ class SchemaParserV22(_SchemaParser):
     """
     For C* 2.2+
     """
+
     _SELECT_KEYSPACES = "SELECT * FROM system.schema_keyspaces"
     _SELECT_COLUMN_FAMILIES = "SELECT * FROM system.schema_columnfamilies"
     _SELECT_COLUMNS = "SELECT * FROM system.schema_columns"
@@ -2038,9 +2492,9 @@ class SchemaParserV22(_SchemaParser):
     _SELECT_FUNCTIONS = "SELECT * FROM system.schema_functions"
     _SELECT_AGGREGATES = "SELECT * FROM system.schema_aggregates"
 
-    _table_name_col = 'columnfamily_name'
+    _table_name_col = "columnfamily_name"
 
-    _function_agg_arument_type_col = 'signature'
+    _function_agg_arument_type_col = "signature"
 
     recognized_table_options = (
         "comment",
@@ -2048,7 +2502,7 @@ class SchemaParserV22(_SchemaParser):
         "dclocal_read_repair_chance",  # kept to be safe, but see _build_table_options()
         "local_read_repair_chance",
         "replicate_on_write",
-        'in_memory',
+        "in_memory",
         "gc_grace_seconds",
         "bloom_filter_fp_chance",
         "caching",
@@ -2065,10 +2519,13 @@ class SchemaParserV22(_SchemaParser):
         "memtable_flush_period_in_ms",
         "populate_io_cache_on_flush",
         "compression",
-        "default_time_to_live")
+        "default_time_to_live",
+    )
 
     def __init__(self, connection, timeout, fetch_size, metadata_request_timeout):
-        super(SchemaParserV22, self).__init__(connection, timeout, fetch_size, metadata_request_timeout)
+        super(SchemaParserV22, self).__init__(
+            connection, timeout, fetch_size, metadata_request_timeout
+        )
         self.keyspaces_result = []
         self.tables_result = []
         self.columns_result = []
@@ -2107,61 +2564,107 @@ class SchemaParserV22(_SchemaParser):
                     agg = self._build_aggregate(agg_row)
                     keyspace_meta.aggregates[agg.signature] = agg
             except Exception:
-                log.exception("Error while parsing metadata for keyspace %s. Metadata model will be incomplete.", keyspace_meta.name)
+                log.exception(
+                    "Error while parsing metadata for keyspace %s. Metadata model will be incomplete.",
+                    keyspace_meta.name,
+                )
                 keyspace_meta._exc_info = sys.exc_info()
 
             yield keyspace_meta
 
     def get_table(self, keyspaces, keyspace, table):
         cl = ConsistencyLevel.ONE
-        where_clause = bind_params(" WHERE keyspace_name = %%s AND %s = %%s" % (self._table_name_col,), (keyspace, table), _encoder)
+        where_clause = bind_params(
+            " WHERE keyspace_name = %%s AND %s = %%s" % (self._table_name_col,),
+            (keyspace, table),
+            _encoder,
+        )
         cf_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_COLUMN_FAMILIES + where_clause, self.metadata_request_timeout),
+            query=maybe_add_timeout_to_query(
+                self._SELECT_COLUMN_FAMILIES + where_clause,
+                self.metadata_request_timeout,
+            ),
             consistency_level=cl,
         )
         col_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_COLUMNS + where_clause, self.metadata_request_timeout),
+            query=maybe_add_timeout_to_query(
+                self._SELECT_COLUMNS + where_clause, self.metadata_request_timeout
+            ),
             consistency_level=cl,
         )
         triggers_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_TRIGGERS + where_clause, self.metadata_request_timeout),
+            query=maybe_add_timeout_to_query(
+                self._SELECT_TRIGGERS + where_clause, self.metadata_request_timeout
+            ),
             consistency_level=cl,
         )
-        (cf_success, cf_result), (col_success, col_result), (triggers_success, triggers_result) \
-            = self.connection.wait_for_responses(cf_query, col_query, triggers_query, timeout=self.timeout, fail_on_error=False)
+        (
+            (cf_success, cf_result),
+            (col_success, col_result),
+            (triggers_success, triggers_result),
+        ) = self.connection.wait_for_responses(
+            cf_query,
+            col_query,
+            triggers_query,
+            timeout=self.timeout,
+            fail_on_error=False,
+        )
         table_result = self._handle_results(cf_success, cf_result)
         col_result = self._handle_results(col_success, col_result)
 
         # the triggers table doesn't exist in C* 1.2
-        triggers_result = self._handle_results(triggers_success, triggers_result,
-                                               expected_failures=InvalidRequest)
+        triggers_result = self._handle_results(
+            triggers_success, triggers_result, expected_failures=InvalidRequest
+        )
 
         if table_result:
-            return self._build_table_metadata(table_result[0], col_result, triggers_result)
+            return self._build_table_metadata(
+                table_result[0], col_result, triggers_result
+            )
 
     def get_type(self, keyspaces, keyspace, type):
-        where_clause = bind_params(" WHERE keyspace_name = %s AND type_name = %s", (keyspace, type), _encoder)
-        return self._query_build_row(self._SELECT_TYPES + where_clause, self._build_user_type)
+        where_clause = bind_params(
+            " WHERE keyspace_name = %s AND type_name = %s", (keyspace, type), _encoder
+        )
+        return self._query_build_row(
+            self._SELECT_TYPES + where_clause, self._build_user_type
+        )
 
     def get_types_map(self, keyspaces, keyspace):
         where_clause = bind_params(" WHERE keyspace_name = %s", (keyspace,), _encoder)
-        types = self._query_build_rows(self._SELECT_TYPES + where_clause, self._build_user_type)
+        types = self._query_build_rows(
+            self._SELECT_TYPES + where_clause, self._build_user_type
+        )
         return dict((t.name, t) for t in types)
 
     def get_function(self, keyspaces, keyspace, function):
-        where_clause = bind_params(" WHERE keyspace_name = %%s AND function_name = %%s AND %s = %%s" % (self._function_agg_arument_type_col,),
-                                   (keyspace, function.name, function.argument_types), _encoder)
-        return self._query_build_row(self._SELECT_FUNCTIONS + where_clause, self._build_function)
+        where_clause = bind_params(
+            " WHERE keyspace_name = %%s AND function_name = %%s AND %s = %%s"
+            % (self._function_agg_arument_type_col,),
+            (keyspace, function.name, function.argument_types),
+            _encoder,
+        )
+        return self._query_build_row(
+            self._SELECT_FUNCTIONS + where_clause, self._build_function
+        )
 
     def get_aggregate(self, keyspaces, keyspace, aggregate):
-        where_clause = bind_params(" WHERE keyspace_name = %%s AND aggregate_name = %%s AND %s = %%s" % (self._function_agg_arument_type_col,),
-                                   (keyspace, aggregate.name, aggregate.argument_types), _encoder)
+        where_clause = bind_params(
+            " WHERE keyspace_name = %%s AND aggregate_name = %%s AND %s = %%s"
+            % (self._function_agg_arument_type_col,),
+            (keyspace, aggregate.name, aggregate.argument_types),
+            _encoder,
+        )
 
-        return self._query_build_row(self._SELECT_AGGREGATES + where_clause, self._build_aggregate)
+        return self._query_build_row(
+            self._SELECT_AGGREGATES + where_clause, self._build_aggregate
+        )
 
     def get_keyspace(self, keyspaces, keyspace):
         where_clause = bind_params(" WHERE keyspace_name = %s", (keyspace,), _encoder)
-        return self._query_build_row(self._SELECT_KEYSPACES + where_clause, self._build_keyspace_metadata)
+        return self._query_build_row(
+            self._SELECT_KEYSPACES + where_clause, self._build_keyspace_metadata
+        )
 
     @classmethod
     def _build_keyspace_metadata(cls, row):
@@ -2169,9 +2672,11 @@ class SchemaParserV22(_SchemaParser):
             ksm = cls._build_keyspace_metadata_internal(row)
         except Exception:
             name = row["keyspace_name"]
-            ksm = KeyspaceMetadata(name, False, 'UNKNOWN', {})
+            ksm = KeyspaceMetadata(name, False, "UNKNOWN", {})
             ksm._exc_info = sys.exc_info()  # capture exc_info before log because nose (test) logging clears it in certain circumstances
-            log.exception("Error while parsing metadata for keyspace %s row(%s)", name, row)
+            log.exception(
+                "Error while parsing metadata for keyspace %s row(%s)", name, row
+            )
         return ksm
 
     @staticmethod
@@ -2184,45 +2689,71 @@ class SchemaParserV22(_SchemaParser):
 
     @classmethod
     def _build_user_type(cls, usertype_row):
-        field_types = list(map(cls._schema_type_to_cql, usertype_row['field_types']))
-        return UserType(usertype_row['keyspace_name'], usertype_row['type_name'],
-                        usertype_row['field_names'], field_types)
+        field_types = list(map(cls._schema_type_to_cql, usertype_row["field_types"]))
+        return UserType(
+            usertype_row["keyspace_name"],
+            usertype_row["type_name"],
+            usertype_row["field_names"],
+            field_types,
+        )
 
     @classmethod
     def _build_function(cls, function_row):
-        return_type = cls._schema_type_to_cql(function_row['return_type'])
-        deterministic = function_row.get('deterministic', False)
-        monotonic = function_row.get('monotonic', False)
-        monotonic_on = function_row.get('monotonic_on', ())
-        return Function(function_row['keyspace_name'], function_row['function_name'],
-                        function_row[cls._function_agg_arument_type_col], function_row['argument_names'],
-                        return_type, function_row['language'], function_row['body'],
-                        function_row['called_on_null_input'],
-                        deterministic, monotonic, monotonic_on)
+        return_type = cls._schema_type_to_cql(function_row["return_type"])
+        deterministic = function_row.get("deterministic", False)
+        monotonic = function_row.get("monotonic", False)
+        monotonic_on = function_row.get("monotonic_on", ())
+        return Function(
+            function_row["keyspace_name"],
+            function_row["function_name"],
+            function_row[cls._function_agg_arument_type_col],
+            function_row["argument_names"],
+            return_type,
+            function_row["language"],
+            function_row["body"],
+            function_row["called_on_null_input"],
+            deterministic,
+            monotonic,
+            monotonic_on,
+        )
 
     @classmethod
     def _build_aggregate(cls, aggregate_row):
-        cass_state_type = types.lookup_casstype(aggregate_row['state_type'])
-        initial_condition = aggregate_row['initcond']
+        cass_state_type = types.lookup_casstype(aggregate_row["state_type"])
+        initial_condition = aggregate_row["initcond"]
         if initial_condition is not None:
-            initial_condition = _encoder.cql_encode_all_types(cass_state_type.deserialize(initial_condition, 3))
+            initial_condition = _encoder.cql_encode_all_types(
+                cass_state_type.deserialize(initial_condition, 3)
+            )
         state_type = _cql_from_cass_type(cass_state_type)
-        return_type = cls._schema_type_to_cql(aggregate_row['return_type'])
-        return Aggregate(aggregate_row['keyspace_name'], aggregate_row['aggregate_name'],
-                         aggregate_row['signature'], aggregate_row['state_func'], state_type,
-                         aggregate_row['final_func'], initial_condition, return_type,
-                         aggregate_row.get('deterministic', False))
+        return_type = cls._schema_type_to_cql(aggregate_row["return_type"])
+        return Aggregate(
+            aggregate_row["keyspace_name"],
+            aggregate_row["aggregate_name"],
+            aggregate_row["signature"],
+            aggregate_row["state_func"],
+            state_type,
+            aggregate_row["final_func"],
+            initial_condition,
+            return_type,
+            aggregate_row.get("deterministic", False),
+        )
 
     def _build_table_metadata(self, row, col_rows=None, trigger_rows=None):
         keyspace_name = row["keyspace_name"]
         cfname = row[self._table_name_col]
 
         col_rows = col_rows or self.keyspace_table_col_rows[keyspace_name][cfname]
-        trigger_rows = trigger_rows or self.keyspace_table_trigger_rows[keyspace_name][cfname]
+        trigger_rows = (
+            trigger_rows or self.keyspace_table_trigger_rows[keyspace_name][cfname]
+        )
 
         if not col_rows:  # CASSANDRA-8487
-            log.warning("Building table metadata with no column meta for %s.%s",
-                        keyspace_name, cfname)
+            log.warning(
+                "Building table metadata with no column meta for %s.%s",
+                keyspace_name,
+                cfname,
+            )
 
         table_meta = TableMetadata(keyspace_name, cfname)
 
@@ -2232,23 +2763,30 @@ class SchemaParserV22(_SchemaParser):
 
             is_dct_comparator = issubclass(comparator, types.DynamicCompositeType)
             is_composite_comparator = issubclass(comparator, types.CompositeType)
-            column_name_types = comparator.subtypes if is_composite_comparator else (comparator,)
+            column_name_types = (
+                comparator.subtypes if is_composite_comparator else (comparator,)
+            )
 
             num_column_name_components = len(column_name_types)
             last_col = column_name_types[-1]
 
             column_aliases = row.get("column_aliases", None)
 
-            clustering_rows = [r for r in col_rows
-                               if r.get('type', None) == "clustering_key"]
+            clustering_rows = [
+                r for r in col_rows if r.get("type", None) == "clustering_key"
+            ]
             if len(clustering_rows) > 1:
-                clustering_rows = sorted(clustering_rows, key=lambda row: row.get('component_index'))
+                clustering_rows = sorted(
+                    clustering_rows, key=lambda row: row.get("component_index")
+                )
 
             if column_aliases is not None:
                 column_aliases = json.loads(column_aliases)
 
-            if not column_aliases:  # json load failed or column_aliases empty PYTHON-562
-                column_aliases = [r.get('column_name') for r in clustering_rows]
+            if (
+                not column_aliases
+            ):  # json load failed or column_aliases empty PYTHON-562
+                column_aliases = [r.get("column_name") for r in clustering_rows]
 
             if is_composite_comparator:
                 if issubclass(last_col, types.ColumnToCollectionType):
@@ -2256,8 +2794,11 @@ class SchemaParserV22(_SchemaParser):
                     is_compact = False
                     has_value = False
                     clustering_size = num_column_name_components - 2
-                elif (len(column_aliases) == num_column_name_components - 1 and
-                      issubclass(last_col, types.UTF8Type)):
+                elif len(
+                    column_aliases
+                ) == num_column_name_components - 1 and issubclass(
+                    last_col, types.UTF8Type
+                ):
                     # aliases?
                     is_compact = False
                     has_value = False
@@ -2269,8 +2810,8 @@ class SchemaParserV22(_SchemaParser):
                     clustering_size = num_column_name_components
 
                     # Some thrift tables define names in composite types (see PYTHON-192)
-                    if not column_aliases and hasattr(comparator, 'fieldnames'):
-                        column_aliases = filter(None, comparator.fieldnames)
+                    if not column_aliases and hasattr(comparator, "fieldnames"):
+                        column_aliases = list(filter(None, comparator.fieldnames))
             else:
                 is_compact = True
                 if column_aliases or not col_rows or is_dct_comparator:
@@ -2281,25 +2822,34 @@ class SchemaParserV22(_SchemaParser):
                     clustering_size = 0
 
             # partition key
-            partition_rows = [r for r in col_rows
-                              if r.get('type', None) == "partition_key"]
+            partition_rows = [
+                r for r in col_rows if r.get("type", None) == "partition_key"
+            ]
 
             if len(partition_rows) > 1:
-                partition_rows = sorted(partition_rows, key=lambda row: row.get('component_index'))
+                partition_rows = sorted(
+                    partition_rows, key=lambda row: row.get("component_index")
+                )
 
             key_aliases = row.get("key_aliases")
             if key_aliases is not None:
                 key_aliases = json.loads(key_aliases) if key_aliases else []
             else:
                 # In 2.0+, we can use the 'type' column. In 3.0+, we have to use it.
-                key_aliases = [r.get('column_name') for r in partition_rows]
+                key_aliases = [r.get("column_name") for r in partition_rows]
 
             key_validator = row.get("key_validator")
             if key_validator is not None:
                 key_type = types.lookup_casstype(key_validator)
-                key_types = key_type.subtypes if issubclass(key_type, types.CompositeType) else [key_type]
+                key_types = (
+                    key_type.subtypes
+                    if issubclass(key_type, types.CompositeType)
+                    else [key_type]
+                )
             else:
-                key_types = [types.lookup_casstype(r.get('validator')) for r in partition_rows]
+                key_types = [
+                    types.lookup_casstype(r.get("validator")) for r in partition_rows
+                ]
 
             for i, col_type in enumerate(key_types):
                 if len(key_aliases) > i:
@@ -2309,7 +2859,9 @@ class SchemaParserV22(_SchemaParser):
                 else:
                     column_name = "key%d" % i
 
-                col = ColumnMetadata(table_meta, column_name, col_type.cql_parameterized_type())
+                col = ColumnMetadata(
+                    table_meta, column_name, col_type.cql_parameterized_type()
+                )
                 table_meta.columns[column_name] = col
                 table_meta.partition_key.append(col)
 
@@ -2323,14 +2875,17 @@ class SchemaParserV22(_SchemaParser):
                 data_type = column_name_types[i]
                 cql_type = _cql_from_cass_type(data_type)
                 is_reversed = types.is_reversed_casstype(data_type)
-                col = ColumnMetadata(table_meta, column_name, cql_type, is_reversed=is_reversed)
+                col = ColumnMetadata(
+                    table_meta, column_name, cql_type, is_reversed=is_reversed
+                )
                 table_meta.columns[column_name] = col
                 table_meta.clustering_key.append(col)
 
             # value alias (if present)
             if has_value:
-                value_alias_rows = [r for r in col_rows
-                                    if r.get('type', None) == "compact_value"]
+                value_alias_rows = [
+                    r for r in col_rows if r.get("type", None) == "compact_value"
+                ]
 
                 if not key_aliases:  # TODO are we checking the right thing here?
                     value_alias = "value"
@@ -2338,14 +2893,16 @@ class SchemaParserV22(_SchemaParser):
                     value_alias = row.get("value_alias", None)
                     if value_alias is None and value_alias_rows:  # CASSANDRA-8487
                         # In 2.0+, we can use the 'type' column. In 3.0+, we have to use it.
-                        value_alias = value_alias_rows[0].get('column_name')
+                        value_alias = value_alias_rows[0].get("column_name")
 
                 default_validator = row.get("default_validator")
                 if default_validator:
                     validator = types.lookup_casstype(default_validator)
                 else:
                     if value_alias_rows:  # CASSANDRA-8487
-                        validator = types.lookup_casstype(value_alias_rows[0].get('validator'))
+                        validator = types.lookup_casstype(
+                            value_alias_rows[0].get("validator")
+                        )
 
                 cql_type = _cql_from_cass_type(validator)
                 col = ColumnMetadata(table_meta, value_alias, cql_type)
@@ -2369,13 +2926,21 @@ class SchemaParserV22(_SchemaParser):
             table_meta.is_compact_storage = is_compact
         except Exception:
             table_meta._exc_info = sys.exc_info()
-            log.exception("Error while parsing metadata for table %s.%s row(%s) columns(%s)", keyspace_name, cfname, row, col_rows)
+            log.exception(
+                "Error while parsing metadata for table %s.%s row(%s) columns(%s)",
+                keyspace_name,
+                cfname,
+                row,
+                col_rows,
+            )
 
         return table_meta
 
     def _build_table_options(self, row):
-        """ Setup the mostly-non-schema table options, like caching settings """
-        options = dict((o, row.get(o)) for o in self.recognized_table_options if o in row)
+        """Setup the mostly-non-schema table options, like caching settings"""
+        options = dict(
+            (o, row.get(o)) for o in self.recognized_table_options if o in row
+        )
 
         # the option name when creating tables is "dclocal_read_repair_chance",
         # but the column name in system.schema_columnfamilies is
@@ -2396,7 +2961,9 @@ class SchemaParserV22(_SchemaParser):
         cql_type = _cql_from_cass_type(data_type)
         is_static = row.get("type", None) == "static"
         is_reversed = types.is_reversed_casstype(data_type)
-        column_meta = ColumnMetadata(table_metadata, name, cql_type, is_static, is_reversed)
+        column_meta = ColumnMetadata(
+            table_metadata, name, cql_type, is_static, is_reversed
+        )
         column_meta._cass_type = data_type
         return column_meta
 
@@ -2413,7 +2980,7 @@ class SchemaParserV22(_SchemaParser):
             target = protect_name(column_metadata.name)
             if kind != "CUSTOM":
                 if "index_keys" in options:
-                    target = 'keys(%s)' % (target,)
+                    target = "keys(%s)" % (target,)
                 elif "index_values" in options:
                     # don't use any "function" for collection values
                     pass
@@ -2423,12 +2990,21 @@ class SchemaParserV22(_SchemaParser):
                     # there is no special index option for full-collection
                     # indexes.
                     data_type = column_metadata._cass_type
-                    collection_types = ('map', 'set', 'list')
-                    if data_type.typename == "frozen" and data_type.subtypes[0].typename in collection_types:
+                    collection_types = ("map", "set", "list")
+                    if (
+                        data_type.typename == "frozen"
+                        and data_type.subtypes[0].typename in collection_types
+                    ):
                         # no index option for full-collection index
-                        target = 'full(%s)' % (target,)
-            options['target'] = target
-            return IndexMetadata(column_metadata.table.keyspace_name, column_metadata.table.name, index_name, kind, options)
+                        target = "full(%s)" % (target,)
+            options["target"] = target
+            return IndexMetadata(
+                column_metadata.table.keyspace_name,
+                column_metadata.table.name,
+                index_name,
+                kind,
+                options,
+            )
 
     @staticmethod
     def _build_trigger_metadata(table_metadata, row):
@@ -2441,44 +3017,59 @@ class SchemaParserV22(_SchemaParser):
         cl = ConsistencyLevel.ONE
         queries = [
             QueryMessage(
-                query=maybe_add_timeout_to_query(self._SELECT_KEYSPACES, self.metadata_request_timeout),
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_KEYSPACES, self.metadata_request_timeout
+                ),
                 consistency_level=cl,
             ),
             QueryMessage(
-                query=maybe_add_timeout_to_query(self._SELECT_COLUMN_FAMILIES, self.metadata_request_timeout),
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_COLUMN_FAMILIES, self.metadata_request_timeout
+                ),
                 consistency_level=cl,
             ),
             QueryMessage(
-                query=maybe_add_timeout_to_query(self._SELECT_COLUMNS, self.metadata_request_timeout),
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_COLUMNS, self.metadata_request_timeout
+                ),
                 consistency_level=cl,
             ),
             QueryMessage(
-                query=maybe_add_timeout_to_query(self._SELECT_TYPES, self.metadata_request_timeout),
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_TYPES, self.metadata_request_timeout
+                ),
                 consistency_level=cl,
             ),
             QueryMessage(
-                query=maybe_add_timeout_to_query(self._SELECT_FUNCTIONS, self.metadata_request_timeout),
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_FUNCTIONS, self.metadata_request_timeout
+                ),
                 consistency_level=cl,
             ),
             QueryMessage(
-                query=maybe_add_timeout_to_query(self._SELECT_AGGREGATES, self.metadata_request_timeout),
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_AGGREGATES, self.metadata_request_timeout
+                ),
                 consistency_level=cl,
             ),
             QueryMessage(
-                query=maybe_add_timeout_to_query(self._SELECT_TRIGGERS, self.metadata_request_timeout),
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_TRIGGERS, self.metadata_request_timeout
+                ),
                 consistency_level=cl,
-            )
+            ),
         ]
 
-        ((ks_success, ks_result),
-         (table_success, table_result),
-         (col_success, col_result),
-         (types_success, types_result),
-         (functions_success, functions_result),
-         (aggregates_success, aggregates_result),
-         (triggers_success, triggers_result)) = (
-             self.connection.wait_for_responses(*queries, timeout=self.timeout,
-                                                fail_on_error=False)
+        (
+            (ks_success, ks_result),
+            (table_success, table_result),
+            (col_success, col_result),
+            (types_success, types_result),
+            (functions_success, functions_result),
+            (aggregates_success, aggregates_result),
+            (triggers_success, triggers_result),
+        ) = self.connection.wait_for_responses(
+            *queries, timeout=self.timeout, fail_on_error=False
         )
 
         self.keyspaces_result = self._handle_results(ks_success, ks_result)
@@ -2487,19 +3078,25 @@ class SchemaParserV22(_SchemaParser):
 
         # if we're connected to Cassandra < 2.0, the triggers table will not exist
         if triggers_success:
-            self.triggers_result = dict_factory(triggers_result.column_names, triggers_result.parsed_rows)
+            self.triggers_result = dict_factory(
+                triggers_result.column_names, triggers_result.parsed_rows
+            )
         else:
             if isinstance(triggers_result, InvalidRequest):
                 log.debug("triggers table not found")
             elif isinstance(triggers_result, Unauthorized):
-                log.warning("this version of Cassandra does not allow access to schema_triggers metadata with authorization enabled (CASSANDRA-7967); "
-                            "The driver will operate normally, but will not reflect triggers in the local metadata model, or schema strings.")
+                log.warning(
+                    "this version of Cassandra does not allow access to schema_triggers metadata with authorization enabled (CASSANDRA-7967); "
+                    "The driver will operate normally, but will not reflect triggers in the local metadata model, or schema strings."
+                )
             else:
                 raise triggers_result
 
         # if we're connected to Cassandra < 2.1, the usertypes table will not exist
         if types_success:
-            self.types_result = dict_factory(types_result.column_names, types_result.parsed_rows)
+            self.types_result = dict_factory(
+                types_result.column_names, types_result.parsed_rows
+            )
         else:
             if isinstance(types_result, InvalidRequest):
                 log.debug("user types table not found")
@@ -2509,7 +3106,9 @@ class SchemaParserV22(_SchemaParser):
 
         # functions were introduced in Cassandra 2.2
         if functions_success:
-            self.functions_result = dict_factory(functions_result.column_names, functions_result.parsed_rows)
+            self.functions_result = dict_factory(
+                functions_result.column_names, functions_result.parsed_rows
+            )
         else:
             if isinstance(functions_result, InvalidRequest):
                 log.debug("user functions table not found")
@@ -2518,7 +3117,9 @@ class SchemaParserV22(_SchemaParser):
 
         # aggregates were introduced in Cassandra 2.2
         if aggregates_success:
-            self.aggregates_result = dict_factory(aggregates_result.column_names, aggregates_result.parsed_rows)
+            self.aggregates_result = dict_factory(
+                aggregates_result.column_names, aggregates_result.parsed_rows
+            )
         else:
             if isinstance(aggregates_result, InvalidRequest):
                 log.debug("user aggregates table not found")
@@ -2567,6 +3168,7 @@ class SchemaParserV3(SchemaParserV22):
     """
     For C* 3.0+
     """
+
     _SELECT_KEYSPACES = "SELECT * FROM system_schema.keyspaces"
     _SELECT_TABLES = "SELECT * FROM system_schema.tables"
     _SELECT_COLUMNS = "SELECT * FROM system_schema.columns"
@@ -2577,32 +3179,35 @@ class SchemaParserV3(SchemaParserV22):
     _SELECT_AGGREGATES = "SELECT * FROM system_schema.aggregates"
     _SELECT_VIEWS = "SELECT * FROM system_schema.views"
 
-    _table_name_col = 'table_name'
+    _table_name_col = "table_name"
 
-    _function_agg_arument_type_col = 'argument_types'
+    _function_agg_arument_type_col = "argument_types"
 
     _table_metadata_class = TableMetadataV3
 
     recognized_table_options = (
-        'bloom_filter_fp_chance',
-        'caching',
-        'cdc',
-        'comment',
-        'compaction',
-        'compression',
-        'crc_check_chance',
-        'dclocal_read_repair_chance',
-        'default_time_to_live',
-        'in_memory',
-        'gc_grace_seconds',
-        'max_index_interval',
-        'memtable_flush_period_in_ms',
-        'min_index_interval',
-        'read_repair_chance',
-        'speculative_retry')
+        "bloom_filter_fp_chance",
+        "caching",
+        "cdc",
+        "comment",
+        "compaction",
+        "compression",
+        "crc_check_chance",
+        "dclocal_read_repair_chance",
+        "default_time_to_live",
+        "in_memory",
+        "gc_grace_seconds",
+        "max_index_interval",
+        "memtable_flush_period_in_ms",
+        "min_index_interval",
+        "read_repair_chance",
+        "speculative_retry",
+    )
 
     def __init__(self, connection, timeout, fetch_size, metadata_request_timeout):
-        super(SchemaParserV3, self).__init__(connection, timeout, fetch_size, metadata_request_timeout)
+        super(SchemaParserV3, self).__init__(
+            connection, timeout, fetch_size, metadata_request_timeout
+        )
         self.indexes_result = []
         self.keyspace_table_index_rows = defaultdict(lambda: defaultdict(list))
         self.keyspace_view_rows = defaultdict(list)
@@ -2617,40 +3222,82 @@ class SchemaParserV3(SchemaParserV22):
     def get_table(self, keyspaces, keyspace, table):
         cl = ConsistencyLevel.ONE
         fetch_size = self.fetch_size
-        where_clause = bind_params(" WHERE keyspace_name = %%s AND %s = %%s" % (self._table_name_col), (keyspace, table), _encoder)
+        where_clause = bind_params(
+            " WHERE keyspace_name = %%s AND %s = %%s" % (self._table_name_col),
+            (keyspace, table),
+            _encoder,
+        )
         cf_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_TABLES + where_clause, self.metadata_request_timeout),
-            consistency_level=cl, fetch_size=fetch_size)
+            query=maybe_add_timeout_to_query(
+                self._SELECT_TABLES + where_clause, self.metadata_request_timeout
+            ),
+            consistency_level=cl,
+            fetch_size=fetch_size,
+        )
         col_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_COLUMNS + where_clause, self.metadata_request_timeout),
-            consistency_level=cl, fetch_size=fetch_size)
+            query=maybe_add_timeout_to_query(
+                self._SELECT_COLUMNS + where_clause, self.metadata_request_timeout
+            ),
+            consistency_level=cl,
+            fetch_size=fetch_size,
+        )
         indexes_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_INDEXES + where_clause, self.metadata_request_timeout),
-            consistency_level=cl, fetch_size=fetch_size)
+            query=maybe_add_timeout_to_query(
+                self._SELECT_INDEXES + where_clause, self.metadata_request_timeout
+            ),
+            consistency_level=cl,
+            fetch_size=fetch_size,
+        )
         triggers_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_TRIGGERS + where_clause, self.metadata_request_timeout),
-            consistency_level=cl, fetch_size=fetch_size)
+            query=maybe_add_timeout_to_query(
+                self._SELECT_TRIGGERS + where_clause, self.metadata_request_timeout
+            ),
+            consistency_level=cl,
+            fetch_size=fetch_size,
+        )
 
         # in protocol v4 we don't know if this event is a view or a table, so we look for both
-        where_clause = bind_params(" WHERE keyspace_name = %s AND view_name = %s", (keyspace, table), _encoder)
+        where_clause = bind_params(
+            " WHERE keyspace_name = %s AND view_name = %s", (keyspace, table), _encoder
+        )
         view_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_VIEWS + where_clause, self.metadata_request_timeout),
-            consistency_level=cl, fetch_size=fetch_size)
-        ((cf_success, cf_result), (col_success, col_result),
-         (indexes_sucess, indexes_result), (triggers_success, triggers_result),
-         (view_success, view_result)) = (
-             self.connection.wait_for_responses(
-                 cf_query, col_query, indexes_query, triggers_query,
-                 view_query, timeout=self.timeout, fail_on_error=False)
+            query=maybe_add_timeout_to_query(
+                self._SELECT_VIEWS + where_clause, self.metadata_request_timeout
+            ),
+            consistency_level=cl,
+            fetch_size=fetch_size,
+        )
+        (
+            (cf_success, cf_result),
+            (col_success, col_result),
+            (indexes_sucess, indexes_result),
+            (triggers_success, triggers_result),
+            (view_success, view_result),
+        ) = self.connection.wait_for_responses(
+            cf_query,
+            col_query,
+            indexes_query,
+            triggers_query,
+            view_query,
+            timeout=self.timeout,
+            fail_on_error=False,
         )
         table_result = self._handle_results(cf_success, cf_result, query_msg=cf_query)
         col_result = self._handle_results(col_success, col_result, query_msg=col_query)
         if table_result:
-            indexes_result = self._handle_results(indexes_sucess, indexes_result, query_msg=indexes_query)
-            triggers_result = self._handle_results(triggers_success, triggers_result, query_msg=triggers_query)
-            return self._build_table_metadata(table_result[0], col_result, triggers_result, indexes_result)
+            indexes_result = self._handle_results(
+                indexes_sucess, indexes_result, query_msg=indexes_query
+            )
+            triggers_result = self._handle_results(
+                triggers_success, triggers_result, query_msg=triggers_query
+            )
+            return self._build_table_metadata(
+                table_result[0], col_result, triggers_result, indexes_result
+            )
 
-        view_result = self._handle_results(view_success, view_result, query_msg=view_query)
+        view_result = self._handle_results(
+            view_success, view_result, query_msg=view_query
+        )
         if view_result:
             return self._build_view_metadata(view_result[0], col_result)
 
@@ -2664,27 +3311,46 @@ class SchemaParserV3(SchemaParserV22):
 
     @staticmethod
     def _build_aggregate(aggregate_row):
-        return Aggregate(aggregate_row['keyspace_name'], aggregate_row['aggregate_name'],
-                         aggregate_row['argument_types'], aggregate_row['state_func'], aggregate_row['state_type'],
-                         aggregate_row['final_func'], aggregate_row['initcond'], aggregate_row['return_type'],
-                         aggregate_row.get('deterministic', False))
+        return Aggregate(
+            aggregate_row["keyspace_name"],
+            aggregate_row["aggregate_name"],
+            aggregate_row["argument_types"],
+            aggregate_row["state_func"],
+            aggregate_row["state_type"],
+            aggregate_row["final_func"],
+            aggregate_row["initcond"],
+            aggregate_row["return_type"],
+            aggregate_row.get("deterministic", False),
+        )
 
-    def _build_table_metadata(self, row, col_rows=None, trigger_rows=None, index_rows=None, virtual=False):
+    def _build_table_metadata(
+        self, row, col_rows=None, trigger_rows=None, index_rows=None, virtual=False
+    ):
         keyspace_name = row["keyspace_name"]
         table_name = row[self._table_name_col]
 
         col_rows = col_rows or self.keyspace_table_col_rows[keyspace_name][table_name]
-        trigger_rows = trigger_rows or self.keyspace_table_trigger_rows[keyspace_name][table_name]
-        index_rows = index_rows or self.keyspace_table_index_rows[keyspace_name][table_name]
+        trigger_rows = (
+            trigger_rows or self.keyspace_table_trigger_rows[keyspace_name][table_name]
+        )
+        index_rows = (
+            index_rows or self.keyspace_table_index_rows[keyspace_name][table_name]
+        )
 
-        table_meta = self._table_metadata_class(keyspace_name, table_name, virtual=virtual)
+        table_meta = self._table_metadata_class(
+            keyspace_name, table_name, virtual=virtual
+        )
         try:
             table_meta.options = self._build_table_options(row)
-            flags = row.get('flags', set())
+            flags = row.get("flags", set())
             if flags:
-                is_dense = 'dense' in flags
-                compact_static = not is_dense and 'super' not in flags and 'compound' not in flags
-                table_meta.is_compact_storage = is_dense or 'super' in flags or 'compound' not in flags
+                is_dense = "dense" in flags
+                compact_static = (
+                    not is_dense and "super" not in flags and "compound" not in flags
+                )
+                table_meta.is_compact_storage = (
+                    is_dense or "super" in flags or "compound" not in flags
+                )
             elif virtual:
                 compact_static = False
                 table_meta.is_compact_storage = False
@@ -2694,7 +3360,9 @@ class SchemaParserV3(SchemaParserV22):
                 table_meta.is_compact_storage = True
                 is_dense = False
 
-            self._build_table_columns(table_meta, col_rows, compact_static, is_dense, virtual)
+            self._build_table_columns(
+                table_meta, col_rows, compact_static, is_dense, virtual
+            )
 
             for trigger_row in trigger_rows:
                 trigger_meta = self._build_trigger_metadata(table_meta, trigger_row)
@@ -2705,43 +3373,56 @@ class SchemaParserV3(SchemaParserV22):
                 if index_meta:
                     table_meta.indexes[index_meta.name] = index_meta
 
-            table_meta.extensions = row.get('extensions', {})
+            table_meta.extensions = row.get("extensions", {})
         except Exception:
             table_meta._exc_info = sys.exc_info()
-            log.exception("Error while parsing metadata for table %s.%s row(%s) columns(%s)", keyspace_name, table_name, row, col_rows)
+            log.exception(
+                "Error while parsing metadata for table %s.%s row(%s) columns(%s)",
+                keyspace_name,
+                table_name,
+                row,
+                col_rows,
+            )
 
         return table_meta
 
     def _build_table_options(self, row):
-        """ Setup the mostly-non-schema table options, like caching settings """
+        """Setup the mostly-non-schema table options, like caching settings"""
         return dict((o, row.get(o)) for o in self.recognized_table_options if o in row)
 
-    def _build_table_columns(self, meta, col_rows, compact_static=False, is_dense=False, virtual=False):
+    def _build_table_columns(
+        self, meta, col_rows, compact_static=False, is_dense=False, virtual=False
+    ):
         # partition key
-        partition_rows = [r for r in col_rows
-                          if r.get('kind', None) == "partition_key"]
+        partition_rows = [r for r in col_rows if r.get("kind", None) == "partition_key"]
         if len(partition_rows) > 1:
-            partition_rows = sorted(partition_rows, key=lambda row: row.get('position'))
+            partition_rows = sorted(partition_rows, key=lambda row: row.get("position"))
         for r in partition_rows:
             # we have to add meta here (and not in the later loop) because TableMetadata.columns is an
             # OrderedDict, and it assumes keys are inserted first, in order, when exporting CQL
             column_meta = self._build_column_metadata(meta, r)
             meta.columns[column_meta.name] = column_meta
-            meta.partition_key.append(meta.columns[r.get('column_name')])
+            meta.partition_key.append(meta.columns[r.get("column_name")])
 
         # clustering key
         if not compact_static:
-            clustering_rows = [r for r in col_rows
-                               if r.get('kind', None) == "clustering"]
+            clustering_rows = [
+                r for r in col_rows if r.get("kind", None) == "clustering"
+            ]
             if len(clustering_rows) > 1:
-                clustering_rows = sorted(clustering_rows, key=lambda row: row.get('position'))
+                clustering_rows = sorted(
+                    clustering_rows, key=lambda row: row.get("position")
+                )
             for r in clustering_rows:
                 column_meta = self._build_column_metadata(meta, r)
                 meta.columns[column_meta.name] = column_meta
-                meta.clustering_key.append(meta.columns[r.get('column_name')])
+                meta.clustering_key.append(meta.columns[r.get("column_name")])
 
-        for col_row in (r for r in col_rows
-                        if r.get('kind', None) not in ('partition_key', 'clustering_key')):
+        for col_row in (
+            r
+            for r in col_rows
+            if r.get("kind", None) not in ("partition_key", "clustering_key")
+        ):
             column_meta = self._build_column_metadata(meta, col_row)
             if is_dense and column_meta.cql_type == types.cql_empty_type:
                 continue
@@ -2760,10 +3441,16 @@ class SchemaParserV3(SchemaParserV22):
         include_all_columns = row["include_all_columns"]
         where_clause = row["where_clause"]
         col_rows = col_rows or self.keyspace_table_col_rows[keyspace_name][view_name]
-        view_meta = MaterializedViewMetadata(keyspace_name, view_name, base_table_name,
-                                             include_all_columns, where_clause, self._build_table_options(row))
+        view_meta = MaterializedViewMetadata(
+            keyspace_name,
+            view_name,
+            base_table_name,
+            include_all_columns,
+            where_clause,
+            self._build_table_options(row),
+        )
         self._build_table_columns(view_meta, col_rows)
-        view_meta.extensions = row.get('extensions', {})
+        view_meta.extensions = row.get("extensions", {})
 
         return view_meta
 
@@ -2773,7 +3460,9 @@ class SchemaParserV3(SchemaParserV22):
         cql_type = row["type"]
         is_static = row.get("kind", None) == "static"
         is_reversed = row["clustering_order"].upper() == "DESC"
-        column_meta = ColumnMetadata(table_metadata, name, cql_type, is_static, is_reversed)
+        column_meta = ColumnMetadata(
+            table_metadata, name, cql_type, is_static, is_reversed
+        )
         return column_meta
 
     @staticmethod
@@ -2782,7 +3471,13 @@ class SchemaParserV3(SchemaParserV22):
         kind = row.get("kind")
         if index_name or kind:
             index_options = row.get("options")
-            return IndexMetadata(table_metadata.keyspace_name, table_metadata.name, index_name, kind, index_options)
+            return IndexMetadata(
+                table_metadata.keyspace_name,
+                table_metadata.name,
+                index_name,
+                kind,
+                index_options,
+            )
         else:
             return None
 
@@ -2797,47 +3492,112 @@ class SchemaParserV3(SchemaParserV22):
         cl = ConsistencyLevel.ONE
         fetch_size = self.fetch_size
         queries = [
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_KEYSPACES, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TABLES, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_COLUMNS, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TYPES, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_FUNCTIONS, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_AGGREGATES, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TRIGGERS, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_INDEXES, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIEWS, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_KEYSPACES, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_TABLES, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_COLUMNS, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_TYPES, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_FUNCTIONS, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_AGGREGATES, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_TRIGGERS, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_INDEXES, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_VIEWS, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
         ]
 
-        ((ks_success, ks_result),
-         (table_success, table_result),
-         (col_success, col_result),
-         (types_success, types_result),
-         (functions_success, functions_result),
-         (aggregates_success, aggregates_result),
-         (triggers_success, triggers_result),
-         (indexes_success, indexes_result),
-         (views_success, views_result)) = self.connection.wait_for_responses(
-             *queries, timeout=self.timeout, fail_on_error=False
+        (
+            (ks_success, ks_result),
+            (table_success, table_result),
+            (col_success, col_result),
+            (types_success, types_result),
+            (functions_success, functions_result),
+            (aggregates_success, aggregates_result),
+            (triggers_success, triggers_result),
+            (indexes_success, indexes_result),
+            (views_success, views_result),
+        ) = self.connection.wait_for_responses(
+            *queries, timeout=self.timeout, fail_on_error=False
         )
 
-        self.keyspaces_result = self._handle_results(ks_success, ks_result, query_msg=queries[0])
-        self.tables_result = self._handle_results(table_success, table_result, query_msg=queries[1])
-        self.columns_result = self._handle_results(col_success, col_result, query_msg=queries[2])
-        self.triggers_result = self._handle_results(triggers_success, triggers_result, query_msg=queries[6])
-        self.types_result = self._handle_results(types_success, types_result, query_msg=queries[3])
-        self.functions_result = self._handle_results(functions_success, functions_result, query_msg=queries[4])
-        self.aggregates_result = self._handle_results(aggregates_success, aggregates_result, query_msg=queries[5])
-        self.indexes_result = self._handle_results(indexes_success, indexes_result, query_msg=queries[7])
-        self.views_result = self._handle_results(views_success, views_result, query_msg=queries[8])
+        self.keyspaces_result = self._handle_results(
+            ks_success, ks_result, query_msg=queries[0]
+        )
+        self.tables_result = self._handle_results(
+            table_success, table_result, query_msg=queries[1]
+        )
+        self.columns_result = self._handle_results(
+            col_success, col_result, query_msg=queries[2]
+        )
+        self.triggers_result = self._handle_results(
+            triggers_success, triggers_result, query_msg=queries[6]
+        )
+        self.types_result = self._handle_results(
+            types_success, types_result, query_msg=queries[3]
+        )
+        self.functions_result = self._handle_results(
+            functions_success, functions_result, query_msg=queries[4]
+        )
+        self.aggregates_result = self._handle_results(
+            aggregates_success, aggregates_result, query_msg=queries[5]
+        )
+        self.indexes_result = self._handle_results(
+            indexes_success, indexes_result, query_msg=queries[7]
+        )
+        self.views_result = self._handle_results(
+            views_success, views_result, query_msg=queries[8]
+        )
 
         self._aggregate_results()
 
@@ -2863,35 +3623,37 @@ class SchemaParserDSE60(SchemaParserV3):
     """
     For DSE 6.0+
     """
-    recognized_table_options = (SchemaParserV3.recognized_table_options +
-                                ("nodesync",))
+
+    recognized_table_options = SchemaParserV3.recognized_table_options + ("nodesync",)
 
 
 class SchemaParserV4(SchemaParserV3):
-
     recognized_table_options = (
-        'additional_write_policy',
-        'bloom_filter_fp_chance',
-        'caching',
-        'cdc',
-        'comment',
-        'compaction',
-        'compression',
-        'crc_check_chance',
-        'default_time_to_live',
-        'gc_grace_seconds',
-        'max_index_interval',
-        'memtable_flush_period_in_ms',
-        'min_index_interval',
-        'read_repair',
-        'speculative_retry')
+        "additional_write_policy",
+        "bloom_filter_fp_chance",
+        "caching",
+        "cdc",
+        "comment",
+        "compaction",
+        "compression",
+        "crc_check_chance",
+        "default_time_to_live",
+        "gc_grace_seconds",
+        "max_index_interval",
+        "memtable_flush_period_in_ms",
+        "min_index_interval",
+        "read_repair",
+        "speculative_retry",
+    )
 
-    _SELECT_VIRTUAL_KEYSPACES = 'SELECT * from system_virtual_schema.keyspaces'
-    _SELECT_VIRTUAL_TABLES = 'SELECT * from system_virtual_schema.tables'
-    _SELECT_VIRTUAL_COLUMNS = 'SELECT * from system_virtual_schema.columns'
+    _SELECT_VIRTUAL_KEYSPACES = "SELECT * from system_virtual_schema.keyspaces"
+    _SELECT_VIRTUAL_TABLES = "SELECT * from system_virtual_schema.tables"
+    _SELECT_VIRTUAL_COLUMNS = "SELECT * from system_virtual_schema.columns"
 
     def __init__(self, connection, timeout, fetch_size, metadata_request_timeout):
-        super(SchemaParserV4, self).__init__(connection, timeout, fetch_size, metadata_request_timeout)
+        super(SchemaParserV4, self).__init__(
+            connection, timeout, fetch_size, metadata_request_timeout
+        )
         self.virtual_keyspaces_rows = defaultdict(list)
         self.virtual_tables_rows = defaultdict(list)
         self.virtual_columns_rows = defaultdict(lambda: defaultdict(list))
@@ -2903,35 +3665,96 @@ class SchemaParserV4(SchemaParserV3):
         fetch_size = self.fetch_size
         queries = [
             # copied from V3
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_KEYSPACES, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TABLES, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_COLUMNS, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TYPES, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_FUNCTIONS, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_AGGREGATES, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TRIGGERS, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_INDEXES, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIEWS, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_KEYSPACES, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_TABLES, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_COLUMNS, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_TYPES, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_FUNCTIONS, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_AGGREGATES, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_TRIGGERS, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_INDEXES, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_VIEWS, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
             # V4-only queries
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIRTUAL_KEYSPACES, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIRTUAL_TABLES, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIRTUAL_COLUMNS, self.metadata_request_timeout),
-                         fetch_size=fetch_size, consistency_level=cl),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_VIRTUAL_KEYSPACES, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_VIRTUAL_TABLES, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_VIRTUAL_COLUMNS, self.metadata_request_timeout
+                ),
+                fetch_size=fetch_size,
+                consistency_level=cl,
+            ),
         ]
 
         responses = self.connection.wait_for_responses(
-            *queries, timeout=self.timeout, fail_on_error=False)
+            *queries, timeout=self.timeout, fail_on_error=False
+        )
         (
             # copied from V3
             (ks_success, ks_result),
@@ -2946,33 +3769,57 @@ class SchemaParserV4(SchemaParserV3):
             # V4-only responses
             (virtual_ks_success, virtual_ks_result),
             (virtual_table_success, virtual_table_result),
-            (virtual_column_success, virtual_column_result)
+            (virtual_column_success, virtual_column_result),
         ) = responses
 
         # copied from V3
-        self.keyspaces_result = self._handle_results(ks_success, ks_result, query_msg=queries[0])
-        self.tables_result = self._handle_results(table_success, table_result, query_msg=queries[1])
-        self.columns_result = self._handle_results(col_success, col_result, query_msg=queries[2])
-        self.triggers_result = self._handle_results(triggers_success, triggers_result, query_msg=queries[6])
-        self.types_result = self._handle_results(types_success, types_result, query_msg=queries[3])
-        self.functions_result = self._handle_results(functions_success, functions_result, query_msg=queries[4])
-        self.aggregates_result = self._handle_results(aggregates_success, aggregates_result, query_msg=queries[5])
-        self.indexes_result = self._handle_results(indexes_success, indexes_result, query_msg=queries[7])
-        self.views_result = self._handle_results(views_success, views_result, query_msg=queries[8])
+        self.keyspaces_result = self._handle_results(
+            ks_success, ks_result, query_msg=queries[0]
+        )
+        self.tables_result = self._handle_results(
+            table_success, table_result, query_msg=queries[1]
+        )
+        self.columns_result = self._handle_results(
+            col_success, col_result, query_msg=queries[2]
+        )
+        self.triggers_result = self._handle_results(
+            triggers_success, triggers_result, query_msg=queries[6]
+        )
+        self.types_result = self._handle_results(
+            types_success, types_result, query_msg=queries[3]
+        )
+        self.functions_result = self._handle_results(
+            functions_success, functions_result, query_msg=queries[4]
+        )
+        self.aggregates_result = self._handle_results(
+            aggregates_success, aggregates_result, query_msg=queries[5]
+        )
+        self.indexes_result = self._handle_results(
+            indexes_success, indexes_result, query_msg=queries[7]
+        )
+        self.views_result = self._handle_results(
+            views_success, views_result, query_msg=queries[8]
+        )
         # V4-only results
         # These tables don't exist in some DSE versions reporting 4.X so we can
         # ignore them if we got an error
         self.virtual_keyspaces_result = self._handle_results(
-            virtual_ks_success, virtual_ks_result,
-            expected_failures=(InvalidRequest,), query_msg=queries[9]
+            virtual_ks_success,
+            virtual_ks_result,
+            expected_failures=(InvalidRequest,),
+            query_msg=queries[9],
         )
         self.virtual_tables_result = self._handle_results(
-            virtual_table_success, virtual_table_result,
-            expected_failures=(InvalidRequest,), query_msg=queries[10]
+            virtual_table_success,
+            virtual_table_result,
+            expected_failures=(InvalidRequest,),
+            query_msg=queries[10],
         )
         self.virtual_columns_result = self._handle_results(
-            virtual_column_success, virtual_column_result,
-            expected_failures=(InvalidRequest,), query_msg=queries[11]
+            virtual_column_success,
+            virtual_column_result,
+            expected_failures=(InvalidRequest,),
+            query_msg=queries[11],
         )
 
         self._aggregate_results()
@@ -2986,7 +3833,7 @@ class SchemaParserV4(SchemaParserV3):
 
         m = self.virtual_columns_rows
         for row in self.virtual_columns_result:
-            ks_name = row['keyspace_name']
+            ks_name = row["keyspace_name"]
             tab_name = row[self._table_name_col]
             m[ks_name][tab_name].append(row)
 
@@ -2995,7 +3842,7 @@ class SchemaParserV4(SchemaParserV3):
             yield x
 
         for row in self.virtual_keyspaces_result:
-            ks_name = row['keyspace_name']
+            ks_name = row["keyspace_name"]
             keyspace_meta = self._build_keyspace_metadata(row)
             keyspace_meta.virtual = True
 
@@ -3004,9 +3851,9 @@ class SchemaParserV4(SchemaParserV3):
 
                 col_rows = self.virtual_columns_rows[ks_name][table_name]
                 keyspace_meta._add_table_metadata(
-                    self._build_table_metadata(table_row,
-                                               col_rows=col_rows,
-                                               virtual=True)
+                    self._build_table_metadata(
+                        table_row, col_rows=col_rows, virtual=True
+                    )
                 )
             yield keyspace_meta
 
@@ -3016,15 +3863,17 @@ class SchemaParserV4(SchemaParserV3):
         row["durable_writes"] = row.get("durable_writes", None)
         row["replication"] = row.get("replication", {})
         row["replication"]["class"] = row["replication"].get("class", None)
-        return super(SchemaParserV4, SchemaParserV4)._build_keyspace_metadata_internal(row)
+        return super(SchemaParserV4, SchemaParserV4)._build_keyspace_metadata_internal(
+            row
+        )
 
 
 class SchemaParserDSE67(SchemaParserV4):
     """
     For DSE 6.7+
     """
-    recognized_table_options = (SchemaParserV4.recognized_table_options +
-                                ("nodesync",))
+
+    recognized_table_options = SchemaParserV4.recognized_table_options + ("nodesync",)
 
 
 class SchemaParserDSE68(SchemaParserDSE67):
@@ -3038,7 +3887,9 @@ class SchemaParserDSE68(SchemaParserDSE67):
     _table_metadata_class = TableMetadataDSE68
 
     def __init__(self, connection, timeout, fetch_size, metadata_request_timeout):
-        super(SchemaParserDSE68, self).__init__(connection, timeout, fetch_size, metadata_request_timeout)
+        super(SchemaParserDSE68, self).__init__(
+            connection, timeout, fetch_size, metadata_request_timeout
+        )
         self.keyspace_table_vertex_rows = defaultdict(lambda: defaultdict(list))
         self.keyspace_table_edge_rows = defaultdict(lambda: defaultdict(list))
 
@@ -3048,33 +3899,52 @@ class SchemaParserDSE68(SchemaParserDSE67):
             yield keyspace_meta
 
     def get_table(self, keyspaces, keyspace, table):
-        table_meta = super(SchemaParserDSE68, self).get_table(keyspaces, keyspace, table)
+        table_meta = super(SchemaParserDSE68, self).get_table(
+            keyspaces, keyspace, table
+        )
         cl = ConsistencyLevel.ONE
-        where_clause = bind_params(" WHERE keyspace_name = %%s AND %s = %%s" % (self._table_name_col), (keyspace, table), _encoder)
+        where_clause = bind_params(
+            " WHERE keyspace_name = %%s AND %s = %%s" % (self._table_name_col),
+            (keyspace, table),
+            _encoder,
+        )
         vertices_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_VERTICES + where_clause, self.metadata_request_timeout),
+            query=maybe_add_timeout_to_query(
+                self._SELECT_VERTICES + where_clause, self.metadata_request_timeout
+            ),
             consistency_level=cl,
         )
         edges_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_EDGES + where_clause, self.metadata_request_timeout),
+            query=maybe_add_timeout_to_query(
+                self._SELECT_EDGES + where_clause, self.metadata_request_timeout
+            ),
             consistency_level=cl,
         )
 
-        (vertices_success, vertices_result), (edges_success, edges_result) \
-            = self.connection.wait_for_responses(vertices_query, edges_query, timeout=self.timeout, fail_on_error=False)
+        (vertices_success, vertices_result), (edges_success, edges_result) = (
+            self.connection.wait_for_responses(
+                vertices_query, edges_query, timeout=self.timeout, fail_on_error=False
+            )
+        )
         vertices_result = self._handle_results(vertices_success, vertices_result)
         edges_result = self._handle_results(edges_success, edges_result)
 
         try:
             if vertices_result:
-                table_meta.vertex = self._build_table_vertex_metadata(vertices_result[0])
+                table_meta.vertex = self._build_table_vertex_metadata(
+                    vertices_result[0]
+                )
             elif edges_result:
-                table_meta.edge = self._build_table_edge_metadata(keyspaces[keyspace], edges_result[0])
+                table_meta.edge = self._build_table_edge_metadata(
+                    keyspaces[keyspace], edges_result[0]
+                )
         except Exception:
             table_meta.vertex = None
             table_meta.edge = None
             table_meta._exc_info = sys.exc_info()
-            log.exception("Error while parsing graph metadata for table %s.%s.", keyspace, table)
+            log.exception(
+                "Error while parsing graph metadata for table %s.%s.", keyspace, table
+            )
 
         return table_meta
 
@@ -3082,41 +3952,56 @@ class SchemaParserDSE68(SchemaParserDSE67):
     def _build_keyspace_metadata_internal(row):
         name = row["keyspace_name"]
         durable_writes = row.get("durable_writes", None)
-        replication = dict(row.get("replication")) if 'replication' in row else {}
-        replication_class = replication.pop("class") if 'class' in replication else None
+        replication = dict(row.get("replication")) if "replication" in row else {}
+        replication_class = replication.pop("class") if "class" in replication else None
         graph_engine = row.get("graph_engine", None)
-        return KeyspaceMetadata(name, durable_writes, replication_class, replication, graph_engine)
+        return KeyspaceMetadata(
+            name, durable_writes, replication_class, replication, graph_engine
+        )
 
     def _build_graph_metadata(self, keyspace_meta):
 
         def _build_table_graph_metadata(table_meta):
-            for row in self.keyspace_table_vertex_rows[keyspace_meta.name][table_meta.name]:
+            for row in self.keyspace_table_vertex_rows[keyspace_meta.name][
+                table_meta.name
+            ]:
                 table_meta.vertex = self._build_table_vertex_metadata(row)
 
-            for row in self.keyspace_table_edge_rows[keyspace_meta.name][table_meta.name]:
+            for row in self.keyspace_table_edge_rows[keyspace_meta.name][
+                table_meta.name
+            ]:
                 table_meta.edge = self._build_table_edge_metadata(keyspace_meta, row)
 
         try:
             # Make sure we process vertices before edges
-            for table_meta in [t for t in keyspace_meta.tables.values()
-                               if t.name in self.keyspace_table_vertex_rows[keyspace_meta.name]]:
+            for table_meta in [
+                t
+                for t in keyspace_meta.tables.values()
+                if t.name in self.keyspace_table_vertex_rows[keyspace_meta.name]
+            ]:
                 _build_table_graph_metadata(table_meta)
 
             # all other tables...
-            for table_meta in [t for t in keyspace_meta.tables.values()
-                               if t.name not in self.keyspace_table_vertex_rows[keyspace_meta.name]]:
+            for table_meta in [
+                t
+                for t in keyspace_meta.tables.values()
+                if t.name not in self.keyspace_table_vertex_rows[keyspace_meta.name]
+            ]:
                 _build_table_graph_metadata(table_meta)
         except Exception:
             # schema error, remove all graph metadata for this keyspace
             for t in keyspace_meta.tables.values():
                 t.edge = t.vertex = None
             keyspace_meta._exc_info = sys.exc_info()
-            log.exception("Error while parsing graph metadata for keyspace %s", keyspace_meta.name)
+            log.exception(
+                "Error while parsing graph metadata for keyspace %s", keyspace_meta.name
+            )
 
     @staticmethod
     def _build_table_vertex_metadata(row):
-        return VertexMetadata(row.get("keyspace_name"), row.get("table_name"),
-                              row.get("label_name"))
+        return VertexMetadata(
+            row.get("keyspace_name"), row.get("table_name"), row.get("label_name")
+        )
 
     @staticmethod
     def _build_table_edge_metadata(keyspace_meta, row):
@@ -3128,37 +4013,113 @@ class SchemaParserDSE68(SchemaParserDSE67):
         to_label = to_table_meta.vertex.label_name
 
         return EdgeMetadata(
-            row.get("keyspace_name"), row.get("table_name"),
-            row.get("label_name"), from_table, from_label,
+            row.get("keyspace_name"),
+            row.get("table_name"),
+            row.get("label_name"),
+            from_table,
+            from_label,
             row.get("from_partition_key_columns"),
-            row.get("from_clustering_columns"), to_table, to_label,
+            row.get("from_clustering_columns"),
+            to_table,
+            to_label,
             row.get("to_partition_key_columns"),
-            row.get("to_clustering_columns"))
+            row.get("to_clustering_columns"),
+        )
 
     def _query_all(self):
         cl = ConsistencyLevel.ONE
         queries = [
             # copied from v4
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_KEYSPACES, self.metadata_request_timeout),
-                         consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TABLES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_COLUMNS, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TYPES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_FUNCTIONS, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_AGGREGATES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TRIGGERS, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_INDEXES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIEWS, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIRTUAL_KEYSPACES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIRTUAL_TABLES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIRTUAL_COLUMNS, self.metadata_request_timeout), consistency_level=cl),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_KEYSPACES, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_TABLES, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_COLUMNS, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_TYPES, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_FUNCTIONS, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_AGGREGATES, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_TRIGGERS, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_INDEXES, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_VIEWS, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_VIRTUAL_KEYSPACES, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_VIRTUAL_TABLES, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_VIRTUAL_COLUMNS, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
             # dse6.8 only
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VERTICES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_EDGES, self.metadata_request_timeout), consistency_level=cl)
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_VERTICES, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
+            QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    self._SELECT_EDGES, self.metadata_request_timeout
+                ),
+                consistency_level=cl,
+            ),
         ]
 
         responses = self.connection.wait_for_responses(
-            *queries, timeout=self.timeout, fail_on_error=False)
+            *queries, timeout=self.timeout, fail_on_error=False
+        )
         (
             # copied from V4
             (ks_success, ks_result),
@@ -3175,7 +4136,7 @@ class SchemaParserDSE68(SchemaParserDSE67):
             (virtual_column_success, virtual_column_result),
             # dse6.8 responses
             (vertices_success, vertices_result),
-            (edges_success, edges_result)
+            (edges_success, edges_result),
         ) = responses
 
         # copied from V4
@@ -3184,24 +4145,29 @@ class SchemaParserDSE68(SchemaParserDSE67):
         self.columns_result = self._handle_results(col_success, col_result)
         self.triggers_result = self._handle_results(triggers_success, triggers_result)
         self.types_result = self._handle_results(types_success, types_result)
-        self.functions_result = self._handle_results(functions_success, functions_result)
-        self.aggregates_result = self._handle_results(aggregates_success, aggregates_result)
+        self.functions_result = self._handle_results(
+            functions_success, functions_result
+        )
+        self.aggregates_result = self._handle_results(
+            aggregates_success, aggregates_result
+        )
         self.indexes_result = self._handle_results(indexes_success, indexes_result)
         self.views_result = self._handle_results(views_success, views_result)
 
         # These tables don't exist in some DSE versions reporting 4.X so we can
         # ignore them if we got an error
         self.virtual_keyspaces_result = self._handle_results(
-            virtual_ks_success, virtual_ks_result,
-            expected_failures=(InvalidRequest,)
+            virtual_ks_success, virtual_ks_result, expected_failures=(InvalidRequest,)
         )
         self.virtual_tables_result = self._handle_results(
-            virtual_table_success, virtual_table_result,
-            expected_failures=(InvalidRequest,)
+            virtual_table_success,
+            virtual_table_result,
+            expected_failures=(InvalidRequest,),
         )
         self.virtual_columns_result = self._handle_results(
-            virtual_column_success, virtual_column_result,
-            expected_failures=(InvalidRequest,)
+            virtual_column_success,
+            virtual_column_result,
+            expected_failures=(InvalidRequest,),
         )
 
         # dse6.8-only results
@@ -3216,13 +4182,13 @@ class SchemaParserDSE68(SchemaParserDSE67):
         m = self.keyspace_table_vertex_rows
         for row in self.vertices_result:
             ksname = row["keyspace_name"]
-            cfname = row['table_name']
+            cfname = row["table_name"]
             m[ksname][cfname].append(row)
 
         m = self.keyspace_table_edge_rows
         for row in self.edges_result:
             ksname = row["keyspace_name"]
-            cfname = row['table_name']
+            cfname = row["table_name"]
             m[ksname][cfname].append(row)
 
 
@@ -3278,7 +4244,15 @@ class MaterializedViewMetadata(object):
     Metadata describing configuration for table extensions
     """
 
-    def __init__(self, keyspace_name, view_name, base_table_name, include_all_columns, where_clause, options):
+    def __init__(
+        self,
+        keyspace_name,
+        view_name,
+        base_table_name,
+        include_all_columns,
+        where_clause,
+        options,
+    ):
         self.keyspace_name = keyspace_name
         self.name = view_name
         self.base_table_name = base_table_name
@@ -3295,35 +4269,47 @@ class MaterializedViewMetadata(object):
         If `formatted` is set to :const:`True`, extra whitespace will
         be added to make the query more readable.
         """
-        sep = '\n    ' if formatted else ' '
+        sep = "\n    " if formatted else " "
         keyspace = protect_name(self.keyspace_name)
         name = protect_name(self.name)
 
-        selected_cols = '*' if self.include_all_columns else ', '.join(protect_name(col.name) for col in self.columns.values())
+        selected_cols = (
+            "*"
+            if self.include_all_columns
+            else ", ".join(protect_name(col.name) for col in self.columns.values())
+        )
         base_table = protect_name(self.base_table_name)
         where_clause = self.where_clause
 
-        part_key = ', '.join(protect_name(col.name) for col in self.partition_key)
+        part_key = ", ".join(protect_name(col.name) for col in self.partition_key)
         if len(self.partition_key) > 1:
             pk = "((%s)" % part_key
         else:
             pk = "(%s" % part_key
         if self.clustering_key:
-            pk += ", %s" % ', '.join(protect_name(col.name) for col in self.clustering_key)
+            pk += ", %s" % ", ".join(
+                protect_name(col.name) for col in self.clustering_key
+            )
         pk += ")"
 
-        properties = TableMetadataV3._property_string(formatted, self.clustering_key, self.options)
+        properties = TableMetadataV3._property_string(
+            formatted, self.clustering_key, self.options
+        )
 
-        ret = ("CREATE MATERIALIZED VIEW %(keyspace)s.%(name)s AS%(sep)s"
-               "SELECT %(selected_cols)s%(sep)s"
-               "FROM %(keyspace)s.%(base_table)s%(sep)s"
-               "WHERE %(where_clause)s%(sep)s"
-               "PRIMARY KEY %(pk)s%(sep)s"
-               "WITH %(properties)s") % locals()
+        ret = (
+            "CREATE MATERIALIZED VIEW %(keyspace)s.%(name)s AS%(sep)s"
+            "SELECT %(selected_cols)s%(sep)s"
+            "FROM %(keyspace)s.%(base_table)s%(sep)s"
+            "WHERE %(where_clause)s%(sep)s"
+            "PRIMARY KEY %(pk)s%(sep)s"
+            "WITH %(properties)s"
+        ) % locals()
 
         if self.extensions:
             registry = _RegisteredExtensionType._extension_registry
-            for k in registry.keys() & self.extensions:  # no viewkeys on OrderedMapSerializeKey
+            for k in (
+                registry.keys() & self.extensions
+            ):  # no viewkeys on OrderedMapSerializeKey
                 ext = registry[k]
                 cql = ext.after_table_cql(self, k, self.extensions[k])
                 if cql:
@@ -3393,10 +4379,19 @@ class EdgeMetadata(object):
     """The columns that match the clustering columns of the outgoing vertex table."""
 
     def __init__(
-            self, keyspace_name, table_name, label_name, from_table,
-            from_label, from_partition_key_columns, from_clustering_columns,
-            to_table, to_label, to_partition_key_columns,
-            to_clustering_columns):
+        self,
+        keyspace_name,
+        table_name,
+        label_name,
+        from_table,
+        from_label,
+        from_partition_key_columns,
+        from_clustering_columns,
+        to_table,
+        to_label,
+        to_partition_key_columns,
+        to_clustering_columns,
+    ):
         self.keyspace_name = keyspace_name
         self.table_name = table_name
         self.label_name = label_name
@@ -3410,14 +4405,20 @@ class EdgeMetadata(object):
         self.to_clustering_columns = to_clustering_columns
 
 
-def get_column_from_system_local(connection, column_name: str, timeout, metadata_request_timeout) -> str:
+def get_column_from_system_local(
+    connection, column_name: str, timeout, metadata_request_timeout
+) -> str:
     success, local_result = connection.wait_for_response(
         QueryMessage(
             query=maybe_add_timeout_to_query(
                 "SELECT " + column_name + " FROM system.local WHERE key='local'",
-                metadata_request_timeout),
-            consistency_level=ConsistencyLevel.ONE)
-        , timeout=timeout, fail_on_error=False)
+                metadata_request_timeout,
+            ),
+            consistency_level=ConsistencyLevel.ONE,
+        ),
+        timeout=timeout,
+        fail_on_error=False,
+    )
     if not success or not local_result.parsed_rows:
         return ""
     local_rows = dict_factory(local_result.column_names, local_result.parsed_rows)
@@ -3425,29 +4426,48 @@ def get_column_from_system_local(connection, column_name: str, timeout, metadata
     return local_row.get(column_name)
 
 
-def get_schema_parser(connection, server_version, dse_version, timeout, metadata_request_timeout, fetch_size=None):
+def get_schema_parser(
+    connection,
+    server_version,
+    dse_version,
+    timeout,
+    metadata_request_timeout,
+    fetch_size=None,
+):
     if server_version is None and dse_version is None:
-        server_version = get_column_from_system_local(connection, "release_version", timeout, metadata_request_timeout)
-        dse_version = get_column_from_system_local(connection, "dse_version", timeout, metadata_request_timeout)
+        server_version = get_column_from_system_local(
+            connection, "release_version", timeout, metadata_request_timeout
+        )
+        dse_version = get_column_from_system_local(
+            connection, "dse_version", timeout, metadata_request_timeout
+        )
 
     version = Version(server_version or "0")
     if dse_version:
         v = Version(dse_version)
-        if v >= Version('6.8.0'):
-            return SchemaParserDSE68(connection, timeout, fetch_size, metadata_request_timeout)
-        elif v >= Version('6.7.0'):
-            return SchemaParserDSE67(connection, timeout, fetch_size, metadata_request_timeout)
-        elif v >= Version('6.0.0'):
-            return SchemaParserDSE60(connection, timeout, fetch_size, metadata_request_timeout)
+        if v >= Version("6.8.0"):
+            return SchemaParserDSE68(
+                connection, timeout, fetch_size, metadata_request_timeout
+            )
+        elif v >= Version("6.7.0"):
+            return SchemaParserDSE67(
+                connection, timeout, fetch_size, metadata_request_timeout
+            )
+        elif v >= Version("6.0.0"):
+            return SchemaParserDSE60(
+                connection, timeout, fetch_size, metadata_request_timeout
+            )
 
-    if version >= Version('4-a'):
+    if version >= Version("4-a"):
         return SchemaParserV4(connection, timeout, fetch_size, metadata_request_timeout)
-    elif version >= Version('3.0.0'):
+    elif version >= Version("3.0.0"):
         return SchemaParserV3(connection, timeout, fetch_size, metadata_request_timeout)
     else:
         # we could further specialize by version. Right now just refactoring the
         # multi-version parser we have as of C* 2.2.0rc1.
-        return SchemaParserV22(connection, timeout, fetch_size, metadata_request_timeout)
+        return SchemaParserV22(
+            connection, timeout, fetch_size, metadata_request_timeout
+        )
 
 
 def _cql_from_cass_type(cass_type):
@@ -3466,9 +4486,13 @@ class RLACTableExtension(RegisteredTableExtension):
 
     @classmethod
     def after_table_cql(cls, table_meta, ext_key, ext_blob):
-        return "RESTRICT ROWS ON %s.%s USING %s;" % (protect_name(table_meta.keyspace_name),
-                                                     protect_name(table_meta.name),
-                                                     protect_name(ext_blob.decode('utf-8')))
+        return "RESTRICT ROWS ON %s.%s USING %s;" % (
+            protect_name(table_meta.keyspace_name),
+            protect_name(table_meta.name),
+            protect_name(ext_blob.decode("utf-8")),
+        )
+
+
 NO_VALID_REPLICA = object()
 
 
@@ -3490,21 +4514,31 @@ def group_keys_by_replica(session, keyspace, table, keys):
 
     partition_keys = cluster.metadata.keyspaces[keyspace].tables[table].partition_key
 
-    serializers = list(types._cqltypes[partition_key.cql_type] for partition_key in partition_keys)
+    serializers = list(
+        types._cqltypes[partition_key.cql_type] for partition_key in partition_keys
+    )
     keys_per_host = defaultdict(list)
     distance = cluster._default_load_balancing_policy.distance
 
     for key in keys:
-        serialized_key = [serializer.serialize(pk, cluster.protocol_version)
-                          for serializer, pk in zip(serializers, key)]
+        serialized_key = [
+            serializer.serialize(pk, cluster.protocol_version)
+            for serializer, pk in zip(serializers, key)
+        ]
         if len(serialized_key) == 1:
             routing_key = serialized_key[0]
         else:
-            routing_key = b"".join(struct.pack(">H%dsB" % len(p), len(p), p, 0) for p in serialized_key)
+            routing_key = b"".join(
+                struct.pack(">H%dsB" % len(p), len(p), p, 0) for p in serialized_key
+            )
         all_replicas = cluster.metadata.get_replicas(keyspace, routing_key)
         # First check if there are local replicas
-        valid_replicas = [host for host in all_replicas if
-                          host.is_up and distance(host) in [HostDistance.LOCAL, HostDistance.LOCAL_RACK]]
+        valid_replicas = [
+            host
+            for host in all_replicas
+            if host.is_up
+            and distance(host) in [HostDistance.LOCAL, HostDistance.LOCAL_RACK]
+        ]
         if not valid_replicas:
             valid_replicas = [host for host in all_replicas if host.is_up]
 
