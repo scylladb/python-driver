@@ -21,17 +21,19 @@ from gremlin_python.process.graph_traversal import GraphTraversal
 from gremlin_python.structure.io.graphsonV2d0 import GraphSONWriter as GraphSONWriterV2
 from gremlin_python.structure.io.graphsonV3d0 import GraphSONWriter as GraphSONWriterV3
 
-from cassandra.datastax.graph.fluent.serializers import GremlinUserTypeIO, \
-    dse_graphson2_serializers, dse_graphson3_serializers
+from cassandra.datastax.graph.fluent.serializers import (
+    GremlinUserTypeIO,
+    dse_graphson2_serializers,
+    dse_graphson3_serializers,
+)
 
 log = logging.getLogger(__name__)
 
 
-__all__ = ['TraversalBatch', '_query_from_traversal', '_DefaultTraversalBatch']
+__all__ = ["TraversalBatch", "_query_from_traversal", "_DefaultTraversalBatch"]
 
 
 class _GremlinGraphSONWriterAdapter(object):
-
     def __init__(self, context, **kwargs):
         super(_GremlinGraphSONWriterAdapter, self).__init__(**kwargs)
         self.context = context
@@ -53,14 +55,20 @@ class _GremlinGraphSONWriterAdapter(object):
             # Check if UDT
             if self.user_types is None:
                 try:
-                    user_types = self.context['cluster']._user_types[self.context['graph_name']]
+                    user_types = self.context["cluster"]._user_types[
+                        self.context["graph_name"]
+                    ]
                     self.user_types = dict(map(reversed, user_types.items()))
                 except KeyError:
                     self.user_types = {}
 
             # Custom detection to map a namedtuple to udt
-            if (tuple in self.serializers and serializer is self.serializers[tuple] and hasattr(value, '_fields') or
-                (not serializer and type(value) in self.user_types)):
+            if (
+                tuple in self.serializers
+                and serializer is self.serializers[tuple]
+                and hasattr(value, "_fields")
+                or (not serializer and type(value) in self.user_types)
+            ):
                 serializer = GremlinUserTypeIO
 
         if serializer:
@@ -101,13 +109,17 @@ def _query_from_traversal(traversal, graph_protocol, context=None):
     :param graphson_protocol: The graph protocol to determine the output format.
     """
     if graph_protocol == GraphProtocol.GRAPHSON_2_0:
-        graphson_writer = graphson2_writer(context, serializer_map=dse_graphson2_serializers)
+        graphson_writer = graphson2_writer(
+            context, serializer_map=dse_graphson2_serializers
+        )
     elif graph_protocol == GraphProtocol.GRAPHSON_3_0:
         if context is None:
-            raise ValueError('Missing context for GraphSON3 serialization requires.')
-        graphson_writer = graphson3_writer(context, serializer_map=dse_graphson3_serializers)
+            raise ValueError("Missing context for GraphSON3 serialization requires.")
+        graphson_writer = graphson3_writer(
+            context, serializer_map=dse_graphson3_serializers
+        )
     else:
-        raise ValueError('Unknown graph protocol: {}'.format(graph_protocol))
+        raise ValueError("Unknown graph protocol: {}".format(graph_protocol))
 
     try:
         query = graphson_writer.writeObject(traversal)
@@ -179,12 +191,12 @@ class TraversalBatch(object):
         raise NotImplementedError()
 
     def __str__(self):
-        return u'<TraversalBatch traversals={0}>'.format(len(self))
+        return "<TraversalBatch traversals={0}>".format(len(self))
+
     __repr__ = __str__
 
 
 class _DefaultTraversalBatch(TraversalBatch):
-
     _traversals = None
 
     def __init__(self, *args, **kwargs):
@@ -193,7 +205,7 @@ class _DefaultTraversalBatch(TraversalBatch):
 
     def add(self, traversal):
         if not isinstance(traversal, GraphTraversal):
-            raise ValueError('traversal should be a gremlin GraphTraversal')
+            raise ValueError("traversal should be a gremlin GraphTraversal")
 
         self._traversals.append(traversal)
         return self
@@ -202,24 +214,41 @@ class _DefaultTraversalBatch(TraversalBatch):
         for traversal in traversals:
             self.add(traversal)
 
-    def as_graph_statement(self, graph_protocol=GraphProtocol.GRAPHSON_2_0, context=None):
-        statements = [_query_from_traversal(t, graph_protocol, context) for t in self._traversals]
-        query = u"[{0}]".format(','.join(statements))
+    def as_graph_statement(
+        self, graph_protocol=GraphProtocol.GRAPHSON_2_0, context=None
+    ):
+        statements = [
+            _query_from_traversal(t, graph_protocol, context) for t in self._traversals
+        ]
+        query = "[{0}]".format(",".join(statements))
         return SimpleGraphStatement(query)
 
     def execute(self):
         if self._session is None:
-            raise ValueError('A DSE Session must be provided to execute the traversal batch.')
+            raise ValueError(
+                "A DSE Session must be provided to execute the traversal batch."
+            )
 
-        execution_profile = self._execution_profile if self._execution_profile else EXEC_PROFILE_GRAPH_DEFAULT
-        graph_options = self._session.get_execution_profile(execution_profile).graph_options
+        execution_profile = (
+            self._execution_profile
+            if self._execution_profile
+            else EXEC_PROFILE_GRAPH_DEFAULT
+        )
+        graph_options = self._session.get_execution_profile(
+            execution_profile
+        ).graph_options
         context = {
-            'cluster': self._session.cluster,
-            'graph_name': graph_options.graph_name
+            "cluster": self._session.cluster,
+            "graph_name": graph_options.graph_name,
         }
-        statement = self.as_graph_statement(graph_options.graph_protocol, context=context) \
-            if graph_options.graph_protocol else self.as_graph_statement(context=context)
-        return self._session.execute_graph(statement, execution_profile=execution_profile)
+        statement = (
+            self.as_graph_statement(graph_options.graph_protocol, context=context)
+            if graph_options.graph_protocol
+            else self.as_graph_statement(context=context)
+        )
+        return self._session.execute_graph(
+            statement, execution_profile=execution_profile
+        )
 
     def clear(self):
         del self._traversals[:]
