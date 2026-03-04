@@ -19,20 +19,16 @@ import warnings
 from pathlib import Path
 from setuptools.command.build_ext import build_ext
 from setuptools import Extension, Command, setup
-from setuptools.errors import (CCompilerError, PlatformError,
-                              ExecError)
+from setuptools.errors import CCompilerError, PlatformError, ExecError
 
-try:
-    import subprocess
-    has_subprocess = True
-except ImportError:
-    has_subprocess = False
+import subprocess
 
 
 has_cqlengine = False
-if __name__ == '__main__' and len(sys.argv) > 1 and sys.argv[1] == "install":
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "install":
     try:
         import cqlengine
+
         has_cqlengine = True
     except ImportError:
         pass
@@ -41,11 +37,9 @@ PROFILING = False
 
 
 class DocCommand(Command):
-
     description = "generate or test documentation"
 
-    user_options = [("test", "t",
-                     "run doctests instead of generating documentation")]
+    user_options = [("test", "t", "run doctests instead of generating documentation")]
 
     boolean_options = ["test"]
 
@@ -61,6 +55,7 @@ class DocCommand(Command):
             mode = "doctest"
         else:
             from cassandra import __version__
+
             path = "docs/_build/%s" % __version__
             mode = "html"
 
@@ -69,57 +64,83 @@ class DocCommand(Command):
             except:
                 pass
 
-        if has_subprocess:
-            # Prevent run with in-place extensions because cython-generated objects do not carry docstrings
-            # http://docs.cython.org/src/userguide/special_methods.html#docstrings
-            import glob
-            for f in glob.glob("cassandra/*.so"):
-                print("Removing '%s' to allow docs to run on pure python modules." %(f,))
-                os.unlink(f)
+        # Prevent run with in-place extensions because cython-generated objects do not carry docstrings
+        # http://docs.cython.org/src/userguide/special_methods.html#docstrings
+        import glob
 
-            # Build io extension to make import and docstrings work
-            try:
-                output = subprocess.check_output(
-                    ["python", "setup.py", "build_ext", "--inplace", "--force", "--no-murmur3", "--no-cython"],
-                    stderr=subprocess.STDOUT)
-            except subprocess.CalledProcessError as exc:
-                raise RuntimeError("Documentation step '%s' failed: %s: %s" % ("build_ext", exc, exc.output))
-            else:
-                print(output)
+        for f in glob.glob("cassandra/*.so"):
+            print("Removing '%s' to allow docs to run on pure python modules." % (f,))
+            os.unlink(f)
 
-            try:
-                output = subprocess.check_output(
-                    ["sphinx-build", "-b", mode, "docs", path],
-                    stderr=subprocess.STDOUT)
-            except subprocess.CalledProcessError as exc:
-                raise RuntimeError("Documentation step '%s' failed: %s: %s" % (mode, exc, exc.output))
-            else:
-                print(output)
+        # Build io extension to make import and docstrings work
+        try:
+            output = subprocess.check_output(
+                [
+                    sys.executable,
+                    "setup.py",
+                    "build_ext",
+                    "--inplace",
+                    "--force",
+                    "--no-murmur3",
+                    "--no-cython",
+                ],
+                stderr=subprocess.STDOUT,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                "Documentation step '%s' failed: %s: %s"
+                % ("build_ext", exc, exc.output)
+            )
+        else:
+            print(output)
 
-            print("")
-            print("Documentation step '%s' performed, results here:" % mode)
-            print("   file://%s/%s/index.html" % (os.path.dirname(os.path.realpath(__file__)), path))
+        try:
+            output = subprocess.check_output(
+                [sys.executable, "-m", "sphinx", "-b", mode, "docs", path],
+                stderr=subprocess.STDOUT,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                "Documentation step '%s' failed: %s: %s" % (mode, exc, exc.output)
+            )
+        else:
+            print(output)
+
+        print("")
+        print("Documentation step '%s' performed, results here:" % mode)
+        print(
+            "   file://%s/%s/index.html"
+            % (os.path.dirname(os.path.realpath(__file__)), path)
+        )
 
 
 class BuildFailed(Exception):
-
     def __init__(self, ext):
         self.ext = ext
 
-is_windows = sys.platform.startswith('win32')
-is_macos = sys.platform.startswith('darwin')
+
+is_windows = sys.platform.startswith("win32")
+is_macos = sys.platform.startswith("darwin")
+
 
 def get_subdriname(directory_path):
     try:
         # List only subdirectories in the given directory
-        subdirectories = [name for dir in directory_path for name in os.listdir(dir)
-                          if os.path.isdir(os.path.join(directory_path, name))]
+        subdirectories = [
+            name
+            for name in os.listdir(directory_path)
+            if os.path.isdir(os.path.join(directory_path, name))
+        ]
         return subdirectories
     except Exception:
         return []
 
+
 def get_libev_headers_path():
-    libev_hb_paths = ["/opt/homebrew/Cellar/libev", os.path.expanduser('~/homebrew/Cellar/libev')]
+    libev_hb_paths = [
+        "/opt/homebrew/Cellar/libev",
+        os.path.expanduser("~/homebrew/Cellar/libev"),
+    ]
     for hb_path in libev_hb_paths:
         if not os.path.exists(hb_path):
             continue
@@ -127,59 +148,70 @@ def get_libev_headers_path():
         if not versions:
             continue
         picked_version = sorted(versions, reverse=True)[0]
-        resulted_path = os.path.join(hb_path, picked_version, 'include')
+        resulted_path = os.path.join(hb_path, picked_version, "include")
         warnings.warn("found libev headers in '%s'" % resulted_path)
         return [resulted_path]
     warnings.warn("did not find libev headers in '%s'" % libev_hb_paths)
     return []
 
 
-murmur3_ext = Extension('cassandra.cmurmur3',
-                        sources=['cassandra/cmurmur3.c'])
+murmur3_ext = Extension("cassandra.cmurmur3", sources=["cassandra/cmurmur3.c"])
 
-is_macos = sys.platform.startswith('darwin')
 
 def eval_env_var_as_array(varname):
     val = os.environ.get(varname)
-    return None if not val else [v.strip() for v in val.split(',')]
+    return None if not val else [v.strip() for v in val.split(",")]
 
-DEFAULT_LIBEV_INCLUDES = ['/usr/include/libev', '/usr/local/include', '/opt/local/include', '/usr/include']
-DEFAULT_LIBEV_LIBDIRS = ['/usr/local/lib', '/opt/local/lib', '/usr/lib64']
-libev_includes = eval_env_var_as_array('CASS_DRIVER_LIBEV_INCLUDES') or DEFAULT_LIBEV_INCLUDES
-libev_libdirs = eval_env_var_as_array('CASS_DRIVER_LIBEV_LIBS') or DEFAULT_LIBEV_LIBDIRS
+
+DEFAULT_LIBEV_INCLUDES = [
+    "/usr/include/libev",
+    "/usr/local/include",
+    "/opt/local/include",
+    "/usr/include",
+]
+DEFAULT_LIBEV_LIBDIRS = ["/usr/local/lib", "/opt/local/lib", "/usr/lib64"]
+libev_includes = (
+    eval_env_var_as_array("CASS_DRIVER_LIBEV_INCLUDES") or DEFAULT_LIBEV_INCLUDES
+)
+libev_libdirs = eval_env_var_as_array("CASS_DRIVER_LIBEV_LIBS") or DEFAULT_LIBEV_LIBDIRS
 
 if is_macos:
-    libev_includes.extend(['/opt/homebrew/include', os.path.expanduser('~/homebrew/include'), *get_libev_headers_path()])
-    libev_libdirs.extend(['/opt/homebrew/lib'])
+    libev_includes.extend(
+        [
+            "/opt/homebrew/include",
+            os.path.expanduser("~/homebrew/include"),
+            *get_libev_headers_path(),
+        ]
+    )
+    libev_libdirs.extend(["/opt/homebrew/lib"])
 
-conan_envfile = Path(__file__).parent / 'build-release/conan/conandeps.env'
+conan_envfile = Path(__file__).parent / "build-release/conan/conandeps.env"
 if conan_envfile.exists():
     conan_paths = json.loads(conan_envfile.read_text())
-    libev_includes.extend([conan_paths.get('include_dirs')])
-    libev_libdirs.extend([conan_paths.get('library_dirs')])
+    libev_includes.extend([conan_paths.get("include_dirs")])
+    libev_libdirs.extend([conan_paths.get("library_dirs")])
 
-libev_ext = Extension('cassandra.io.libevwrapper',
-                      sources=['cassandra/io/libevwrapper.c'],
-                      include_dirs=libev_includes,
-                      libraries=['ev'],
-                      library_dirs=libev_libdirs)
+libev_ext = Extension(
+    "cassandra.io.libevwrapper",
+    sources=["cassandra/io/libevwrapper.c"],
+    include_dirs=libev_includes,
+    libraries=["ev"],
+    library_dirs=libev_libdirs,
+)
 
-platform_unsupported_msg = \
-"""
+platform_unsupported_msg = """
 ===============================================================================
 The optional C extensions are not supported on this platform.
 ===============================================================================
 """
 
-arch_unsupported_msg = \
-"""
+arch_unsupported_msg = """
 ===============================================================================
 The optional C extensions are not supported on big-endian systems.
 ===============================================================================
 """
 
-pypy_unsupported_msg = \
-"""
+pypy_unsupported_msg = """
 =================================================================================
 Some optional C extensions are not supported in PyPy. Only murmur3 will be built.
 =================================================================================
@@ -196,20 +228,41 @@ if not is_supported_platform:
 elif not is_supported_arch:
     sys.stderr.write(arch_unsupported_msg)
 
-try_extensions = "--no-extensions" not in sys.argv and is_supported_platform and is_supported_arch and not os.environ.get('CASS_DRIVER_NO_EXTENSIONS')
+try_extensions = (
+    "--no-extensions" not in sys.argv
+    and is_supported_platform
+    and is_supported_arch
+    and not os.environ.get("CASS_DRIVER_NO_EXTENSIONS")
+)
 try_murmur3 = try_extensions and "--no-murmur3" not in sys.argv
-try_libev = try_extensions and "--no-libev" not in sys.argv and not is_pypy and not os.environ.get('CASS_DRIVER_NO_LIBEV')
-try_cython = try_extensions and "--no-cython" not in sys.argv and not is_pypy and not os.environ.get('CASS_DRIVER_NO_CYTHON')
-sys.argv = [a for a in sys.argv if a not in ("--no-murmur3", "--no-libev", "--no-cython", "--no-extensions")]
+try_libev = (
+    try_extensions
+    and "--no-libev" not in sys.argv
+    and not is_pypy
+    and not os.environ.get("CASS_DRIVER_NO_LIBEV")
+)
+try_cython = (
+    try_extensions
+    and "--no-cython" not in sys.argv
+    and not is_pypy
+    and not os.environ.get("CASS_DRIVER_NO_CYTHON")
+)
+sys.argv = [
+    a
+    for a in sys.argv
+    if a not in ("--no-murmur3", "--no-libev", "--no-cython", "--no-extensions")
+]
 
-build_concurrency = int(os.environ.get('CASS_DRIVER_BUILD_CONCURRENCY', '0'))
+build_concurrency = int(os.environ.get("CASS_DRIVER_BUILD_CONCURRENCY", "0"))
 if build_concurrency == 0:
     build_concurrency = None
 
-CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = bool(os.environ.get('CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST', 'no') == 'yes')
+CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = bool(
+    os.environ.get("CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST", "no") == "yes"
+)
+
 
 class NoPatchExtension(Extension):
-
     # Older versions of setuptools.extension has a static flag which is set False before our
     # setup_requires lands Cython. It causes our *.pyx sources to be renamed to *.c in
     # the initializer.
@@ -221,7 +274,7 @@ class NoPatchExtension(Extension):
     def __init__(self, *args, **kwargs):
         # bypass the patched init if possible
         if Extension.__bases__:
-            base, = Extension.__bases__
+            (base,) = Extension.__bases__
             base.__init__(self, *args, **kwargs)
         else:
             Extension.__init__(self, *args, **kwargs)
@@ -230,7 +283,8 @@ class NoPatchExtension(Extension):
 class build_extensions(build_ext):
     _needs_stub = False
 
-    error_message = """
+    error_message = (
+        """
 ===============================================================================
 WARNING: could not compile %s.
 
@@ -242,7 +296,9 @@ is configured to build for the appropriate architecture (matching your Python ru
 This is often a matter of using vcvarsall.bat from your install directory, or running
 from a command prompt in the Visual Studio Tools Start Menu.
 ===============================================================================
-""" if is_windows else """
+"""
+        if is_windows
+        else """
 ===============================================================================
 WARNING: could not compile %s.
 
@@ -279,33 +335,35 @@ On OSX, via homebrew:
 
 ===============================================================================
     """
+    )
 
     def run(self):
         try:
             self._setup_extensions()
             build_ext.run(self)
         except PlatformError as exc:
-            sys.stderr.write('%s\n' % str(exc))
+            sys.stderr.write("%s\n" % str(exc))
             warnings.warn(self.error_message % "C extensions.")
             if CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST:
                 raise
-
 
     def build_extensions(self):
         if build_concurrency is None or build_concurrency > 1:
             self.check_extensions_list(self.extensions)
 
             import multiprocessing.pool
-            multiprocessing.pool.ThreadPool(processes=build_concurrency).map(self.build_extension, self.extensions)
+
+            multiprocessing.pool.ThreadPool(processes=build_concurrency).map(
+                self.build_extension, self.extensions
+            )
         else:
             build_ext.build_extensions(self)
 
     def build_extension(self, ext):
         try:
             build_ext.build_extension(self, fix_extension_class(ext))
-        except (CCompilerError, ExecError,
-                PlatformError, IOError) as exc:
-            sys.stderr.write('%s\n' % str(exc))
+        except (CCompilerError, ExecError, PlatformError, IOError) as exc:
+            sys.stderr.write("%s\n" % str(exc))
             name = "The %s extension" % (ext.name,)
             warnings.warn(self.error_message % (name,))
             if CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST:
@@ -326,25 +384,49 @@ On OSX, via homebrew:
         if try_cython:
             try:
                 from Cython.Build import cythonize
-                cython_candidates = ['cluster', 'concurrent', 'connection', 'cqltypes', 'metadata',
-                                     'pool', 'protocol', 'query', 'util', 'shard_info']
-                compile_args = [] if is_windows else ['-Wno-unused-function']
-                self.extensions.extend(cythonize(
-                    [Extension('cassandra.%s' % m, ['cassandra/%s.py' % m],
-                               extra_compile_args=compile_args)
-                        for m in cython_candidates],
-                    nthreads=build_concurrency,
-                    compiler_directives={'language_level': 3},
-                    exclude_failures=not CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST,
-                ))
 
-                self.extensions.extend(cythonize(
-                    NoPatchExtension("*", ["cassandra/*.pyx"], extra_compile_args=compile_args),
-                    nthreads=build_concurrency,
-                    compiler_directives={'language_level': 3},
-                ))
+                cython_candidates = [
+                    "cluster",
+                    "concurrent",
+                    "connection",
+                    "cqltypes",
+                    "metadata",
+                    "pool",
+                    "protocol",
+                    "query",
+                    "util",
+                    "shard_info",
+                ]
+                compile_args = [] if is_windows else ["-Wno-unused-function"]
+                self.extensions.extend(
+                    cythonize(
+                        [
+                            Extension(
+                                "cassandra.%s" % m,
+                                ["cassandra/%s.py" % m],
+                                extra_compile_args=compile_args,
+                            )
+                            for m in cython_candidates
+                        ],
+                        nthreads=build_concurrency,
+                        compiler_directives={"language_level": 3},
+                        exclude_failures=not CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST,
+                    )
+                )
+
+                self.extensions.extend(
+                    cythonize(
+                        NoPatchExtension(
+                            "*", ["cassandra/*.pyx"], extra_compile_args=compile_args
+                        ),
+                        nthreads=build_concurrency,
+                        compiler_directives={"language_level": 3},
+                    )
+                )
             except Exception:
-                sys.stderr.write("Failed to cythonize one or more modules. These will not be compiled as extensions (optional).\n")
+                sys.stderr.write(
+                    "Failed to cythonize one or more modules. These will not be compiled as extensions (optional).\n"
+                )
                 if CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST:
                     raise
 
@@ -357,15 +439,21 @@ def fix_extension_class(ext: Extension) -> Extension:
 
 def run_setup(extensions):
 
-    kw = {'cmdclass': {'doc': DocCommand}}
-    kw['cmdclass']['build_ext'] = build_extensions
-    kw['ext_modules'] = [Extension('DUMMY', [])]  # dummy extension makes sure build_ext is called for install
+    kw = {"cmdclass": {"doc": DocCommand}}
+    kw["cmdclass"]["build_ext"] = build_extensions
+    kw["ext_modules"] = [
+        Extension("DUMMY", [])
+    ]  # dummy extension makes sure build_ext is called for install
 
     setup(**kw)
+
 
 run_setup(None)
 
 if has_cqlengine:
-    warnings.warn("\n#######\n'cqlengine' package is present on path: %s\n"
-                  "cqlengine is now an integrated sub-package of this driver.\n"
-                  "It is recommended to remove this package to reduce the chance for conflicting usage" % cqlengine.__file__)
+    warnings.warn(
+        "\n#######\n'cqlengine' package is present on path: %s\n"
+        "cqlengine is now an integrated sub-package of this driver.\n"
+        "It is recommended to remove this package to reduce the chance for conflicting usage"
+        % cqlengine.__file__
+    )
