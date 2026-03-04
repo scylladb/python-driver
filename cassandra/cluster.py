@@ -171,10 +171,7 @@ except (ImportError, AttributeError):
     # TODO: remove it when eventlet issue would be fixed
     EventletConnection = None
 
-try:
-    from weakref import WeakSet
-except ImportError:
-    from cassandra.util import WeakSet  # NOQA
+from weakref import WeakSet
 
 
 def _is_gevent_monkey_patched():
