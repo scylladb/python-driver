@@ -24,12 +24,10 @@ import weakref
 import sys
 import ssl
 
-try:
-    from weakref import WeakSet
-except ImportError:
-    from cassandra.util import WeakSet  # noqa
+from weakref import WeakSet
 
 from cassandra import DependencyException
+
 try:
     import asyncore
 except ModuleNotFoundError:
@@ -39,13 +37,19 @@ except ModuleNotFoundError:
         "other event loop implementations."
     )
 
-from cassandra.connection import Connection, ConnectionShutdown, NONBLOCKING, Timer, TimerManager
-
+from cassandra.connection import (
+    Connection,
+    ConnectionShutdown,
+    NONBLOCKING,
+    Timer,
+    TimerManager,
+)
 
 
 log = logging.getLogger(__name__)
 
 _dispatcher_map = {}
+
 
 def _cleanup(loop):
     if loop:
@@ -80,7 +84,6 @@ class WaitableTimer(Timer):
 
 
 class _PipeWrapper(object):
-
     def __init__(self, fd):
         self.fd = fd
 
@@ -98,7 +101,6 @@ class _PipeWrapper(object):
 
 
 class _AsyncoreDispatcher(asyncore.dispatcher):
-
     def __init__(self, socket):
         asyncore.dispatcher.__init__(self, map=_dispatcher_map)
         # inject after to avoid base class validation
@@ -120,7 +122,6 @@ class _AsyncoreDispatcher(asyncore.dispatcher):
 
 
 class _AsyncorePipeDispatcher(_AsyncoreDispatcher):
-
     def __init__(self):
         self.read_fd, self.write_fd = os.pipe()
         _AsyncoreDispatcher.__init__(self, _PipeWrapper(self.read_fd))
@@ -136,7 +137,7 @@ class _AsyncorePipeDispatcher(_AsyncoreDispatcher):
     def notify_loop(self):
         if not self._notified:
             self._notified = True
-            os.write(self.write_fd, b'x')
+            os.write(self.write_fd, b"x")
 
 
 class _AsyncoreUDPDispatcher(_AsyncoreDispatcher):
@@ -152,7 +153,8 @@ class _AsyncoreUDPDispatcher(_AsyncoreDispatcher):
         AsyncoreLoop._loop_dispatch_class = _AsyncoreUDPDispatcher
 
     """
-    bind_address = ('localhost', 10000)
+
+    bind_address = ("localhost", 10000)
 
     def __init__(self):
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -172,14 +174,13 @@ class _AsyncoreUDPDispatcher(_AsyncoreDispatcher):
     def notify_loop(self):
         if not self._notified:
             self._notified = True
-            self._socket.sendto(b'', self.bind_address)
+            self._socket.sendto(b"", self.bind_address)
 
     def loop(self, timeout):
         asyncore.loop(timeout=timeout, use_poll=False, map=_dispatcher_map, count=1)
 
 
 class _BusyWaitDispatcher(object):
-
     max_write_latency = 0.001
     """
     Timeout pushed down to asyncore select/poll. Dictates the amount of time it will sleep before coming back to check
@@ -193,7 +194,12 @@ class _BusyWaitDispatcher(object):
         if not _dispatcher_map:
             time.sleep(0.005)
         count = timeout // self.max_write_latency
-        asyncore.loop(timeout=self.max_write_latency, use_poll=True, map=_dispatcher_map, count=count)
+        asyncore.loop(
+            timeout=self.max_write_latency,
+            use_poll=True,
+            map=_dispatcher_map,
+            count=count,
+        )
 
     def validate(self):
         pass
@@ -203,10 +209,11 @@ class _BusyWaitDispatcher(object):
 
 
 class AsyncoreLoop(object):
-
     timer_resolution = 0.1  # used as the max interval to be in the io loop before returning to service timeouts
 
-    _loop_dispatch_class = _AsyncorePipeDispatcher if os.name != 'nt' else _BusyWaitDispatcher
+    _loop_dispatch_class = (
+        _AsyncorePipeDispatcher if os.name != "nt" else _BusyWaitDispatcher
+    )
 
     def __init__(self):
         self._pid = os.getpid()
@@ -223,7 +230,10 @@ class AsyncoreLoop(object):
             dispatcher.validate()
             log.debug("Validated loop dispatch with %s", self._loop_dispatch_class)
         except Exception:
-            log.exception("Failed validating loop dispatch with %s. Using busy wait execution instead.", self._loop_dispatch_class)
+            log.exception(
+                "Failed validating loop dispatch with %s. Using busy wait execution instead.",
+                self._loop_dispatch_class,
+            )
             dispatcher.close()
             dispatcher = _BusyWaitDispatcher()
         self._loop_dispatcher = dispatcher
@@ -241,7 +251,9 @@ class AsyncoreLoop(object):
                 self._loop_lock.release()
 
         if should_start:
-            self._thread = Thread(target=self._run_loop, name="asyncore_cassandra_driver_event_loop")
+            self._thread = Thread(
+                target=self._run_loop, name="asyncore_cassandra_driver_event_loop"
+            )
             self._thread.daemon = True
             self._thread.start()
 
@@ -256,7 +268,9 @@ class AsyncoreLoop(object):
                     self._loop_dispatcher.loop(self.timer_resolution)
                     self._timers.service_timeouts()
                 except Exception as exc:
-                    self._maybe_log_debug("Asyncore event loop stopped unexpectedly", exc_info=exc)
+                    self._maybe_log_debug(
+                        "Asyncore event loop stopped unexpectedly", exc_info=exc
+                    )
                     break
             self._started = False
 
@@ -291,7 +305,8 @@ class AsyncoreLoop(object):
         if self._thread.is_alive():
             log.warning(
                 "Event loop thread could not be joined, so shutdown may not be clean. "
-                "Please call Cluster.shutdown() to avoid this.")
+                "Please call Cluster.shutdown() to avoid this."
+            )
 
         log.debug("Event loop thread was joined")
 
@@ -358,8 +373,9 @@ class AsyncoreConnection(Connection, asyncore.dispatcher):
 
         init_handler = WaitableTimer(
             timeout=0,
-            callback=partial(asyncore.dispatcher.__init__,
-                             self, self._socket, _dispatcher_map)
+            callback=partial(
+                asyncore.dispatcher.__init__, self, self._socket, _dispatcher_map
+            ),
         )
         _global_loop.add_timer(init_handler)
         init_handler.wait(kwargs["connect_timeout"])
@@ -390,7 +406,7 @@ class AsyncoreConnection(Connection, asyncore.dispatcher):
                 msg += ": %s" % (self.last_error,)
             self.error_all_requests(ConnectionShutdown(msg))
 
-            #This happens when the connection is shutdown while waiting for the ReadyMessage
+            # This happens when the connection is shutdown while waiting for the ReadyMessage
             if not self.connected_event.is_set():
                 self.last_error = ConnectionShutdown(msg)
 
@@ -417,8 +433,10 @@ class AsyncoreConnection(Connection, asyncore.dispatcher):
                 sent = self.send(next_msg)
                 self._readable = True
             except socket.error as err:
-                if (err.args[0] in NONBLOCKING or
-                        err.args[0] in (ssl.SSL_ERROR_WANT_READ, ssl.SSL_ERROR_WANT_WRITE)):
+                if err.args[0] in NONBLOCKING or err.args[0] in (
+                    ssl.SSL_ERROR_WANT_READ,
+                    ssl.SSL_ERROR_WANT_WRITE,
+                ):
                     with self.deque_lock:
                         self.deque.appendleft(next_msg)
                 else:
@@ -463,7 +481,7 @@ class AsyncoreConnection(Connection, asyncore.dispatcher):
         if len(data) > sabs:
             chunks = []
             for i in range(0, len(data), sabs):
-                chunks.append(data[i:i + sabs])
+                chunks.append(data[i : i + sabs])
         else:
             chunks = [data]
 
@@ -476,4 +494,7 @@ class AsyncoreConnection(Connection, asyncore.dispatcher):
         return self._writable
 
     def readable(self):
-        return self._readable or ((self.is_control_connection or self._continuous_paging_sessions) and not (self.is_defunct or self.is_closed))
+        return self._readable or (
+            (self.is_control_connection or self._continuous_paging_sessions)
+            and not (self.is_defunct or self.is_closed)
+        )
