@@ -4724,13 +4724,18 @@ class ResponseFuture(object):
                         self.prepared_statement = self.session.cluster._prepared_statements[query_id]
                     except KeyError:
                         if not self.prepared_statement:
-                            log.error("Tried to execute unknown prepared statement: id=%s", hexlify(query_id))
+                            log.error(
+                                "Tried to execute unknown prepared statement: id=%s",
+                                hexlify(query_id).decode('ascii'),
+                            )
                             self._set_final_exception(response)
                             return
                         log.warning(
                             "UNPREPARED for query id %s while executing statement id %s. "
                             "Could not resolve returned id in cache, proceeding with in-flight context.",
-                            hexlify(query_id), hexlify(self.prepared_statement.query_id))
+                            hexlify(query_id).decode('ascii'),
+                            hexlify(self.prepared_statement.query_id).decode('ascii'),
+                        )
 
                     current_keyspace = self._connection.keyspace
                     prepared_keyspace = self.prepared_statement.keyspace

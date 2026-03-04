@@ -622,6 +622,12 @@ class ResponseFutureTests(unittest.TestCase):
             rf.result()
 
     def test_prepared_query_not_found_uses_local_prepared_context(self):
+        """
+        Regression test: the original code asserted response.info == self.prepared_statement.query_id,
+        which raised AssertionError when the server returned a different query id (e.g. due to a
+        coordinator race or restart), preventing recovery. The fix removes the assertion and falls
+        back to the in-flight prepared_statement context so reprepare can still proceed.
+        """
         session = self.make_session()
         pool = session._pools.get.return_value
         connection = Mock(spec=Connection)
@@ -639,7 +645,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf.prepared_statement.query_string = "SELECT * FROM foobar"
         rf.prepared_statement.keyspace = "FooKeyspace"
 
-        # Different query id in UNPREPARED response should not prevent reprepare when local context exists.
+        # Server returns a *different* query id in UNPREPARED — old code would raise AssertionError here.
         result = Mock(spec=PreparedQueryNotFound, info=b"other-query-id")
         rf._set_result(None, None, None, result)
 
