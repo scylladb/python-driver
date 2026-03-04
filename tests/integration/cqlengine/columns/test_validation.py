@@ -21,24 +21,46 @@ from uuid import uuid4, uuid1
 from packaging.version import Version
 
 from cassandra import InvalidRequest
-from cassandra.cqlengine.columns import (TimeUUID, Ascii, Text, Integer, BigInt,
-                                         VarInt, DateTime, Date, UUID, Boolean,
-                                         Decimal, Inet, Time, UserDefinedType,
-                                         Map, List, Set, Tuple, Double, Duration)
+from cassandra.cqlengine.columns import (
+    TimeUUID,
+    Ascii,
+    Text,
+    Integer,
+    BigInt,
+    VarInt,
+    DateTime,
+    Date,
+    UUID,
+    Boolean,
+    Decimal,
+    Inet,
+    Time,
+    UserDefinedType,
+    Map,
+    List,
+    Set,
+    Tuple,
+    Double,
+    Duration,
+)
 from cassandra.cqlengine.connection import execute
 from cassandra.cqlengine.management import sync_table, drop_table
 from cassandra.cqlengine.models import Model, ValidationError
 from cassandra.cqlengine.usertype import UserType
 from cassandra import util
 
-from tests.integration import PROTOCOL_VERSION, CASSANDRA_VERSION, greaterthanorequalcass30, greaterthanorequalcass3_11
+from tests.integration import (
+    PROTOCOL_VERSION,
+    CASSANDRA_VERSION,
+    greaterthanorequalcass30,
+    greaterthanorequalcass3_11,
+)
 from tests.integration.cqlengine.base import BaseCassEngTestCase
 import pytest
 
 
 class TestDatetime(BaseCassEngTestCase):
     class DatetimeTest(Model):
-
         test_id = Integer(primary_key=True)
         created_at = DateTime()
 
@@ -60,25 +82,38 @@ class TestDatetime(BaseCassEngTestCase):
         class TZ(tzinfo):
             def utcoffset(self, date_time):
                 return timedelta(hours=-1)
+
             def dst(self, date_time):
                 return None
 
         now = datetime(1982, 1, 1, tzinfo=TZ())
         dt = self.DatetimeTest.objects.create(test_id=1, created_at=now)
         dt2 = self.DatetimeTest.objects(test_id=1).first()
-        assert dt2.created_at.timetuple()[:6] == (now + timedelta(hours=1)).timetuple()[:6]
+        assert (
+            dt2.created_at.timetuple()[:6] == (now + timedelta(hours=1)).timetuple()[:6]
+        )
 
     @greaterthanorequalcass30
     def test_datetime_date_support(self):
         today = date.today()
         self.DatetimeTest.objects.create(test_id=2, created_at=today)
         dt2 = self.DatetimeTest.objects(test_id=2).first()
-        assert dt2.created_at.isoformat() == datetime(today.year, today.month, today.day).isoformat()
+        assert (
+            dt2.created_at.isoformat()
+            == datetime(today.year, today.month, today.day).isoformat()
+        )
 
-        result = self.DatetimeTest.objects.all().allow_filtering().filter(test_id=2).first()
+        result = (
+            self.DatetimeTest.objects.all().allow_filtering().filter(test_id=2).first()
+        )
         assert result.created_at == datetime.combine(today, datetime.min.time())
 
-        result = self.DatetimeTest.objects.all().allow_filtering().filter(test_id=2, created_at=today).first()
+        result = (
+            self.DatetimeTest.objects.all()
+            .allow_filtering()
+            .filter(test_id=2, created_at=today)
+            .first()
+        )
         assert result.created_at == datetime.combine(today, datetime.min.time())
 
     def test_datetime_none(self):
@@ -86,11 +121,11 @@ class TestDatetime(BaseCassEngTestCase):
         dt2 = self.DatetimeTest.objects(test_id=3).first()
         assert dt2.created_at is None
 
-        dts = self.DatetimeTest.objects.filter(test_id=3).values_list('created_at')
+        dts = self.DatetimeTest.objects.filter(test_id=3).values_list("created_at")
         assert dts[0][0] is None
 
     def test_datetime_invalid(self):
-        dt_value= 'INVALID'
+        dt_value = "INVALID"
         with pytest.raises(TypeError):
             self.DatetimeTest.objects.create(test_id=4, created_at=dt_value)
 
@@ -98,7 +133,9 @@ class TestDatetime(BaseCassEngTestCase):
         dt_value = 1454520554
         self.DatetimeTest.objects.create(test_id=5, created_at=dt_value)
         dt2 = self.DatetimeTest.objects(test_id=5).first()
-        assert dt2.created_at == datetime.fromtimestamp(dt_value, tz=timezone.utc).replace(tzinfo=None)
+        assert dt2.created_at == datetime.fromtimestamp(
+            dt_value, tz=timezone.utc
+        ).replace(tzinfo=None)
 
     def test_datetime_large(self):
         dt_value = datetime(2038, 12, 31, 10, 10, 10, 123000)
@@ -132,7 +169,6 @@ class TestDatetime(BaseCassEngTestCase):
 
 class TestBoolDefault(BaseCassEngTestCase):
     class BoolDefaultValueTest(Model):
-
         test_id = Integer(primary_key=True)
         stuff = Boolean(default=True)
 
@@ -149,7 +185,6 @@ class TestBoolDefault(BaseCassEngTestCase):
 
 class TestBoolValidation(BaseCassEngTestCase):
     class BoolValidationTest(Model):
-
         test_id = Integer(primary_key=True)
         bool_column = Boolean()
 
@@ -166,7 +201,6 @@ class TestBoolValidation(BaseCassEngTestCase):
 
 class TestVarInt(BaseCassEngTestCase):
     class VarIntTest(Model):
-
         test_id = Integer(primary_key=True)
         bignum = VarInt(primary_key=True)
 
@@ -181,7 +215,9 @@ class TestVarInt(BaseCassEngTestCase):
     def test_varint_io(self):
         # TODO: this is a weird test.  i changed the number from sys.maxint (which doesn't exist in python 3)
         # to the giant number below and it broken between runs.
-        long_int = 92834902384092834092384028340283048239048203480234823048230482304820348239
+        long_int = (
+            92834902384092834092384028340283048239048203480234823048230482304820348239
+        )
         int1 = self.VarIntTest.objects.create(test_id=0, bignum=long_int)
         int2 = self.VarIntTest.objects(test_id=0).first()
         assert int1.bignum == int2.bignum
@@ -190,7 +226,7 @@ class TestVarInt(BaseCassEngTestCase):
             self.VarIntTest.objects.create(test_id=0, bignum="not_a_number")
 
 
-class DataType():
+class DataType:
     @classmethod
     def setUpClass(cls):
         if PROTOCOL_VERSION < 4 or CASSANDRA_VERSION < Version("3.0"):
@@ -211,18 +247,26 @@ class DataType():
 
     def setUp(self):
         if PROTOCOL_VERSION < 4 or CASSANDRA_VERSION < Version("3.0"):
-            raise unittest.SkipTest("Protocol v4 datatypes "
-                                    "require native protocol 4+ and C* version >=3.0, "
-                                    "currently using protocol {0} and C* version {1}".
-                                    format(PROTOCOL_VERSION, CASSANDRA_VERSION))
+            raise unittest.SkipTest(
+                "Protocol v4 datatypes "
+                "require native protocol 4+ and C* version >=3.0, "
+                "currently using protocol {0} and C* version {1}".format(
+                    PROTOCOL_VERSION, CASSANDRA_VERSION
+                )
+            )
 
     def _check_value_is_correct_in_db(self, value):
         """
-         Check that different ways of reading the value
-         from the model class give the same expected result
+        Check that different ways of reading the value
+        from the model class give the same expected result
         """
         if value is None:
-            result = self.model_class.objects.all().allow_filtering().filter(test_id=0).first()
+            result = (
+                self.model_class.objects.all()
+                .allow_filtering()
+                .filter(test_id=0)
+                .first()
+            )
             assert result.class_param is None
 
             result = self.model_class.objects(test_id=0).first()
@@ -238,11 +282,21 @@ class DataType():
             assert isinstance(result.class_param, self.python_klass)
             assert result.class_param == value_to_compare
 
-            result = self.model_class.objects.all().allow_filtering().filter(test_id=0).first()
+            result = (
+                self.model_class.objects.all()
+                .allow_filtering()
+                .filter(test_id=0)
+                .first()
+            )
             assert isinstance(result.class_param, self.python_klass)
             assert result.class_param == value_to_compare
 
-            result = self.model_class.objects.all().allow_filtering().filter(test_id=0, class_param=value).first()
+            result = (
+                self.model_class.objects.all()
+                .allow_filtering()
+                .filter(test_id=0, class_param=value)
+                .first()
+            )
             assert isinstance(result.class_param, self.python_klass)
             assert result.class_param == value_to_compare
 
@@ -272,29 +326,26 @@ class DataType():
 
     def test_param_none(self):
         """
-         Test that None value is correctly written to the db
-         and then is correctly read
+        Test that None value is correctly written to the db
+        and then is correctly read
         """
         self.model_class.objects.create(test_id=1, class_param=None)
         dt2 = self.model_class.objects(test_id=1).first()
         assert dt2.class_param is None
 
-        dts = self.model_class.objects(test_id=1).values_list('class_param')
+        dts = self.model_class.objects(test_id=1).values_list("class_param")
         assert dts[0][0] is None
 
 
 class TestDate(DataType, BaseCassEngTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.db_klass, cls.python_klass = (
-            Date,
-            util.Date
-        )
+        cls.db_klass, cls.python_klass = (Date, util.Date)
 
         cls.first_value, cls.second_value, cls.third_value = (
             datetime.utcnow(),
             util.Date(datetime(1, 1, 1)),
-            datetime(1, 1, 2)
+            datetime(1, 1, 2),
         )
         super(TestDate, cls).setUpClass()
 
@@ -302,14 +353,11 @@ class TestDate(DataType, BaseCassEngTestCase):
 class TestTime(DataType, BaseCassEngTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.db_klass, cls.python_klass = (
-            Time,
-            util.Time
-        )
+        cls.db_klass, cls.python_klass = (Time, util.Time)
         cls.first_value, cls.second_value, cls.third_value = (
             None,
             util.Time(time(2, 12, 7, 49)),
-            time(2, 12, 7, 50)
+            time(2, 12, 7, 50),
         )
         super(TestTime, cls).setUpClass()
 
@@ -317,14 +365,11 @@ class TestTime(DataType, BaseCassEngTestCase):
 class TestDateTime(DataType, BaseCassEngTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.db_klass, cls.python_klass = (
-            DateTime,
-            datetime
-        )
+        cls.db_klass, cls.python_klass = (DateTime, datetime)
         cls.first_value, cls.second_value, cls.third_value = (
             datetime(2017, 4, 13, 18, 34, 24, 317000),
             datetime(1, 1, 1),
-            datetime(1, 1, 2)
+            datetime(1, 1, 2),
         )
         super(TestDateTime, cls).setUpClass()
 
@@ -332,16 +377,10 @@ class TestDateTime(DataType, BaseCassEngTestCase):
 class TestBoolean(DataType, BaseCassEngTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.db_klass, cls.python_klass = (
-            Boolean,
-            bool
-        )
-        cls.first_value, cls.second_value, cls.third_value = (
-            None,
-            False,
-            True
-        )
+        cls.db_klass, cls.python_klass = (Boolean, bool)
+        cls.first_value, cls.second_value, cls.third_value = (None, False, True)
         super(TestBoolean, cls).setUpClass()
+
 
 @greaterthanorequalcass3_11
 class TestDuration(DataType, BaseCassEngTestCase):
@@ -349,14 +388,11 @@ class TestDuration(DataType, BaseCassEngTestCase):
     def setUpClass(cls):
         # setUpClass is executed despite the whole class being skipped
         if CASSANDRA_VERSION >= Version("3.10"):
-            cls.db_klass, cls.python_klass = (
-                Duration,
-                util.Duration
-            )
+            cls.db_klass, cls.python_klass = (Duration, util.Duration)
             cls.first_value, cls.second_value, cls.third_value = (
                 util.Duration(0, 0, 0),
                 util.Duration(1, 2, 3),
-                util.Duration(0, 0, 0)
+                util.Duration(0, 0, 0),
             )
             super(TestDuration, cls).setUpClass()
 
@@ -387,7 +423,7 @@ class TestUDT(DataType, BaseCassEngTestCase):
     def setUpClass(cls):
         if PROTOCOL_VERSION < 4 or CASSANDRA_VERSION < Version("3.0"):
             return
-        
+
         cls.db_klass, cls.python_klass = UserDefinedType, User
         cls.first_value = User(
             age=1,
@@ -395,7 +431,7 @@ class TestUDT(DataType, BaseCassEngTestCase):
             map_param={1: time(2, 12, 7, 50), 2: util.Time(time(2, 12, 7, 49))},
             list_param=[datetime(1, 1, 2), datetime(1, 1, 3)],
             set_param=set((datetime(1, 1, 3), util.Date(datetime(1, 1, 1)))),
-            tuple_param=(datetime(1, 1, 3), 2, False, 1, 2.324, uuid4())
+            tuple_param=(datetime(1, 1, 3), 2, False, 1, 2.324, uuid4()),
         )
 
         cls.second_value = User(
@@ -404,7 +440,7 @@ class TestUDT(DataType, BaseCassEngTestCase):
             map_param={1: time(2, 12, 7, 50), 2: util.Time(time(2, 12, 7, 49))},
             list_param=[datetime(1, 1, 2), datetime(1, 2, 3)],
             set_param=None,
-            tuple_param=(datetime(1, 1, 2), 2, False, 1, 2.324, uuid4())
+            tuple_param=(datetime(1, 1, 2), 2, False, 1, 2.324, uuid4()),
         )
 
         cls.third_value = User(
@@ -413,7 +449,7 @@ class TestUDT(DataType, BaseCassEngTestCase):
             map_param={1: time(2, 12, 7, 51), 2: util.Time(time(2, 12, 7, 49))},
             list_param=[datetime(1, 1, 2), datetime(1, 1, 4)],
             set_param=set((datetime(1, 1, 3), util.Date(datetime(1, 1, 2)))),
-            tuple_param=(None, 3, False, None, 2.3214, uuid4())
+            tuple_param=(None, 3, False, None, 2.3214, uuid4()),
         )
 
         cls.model_class = UserModel
@@ -422,7 +458,6 @@ class TestUDT(DataType, BaseCassEngTestCase):
 
 class TestDecimal(BaseCassEngTestCase):
     class DecimalTest(Model):
-
         test_id = Integer(primary_key=True)
         dec_val = Decimal()
 
@@ -435,18 +470,17 @@ class TestDecimal(BaseCassEngTestCase):
         drop_table(cls.DecimalTest)
 
     def test_decimal_io(self):
-        dt = self.DecimalTest.objects.create(test_id=0, dec_val=D('0.00'))
+        dt = self.DecimalTest.objects.create(test_id=0, dec_val=D("0.00"))
         dt2 = self.DecimalTest.objects(test_id=0).first()
         assert dt2.dec_val == dt.dec_val
 
         dt = self.DecimalTest.objects.create(test_id=0, dec_val=5)
         dt2 = self.DecimalTest.objects(test_id=0).first()
-        assert dt2.dec_val == D('5')
+        assert dt2.dec_val == D("5")
 
 
 class TestUUID(BaseCassEngTestCase):
     class UUIDTest(Model):
-
         test_id = Integer(primary_key=True)
         a_uuid = UUID(default=uuid4())
 
@@ -480,7 +514,6 @@ class TestUUID(BaseCassEngTestCase):
 
 class TestTimeUUID(BaseCassEngTestCase):
     class TimeUUIDTest(Model):
-
         test_id = Integer(primary_key=True)
         timeuuid = TimeUUID(default=uuid1())
 
@@ -505,80 +538,78 @@ class TestTimeUUID(BaseCassEngTestCase):
 
 class TestInteger(BaseCassEngTestCase):
     class IntegerTest(Model):
-
-        test_id = UUID(primary_key=True, default=lambda:uuid4())
+        test_id = UUID(primary_key=True, default=lambda: uuid4())
         value = Integer(default=0, required=True)
 
     def test_default_zero_fields_validate(self):
-        """ Tests that integer columns with a default value of 0 validate """
+        """Tests that integer columns with a default value of 0 validate"""
         it = self.IntegerTest()
         it.validate()
 
 
 class TestBigInt(BaseCassEngTestCase):
     class BigIntTest(Model):
-
-        test_id = UUID(primary_key=True, default=lambda:uuid4())
-        value   = BigInt(default=0, required=True)
+        test_id = UUID(primary_key=True, default=lambda: uuid4())
+        value = BigInt(default=0, required=True)
 
     def test_default_zero_fields_validate(self):
-        """ Tests that bigint columns with a default value of 0 validate """
+        """Tests that bigint columns with a default value of 0 validate"""
         it = self.BigIntTest()
         it.validate()
 
 
 class TestAscii(BaseCassEngTestCase):
     def test_min_length(self):
-        """ Test arbitrary minimal lengths requirements. """
+        """Test arbitrary minimal lengths requirements."""
 
-        Ascii(min_length=0).validate('')
-        Ascii(min_length=0, required=True).validate('')
+        Ascii(min_length=0).validate("")
+        Ascii(min_length=0, required=True).validate("")
 
         Ascii(min_length=0).validate(None)
-        Ascii(min_length=0).validate('kevin')
+        Ascii(min_length=0).validate("kevin")
 
-        Ascii(min_length=1).validate('k')
+        Ascii(min_length=1).validate("k")
 
-        Ascii(min_length=5).validate('kevin')
-        Ascii(min_length=5).validate('kevintastic')
+        Ascii(min_length=5).validate("kevin")
+        Ascii(min_length=5).validate("kevintastic")
 
         with pytest.raises(ValidationError):
-            Ascii(min_length=1).validate('')
+            Ascii(min_length=1).validate("")
 
         with pytest.raises(ValidationError):
             Ascii(min_length=1).validate(None)
 
         with pytest.raises(ValidationError):
-            Ascii(min_length=6).validate('')
+            Ascii(min_length=6).validate("")
 
         with pytest.raises(ValidationError):
             Ascii(min_length=6).validate(None)
 
         with pytest.raises(ValidationError):
-            Ascii(min_length=6).validate('kevin')
+            Ascii(min_length=6).validate("kevin")
 
         with pytest.raises(ValueError):
             Ascii(min_length=-1)
 
     def test_max_length(self):
-        """ Test arbitrary maximal lengths requirements. """
-        Ascii(max_length=0).validate('')
+        """Test arbitrary maximal lengths requirements."""
+        Ascii(max_length=0).validate("")
         Ascii(max_length=0).validate(None)
 
-        Ascii(max_length=1).validate('')
+        Ascii(max_length=1).validate("")
         Ascii(max_length=1).validate(None)
-        Ascii(max_length=1).validate('b')
+        Ascii(max_length=1).validate("b")
 
-        Ascii(max_length=5).validate('')
+        Ascii(max_length=5).validate("")
         Ascii(max_length=5).validate(None)
-        Ascii(max_length=5).validate('b')
-        Ascii(max_length=5).validate('blake')
+        Ascii(max_length=5).validate("b")
+        Ascii(max_length=5).validate("blake")
 
         with pytest.raises(ValidationError):
-            Ascii(max_length=0).validate('b')
+            Ascii(max_length=0).validate("b")
 
         with pytest.raises(ValidationError):
-            Ascii(max_length=5).validate('blaketastic')
+            Ascii(max_length=5).validate("blaketastic")
 
         with pytest.raises(ValueError):
             Ascii(max_length=-1)
@@ -596,9 +627,9 @@ class TestAscii(BaseCassEngTestCase):
             Ascii(min_length=1, max_length=0)
 
     def test_type_checking(self):
-        Ascii().validate('string')
-        Ascii().validate(u'unicode')
-        Ascii().validate(bytearray('bytearray', encoding='ascii'))
+        Ascii().validate("string")
+        Ascii().validate("unicode")
+        Ascii().validate(bytearray("bytearray", encoding="ascii"))
 
         with pytest.raises(ValidationError):
             Ascii().validate(5)
@@ -606,106 +637,101 @@ class TestAscii(BaseCassEngTestCase):
         with pytest.raises(ValidationError):
             Ascii().validate(True)
 
-        Ascii().validate("!#$%&\'()*+,-./")
+        Ascii().validate("!#$%&'()*+,-./")
 
         with pytest.raises(ValidationError):
-            Ascii().validate('Beyonc' + chr(233))
-
-        if sys.version_info < (3, 1):
-            with pytest.raises(ValidationError):
-                Ascii().validate(u'Beyonc' + unichr(233))
+            Ascii().validate("Beyonc" + chr(233))
 
     def test_unaltering_validation(self):
-        """ Test the validation step doesn't re-interpret values. """
-        assert Ascii().validate('') == ''
+        """Test the validation step doesn't re-interpret values."""
+        assert Ascii().validate("") == ""
         assert Ascii().validate(None) == None
-        assert Ascii().validate('yo') == 'yo'
+        assert Ascii().validate("yo") == "yo"
 
     def test_non_required_validation(self):
-        """ Tests that validation is ok on none and blank values if required is False. """
-        Ascii().validate('')
+        """Tests that validation is ok on none and blank values if required is False."""
+        Ascii().validate("")
         Ascii().validate(None)
 
     def test_required_validation(self):
-        """ Tests that validation raise on none and blank values if value required. """
-        Ascii(required=True).validate('k')
+        """Tests that validation raise on none and blank values if value required."""
+        Ascii(required=True).validate("k")
 
         with pytest.raises(ValidationError):
-            Ascii(required=True).validate('')
+            Ascii(required=True).validate("")
 
         with pytest.raises(ValidationError):
             Ascii(required=True).validate(None)
 
         # With min_length set.
-        Ascii(required=True, min_length=0).validate('k')
-        Ascii(required=True, min_length=1).validate('k')
+        Ascii(required=True, min_length=0).validate("k")
+        Ascii(required=True, min_length=1).validate("k")
 
         with pytest.raises(ValidationError):
-            Ascii(required=True, min_length=2).validate('k')
+            Ascii(required=True, min_length=2).validate("k")
 
         # With max_length set.
-        Ascii(required=True, max_length=1).validate('k')
+        Ascii(required=True, max_length=1).validate("k")
 
         with pytest.raises(ValidationError):
-            Ascii(required=True, max_length=2).validate('kevin')
+            Ascii(required=True, max_length=2).validate("kevin")
 
         with pytest.raises(ValueError):
             Ascii(required=True, max_length=0)
 
 
 class TestText(BaseCassEngTestCase):
-
     def test_min_length(self):
-        """ Test arbitrary minimal lengths requirements. """
+        """Test arbitrary minimal lengths requirements."""
 
-        Text(min_length=0).validate('')
-        Text(min_length=0, required=True).validate('')
+        Text(min_length=0).validate("")
+        Text(min_length=0, required=True).validate("")
 
         Text(min_length=0).validate(None)
-        Text(min_length=0).validate('blake')
+        Text(min_length=0).validate("blake")
 
-        Text(min_length=1).validate('b')
+        Text(min_length=1).validate("b")
 
-        Text(min_length=5).validate('blake')
-        Text(min_length=5).validate('blaketastic')
+        Text(min_length=5).validate("blake")
+        Text(min_length=5).validate("blaketastic")
 
         with pytest.raises(ValidationError):
-            Text(min_length=1).validate('')
+            Text(min_length=1).validate("")
 
         with pytest.raises(ValidationError):
             Text(min_length=1).validate(None)
 
         with pytest.raises(ValidationError):
-            Text(min_length=6).validate('')
+            Text(min_length=6).validate("")
 
         with pytest.raises(ValidationError):
             Text(min_length=6).validate(None)
 
         with pytest.raises(ValidationError):
-            Text(min_length=6).validate('blake')
+            Text(min_length=6).validate("blake")
 
         with pytest.raises(ValueError):
             Text(min_length=-1)
 
     def test_max_length(self):
-        """ Test arbitrary maximal lengths requirements. """
-        Text(max_length=0).validate('')
+        """Test arbitrary maximal lengths requirements."""
+        Text(max_length=0).validate("")
         Text(max_length=0).validate(None)
 
-        Text(max_length=1).validate('')
+        Text(max_length=1).validate("")
         Text(max_length=1).validate(None)
-        Text(max_length=1).validate('b')
+        Text(max_length=1).validate("b")
 
-        Text(max_length=5).validate('')
+        Text(max_length=5).validate("")
         Text(max_length=5).validate(None)
-        Text(max_length=5).validate('b')
-        Text(max_length=5).validate('blake')
+        Text(max_length=5).validate("b")
+        Text(max_length=5).validate("blake")
 
         with pytest.raises(ValidationError):
-            Text(max_length=0).validate('b')
+            Text(max_length=0).validate("b")
 
         with pytest.raises(ValidationError):
-            Text(max_length=5).validate('blaketastic')
+            Text(max_length=5).validate("blaketastic")
 
         with pytest.raises(ValueError):
             Text(max_length=-1)
@@ -723,9 +749,9 @@ class TestText(BaseCassEngTestCase):
             Text(min_length=1, max_length=0)
 
     def test_type_checking(self):
-        Text().validate('string')
-        Text().validate(u'unicode')
-        Text().validate(bytearray('bytearray', encoding='ascii'))
+        Text().validate("string")
+        Text().validate("unicode")
+        Text().validate(bytearray("bytearray", encoding="ascii"))
 
         with pytest.raises(ValidationError):
             Text().validate(5)
@@ -733,44 +759,42 @@ class TestText(BaseCassEngTestCase):
         with pytest.raises(ValidationError):
             Text().validate(True)
 
-        Text().validate("!#$%&\'()*+,-./")
-        Text().validate('Beyonc' + chr(233))
-        if sys.version_info < (3, 1):
-            Text().validate(u'Beyonc' + unichr(233))
+        Text().validate("!#$%&'()*+,-./")
+        Text().validate("Beyonc" + chr(233))
 
     def test_unaltering_validation(self):
-        """ Test the validation step doesn't re-interpret values. """
-        assert Text().validate('') == ''
+        """Test the validation step doesn't re-interpret values."""
+        assert Text().validate("") == ""
         assert Text().validate(None) == None
-        assert Text().validate('yo') == 'yo'
+        assert Text().validate("yo") == "yo"
 
     def test_non_required_validation(self):
-        """ Tests that validation is ok on none and blank values if required is False """
-        Text().validate('')
+        """Tests that validation is ok on none and blank values if required is False"""
+        Text().validate("")
         Text().validate(None)
 
     def test_required_validation(self):
-        """ Tests that validation raise on none and blank values if value required. """
-        Text(required=True).validate('b')
+        """Tests that validation raise on none and blank values if value required."""
+        Text(required=True).validate("b")
 
         with pytest.raises(ValidationError):
-            Text(required=True).validate('')
+            Text(required=True).validate("")
 
         with pytest.raises(ValidationError):
             Text(required=True).validate(None)
 
         # With min_length set.
-        Text(required=True, min_length=0).validate('b')
-        Text(required=True, min_length=1).validate('b')
+        Text(required=True, min_length=0).validate("b")
+        Text(required=True, min_length=1).validate("b")
 
         with pytest.raises(ValidationError):
-            Text(required=True, min_length=2).validate('b')
+            Text(required=True, min_length=2).validate("b")
 
         # With max_length set.
-        Text(required=True, max_length=1).validate('b')
+        Text(required=True, max_length=1).validate("b")
 
         with pytest.raises(ValidationError):
-            Text(required=True, max_length=2).validate('blake')
+            Text(required=True, max_length=2).validate("blake")
 
         with pytest.raises(ValueError):
             Text(required=True, max_length=0)
@@ -778,7 +802,6 @@ class TestText(BaseCassEngTestCase):
 
 class TestExtraFieldsRaiseException(BaseCassEngTestCase):
     class TestModel(Model):
-
         id = UUID(primary_key=True, default=uuid4)
 
     def test_extra_field(self):
@@ -788,15 +811,18 @@ class TestExtraFieldsRaiseException(BaseCassEngTestCase):
 
 class TestPythonDoesntDieWhenExtraFieldIsInCassandra(BaseCassEngTestCase):
     class TestModel(Model):
-
-        __table_name__ = 'alter_doesnt_break_running_app'
+        __table_name__ = "alter_doesnt_break_running_app"
         id = UUID(primary_key=True, default=uuid4)
 
     def test_extra_field(self):
         drop_table(self.TestModel)
         sync_table(self.TestModel)
         self.TestModel.create()
-        execute("ALTER TABLE {0} add blah int".format(self.TestModel.column_family_name(include_keyspace=True)))
+        execute(
+            "ALTER TABLE {0} add blah int".format(
+                self.TestModel.column_family_name(include_keyspace=True)
+            )
+        )
         self.TestModel.objects.all()
 
 
@@ -807,9 +833,10 @@ class TestTimeUUIDFromDatetime(BaseCassEngTestCase):
         uuid = util.uuid_from_time(dt)
 
         from uuid import UUID
+
         assert isinstance(uuid, UUID)
 
-        ts = (uuid.time - 0x01b21dd213814000) / 1e7 # back to a timestamp
+        ts = (uuid.time - 0x01B21DD213814000) / 1e7  # back to a timestamp
         new_dt = datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
 
         # checks that we created a UUID1 with the proper timestamp
@@ -817,7 +844,6 @@ class TestTimeUUIDFromDatetime(BaseCassEngTestCase):
 
 
 class TestInet(BaseCassEngTestCase):
-
     class InetTestModel(Model):
         id = UUID(primary_key=True, default=uuid4)
         address = Inet()
