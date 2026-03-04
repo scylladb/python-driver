@@ -290,14 +290,14 @@ class TypeTests(unittest.TestCase):
 
     def test_write_read_string(self):
         with tempfile.TemporaryFile() as f:
-            value = u'test'
+            value = 'test'
             write_string(f, value)
             f.seek(0)
             assert read_string(f) == value
 
     def test_write_read_longstring(self):
         with tempfile.TemporaryFile() as f:
-            value = u'test'
+            value = 'test'
             write_longstring(f, value)
             f.seek(0)
             assert read_longstring(f) == value
@@ -323,7 +323,7 @@ class TypeTests(unittest.TestCase):
             assert read_inet(f) == value
 
     def test_cql_quote(self):
-        assert cql_quote(u'test') == "'test'"
+        assert cql_quote('test') == "'test'"
         assert cql_quote('test') == "'test'"
         assert cql_quote(0) == '0'
 

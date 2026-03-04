@@ -66,9 +66,9 @@ marshalled_value_pairs = (
     (b'', 'InetAddressType', None),
     (b'A46\xa9', 'InetAddressType', '65.52.54.169'),
     (b'*\x00\x13(\xe1\x02\xcc\xc0\x00\x00\x00\x00\x00\x00\x01"', 'InetAddressType', '2a00:1328:e102:ccc0::122'),
-    (b'\xe3\x81\xbe\xe3\x81\x97\xe3\x81\xa6', 'UTF8Type', u'\u307e\u3057\u3066'),
-    (b'\xe3\x81\xbe\xe3\x81\x97\xe3\x81\xa6' * 1000, 'UTF8Type', u'\u307e\u3057\u3066' * 1000),
-    (b'', 'UTF8Type', u''),
+    (b'\xe3\x81\xbe\xe3\x81\x97\xe3\x81\xa6', 'UTF8Type', '\u307e\u3057\u3066'),
+    (b'\xe3\x81\xbe\xe3\x81\x97\xe3\x81\xa6' * 1000, 'UTF8Type', '\u307e\u3057\u3066' * 1000),
+    (b'', 'UTF8Type', ''),
     (b'\xff' * 16, 'UUIDType', UUID('ffffffff-ffff-ffff-ffff-ffffffffffff')),
     (b'I\x15~\xfc\xef<\x9d\xe3\x16\x98\xaf\x80\x1f\xb4\x0b*', 'UUIDType', UUID('49157efc-ef3c-9de3-1698-af801fb40b2a')),
     (b'', 'UUIDType', None),
@@ -89,9 +89,9 @@ marshalled_value_pairs = (
 )
 
 ordered_map_value = OrderedMapSerializedKey(UTF8Type, 3)
-ordered_map_value._insert(u'\u307fbob', 199)
-ordered_map_value._insert(u'', -1)
-ordered_map_value._insert(u'\\', 0)
+ordered_map_value._insert('\u307fbob', 199)
+ordered_map_value._insert('', -1)
+ordered_map_value._insert('\\', 0)
 
 # these following entries work for me right now, but they're dependent on
 # vagaries of internal python ordering for unordered types
