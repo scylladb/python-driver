@@ -21,7 +21,9 @@ from cassandra.cqlengine import columns
 from cassandra.cqlengine import connection
 from cassandra.cqlengine import query
 from cassandra.cqlengine.query import DoesNotExist as _DoesNotExist
-from cassandra.cqlengine.query import MultipleObjectsReturned as _MultipleObjectsReturned
+from cassandra.cqlengine.query import (
+    MultipleObjectsReturned as _MultipleObjectsReturned,
+)
 from cassandra.metadata import protect_name
 from cassandra.util import OrderedDict
 
@@ -54,6 +56,7 @@ class PolymorphicModelException(ModelException):
 class UndefinedKeyspaceWarning(Warning):
     pass
 
+
 DEFAULT_KEYSPACE = None
 
 
@@ -62,6 +65,7 @@ class hybrid_classmethod(object):
     Allows a method to behave as both a class method and
     normal instance method depending on how it's called
     """
+
     def __init__(self, clsmethod, instmethod):
         self.clsmethod = clsmethod
         self.instmethod = instmethod
@@ -86,9 +90,9 @@ class QuerySetDescriptor(object):
     """
 
     def __get__(self, obj, model):
-        """ :rtype: ModelQuerySet """
+        """:rtype: ModelQuerySet"""
         if model.__abstract__:
-            raise CQLEngineException('cannot execute queries against abstract models')
+            raise CQLEngineException("cannot execute queries against abstract models")
         queryset = model.__queryset__(model)
 
         # if this is a concrete polymorphic model, and the discriminator
@@ -115,13 +119,17 @@ class ConditionalDescriptor(object):
     """
     returns a query set descriptor
     """
+
     def __get__(self, instance, model):
         if instance:
+
             def conditional_setter(*prepared_conditional, **unprepared_conditionals):
                 if len(prepared_conditional) > 0:
                     conditionals = prepared_conditional[0]
                 else:
-                    conditionals = instance.objects.iff(**unprepared_conditionals)._conditional
+                    conditionals = instance.objects.iff(
+                        **unprepared_conditionals
+                    )._conditional
                 instance._conditional = conditionals
                 return instance
 
@@ -132,6 +140,7 @@ class ConditionalDescriptor(object):
             conditionals = model.objects.iff(**unprepared_conditionals)._conditional
             qs._conditional = conditionals
             return qs
+
         return conditional_setter
 
     def __call__(self, *args, **kwargs):
@@ -142,6 +151,7 @@ class TTLDescriptor(object):
     """
     returns a query set descriptor
     """
+
     def __get__(self, instance, model):
         if instance:
             # instance = copy.deepcopy(instance)
@@ -149,6 +159,7 @@ class TTLDescriptor(object):
             def ttl_setter(ts):
                 instance._ttl = ts
                 return instance
+
             return ttl_setter
 
         qs = model.__queryset__(model)
@@ -167,12 +178,14 @@ class TimestampDescriptor(object):
     """
     returns a query set descriptor with a timestamp specified
     """
+
     def __get__(self, instance, model):
         if instance:
             # instance method
             def timestamp_setter(ts):
                 instance._timestamp = ts
                 return instance
+
             return timestamp_setter
 
         return model.objects.timestamp
@@ -185,12 +198,14 @@ class IfNotExistsDescriptor(object):
     """
     return a query set descriptor with a if_not_exists flag specified
     """
+
     def __get__(self, instance, model):
         if instance:
             # instance method
             def ifnotexists_setter(ife=True):
                 instance._if_not_exists = ife
                 return instance
+
             return ifnotexists_setter
 
         return model.objects.if_not_exists
@@ -203,12 +218,14 @@ class IfExistsDescriptor(object):
     """
     return a query set descriptor with a if_exists flag specified
     """
+
     def __get__(self, instance, model):
         if instance:
             # instance method
             def ifexists_setter(ife=True):
                 instance._if_exists = ife
                 return instance
+
             return ifexists_setter
 
         return model.objects.if_exists
@@ -221,12 +238,14 @@ class ConsistencyDescriptor(object):
     """
     returns a query set descriptor if called on Class, instance if it was an instance call
     """
+
     def __get__(self, instance, model):
         if instance:
             # instance = copy.deepcopy(instance)
             def consistency_setter(consistency):
                 instance.__consistency__ = consistency
                 return instance
+
             return consistency_setter
 
         qs = model.__queryset__(model)
@@ -245,6 +264,7 @@ class UsingDescriptor(object):
     """
     return a query set descriptor with a connection context specified
     """
+
     def __get__(self, instance, model):
         if instance:
             # instance method
@@ -252,6 +272,7 @@ class UsingDescriptor(object):
                 if connection:
                     instance._connection = connection
                 return instance
+
             return using_setter
 
         return model.objects.using
@@ -272,7 +293,7 @@ class ColumnQueryEvaluator(query.AbstractQueryableColumn):
     def __init__(self, column):
         self.column = column
 
-    def __unicode__(self):
+    def __str__(self):
         return self.column.db_field_name
 
     def _get_column(self):
@@ -316,7 +337,7 @@ class ColumnDescriptor(object):
         if instance:
             return instance._values[self.column.column_name].setval(value)
         else:
-            raise AttributeError('cannot reassign column values')
+            raise AttributeError("cannot reassign column values")
 
     def __delete__(self, instance):
         """
@@ -326,7 +347,9 @@ class ColumnDescriptor(object):
             if self.column.can_delete:
                 instance._values[self.column.column_name].delval()
             else:
-                raise AttributeError('cannot delete {0} columns'.format(self.column.column_name))
+                raise AttributeError(
+                    "cannot delete {0} columns".format(self.column.column_name)
+                )
 
 
 class BaseModel(object):
@@ -376,9 +399,13 @@ class BaseModel(object):
 
     __consistency__ = None  # can be set per query
 
-    _timestamp = None  # optional timestamp to include with the operation (USING TIMESTAMP)
+    _timestamp = (
+        None  # optional timestamp to include with the operation (USING TIMESTAMP)
+    )
 
-    _if_not_exists = False  # optional if_not_exists flag to check existence before insertion
+    _if_not_exists = (
+        False  # optional if_not_exists flag to check existence before insertion
+    )
 
     _if_exists = False  # optional if_exists flag to check existence before update
 
@@ -409,17 +436,25 @@ class BaseModel(object):
             self._values[name] = value_mngr
 
     def __repr__(self):
-        return '{0}({1})'.format(self.__class__.__name__,
-                               ', '.join('{0}={1!r}'.format(k, getattr(self, k))
-                                         for k in self._defined_columns.keys()
-                                         if k != self._discriminator_column_name))
+        return "{0}({1})".format(
+            self.__class__.__name__,
+            ", ".join(
+                "{0}={1!r}".format(k, getattr(self, k))
+                for k in self._defined_columns.keys()
+                if k != self._discriminator_column_name
+            ),
+        )
 
     def __str__(self):
         """
         Pretty printing of models by their primary key
         """
-        return '{0} <{1}>'.format(self.__class__.__name__,
-                                ', '.join('{0}={1}'.format(k, getattr(self, k)) for k in self._primary_keys.keys()))
+        return "{0} <{1}>".format(
+            self.__class__.__name__,
+            ", ".join(
+                "{0}={1}".format(k, getattr(self, k)) for k in self._primary_keys.keys()
+            ),
+        )
 
     @classmethod
     def _routing_key_from_values(cls, pk_values, protocol_version):
@@ -428,19 +463,27 @@ class BaseModel(object):
     @classmethod
     def _discover_polymorphic_submodels(cls):
         if not cls._is_polymorphic_base:
-            raise ModelException('_discover_polymorphic_submodels can only be called on polymorphic base classes')
+            raise ModelException(
+                "_discover_polymorphic_submodels can only be called on polymorphic base classes"
+            )
 
         def _discover(klass):
-            if not klass._is_polymorphic_base and klass.__discriminator_value__ is not None:
+            if (
+                not klass._is_polymorphic_base
+                and klass.__discriminator_value__ is not None
+            ):
                 cls._discriminator_map[klass.__discriminator_value__] = klass
             for subklass in klass.__subclasses__():
                 _discover(subklass)
+
         _discover(cls)
 
     @classmethod
     def _get_model_by_discriminator_value(cls, key):
         if not cls._is_polymorphic_base:
-            raise ModelException('_get_model_by_discriminator_value can only be called on polymorphic base classes')
+            raise ModelException(
+                "_get_model_by_discriminator_value can only be called on polymorphic base classes"
+            )
         return cls._discriminator_map.get(key)
 
     @classmethod
@@ -459,7 +502,9 @@ class BaseModel(object):
             disc_key = values.get(cls._discriminator_column_name)
 
             if disc_key is None:
-                raise PolymorphicModelException('discriminator value was not found in values')
+                raise PolymorphicModelException(
+                    "discriminator value was not found in values"
+                )
 
             poly_base = cls if cls._is_polymorphic_base else cls._polymorphic_base
 
@@ -469,15 +514,19 @@ class BaseModel(object):
                 klass = poly_base._get_model_by_discriminator_value(disc_key)
                 if klass is None:
                     raise PolymorphicModelException(
-                        'unrecognized discriminator column {0} for class {1}'.format(disc_key, poly_base.__name__)
+                        "unrecognized discriminator column {0} for class {1}".format(
+                            disc_key, poly_base.__name__
+                        )
                     )
 
             if not issubclass(klass, cls):
                 raise PolymorphicModelException(
-                    '{0} is not a subclass of {1}'.format(klass.__name__, cls.__name__)
+                    "{0} is not a subclass of {1}".format(klass.__name__, cls.__name__)
                 )
 
-            values = dict((k, v) for k, v in values.items() if k in klass._columns.keys())
+            values = dict(
+                (k, v) for k, v in values.items() if k in klass._columns.keys()
+            )
 
         else:
             klass = cls
@@ -540,7 +589,9 @@ class BaseModel(object):
         if keys != other_keys:
             return False
 
-        return all(getattr(self, key, None) == getattr(other, key, None) for key in other_keys)
+        return all(
+            getattr(self, key, None) == getattr(other, key, None) for key in other_keys
+        )
 
     def __ne__(self, other):
         return not self.__eq__(other)
@@ -555,37 +606,47 @@ class BaseModel(object):
         if include_keyspace:
             keyspace = cls._get_keyspace()
             if not keyspace:
-                raise CQLEngineException("Model keyspace is not set and no default is available. Set model keyspace or setup connection before attempting to generate a query.")
-            return '{0}.{1}'.format(protect_name(keyspace), cf_name)
+                raise CQLEngineException(
+                    "Model keyspace is not set and no default is available. Set model keyspace or setup connection before attempting to generate a query."
+                )
+            return "{0}.{1}".format(protect_name(keyspace), cf_name)
 
         return cf_name
-
 
     @classmethod
     def _raw_column_family_name(cls):
         if not cls._table_name:
             if cls.__table_name__:
                 if cls.__table_name_case_sensitive__:
-                    warn("Model __table_name_case_sensitive__ will be removed in 4.0.", PendingDeprecationWarning)
+                    warn(
+                        "Model __table_name_case_sensitive__ will be removed in 4.0.",
+                        PendingDeprecationWarning,
+                    )
                     cls._table_name = cls.__table_name__
                 else:
                     table_name = cls.__table_name__.lower()
                     if cls.__table_name__ != table_name:
-                        warn(("Model __table_name__ will be case sensitive by default in 4.0. "
-                        "You should fix the __table_name__ value of the '{0}' model.").format(cls.__name__))
+                        warn(
+                            (
+                                "Model __table_name__ will be case sensitive by default in 4.0. "
+                                "You should fix the __table_name__ value of the '{0}' model."
+                            ).format(cls.__name__)
+                        )
                     cls._table_name = table_name
             else:
                 if cls._is_polymorphic and not cls._is_polymorphic_base:
                     cls._table_name = cls._polymorphic_base._raw_column_family_name()
                 else:
-                    camelcase = re.compile(r'([a-z])([A-Z])')
-                    ccase = lambda s: camelcase.sub(lambda v: '{0}_{1}'.format(v.group(1), v.group(2).lower()), s)
+                    camelcase = re.compile(r"([a-z])([A-Z])")
+                    ccase = lambda s: camelcase.sub(
+                        lambda v: "{0}_{1}".format(v.group(1), v.group(2).lower()), s
+                    )
 
                     cf_name = ccase(cls.__name__)
                     # trim to less than 48 characters or cassandra will complain
                     cf_name = cf_name[-48:]
                     cf_name = cf_name.lower()
-                    cf_name = re.sub(r'^_+', '', cf_name)
+                    cf_name = re.sub(r"^_+", "", cf_name)
                     cls._table_name = cf_name
 
         return cls._table_name
@@ -607,12 +668,12 @@ class BaseModel(object):
 
     # Let an instance be used like a dict of its columns keys/values
     def __iter__(self):
-        """ Iterate over column ids. """
+        """Iterate over column ids."""
         for column_id in self._columns.keys():
             yield column_id
 
     def __getitem__(self, key):
-        """ Returns column's value. """
+        """Returns column's value."""
         if not isinstance(key, str):
             raise TypeError
         if key not in self._columns.keys():
@@ -620,7 +681,7 @@ class BaseModel(object):
         return getattr(self, key)
 
     def __setitem__(self, key, val):
-        """ Sets a column's value. """
+        """Sets a column's value."""
         if not isinstance(key, str):
             raise TypeError
         if key not in self._columns.keys():
@@ -638,19 +699,19 @@ class BaseModel(object):
             return self._len
 
     def keys(self):
-        """ Returns a list of column IDs. """
+        """Returns a list of column IDs."""
         return [k for k in self]
 
     def values(self):
-        """ Returns list of column values. """
+        """Returns list of column values."""
         return [self[k] for k in self]
 
     def items(self):
-        """ Returns a list of column ID/value tuples. """
+        """Returns a list of column ID/value tuples."""
         return [(k, self[k]) for k in self]
 
     def _as_dict(self):
-        """ Returns a map of column names to cleaned values """
+        """Returns a map of column names to cleaned values"""
         values = self._dynamic_columns or {}
         for name, col in self._columns.items():
             values[name] = col.to_database(getattr(self, name, None))
@@ -703,7 +764,7 @@ class BaseModel(object):
         Sets a timeout for use in :meth:`~.save`, :meth:`~.update`, and :meth:`~.delete`
         operations
         """
-        assert self._batch is None, 'Setting both timeout and batch is not supported'
+        assert self._batch is None, "Setting both timeout and batch is not supported"
         self._timeout = timeout
         return self
 
@@ -722,20 +783,25 @@ class BaseModel(object):
         # handle polymorphic models
         if self._is_polymorphic:
             if self._is_polymorphic_base:
-                raise PolymorphicModelException('cannot save polymorphic base model')
+                raise PolymorphicModelException("cannot save polymorphic base model")
             else:
-                setattr(self, self._discriminator_column_name, self.__discriminator_value__)
+                setattr(
+                    self, self._discriminator_column_name, self.__discriminator_value__
+                )
 
         self.validate()
-        self.__dmlquery__(self.__class__, self,
-                          batch=self._batch,
-                          ttl=self._ttl,
-                          timestamp=self._timestamp,
-                          consistency=self.__consistency__,
-                          if_not_exists=self._if_not_exists,
-                          conditional=self._conditional,
-                          timeout=self._timeout,
-                          if_exists=self._if_exists).save()
+        self.__dmlquery__(
+            self.__class__,
+            self,
+            batch=self._batch,
+            ttl=self._ttl,
+            timestamp=self._timestamp,
+            consistency=self.__consistency__,
+            if_not_exists=self._if_not_exists,
+            conditional=self._conditional,
+            timeout=self._timeout,
+            if_exists=self._if_exists,
+        ).save()
 
         self._set_persisted()
 
@@ -761,7 +827,9 @@ class BaseModel(object):
             if col is None:
                 raise ValidationError(
                     "{0}.{1} has no column named: {2}".format(
-                        self.__module__, self.__class__.__name__, column_id))
+                        self.__module__, self.__class__.__name__, column_id
+                    )
+                )
 
             # check for primary key update attempts
             if col.is_primary_key:
@@ -769,26 +837,33 @@ class BaseModel(object):
                 if v != current_value:
                     raise ValidationError(
                         "Cannot apply update to primary key '{0}' for {1}.{2}".format(
-                            column_id, self.__module__, self.__class__.__name__))
+                            column_id, self.__module__, self.__class__.__name__
+                        )
+                    )
 
             setattr(self, column_id, v)
 
         # handle polymorphic models
         if self._is_polymorphic:
             if self._is_polymorphic_base:
-                raise PolymorphicModelException('cannot update polymorphic base model')
+                raise PolymorphicModelException("cannot update polymorphic base model")
             else:
-                setattr(self, self._discriminator_column_name, self.__discriminator_value__)
+                setattr(
+                    self, self._discriminator_column_name, self.__discriminator_value__
+                )
 
         self.validate()
-        self.__dmlquery__(self.__class__, self,
-                          batch=self._batch,
-                          ttl=self._ttl,
-                          timestamp=self._timestamp,
-                          consistency=self.__consistency__,
-                          conditional=self._conditional,
-                          timeout=self._timeout,
-                          if_exists=self._if_exists).update()
+        self.__dmlquery__(
+            self.__class__,
+            self,
+            batch=self._batch,
+            ttl=self._ttl,
+            timestamp=self._timestamp,
+            consistency=self.__consistency__,
+            conditional=self._conditional,
+            timeout=self._timeout,
+            if_exists=self._if_exists,
+        ).update()
 
         self._set_persisted()
 
@@ -800,13 +875,16 @@ class BaseModel(object):
         """
         Deletes the object from the database
         """
-        self.__dmlquery__(self.__class__, self,
-                          batch=self._batch,
-                          timestamp=self._timestamp,
-                          consistency=self.__consistency__,
-                          timeout=self._timeout,
-                          conditional=self._conditional,
-                          if_exists=self._if_exists).delete()
+        self.__dmlquery__(
+            self.__class__,
+            self,
+            batch=self._batch,
+            timestamp=self._timestamp,
+            consistency=self.__consistency__,
+            timeout=self._timeout,
+            conditional=self._conditional,
+            if_exists=self._if_exists,
+        ).delete()
 
     def get_changed_columns(self):
         """
@@ -819,9 +897,13 @@ class BaseModel(object):
         return cls.objects.batch(batch)
 
     def _inst_batch(self, batch):
-        assert self._timeout is connection.NOT_SET, 'Setting both timeout and batch is not supported'
+        assert self._timeout is connection.NOT_SET, (
+            "Setting both timeout and batch is not supported"
+        )
         if self._connection:
-            raise CQLEngineException("Cannot specify a connection on model in batch mode.")
+            raise CQLEngineException(
+                "Cannot specify a connection on model in batch mode."
+            )
         self._batch = batch
         return self
 
@@ -838,7 +920,6 @@ class BaseModel(object):
 
 
 class ModelMetaClass(type):
-
     def __new__(cls, name, bases, attrs):
         # move column definitions into columns dict
         # and set default column names
@@ -849,48 +930,68 @@ class ModelMetaClass(type):
         # get inherited properties
         inherited_columns = OrderedDict()
         for base in bases:
-            for k, v in getattr(base, '_defined_columns', {}).items():
+            for k, v in getattr(base, "_defined_columns", {}).items():
                 inherited_columns.setdefault(k, v)
 
         # short circuit __abstract__ inheritance
-        is_abstract = attrs['__abstract__'] = attrs.get('__abstract__', False)
+        is_abstract = attrs["__abstract__"] = attrs.get("__abstract__", False)
 
         # short circuit __discriminator_value__ inheritance
-        attrs['__discriminator_value__'] = attrs.get('__discriminator_value__')
+        attrs["__discriminator_value__"] = attrs.get("__discriminator_value__")
 
         # TODO __default__ttl__ should be removed in the next major release
-        options = attrs.get('__options__') or {}
-        attrs['__default_ttl__'] = options.get('default_time_to_live')
+        options = attrs.get("__options__") or {}
+        attrs["__default_ttl__"] = options.get("default_time_to_live")
 
-        column_definitions = [(k, v) for k, v in attrs.items() if isinstance(v, columns.Column)]
+        column_definitions = [
+            (k, v) for k, v in attrs.items() if isinstance(v, columns.Column)
+        ]
         column_definitions = sorted(column_definitions, key=lambda x: x[1].position)
 
-        is_polymorphic_base = any([c[1].discriminator_column for c in column_definitions])
+        is_polymorphic_base = any(
+            [c[1].discriminator_column for c in column_definitions]
+        )
 
         column_definitions = [x for x in inherited_columns.items()] + column_definitions
-        discriminator_columns = [c for c in column_definitions if c[1].discriminator_column]
+        discriminator_columns = [
+            c for c in column_definitions if c[1].discriminator_column
+        ]
         is_polymorphic = len(discriminator_columns) > 0
         if len(discriminator_columns) > 1:
-            raise ModelDefinitionException('only one discriminator_column can be defined in a model, {0} found'.format(len(discriminator_columns)))
+            raise ModelDefinitionException(
+                "only one discriminator_column can be defined in a model, {0} found".format(
+                    len(discriminator_columns)
+                )
+            )
 
-        if attrs['__discriminator_value__'] and not is_polymorphic:
-            raise ModelDefinitionException('__discriminator_value__ specified, but no base columns defined with discriminator_column=True')
+        if attrs["__discriminator_value__"] and not is_polymorphic:
+            raise ModelDefinitionException(
+                "__discriminator_value__ specified, but no base columns defined with discriminator_column=True"
+            )
 
-        discriminator_column_name, discriminator_column = discriminator_columns[0] if discriminator_columns else (None, None)
+        discriminator_column_name, discriminator_column = (
+            discriminator_columns[0] if discriminator_columns else (None, None)
+        )
 
-        if isinstance(discriminator_column, (columns.BaseContainerColumn, columns.Counter)):
-            raise ModelDefinitionException('counter and container columns cannot be used as discriminator columns')
+        if isinstance(
+            discriminator_column, (columns.BaseContainerColumn, columns.Counter)
+        ):
+            raise ModelDefinitionException(
+                "counter and container columns cannot be used as discriminator columns"
+            )
 
         # find polymorphic base class
         polymorphic_base = None
         if is_polymorphic and not is_polymorphic_base:
+
             def _get_polymorphic_base(bases):
                 for base in bases:
-                    if getattr(base, '_is_polymorphic_base', False):
+                    if getattr(base, "_is_polymorphic_base", False):
                         return base
                     klass = _get_polymorphic_base(base.__bases__)
                     if klass:
                         return klass
+
             polymorphic_base = _get_polymorphic_base(bases)
 
         defined_columns = OrderedDict(column_definitions)
@@ -899,10 +1000,16 @@ class ModelMetaClass(type):
         if not is_abstract and not any([v.primary_key for k, v in column_definitions]):
             raise ModelDefinitionException("At least 1 primary key is required.")
 
-        counter_columns = [c for c in defined_columns.values() if isinstance(c, columns.Counter)]
-        data_columns = [c for c in defined_columns.values() if not c.primary_key and not isinstance(c, columns.Counter)]
+        counter_columns = [
+            c for c in defined_columns.values() if isinstance(c, columns.Counter)
+        ]
+        data_columns = [
+            c
+            for c in defined_columns.values()
+            if not c.primary_key and not isinstance(c, columns.Counter)
+        ]
         if counter_columns and data_columns:
-            raise ModelDefinitionException('counter models may not have data columns')
+            raise ModelDefinitionException("counter models may not have data columns")
 
         has_partition_keys = any(v.partition_key for (k, v) in column_definitions)
 
@@ -919,11 +1026,15 @@ class ModelMetaClass(type):
         for k, v in column_definitions:
             # don't allow a column with the same name as a built-in attribute or method
             if k in BaseModel.__dict__:
-                raise ModelDefinitionException("column '{0}' conflicts with built-in attribute/method".format(k))
+                raise ModelDefinitionException(
+                    "column '{0}' conflicts with built-in attribute/method".format(k)
+                )
 
             # counter column primary keys are not allowed
             if (v.primary_key or v.partition_key) and isinstance(v, columns.Counter):
-                raise ModelDefinitionException('counter columns cannot be used as primary keys')
+                raise ModelDefinitionException(
+                    "counter columns cannot be used as primary keys"
+                )
 
             # this will mark the first primary key column as a partition
             # key, if one hasn't been set already
@@ -941,14 +1052,24 @@ class ModelMetaClass(type):
                 v._partition_key_index = overriding._partition_key_index
             _transform_column(k, v)
 
-        partition_keys = OrderedDict(k for k in primary_keys.items() if k[1].partition_key)
-        clustering_keys = OrderedDict(k for k in primary_keys.items() if not k[1].partition_key)
+        partition_keys = OrderedDict(
+            k for k in primary_keys.items() if k[1].partition_key
+        )
+        clustering_keys = OrderedDict(
+            k for k in primary_keys.items() if not k[1].partition_key
+        )
 
-        if attrs.get('__compute_routing_key__', True):
+        if attrs.get("__compute_routing_key__", True):
             key_cols = [c for c in partition_keys.values()]
-            partition_key_index = dict((col.db_field_name, col._partition_key_index) for col in key_cols)
+            partition_key_index = dict(
+                (col.db_field_name, col._partition_key_index) for col in key_cols
+            )
             key_cql_types = [c.cql_type for c in key_cols]
-            key_serializer = staticmethod(lambda parts, proto_version: [t.to_binary(p, proto_version) for t, p in zip(key_cql_types, parts)])
+            key_serializer = staticmethod(
+                lambda parts, proto_version: [
+                    t.to_binary(p, proto_version) for t, p in zip(key_cql_types, parts)
+                ]
+            )
         else:
             partition_key_index = {}
             key_serializer = staticmethod(lambda parts, proto_version: None)
@@ -959,23 +1080,37 @@ class ModelMetaClass(type):
                 raise ModelException("at least one partition key must be defined")
         if len(partition_keys) == 1:
             pk_name = [x for x in partition_keys.keys()][0]
-            attrs['pk'] = attrs[pk_name]
+            attrs["pk"] = attrs[pk_name]
         else:
             # composite partition key case, get/set a tuple of values
-            _get = lambda self: tuple(self._values[c].getval() for c in partition_keys.keys())
-            _set = lambda self, val: tuple(self._values[c].setval(v) for (c, v) in zip(partition_keys.keys(), val))
-            attrs['pk'] = property(_get, _set)
+            _get = lambda self: tuple(
+                self._values[c].getval() for c in partition_keys.keys()
+            )
+            _set = lambda self, val: tuple(
+                self._values[c].setval(v) for (c, v) in zip(partition_keys.keys(), val)
+            )
+            attrs["pk"] = property(_get, _set)
 
         # some validation
         col_names = set()
         for v in column_dict.values():
             # check for duplicate column names
             if v.db_field_name in col_names:
-                raise ModelException("{0} defines the column '{1}' more than once".format(name, v.db_field_name))
+                raise ModelException(
+                    "{0} defines the column '{1}' more than once".format(
+                        name, v.db_field_name
+                    )
+                )
             if v.clustering_order and not (v.primary_key and not v.partition_key):
-                raise ModelException("clustering_order may be specified only for clustering primary keys")
-            if v.clustering_order and v.clustering_order.lower() not in ('asc', 'desc'):
-                raise ModelException("invalid clustering order '{0}' for column '{1}'".format(repr(v.clustering_order), v.db_field_name))
+                raise ModelException(
+                    "clustering_order may be specified only for clustering primary keys"
+                )
+            if v.clustering_order and v.clustering_order.lower() not in ("asc", "desc"):
+                raise ModelException(
+                    "invalid clustering order '{0}' for column '{1}'".format(
+                        repr(v.clustering_order), v.db_field_name
+                    )
+                )
             col_names.add(v.db_field_name)
 
         # create db_name -> model name map for loading
@@ -986,47 +1121,53 @@ class ModelMetaClass(type):
                 db_map[db_field] = col_name
 
         # add management members to the class
-        attrs['_columns'] = column_dict
-        attrs['_primary_keys'] = primary_keys
-        attrs['_defined_columns'] = defined_columns
+        attrs["_columns"] = column_dict
+        attrs["_primary_keys"] = primary_keys
+        attrs["_defined_columns"] = defined_columns
 
         # maps the database field to the models key
-        attrs['_db_map'] = db_map
-        attrs['_pk_name'] = pk_name
-        attrs['_dynamic_columns'] = {}
+        attrs["_db_map"] = db_map
+        attrs["_pk_name"] = pk_name
+        attrs["_dynamic_columns"] = {}
 
-        attrs['_partition_keys'] = partition_keys
-        attrs['_partition_key_index'] = partition_key_index
-        attrs['_key_serializer'] = key_serializer
-        attrs['_clustering_keys'] = clustering_keys
-        attrs['_has_counter'] = len(counter_columns) > 0
+        attrs["_partition_keys"] = partition_keys
+        attrs["_partition_key_index"] = partition_key_index
+        attrs["_key_serializer"] = key_serializer
+        attrs["_clustering_keys"] = clustering_keys
+        attrs["_has_counter"] = len(counter_columns) > 0
 
         # add polymorphic management attributes
-        attrs['_is_polymorphic_base'] = is_polymorphic_base
-        attrs['_is_polymorphic'] = is_polymorphic
-        attrs['_polymorphic_base'] = polymorphic_base
-        attrs['_discriminator_column'] = discriminator_column
-        attrs['_discriminator_column_name'] = discriminator_column_name
-        attrs['_discriminator_map'] = {} if is_polymorphic_base else None
+        attrs["_is_polymorphic_base"] = is_polymorphic_base
+        attrs["_is_polymorphic"] = is_polymorphic
+        attrs["_polymorphic_base"] = polymorphic_base
+        attrs["_discriminator_column"] = discriminator_column
+        attrs["_discriminator_column_name"] = discriminator_column_name
+        attrs["_discriminator_map"] = {} if is_polymorphic_base else None
 
         # setup class exceptions
         DoesNotExistBase = None
         for base in bases:
-            DoesNotExistBase = getattr(base, 'DoesNotExist', None)
+            DoesNotExistBase = getattr(base, "DoesNotExist", None)
             if DoesNotExistBase is not None:
                 break
 
-        DoesNotExistBase = DoesNotExistBase or attrs.pop('DoesNotExist', BaseModel.DoesNotExist)
-        attrs['DoesNotExist'] = type('DoesNotExist', (DoesNotExistBase,), {})
+        DoesNotExistBase = DoesNotExistBase or attrs.pop(
+            "DoesNotExist", BaseModel.DoesNotExist
+        )
+        attrs["DoesNotExist"] = type("DoesNotExist", (DoesNotExistBase,), {})
 
         MultipleObjectsReturnedBase = None
         for base in bases:
-            MultipleObjectsReturnedBase = getattr(base, 'MultipleObjectsReturned', None)
+            MultipleObjectsReturnedBase = getattr(base, "MultipleObjectsReturned", None)
             if MultipleObjectsReturnedBase is not None:
                 break
 
-        MultipleObjectsReturnedBase = MultipleObjectsReturnedBase or attrs.pop('MultipleObjectsReturned', BaseModel.MultipleObjectsReturned)
-        attrs['MultipleObjectsReturned'] = type('MultipleObjectsReturned', (MultipleObjectsReturnedBase,), {})
+        MultipleObjectsReturnedBase = MultipleObjectsReturnedBase or attrs.pop(
+            "MultipleObjectsReturned", BaseModel.MultipleObjectsReturned
+        )
+        attrs["MultipleObjectsReturned"] = type(
+            "MultipleObjectsReturned", (MultipleObjectsReturnedBase,), {}
+        )
 
         # create the class and add a QuerySet to it
         klass = super(ModelMetaClass, cls).__new__(cls, name, bases, attrs)

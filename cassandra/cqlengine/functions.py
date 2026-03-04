@@ -16,8 +16,10 @@ from datetime import datetime
 
 from cassandra.cqlengine import UnicodeMixin, ValidationError
 
+
 def get_total_seconds(td):
     return td.total_seconds()
+
 
 class QueryValue(UnicodeMixin):
     """
@@ -25,13 +27,13 @@ class QueryValue(UnicodeMixin):
     be passed into .filter() keyword args
     """
 
-    format_string = '%({0})s'
+    format_string = "%({0})s"
 
     def __init__(self, value):
         self.value = value
         self.context_id = None
 
-    def __unicode__(self):
+    def __str__(self):
         return self.format_string.format(self.context_id)
 
     def set_context_id(self, ctx_id):
@@ -50,18 +52,18 @@ class BaseQueryFunction(QueryValue):
     be passed into .filter() and will be translated into CQL functions in
     the resulting query
     """
+
     pass
 
 
 class TimeUUIDQueryFunction(BaseQueryFunction):
-
     def __init__(self, value):
         """
         :param value: the time to create bounding time uuid from
         :type value: datetime
         """
         if not isinstance(value, datetime):
-            raise ValidationError('datetime instance is required')
+            raise ValidationError("datetime instance is required")
         super(TimeUUIDQueryFunction, self).__init__(value)
 
     def to_database(self, val):
@@ -79,7 +81,8 @@ class MinTimeUUID(TimeUUIDQueryFunction):
 
     http://cassandra.apache.org/doc/cql3/CQL-3.0.html#timeuuidFun
     """
-    format_string = 'MinTimeUUID(%({0})s)'
+
+    format_string = "MinTimeUUID(%({0})s)"
 
 
 class MaxTimeUUID(TimeUUIDQueryFunction):
@@ -88,7 +91,8 @@ class MaxTimeUUID(TimeUUIDQueryFunction):
 
     http://cassandra.apache.org/doc/cql3/CQL-3.0.html#timeuuidFun
     """
-    format_string = 'MaxTimeUUID(%({0})s)'
+
+    format_string = "MaxTimeUUID(%({0})s)"
 
 
 class Token(BaseQueryFunction):
@@ -97,6 +101,7 @@ class Token(BaseQueryFunction):
 
     http://cassandra.apache.org/doc/cql3/CQL-3.0.html#tokenFun
     """
+
     def __init__(self, *values):
         if len(values) == 1 and isinstance(values[0], (list, tuple)):
             values = values[0]
@@ -109,8 +114,11 @@ class Token(BaseQueryFunction):
     def get_context_size(self):
         return len(self.value)
 
-    def __unicode__(self):
-        token_args = ', '.join('%({0})s'.format(self.context_id + i) for i in range(self.get_context_size()))
+    def __str__(self):
+        token_args = ", ".join(
+            "%({0})s".format(self.context_id + i)
+            for i in range(self.get_context_size())
+        )
         return "token({0})".format(token_args)
 
     def update_context(self, ctx):
