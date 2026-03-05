@@ -20,7 +20,9 @@ from cassandra.cqlengine.connection import get_cluster
 from cassandra.cqlengine.models import UsingDescriptor, BaseModel
 from cassandra.cqlengine.query import AbstractQueryableColumn, SimpleQuerySet
 from cassandra.cqlengine.query import DoesNotExist as _DoesNotExist
-from cassandra.cqlengine.query import MultipleObjectsReturned as _MultipleObjectsReturned
+from cassandra.cqlengine.query import (
+    MultipleObjectsReturned as _MultipleObjectsReturned,
+)
 
 
 class QuerySetDescriptor(object):
@@ -30,9 +32,9 @@ class QuerySetDescriptor(object):
     """
 
     def __get__(self, obj, model):
-        """ :rtype: ModelQuerySet """
+        """:rtype: ModelQuerySet"""
         if model.__abstract__:
-            raise CQLEngineException('cannot execute queries against abstract models')
+            raise CQLEngineException("cannot execute queries against abstract models")
         return SimpleQuerySet(obj)
 
     def __call__(self, *args, **kwargs):
@@ -52,11 +54,11 @@ class NamedColumn(AbstractQueryableColumn):
     def __init__(self, name):
         self.name = name
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
     def _get_column(self):
-        """ :rtype: NamedColumn """
+        """:rtype: NamedColumn"""
         return self
 
     @property
@@ -113,11 +115,25 @@ class NamedTable(object):
 
     def _get_partition_keys(self):
         try:
-            table_meta = get_cluster(self._get_connection()).metadata.keyspaces[self.keyspace].tables[self.name]
-            self.__partition_keys = OrderedDict((pk.name, Column(primary_key=True, partition_key=True, db_field=pk.name)) for pk in table_meta.partition_key)
+            table_meta = (
+                get_cluster(self._get_connection())
+                .metadata.keyspaces[self.keyspace]
+                .tables[self.name]
+            )
+            self.__partition_keys = OrderedDict(
+                (
+                    pk.name,
+                    Column(primary_key=True, partition_key=True, db_field=pk.name),
+                )
+                for pk in table_meta.partition_key
+            )
         except Exception as e:
-            raise CQLEngineException("Failed inspecting partition keys for {0}."
-                                     "Ensure cqlengine is connected before attempting this with NamedTable.".format(self.column_family_name()))
+            raise CQLEngineException(
+                "Failed inspecting partition keys for {0}."
+                "Ensure cqlengine is connected before attempting this with NamedTable.".format(
+                    self.column_family_name()
+                )
+            )
 
     def column(self, name):
         return NamedColumn(name)
@@ -128,7 +144,7 @@ class NamedTable(object):
         otherwise, it creates it from the module and class name
         """
         if include_keyspace:
-            return '{0}.{1}'.format(self.keyspace, self.name)
+            return "{0}.{1}".format(self.keyspace, self.name)
         else:
             return self.name
 

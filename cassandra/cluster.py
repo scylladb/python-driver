@@ -16,7 +16,6 @@
 This module houses the main classes you will interact with,
 :class:`.Cluster` and :class:`.Session`.
 """
-from __future__ import absolute_import
 
 import atexit
 import datetime
@@ -43,57 +42,120 @@ import uuid
 import weakref
 from weakref import WeakValueDictionary
 
-from cassandra import (ConsistencyLevel, AuthenticationFailed, InvalidRequest,
-                       OperationTimedOut, UnsupportedOperation,
-                       SchemaTargetType, DriverException, ProtocolVersion,
-                       UnresolvableContactPoints, DependencyException)
+from cassandra import (
+    ConsistencyLevel,
+    AuthenticationFailed,
+    InvalidRequest,
+    OperationTimedOut,
+    UnsupportedOperation,
+    SchemaTargetType,
+    DriverException,
+    ProtocolVersion,
+    UnresolvableContactPoints,
+    DependencyException,
+)
 from cassandra.auth import _proxy_execute_key, PlainTextAuthProvider
-from cassandra.connection import (ConnectionException, ConnectionShutdown,
-                                  ConnectionHeartbeat, ProtocolVersionUnsupported,
-                                  EndPoint, DefaultEndPoint, DefaultEndPointFactory,
-                                  SniEndPointFactory, ConnectionBusy, locally_supported_compressions)
+from cassandra.connection import (
+    ConnectionException,
+    ConnectionShutdown,
+    ConnectionHeartbeat,
+    ProtocolVersionUnsupported,
+    EndPoint,
+    DefaultEndPoint,
+    DefaultEndPointFactory,
+    SniEndPointFactory,
+    ConnectionBusy,
+    locally_supported_compressions,
+)
 from cassandra.cqltypes import UserType
 import cassandra.cqltypes as types
 from cassandra.encoder import Encoder
-from cassandra.protocol import (QueryMessage, ResultMessage,
-                                ErrorMessage, ReadTimeoutErrorMessage,
-                                WriteTimeoutErrorMessage,
-                                UnavailableErrorMessage,
-                                OverloadedErrorMessage,
-                                PrepareMessage, ExecuteMessage,
-                                PreparedQueryNotFound,
-                                IsBootstrappingErrorMessage,
-                                TruncateError, ServerError,
-                                BatchMessage, RESULT_KIND_PREPARED,
-                                RESULT_KIND_SET_KEYSPACE, RESULT_KIND_ROWS,
-                                RESULT_KIND_SCHEMA_CHANGE, ProtocolHandler,
-                                RESULT_KIND_VOID, ProtocolException)
+from cassandra.protocol import (
+    QueryMessage,
+    ResultMessage,
+    ErrorMessage,
+    ReadTimeoutErrorMessage,
+    WriteTimeoutErrorMessage,
+    UnavailableErrorMessage,
+    OverloadedErrorMessage,
+    PrepareMessage,
+    ExecuteMessage,
+    PreparedQueryNotFound,
+    IsBootstrappingErrorMessage,
+    TruncateError,
+    ServerError,
+    BatchMessage,
+    RESULT_KIND_PREPARED,
+    RESULT_KIND_SET_KEYSPACE,
+    RESULT_KIND_ROWS,
+    RESULT_KIND_SCHEMA_CHANGE,
+    ProtocolHandler,
+    RESULT_KIND_VOID,
+    ProtocolException,
+)
 from cassandra.metadata import Metadata, protect_name, murmur3, _NodeInfo
-from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, SimpleConvictionPolicy,
-                                ExponentialReconnectionPolicy, HostDistance,
-                                RetryPolicy, IdentityTranslator, NoSpeculativeExecutionPlan,
-                                NoSpeculativeExecutionPolicy, DefaultLoadBalancingPolicy,
-                                NeverRetryPolicy)
-from cassandra.pool import (Host, _ReconnectionHandler, _HostReconnectionHandler,
-                            HostConnection,
-                            NoConnectionsAvailable)
-from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
-                             BatchStatement, bind_params, QueryTrace, TraceUnavailable,
-                             named_tuple_factory, dict_factory, tuple_factory, FETCH_SIZE_UNSET,
-                             HostTargetingStatement)
+from cassandra.policies import (
+    TokenAwarePolicy,
+    DCAwareRoundRobinPolicy,
+    SimpleConvictionPolicy,
+    ExponentialReconnectionPolicy,
+    HostDistance,
+    RetryPolicy,
+    IdentityTranslator,
+    NoSpeculativeExecutionPlan,
+    NoSpeculativeExecutionPolicy,
+    DefaultLoadBalancingPolicy,
+    NeverRetryPolicy,
+)
+from cassandra.pool import (
+    Host,
+    _ReconnectionHandler,
+    _HostReconnectionHandler,
+    HostConnection,
+    NoConnectionsAvailable,
+)
+from cassandra.query import (
+    SimpleStatement,
+    PreparedStatement,
+    BoundStatement,
+    BatchStatement,
+    bind_params,
+    QueryTrace,
+    TraceUnavailable,
+    named_tuple_factory,
+    dict_factory,
+    tuple_factory,
+    FETCH_SIZE_UNSET,
+    HostTargetingStatement,
+)
 from cassandra.marshal import int64_pack
 from cassandra.tablets import Tablet, Tablets
 from cassandra.timestamps import MonotonicTimestampGenerator
-from cassandra.util import _resolve_contact_points_to_string_map, Version, maybe_add_timeout_to_query
+from cassandra.util import (
+    _resolve_contact_points_to_string_map,
+    Version,
+    maybe_add_timeout_to_query,
+)
 
 from cassandra.datastax.insights.reporter import MonitorReporter
 from cassandra.datastax.insights.util import version_supports_insights
 
-from cassandra.datastax.graph import (graph_object_row_factory, GraphOptions, GraphSON1Serializer,
-                                      GraphProtocol, GraphSON2Serializer, GraphStatement, SimpleGraphStatement,
-                                      graph_graphson2_row_factory, graph_graphson3_row_factory,
-                                      GraphSON3Serializer)
-from cassandra.datastax.graph.query import _request_timeout_key, _GraphSONContextRowFactory
+from cassandra.datastax.graph import (
+    graph_object_row_factory,
+    GraphOptions,
+    GraphSON1Serializer,
+    GraphProtocol,
+    GraphSON2Serializer,
+    GraphStatement,
+    SimpleGraphStatement,
+    graph_graphson2_row_factory,
+    graph_graphson3_row_factory,
+    GraphSON3Serializer,
+)
+from cassandra.datastax.graph.query import (
+    _request_timeout_key,
+    _GraphSONContextRowFactory,
+)
 from cassandra.datastax import cloud as dscloud
 from cassandra.application_info import ApplicationInfoBase
 
@@ -109,64 +171,78 @@ except (ImportError, AttributeError):
     # TODO: remove it when eventlet issue would be fixed
     EventletConnection = None
 
-try:
-    from weakref import WeakSet
-except ImportError:
-    from cassandra.util import WeakSet  # NOQA
+from weakref import WeakSet
+
 
 def _is_gevent_monkey_patched():
-    if 'gevent.monkey' not in sys.modules:
+    if "gevent.monkey" not in sys.modules:
         return False
     try:
         import gevent.socket
-        return socket.socket is gevent.socket.socket    # Another case related to PYTHON-1364
+
+        return (
+            socket.socket is gevent.socket.socket
+        )  # Another case related to PYTHON-1364
     except (AttributeError, ImportError):
         return False
+
 
 def _try_gevent_import():
     if _is_gevent_monkey_patched():
         from cassandra.io.geventreactor import GeventConnection
-        return (GeventConnection,None)
+
+        return (GeventConnection, None)
     else:
-        return (None,None)
+        return (None, None)
+
 
 def _is_eventlet_monkey_patched():
-    if 'eventlet.patcher' not in sys.modules:
+    if "eventlet.patcher" not in sys.modules:
         return False
     try:
         import eventlet.patcher
-        return eventlet.patcher.is_monkey_patched('socket')
+
+        return eventlet.patcher.is_monkey_patched("socket")
     except (ImportError, AttributeError):
         # AttributeError was add for handling python 3.12 https://github.com/eventlet/eventlet/issues/812
         # TODO: remove it when eventlet issue would be fixed
         return False
 
+
 def _try_eventlet_import():
     if _is_eventlet_monkey_patched():
         from cassandra.io.eventletreactor import EventletConnection
-        return (EventletConnection,None)
+
+        return (EventletConnection, None)
     else:
-        return (None,None)
+        return (None, None)
+
 
 def _try_libev_import():
     try:
         from cassandra.io.libevreactor import LibevConnection
-        return (LibevConnection,None)
+
+        return (LibevConnection, None)
     except DependencyException as e:
         return (None, e)
+
 
 def _try_asyncore_import():
     try:
         from cassandra.io.asyncorereactor import AsyncoreConnection
-        return (AsyncoreConnection,None)
+
+        return (AsyncoreConnection, None)
     except DependencyException as e:
         return (None, e)
 
+
 def _try_asyncio_import():
     from cassandra.io.asyncioreactor import AsyncioConnection
+
     return (AsyncioConnection, None)
 
-def _connection_reduce_fn(val,import_fn):
+
+def _connection_reduce_fn(val, import_fn):
     (rv, excs) = val
     # If we've already found a workable Connection class return immediately
     if rv:
@@ -176,22 +252,23 @@ def _connection_reduce_fn(val,import_fn):
         excs.append(exc)
     return (rv or import_result, excs)
 
-conn_fns = (_try_gevent_import, _try_eventlet_import, _try_libev_import, _try_asyncore_import, _try_asyncio_import)
-(conn_class, excs) = reduce(_connection_reduce_fn, conn_fns, (None,[]))
+
+conn_fns = (
+    _try_gevent_import,
+    _try_eventlet_import,
+    _try_libev_import,
+    _try_asyncore_import,
+    _try_asyncio_import,
+)
+(conn_class, excs) = reduce(_connection_reduce_fn, conn_fns, (None, []))
 if not conn_class:
     raise DependencyException("Exception loading connection class dependencies", excs)
 DefaultConnection = conn_class
 
-# Forces load of utf8 encoding module to avoid deadlock that occurs
-# if code that is being imported tries to import the module in a seperate
-# thread.
-# See http://bugs.python.org/issue10923
-"".encode('utf8')
-
 log = logging.getLogger(__name__)
 
 
-_GRAPH_PAGING_MIN_DSE_VERSION = Version('6.8.0')
+_GRAPH_PAGING_MIN_DSE_VERSION = Version("6.8.0")
 
 _NOT_SET = object()
 
@@ -215,7 +292,7 @@ class NoHostAvailable(Exception):
 
 
 def _future_completed(future):
-    """ Helper for run_in_executor() """
+    """Helper for run_in_executor()"""
     exc = future.exception()
     if exc:
         log.debug("Failed to run task on executor", exc_info=exc)
@@ -252,7 +329,9 @@ def _discard_cluster_shutdown(cluster):
 
 
 def _shutdown_clusters():
-    clusters = _clusters_for_shutdown.copy()  # copy because shutdown modifies the global set "discard"
+    clusters = (
+        _clusters_for_shutdown.copy()
+    )  # copy because shutdown modifies the global set "discard"
     for cluster in clusters:
         cluster.shutdown()
 
@@ -267,7 +346,6 @@ def default_lbp_factory():
 
 
 class ContinuousPagingOptions(object):
-
     class PagingUnit(object):
         BYTES = 1
         ROWS = 2
@@ -295,12 +373,20 @@ class ContinuousPagingOptions(object):
     by default it is 4 and it must be at least 2.
     """
 
-    def __init__(self, page_unit=PagingUnit.ROWS, max_pages=0, max_pages_per_second=0, max_queue_size=4):
+    def __init__(
+        self,
+        page_unit=PagingUnit.ROWS,
+        max_pages=0,
+        max_pages_per_second=0,
+        max_queue_size=4,
+    ):
         self.page_unit = page_unit
         self.max_pages = max_pages
         self.max_pages_per_second = max_pages_per_second
         if max_queue_size < 2:
-            raise ValueError('ContinuousPagingOptions.max_queue_size must be 2 or greater')
+            raise ValueError(
+                "ContinuousPagingOptions.max_queue_size must be 2 or greater"
+            )
         self.max_queue_size = max_queue_size
 
     def page_unit_bytes(self):
@@ -314,20 +400,22 @@ def _addrinfo_or_none(contact_point, port):
     PYTHON-895.
     """
     try:
-        return socket.getaddrinfo(contact_point, port,
-                                  socket.AF_UNSPEC, socket.SOCK_STREAM)
+        return socket.getaddrinfo(
+            contact_point, port, socket.AF_UNSPEC, socket.SOCK_STREAM
+        )
     except socket.gaierror:
-        log.debug('Could not resolve hostname "{}" '
-                  'with port {}'.format(contact_point, port))
+        log.debug(
+            'Could not resolve hostname "{}" with port {}'.format(contact_point, port)
+        )
         return None
 
 
 def _execution_profile_to_string(name):
     default_profiles = {
-        EXEC_PROFILE_DEFAULT: 'EXEC_PROFILE_DEFAULT',
-        EXEC_PROFILE_GRAPH_DEFAULT: 'EXEC_PROFILE_GRAPH_DEFAULT',
-        EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT: 'EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT',
-        EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT: 'EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT',
+        EXEC_PROFILE_DEFAULT: "EXEC_PROFILE_DEFAULT",
+        EXEC_PROFILE_GRAPH_DEFAULT: "EXEC_PROFILE_GRAPH_DEFAULT",
+        EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT: "EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT",
+        EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT: "EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT",
     }
 
     if name in default_profiles:
@@ -407,10 +495,17 @@ class ExecutionProfile(object):
     _load_balancing_policy_explicit = False
     _consistency_level_explicit = False
 
-    def __init__(self, load_balancing_policy=_NOT_SET, retry_policy=None,
-                 consistency_level=_NOT_SET, serial_consistency_level=None,
-                 request_timeout=10.0, row_factory=named_tuple_factory, speculative_execution_policy=None,
-                 continuous_paging_options=None):
+    def __init__(
+        self,
+        load_balancing_policy=_NOT_SET,
+        retry_policy=None,
+        consistency_level=_NOT_SET,
+        serial_consistency_level=None,
+        request_timeout=10.0,
+        row_factory=named_tuple_factory,
+        speculative_execution_policy=None,
+        continuous_paging_options=None,
+    ):
 
         if load_balancing_policy is _NOT_SET:
             self._load_balancing_policy_explicit = False
@@ -428,16 +523,21 @@ class ExecutionProfile(object):
 
         self.retry_policy = retry_policy or RetryPolicy()
 
-        if (serial_consistency_level is not None and
-                not ConsistencyLevel.is_serial(serial_consistency_level)):
-            raise ValueError("serial_consistency_level must be either "
-                             "ConsistencyLevel.SERIAL "
-                             "or ConsistencyLevel.LOCAL_SERIAL.")
+        if serial_consistency_level is not None and not ConsistencyLevel.is_serial(
+            serial_consistency_level
+        ):
+            raise ValueError(
+                "serial_consistency_level must be either "
+                "ConsistencyLevel.SERIAL "
+                "or ConsistencyLevel.LOCAL_SERIAL."
+            )
         self.serial_consistency_level = serial_consistency_level
 
         self.request_timeout = request_timeout
         self.row_factory = row_factory
-        self.speculative_execution_policy = speculative_execution_policy or NoSpeculativeExecutionPolicy()
+        self.speculative_execution_policy = (
+            speculative_execution_policy or NoSpeculativeExecutionPolicy()
+        )
         self.continuous_paging_options = continuous_paging_options
 
 
@@ -453,10 +553,17 @@ class GraphExecutionProfile(ExecutionProfile):
     See cassandra.graph.GraphOptions
     """
 
-    def __init__(self, load_balancing_policy=_NOT_SET, retry_policy=None,
-                 consistency_level=_NOT_SET, serial_consistency_level=None,
-                 request_timeout=30.0, row_factory=None,
-                 graph_options=None, continuous_paging_options=_NOT_SET):
+    def __init__(
+        self,
+        load_balancing_policy=_NOT_SET,
+        retry_policy=None,
+        consistency_level=_NOT_SET,
+        serial_consistency_level=None,
+        request_timeout=30.0,
+        row_factory=None,
+        graph_options=None,
+        continuous_paging_options=_NOT_SET,
+    ):
         """
         Default execution profile for graph execution.
 
@@ -469,19 +576,31 @@ class GraphExecutionProfile(ExecutionProfile):
         :class:`cassandra.policies.NeverRetryPolicy`.
         """
         retry_policy = retry_policy or NeverRetryPolicy()
-        super(GraphExecutionProfile, self).__init__(load_balancing_policy, retry_policy, consistency_level,
-                                                    serial_consistency_level, request_timeout, row_factory,
-                                                    continuous_paging_options=continuous_paging_options)
-        self.graph_options = graph_options or GraphOptions(graph_source=b'g',
-                                                           graph_language=b'gremlin-groovy')
+        super(GraphExecutionProfile, self).__init__(
+            load_balancing_policy,
+            retry_policy,
+            consistency_level,
+            serial_consistency_level,
+            request_timeout,
+            row_factory,
+            continuous_paging_options=continuous_paging_options,
+        )
+        self.graph_options = graph_options or GraphOptions(
+            graph_source=b"g", graph_language=b"gremlin-groovy"
+        )
 
 
 class GraphAnalyticsExecutionProfile(GraphExecutionProfile):
-
-    def __init__(self, load_balancing_policy=None, retry_policy=None,
-                 consistency_level=_NOT_SET, serial_consistency_level=None,
-                 request_timeout=3600. * 24. * 7., row_factory=None,
-                 graph_options=None):
+    def __init__(
+        self,
+        load_balancing_policy=None,
+        retry_policy=None,
+        consistency_level=_NOT_SET,
+        serial_consistency_level=None,
+        request_timeout=3600.0 * 24.0 * 7.0,
+        row_factory=None,
+        graph_options=None,
+    ):
         """
         Execution profile with timeout and load balancing appropriate for graph analytics queries.
 
@@ -494,35 +613,50 @@ class GraphAnalyticsExecutionProfile(GraphExecutionProfile):
         Note: The graph_options.graph_source is set automatically to b'a' (analytics)
         when using GraphAnalyticsExecutionProfile. This is mandatory to target analytics nodes.
         """
-        load_balancing_policy = load_balancing_policy or DefaultLoadBalancingPolicy(default_lbp_factory())
-        graph_options = graph_options or GraphOptions(graph_language=b'gremlin-groovy')
-        super(GraphAnalyticsExecutionProfile, self).__init__(load_balancing_policy, retry_policy, consistency_level,
-                                                             serial_consistency_level, request_timeout, row_factory,
-                                                             graph_options)
+        load_balancing_policy = load_balancing_policy or DefaultLoadBalancingPolicy(
+            default_lbp_factory()
+        )
+        graph_options = graph_options or GraphOptions(graph_language=b"gremlin-groovy")
+        super(GraphAnalyticsExecutionProfile, self).__init__(
+            load_balancing_policy,
+            retry_policy,
+            consistency_level,
+            serial_consistency_level,
+            request_timeout,
+            row_factory,
+            graph_options,
+        )
         # ensure the graph_source is analytics, since this is the purpose of the GraphAnalyticsExecutionProfile
         self.graph_options.set_source_analytics()
 
 
 class ProfileManager(object):
-
     def __init__(self):
         self.profiles = dict()
 
     def _profiles_without_explicit_lbps(self):
-        names = (profile_name for
-                 profile_name, profile in self.profiles.items()
-                 if not profile._load_balancing_policy_explicit)
+        names = (
+            profile_name
+            for profile_name, profile in self.profiles.items()
+            if not profile._load_balancing_policy_explicit
+        )
         return tuple(
-            'EXEC_PROFILE_DEFAULT' if n is EXEC_PROFILE_DEFAULT else n
-            for n in names
+            "EXEC_PROFILE_DEFAULT" if n is EXEC_PROFILE_DEFAULT else n for n in names
         )
 
     def distance(self, host):
-        distances = set(p.load_balancing_policy.distance(host) for p in self.profiles.values())
-        return HostDistance.LOCAL_RACK if HostDistance.LOCAL_RACK in distances else \
-            HostDistance.LOCAL if HostDistance.LOCAL in distances else \
-            HostDistance.REMOTE if HostDistance.REMOTE in distances else \
-            HostDistance.IGNORED
+        distances = set(
+            p.load_balancing_policy.distance(host) for p in self.profiles.values()
+        )
+        return (
+            HostDistance.LOCAL_RACK
+            if HostDistance.LOCAL_RACK in distances
+            else HostDistance.LOCAL
+            if HostDistance.LOCAL in distances
+            else HostDistance.REMOTE
+            if HostDistance.REMOTE in distances
+            else HostDistance.IGNORED
+        )
 
     def populate(self, cluster, hosts):
         for p in self.profiles.values():
@@ -629,7 +763,7 @@ class Cluster(object):
     which implicitly handle shutdown when leaving scope.
     """
 
-    contact_points = ['127.0.0.1']
+    contact_points = ["127.0.0.1"]
     """
     The list of contact points to try connecting for cluster discovery. A
     contact point can be a string (ip or hostname), a tuple (ip/hostname, port) or a
@@ -736,15 +870,20 @@ class Cluster(object):
             self._auth_provider_callable = value.new_authenticator
         except AttributeError:
             if self.protocol_version > 1:
-                raise TypeError("auth_provider must implement the cassandra.auth.AuthProvider "
-                                "interface when protocol_version >= 2")
+                raise TypeError(
+                    "auth_provider must implement the cassandra.auth.AuthProvider "
+                    "interface when protocol_version >= 2"
+                )
             elif not callable(value):
-                raise TypeError("auth_provider must be callable when protocol_version == 1")
+                raise TypeError(
+                    "auth_provider must be callable when protocol_version == 1"
+                )
             self._auth_provider_callable = value
 
         self._auth_provider = value
 
     _load_balancing_policy = None
+
     @property
     def load_balancing_policy(self):
         """
@@ -765,7 +904,9 @@ class Cluster(object):
     @load_balancing_policy.setter
     def load_balancing_policy(self, lbp):
         if self._config_mode == _ConfigMode.PROFILES:
-            raise ValueError("Cannot set Cluster.load_balancing_policy while using Configuration Profiles. Set this in a profile instead.")
+            raise ValueError(
+                "Cannot set Cluster.load_balancing_policy while using Configuration Profiles. Set this in a profile instead."
+            )
         self._load_balancing_policy = lbp
         self._config_mode = _ConfigMode.LEGACY
 
@@ -781,6 +922,7 @@ class Cluster(object):
     """
 
     _default_retry_policy = RetryPolicy()
+
     @property
     def default_retry_policy(self):
         """
@@ -793,7 +935,9 @@ class Cluster(object):
     @default_retry_policy.setter
     def default_retry_policy(self, policy):
         if self._config_mode == _ConfigMode.PROFILES:
-            raise ValueError("Cannot set Cluster.default_retry_policy while using Configuration Profiles. Set this in a profile instead.")
+            raise ValueError(
+                "Cannot set Cluster.default_retry_policy while using Configuration Profiles. Set this in a profile instead."
+            )
         self._default_retry_policy = policy
         self._config_mode = _ConfigMode.LEGACY
 
@@ -1044,12 +1188,12 @@ class Cluster(object):
     be generated automatically unless the user provides one.
     """
 
-    application_name = ''
+    application_name = ""
     """
     A string identifying this application to Insights.
     """
 
-    application_version = ''
+    application_version = ""
     """
     A string identifiying this application's version to Insights
     """
@@ -1169,54 +1313,55 @@ class Cluster(object):
     _listeners = None
     _listener_lock = None
 
-    def __init__(self,
-                 contact_points=_NOT_SET,
-                 port=9042,
-                 compression: Union[bool, str, None] = True,
-                 auth_provider=None,
-                 load_balancing_policy=None,
-                 reconnection_policy=None,
-                 default_retry_policy=None,
-                 conviction_policy_factory=None,
-                 metrics_enabled=False,
-                 connection_class=None,
-                 ssl_options=None,
-                 sockopts=None,
-                 cql_version=None,
-                 protocol_version=_NOT_SET,
-                 executor_threads=2,
-                 max_schema_agreement_wait=10,
-                 control_connection_timeout=2.0,
-                 idle_heartbeat_interval=30,
-                 schema_event_refresh_window=2,
-                 topology_event_refresh_window=10,
-                 connect_timeout=5,
-                 schema_metadata_enabled=True,
-                 token_metadata_enabled=True,
-                 schema_metadata_page_size=1000,
-                 address_translator=None,
-                 status_event_refresh_window=2,
-                 prepare_on_all_hosts=True,
-                 reprepare_on_up=True,
-                 execution_profiles=None,
-                 allow_beta_protocol_version=False,
-                 timestamp_generator=None,
-                 idle_heartbeat_timeout=30,
-                 no_compact=False,
-                 ssl_context=None,
-                 endpoint_factory=None,
-                 application_name=None,
-                 application_version=None,
-                 monitor_reporting_enabled=True,
-                 monitor_reporting_interval=30,
-                 client_id=None,
-                 cloud=None,
-                 scylla_cloud=None,
-                 shard_aware_options=None,
-                 metadata_request_timeout: Optional[float] = None,
-                 column_encryption_policy=None,
-                 application_info:Optional[ApplicationInfoBase]=None
-                 ):
+    def __init__(
+        self,
+        contact_points=_NOT_SET,
+        port=9042,
+        compression: Union[bool, str, None] = True,
+        auth_provider=None,
+        load_balancing_policy=None,
+        reconnection_policy=None,
+        default_retry_policy=None,
+        conviction_policy_factory=None,
+        metrics_enabled=False,
+        connection_class=None,
+        ssl_options=None,
+        sockopts=None,
+        cql_version=None,
+        protocol_version=_NOT_SET,
+        executor_threads=2,
+        max_schema_agreement_wait=10,
+        control_connection_timeout=2.0,
+        idle_heartbeat_interval=30,
+        schema_event_refresh_window=2,
+        topology_event_refresh_window=10,
+        connect_timeout=5,
+        schema_metadata_enabled=True,
+        token_metadata_enabled=True,
+        schema_metadata_page_size=1000,
+        address_translator=None,
+        status_event_refresh_window=2,
+        prepare_on_all_hosts=True,
+        reprepare_on_up=True,
+        execution_profiles=None,
+        allow_beta_protocol_version=False,
+        timestamp_generator=None,
+        idle_heartbeat_timeout=30,
+        no_compact=False,
+        ssl_context=None,
+        endpoint_factory=None,
+        application_name=None,
+        application_version=None,
+        monitor_reporting_enabled=True,
+        monitor_reporting_interval=30,
+        client_id=None,
+        cloud=None,
+        scylla_cloud=None,
+        shard_aware_options=None,
+        metadata_request_timeout: Optional[float] = None,
+        column_encryption_policy=None,
+        application_info: Optional[ApplicationInfoBase] = None,
+    ):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
         extablishing connection pools or refreshing metadata.
@@ -1227,7 +1372,9 @@ class Cluster(object):
         # Handle port passed as string
         if isinstance(port, str):
             if not port.isdigit():
-                raise ValueError("Only numeric values are supported for port (%s)" % port)
+                raise ValueError(
+                    "Only numeric values are supported for port (%s)" % port
+                )
             port = int(port)
 
         if port < 1 or port > 65535:
@@ -1237,25 +1384,47 @@ class Cluster(object):
             self.connection_class = connection_class
 
         if scylla_cloud is not None:
-            raise NotImplementedError("scylla_cloud was removed and not supported anymore")
+            raise NotImplementedError(
+                "scylla_cloud was removed and not supported anymore"
+            )
 
         if cloud is not None:
             self.cloud = cloud
-            if contact_points is not _NOT_SET or endpoint_factory or ssl_context or ssl_options:
-                raise ValueError("contact_points, endpoint_factory, ssl_context, and ssl_options "
-                                 "cannot be specified with a cloud configuration")
+            if (
+                contact_points is not _NOT_SET
+                or endpoint_factory
+                or ssl_context
+                or ssl_options
+            ):
+                raise ValueError(
+                    "contact_points, endpoint_factory, ssl_context, and ssl_options "
+                    "cannot be specified with a cloud configuration"
+                )
 
-            uses_twisted = TwistedConnection and issubclass(self.connection_class, TwistedConnection)
-            uses_eventlet = EventletConnection and issubclass(self.connection_class, EventletConnection)
-            cloud_config = dscloud.get_cloud_config(cloud, create_pyopenssl_context=uses_twisted or uses_eventlet)
+            uses_twisted = TwistedConnection and issubclass(
+                self.connection_class, TwistedConnection
+            )
+            uses_eventlet = EventletConnection and issubclass(
+                self.connection_class, EventletConnection
+            )
+            cloud_config = dscloud.get_cloud_config(
+                cloud, create_pyopenssl_context=uses_twisted or uses_eventlet
+            )
 
             ssl_context = cloud_config.ssl_context
-            ssl_options = {'check_hostname': True}
-            if (auth_provider is None and cloud_config.username
-                    and cloud_config.password):
-                auth_provider = PlainTextAuthProvider(cloud_config.username, cloud_config.password)
+            ssl_options = {"check_hostname": True}
+            if (
+                auth_provider is None
+                and cloud_config.username
+                and cloud_config.password
+            ):
+                auth_provider = PlainTextAuthProvider(
+                    cloud_config.username, cloud_config.password
+                )
 
-            endpoint_factory = SniEndPointFactory(cloud_config.sni_host, cloud_config.sni_port)
+            endpoint_factory = SniEndPointFactory(
+                cloud_config.sni_host, cloud_config.sni_port
+            )
             contact_points = [
                 endpoint_factory.create_from_sni(host_id)
                 for host_id in cloud_config.host_ids
@@ -1264,15 +1433,19 @@ class Cluster(object):
         if contact_points is not None:
             if contact_points is _NOT_SET:
                 self._contact_points_explicit = False
-                contact_points = ['127.0.0.1']
+                contact_points = ["127.0.0.1"]
             else:
                 self._contact_points_explicit = True
 
             if isinstance(contact_points, str):
-                raise TypeError("contact_points should not be a string, it should be a sequence (e.g. list) of strings")
+                raise TypeError(
+                    "contact_points should not be a string, it should be a sequence (e.g. list) of strings"
+                )
 
             if None in contact_points:
-                raise ValueError("contact_points should not contain None (it can resolve to localhost)")
+                raise ValueError(
+                    "contact_points should not contain None (it can resolve to localhost)"
+                )
             self.contact_points = contact_points
 
         self.port = port
@@ -1280,7 +1453,9 @@ class Cluster(object):
         if column_encryption_policy is not None:
             self.column_encryption_policy = column_encryption_policy
 
-        self.endpoint_factory = endpoint_factory or DefaultEndPointFactory(port=self.port)
+        self.endpoint_factory = endpoint_factory or DefaultEndPointFactory(
+            port=self.port
+        )
         self.endpoint_factory.configure(self)
 
         self._resolve_hostnames()
@@ -1297,7 +1472,8 @@ class Cluster(object):
             if not locally_supported_compressions.get(compression):
                 raise ValueError(
                     "Compression '%s' was requested, but it is not available. "
-                    "Consider installing the corresponding Python package." % compression
+                    "Consider installing the corresponding Python package."
+                    % compression
                 )
         else:
             raise TypeError(
@@ -1317,19 +1493,27 @@ class Cluster(object):
 
         if load_balancing_policy is not None:
             if isinstance(load_balancing_policy, type):
-                raise TypeError("load_balancing_policy should not be a class, it should be an instance of that class")
+                raise TypeError(
+                    "load_balancing_policy should not be a class, it should be an instance of that class"
+                )
             self.load_balancing_policy = load_balancing_policy
         else:
-            self._load_balancing_policy = default_lbp_factory()  # set internal attribute to avoid committing to legacy config mode
+            self._load_balancing_policy = (
+                default_lbp_factory()
+            )  # set internal attribute to avoid committing to legacy config mode
 
         if reconnection_policy is not None:
             if isinstance(reconnection_policy, type):
-                raise TypeError("reconnection_policy should not be a class, it should be an instance of that class")
+                raise TypeError(
+                    "reconnection_policy should not be a class, it should be an instance of that class"
+                )
             self.reconnection_policy = reconnection_policy
 
         if default_retry_policy is not None:
             if isinstance(default_retry_policy, type):
-                raise TypeError("default_retry_policy should not be a class, it should be an instance of that class")
+                raise TypeError(
+                    "default_retry_policy should not be a class, it should be an instance of that class"
+                )
             self.default_retry_policy = default_retry_policy
 
         if conviction_policy_factory is not None:
@@ -1339,13 +1523,16 @@ class Cluster(object):
 
         if address_translator is not None:
             if isinstance(address_translator, type):
-                raise TypeError("address_translator should not be a class, it should be an instance of that class")
+                raise TypeError(
+                    "address_translator should not be a class, it should be an instance of that class"
+                )
             self.address_translator = address_translator
 
         if application_info is not None:
             if not isinstance(application_info, ApplicationInfoBase):
                 raise TypeError(
-                    "application_info should be an instance of any ApplicationInfoBase class")
+                    "application_info should be an instance of any ApplicationInfoBase class"
+                )
             self._application_info = application_info
 
         if timestamp_generator is not None:
@@ -1360,18 +1547,23 @@ class Cluster(object):
             self.load_balancing_policy,
             self.default_retry_policy,
             request_timeout=Session._default_timeout,
-            row_factory=Session._row_factory
+            row_factory=Session._row_factory,
         )
 
         # legacy mode if either of these is not default
         if load_balancing_policy or default_retry_policy:
             if execution_profiles:
-                raise ValueError("Clusters constructed with execution_profiles should not specify legacy parameters "
-                                 "load_balancing_policy or default_retry_policy. Configure this in a profile instead.")
+                raise ValueError(
+                    "Clusters constructed with execution_profiles should not specify legacy parameters "
+                    "load_balancing_policy or default_retry_policy. Configure this in a profile instead."
+                )
 
             self._config_mode = _ConfigMode.LEGACY
-            warn("Legacy execution parameters will be removed in 4.0. Consider using "
-                 "execution profiles.", DeprecationWarning)
+            warn(
+                "Legacy execution parameters will be removed in 4.0. Consider using "
+                "execution profiles.",
+                DeprecationWarning,
+            )
 
         else:
             profiles = self.profile_manager.profiles
@@ -1379,44 +1571,63 @@ class Cluster(object):
                 profiles.update(execution_profiles)
                 self._config_mode = _ConfigMode.PROFILES
 
-            lbp = DefaultLoadBalancingPolicy(self.profile_manager.default.load_balancing_policy)
-            profiles.setdefault(EXEC_PROFILE_GRAPH_DEFAULT, GraphExecutionProfile(load_balancing_policy=lbp))
-            profiles.setdefault(EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT,
-                                GraphExecutionProfile(load_balancing_policy=lbp, request_timeout=60. * 3.))
-            profiles.setdefault(EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT,
-                                GraphAnalyticsExecutionProfile(load_balancing_policy=lbp))
+            lbp = DefaultLoadBalancingPolicy(
+                self.profile_manager.default.load_balancing_policy
+            )
+            profiles.setdefault(
+                EXEC_PROFILE_GRAPH_DEFAULT,
+                GraphExecutionProfile(load_balancing_policy=lbp),
+            )
+            profiles.setdefault(
+                EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT,
+                GraphExecutionProfile(
+                    load_balancing_policy=lbp, request_timeout=60.0 * 3.0
+                ),
+            )
+            profiles.setdefault(
+                EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT,
+                GraphAnalyticsExecutionProfile(load_balancing_policy=lbp),
+            )
 
-        if self._contact_points_explicit and not self.cloud:  # avoid this warning for cloud users.
+        if (
+            self._contact_points_explicit and not self.cloud
+        ):  # avoid this warning for cloud users.
             if self._config_mode is _ConfigMode.PROFILES:
-                default_lbp_profiles = self.profile_manager._profiles_without_explicit_lbps()
+                default_lbp_profiles = (
+                    self.profile_manager._profiles_without_explicit_lbps()
+                )
                 if default_lbp_profiles:
                     log.warning(
-                        'Cluster.__init__ called with contact_points '
-                        'specified, but load-balancing policies are not '
-                        'specified in some ExecutionProfiles. In the next '
-                        'major version, this will raise an error; please '
-                        'specify a load-balancing policy. '
-                        '(contact_points = {cp}, '
-                        'EPs without explicit LBPs = {eps})'
-                        ''.format(cp=contact_points, eps=default_lbp_profiles))
+                        "Cluster.__init__ called with contact_points "
+                        "specified, but load-balancing policies are not "
+                        "specified in some ExecutionProfiles. In the next "
+                        "major version, this will raise an error; please "
+                        "specify a load-balancing policy. "
+                        "(contact_points = {cp}, "
+                        "EPs without explicit LBPs = {eps})"
+                        "".format(cp=contact_points, eps=default_lbp_profiles)
+                    )
             else:
                 if load_balancing_policy is None:
                     log.warning(
-                        'Cluster.__init__ called with contact_points '
-                        'specified, but no load_balancing_policy. In the next '
-                        'major version, this will raise an error; please '
-                        'specify a load-balancing policy. '
-                        '(contact_points = {cp}, lbp = {lbp})'
-                        ''.format(cp=contact_points, lbp=load_balancing_policy))
+                        "Cluster.__init__ called with contact_points "
+                        "specified, but no load_balancing_policy. In the next "
+                        "major version, this will raise an error; please "
+                        "specify a load-balancing policy. "
+                        "(contact_points = {cp}, lbp = {lbp})"
+                        "".format(cp=contact_points, lbp=load_balancing_policy)
+                    )
 
         self.metrics_enabled = metrics_enabled
 
         if ssl_options and not ssl_context:
-            warn('Using ssl_options without ssl_context is '
-                 'deprecated and will result in an error in '
-                 'the next major release. Please use ssl_context '
-                 'to prepare for that release.',
-                 DeprecationWarning)
+            warn(
+                "Using ssl_options without ssl_context is "
+                "deprecated and will result in an error in "
+                "the next major release. Please use ssl_context "
+                "to prepare for that release.",
+                DeprecationWarning,
+            )
 
         self.ssl_options = ssl_options
         self.ssl_context = ssl_context
@@ -1424,7 +1635,11 @@ class Cluster(object):
         self.cql_version = cql_version
         self.max_schema_agreement_wait = max_schema_agreement_wait
         self.control_connection_timeout = control_connection_timeout
-        self.metadata_request_timeout = self.control_connection_timeout if metadata_request_timeout is None else metadata_request_timeout
+        self.metadata_request_timeout = (
+            self.control_connection_timeout
+            if metadata_request_timeout is None
+            else metadata_request_timeout
+        )
         self.idle_heartbeat_interval = idle_heartbeat_interval
         self.idle_heartbeat_timeout = idle_heartbeat_timeout
         self.schema_event_refresh_window = schema_event_refresh_window
@@ -1457,14 +1672,19 @@ class Cluster(object):
 
         if self.metrics_enabled:
             from cassandra.metrics import Metrics
+
             self.metrics = Metrics(weakref.proxy(self))
 
         self.control_connection = ControlConnection(
-            self, self.control_connection_timeout,
-            self.schema_event_refresh_window, self.topology_event_refresh_window,
+            self,
+            self.control_connection_timeout,
+            self.schema_event_refresh_window,
+            self.topology_event_refresh_window,
             self.status_event_refresh_window,
-            schema_metadata_enabled, token_metadata_enabled,
-            schema_meta_page_size=schema_metadata_page_size)
+            schema_metadata_enabled,
+            token_metadata_enabled,
+            schema_meta_page_size=schema_metadata_page_size,
+        )
 
         if client_id is None:
             self.client_id = uuid.uuid4()
@@ -1478,20 +1698,32 @@ class Cluster(object):
         for cp in [cp for cp in self.contact_points if not isinstance(cp, EndPoint)]:
             raw_contact_points.append(cp if isinstance(cp, tuple) else (cp, self.port))
 
-        self.endpoints_resolved = [cp for cp in self.contact_points if isinstance(cp, EndPoint)]
-        self._endpoint_map_for_insights = {repr(ep): '{ip}:{port}'.format(ip=ep.address, port=ep.port)
-                                           for ep in self.endpoints_resolved}
+        self.endpoints_resolved = [
+            cp for cp in self.contact_points if isinstance(cp, EndPoint)
+        ]
+        self._endpoint_map_for_insights = {
+            repr(ep): "{ip}:{port}".format(ip=ep.address, port=ep.port)
+            for ep in self.endpoints_resolved
+        }
         strs_resolved_map = _resolve_contact_points_to_string_map(raw_contact_points)
-        self.endpoints_resolved.extend(list(chain(
-            *[
-                [DefaultEndPoint(ip, port) for ip, port in xs if ip is not None]
-                for xs in strs_resolved_map.values() if xs is not None
-            ]
-        )))
+        self.endpoints_resolved.extend(
+            list(
+                chain(
+                    *[
+                        [DefaultEndPoint(ip, port) for ip, port in xs if ip is not None]
+                        for xs in strs_resolved_map.values()
+                        if xs is not None
+                    ]
+                )
+            )
+        )
 
         self._endpoint_map_for_insights.update(
-            {key: ['{ip}:{port}'.format(ip=ip, port=port) for ip, port in value]
-             for key, value in strs_resolved_map.items() if value is not None}
+            {
+                key: ["{ip}:{port}".format(ip=ip, port=port) for ip, port in value]
+                for key, value in strs_resolved_map.items()
+                if value is not None
+            }
         )
 
         if self.contact_points and (not self.endpoints_resolved):
@@ -1503,34 +1735,38 @@ class Cluster(object):
         Create a ThreadPoolExecutor for the cluster. In most cases, the built-in
         `concurrent.futures.ThreadPoolExecutor` is used.
 
-        Python 3.7+ and Eventlet cause the `concurrent.futures.ThreadPoolExecutor`
-        to hang indefinitely. In that case, the user needs to have the `futurist`
+        Eventlet causes the `concurrent.futures.ThreadPoolExecutor` to hang
+        indefinitely. In that case, the user needs to have the `futurist`
         package so we can use the `futurist.GreenThreadPoolExecutor` class instead.
 
         :param kwargs: All keyword args are passed to the ThreadPoolExecutor constructor.
         :return: A ThreadPoolExecutor instance.
         """
         tpe_class = ThreadPoolExecutor
-        if sys.version_info[0] >= 3 and sys.version_info[1] >= 7:
-            try:
-                from cassandra.io.eventletreactor import EventletConnection
-                is_eventlet = issubclass(self.connection_class, EventletConnection)
-            except:
-                # Eventlet is not available or can't be detected
-                return tpe_class(**kwargs)
+        try:
+            from cassandra.io.eventletreactor import EventletConnection
 
-            if is_eventlet:
-                try:
-                    from futurist import GreenThreadPoolExecutor
-                    tpe_class = GreenThreadPoolExecutor
-                except ImportError:
-                    # futurist is not available
-                    raise ImportError(
-                        ("Python 3.7+ and Eventlet cause the `concurrent.futures.ThreadPoolExecutor` "
-                         "to hang indefinitely. If you want to use the Eventlet reactor, you "
-                         "need to install the `futurist` package to allow the driver to use "
-                         "the GreenThreadPoolExecutor. See https://github.com/eventlet/eventlet/issues/508 "
-                         "for more details."))
+            is_eventlet = issubclass(self.connection_class, EventletConnection)
+        except:
+            # Eventlet is not available or can't be detected
+            return tpe_class(**kwargs)
+
+        if is_eventlet:
+            try:
+                from futurist import GreenThreadPoolExecutor
+
+                tpe_class = GreenThreadPoolExecutor
+            except ImportError:
+                # futurist is not available
+                raise ImportError(
+                    (
+                        "Eventlet causes the `concurrent.futures.ThreadPoolExecutor` "
+                        "to hang indefinitely. If you want to use the Eventlet reactor, you "
+                        "need to install the `futurist` package to allow the driver to use "
+                        "the GreenThreadPoolExecutor. See https://github.com/eventlet/eventlet/issues/508 "
+                        "for more details."
+                    )
+                )
 
         return tpe_class(**kwargs)
 
@@ -1583,9 +1819,14 @@ class Cluster(object):
 
         """
         if self.protocol_version < 3:
-            log.warning("User Type serialization is only supported in native protocol version 3+ (%d in use). "
-                        "CQL encoding for simple statements will still work, but named tuples will "
-                        "be returned when reading type %s.%s.", self.protocol_version, keyspace, user_type)
+            log.warning(
+                "User Type serialization is only supported in native protocol version 3+ (%d in use). "
+                "CQL encoding for simple statements will still work, but named tuples will "
+                "be returned when reading type %s.%s.",
+                self.protocol_version,
+                keyspace,
+                user_type,
+            )
 
         self._user_types[keyspace][user_type] = klass
         for session in tuple(self.sessions):
@@ -1609,23 +1850,29 @@ class Cluster(object):
         if not isinstance(profile, ExecutionProfile):
             raise TypeError("profile must be an instance of ExecutionProfile")
         if self._config_mode == _ConfigMode.LEGACY:
-            raise ValueError("Cannot add execution profiles when legacy parameters are set explicitly.")
+            raise ValueError(
+                "Cannot add execution profiles when legacy parameters are set explicitly."
+            )
         if name in self.profile_manager.profiles:
             raise ValueError("Profile {} already exists".format(name))
         contact_points_but_no_lbp = (
-            self._contact_points_explicit and not
-            profile._load_balancing_policy_explicit)
+            self._contact_points_explicit
+            and not profile._load_balancing_policy_explicit
+        )
         if contact_points_but_no_lbp:
             log.warning(
-                'Tried to add an ExecutionProfile with name {name}. '
-                '{self} was explicitly configured with contact_points, but '
-                '{ep} was not explicitly configured with a '
-                'load_balancing_policy. In the next major version, trying to '
-                'add an ExecutionProfile without an explicitly configured LBP '
-                'to a cluster with explicitly configured contact_points will '
-                'raise an exception; please specify a load-balancing policy '
-                'in the ExecutionProfile.'
-                ''.format(name=_execution_profile_to_string(name), self=self, ep=profile))
+                "Tried to add an ExecutionProfile with name {name}. "
+                "{self} was explicitly configured with contact_points, but "
+                "{ep} was not explicitly configured with a "
+                "load_balancing_policy. In the next major version, trying to "
+                "add an ExecutionProfile without an explicitly configured LBP "
+                "to a cluster with explicitly configured contact_points will "
+                "raise an exception; please specify a load-balancing policy "
+                "in the ExecutionProfile."
+                "".format(
+                    name=_execution_profile_to_string(name), self=self, ep=profile
+                )
+            )
 
         self.profile_manager.profiles[name] = profile
         profile.load_balancing_policy.populate(self, self.metadata.all_hosts())
@@ -1638,54 +1885,77 @@ class Cluster(object):
             futures.update(session.update_created_pools())
         _, not_done = wait_futures(futures, pool_wait_timeout)
         if not_done:
-            raise OperationTimedOut("Failed to create all new connection pools in the %ss timeout.")
+            raise OperationTimedOut(
+                "Failed to create all new connection pools in the %ss timeout."
+            )
 
-    def connection_factory(self, endpoint, host_conn = None, *args, **kwargs):
+    def connection_factory(self, endpoint, host_conn=None, *args, **kwargs):
         """
         Called to create a new connection with proper configuration.
         Intended for internal use only.
         """
         kwargs = self._make_connection_kwargs(endpoint, kwargs)
-        return self.connection_class.factory(endpoint, self.connect_timeout, host_conn, *args, **kwargs)
+        return self.connection_class.factory(
+            endpoint, self.connect_timeout, host_conn, *args, **kwargs
+        )
 
     def _make_connection_factory(self, host, *args, **kwargs):
         kwargs = self._make_connection_kwargs(host.endpoint, kwargs)
-        return partial(self.connection_class.factory, host.endpoint, self.connect_timeout, *args, **kwargs)
+        return partial(
+            self.connection_class.factory,
+            host.endpoint,
+            self.connect_timeout,
+            *args,
+            **kwargs,
+        )
 
     def _make_connection_kwargs(self, endpoint, kwargs_dict):
         if self._auth_provider_callable:
-            kwargs_dict.setdefault('authenticator', self._auth_provider_callable(endpoint.address))
+            kwargs_dict.setdefault(
+                "authenticator", self._auth_provider_callable(endpoint.address)
+            )
 
-        kwargs_dict.setdefault('port', self.port)
-        kwargs_dict.setdefault('compression', self.compression)
-        kwargs_dict.setdefault('sockopts', self.sockopts)
-        kwargs_dict.setdefault('ssl_options', self.ssl_options)
-        kwargs_dict.setdefault('ssl_context', self.ssl_context)
-        kwargs_dict.setdefault('cql_version', self.cql_version)
-        kwargs_dict.setdefault('protocol_version', self.protocol_version)
-        kwargs_dict.setdefault('user_type_map', self._user_types)
-        kwargs_dict.setdefault('allow_beta_protocol_version', self.allow_beta_protocol_version)
-        kwargs_dict.setdefault('no_compact', self.no_compact)
-        kwargs_dict.setdefault('application_info', self.application_info)
+        kwargs_dict.setdefault("port", self.port)
+        kwargs_dict.setdefault("compression", self.compression)
+        kwargs_dict.setdefault("sockopts", self.sockopts)
+        kwargs_dict.setdefault("ssl_options", self.ssl_options)
+        kwargs_dict.setdefault("ssl_context", self.ssl_context)
+        kwargs_dict.setdefault("cql_version", self.cql_version)
+        kwargs_dict.setdefault("protocol_version", self.protocol_version)
+        kwargs_dict.setdefault("user_type_map", self._user_types)
+        kwargs_dict.setdefault(
+            "allow_beta_protocol_version", self.allow_beta_protocol_version
+        )
+        kwargs_dict.setdefault("no_compact", self.no_compact)
+        kwargs_dict.setdefault("application_info", self.application_info)
 
         return kwargs_dict
 
     def protocol_downgrade(self, host_endpoint, previous_version):
         if self._protocol_version_explicit:
-            raise DriverException("ProtocolError returned from server while using explicitly set client protocol_version %d" % (previous_version,))
+            raise DriverException(
+                "ProtocolError returned from server while using explicitly set client protocol_version %d"
+                % (previous_version,)
+            )
         new_version = ProtocolVersion.get_lower_supported(previous_version)
         if new_version < ProtocolVersion.MIN_SUPPORTED:
             raise DriverException(
-                "Cannot downgrade protocol version below minimum supported version: %d" % (ProtocolVersion.MIN_SUPPORTED,))
+                "Cannot downgrade protocol version below minimum supported version: %d"
+                % (ProtocolVersion.MIN_SUPPORTED,)
+            )
 
-        log.warning("Downgrading core protocol version from %d to %d for %s. "
-                    "To avoid this, it is best practice to explicitly set Cluster(protocol_version) to the version supported by your cluster. "
-                    "http://datastax.github.io/python-driver/api/cassandra/cluster.html#cassandra.cluster.Cluster.protocol_version", self.protocol_version, new_version, host_endpoint)
+        log.warning(
+            "Downgrading core protocol version from %d to %d for %s. "
+            "To avoid this, it is best practice to explicitly set Cluster(protocol_version) to the version supported by your cluster. "
+            "http://datastax.github.io/python-driver/api/cassandra/cluster.html#cassandra.cluster.Cluster.protocol_version",
+            self.protocol_version,
+            new_version,
+            host_endpoint,
+        )
         self.protocol_version = new_version
 
     def _populate_hosts(self):
-        self.profile_manager.populate(
-            weakref.proxy(self), self.metadata.all_hosts())
+        self.profile_manager.populate(weakref.proxy(self), self.metadata.all_hosts())
         self.load_balancing_policy.populate(
             weakref.proxy(self), self.metadata.all_hosts()
         )
@@ -1706,8 +1976,11 @@ class Cluster(object):
                 raise DriverException("Cluster is already shut down")
 
             if not self._is_setup:
-                log.debug("Connecting to cluster, contact points: %s; protocol version: %s",
-                          self.contact_points, self.protocol_version)
+                log.debug(
+                    "Connecting to cluster, contact points: %s; protocol version: %s",
+                    self.contact_points,
+                    self.protocol_version,
+                )
                 self.connection_class.initialize_reactor()
                 _register_cluster_shutdown(self)
 
@@ -1717,8 +1990,9 @@ class Cluster(object):
 
                     log.debug("Control connection created")
                 except Exception:
-                    log.exception("Control connection failed to connect, "
-                                  "shutting down Cluster:")
+                    log.exception(
+                        "Control connection failed to connect, shutting down Cluster:"
+                    )
                     self.shutdown()
                     raise
 
@@ -1728,7 +2002,7 @@ class Cluster(object):
                     self._idle_heartbeat = ConnectionHeartbeat(
                         self.idle_heartbeat_interval,
                         self.get_connection_holders,
-                        timeout=self.idle_heartbeat_timeout
+                        timeout=self.idle_heartbeat_timeout,
                     )
                 self._is_setup = True
 
@@ -1765,9 +2039,13 @@ class Cluster(object):
 
     def shard_aware_stats(self):
         if self.is_shard_aware():
-            return {str(pool.host.endpoint): {'shards_count': pool.host.sharding_info.shards_count,
-                                              'connected': len(pool._connections.keys())}
-                    for pool in self.get_all_pools()}
+            return {
+                str(pool.host.endpoint): {
+                    "shards_count": pool.host.sharding_info.shards_count,
+                    "connected": len(pool._connections.keys()),
+                }
+                for pool in self.get_all_pools()
+            }
 
     def shutdown(self):
         """
@@ -1840,12 +2118,16 @@ class Cluster(object):
         try:
             # all futures have completed at this point
             for exc in [f for f in results if isinstance(f, Exception)]:
-                log.error("Unexpected failure while marking node %s up:", host, exc_info=exc)
+                log.error(
+                    "Unexpected failure while marking node %s up:", host, exc_info=exc
+                )
                 self._cleanup_failed_on_up_handling(host)
                 return
 
             if not all(results):
-                log.debug("Connection pool could not be created, not marking node %s up", host)
+                log.debug(
+                    "Connection pool could not be created, not marking node %s up", host
+                )
                 self._cleanup_failed_on_up_handling(host)
                 return
 
@@ -1872,7 +2154,9 @@ class Cluster(object):
         log.debug("Waiting to acquire lock for handling up status of node %s", host)
         with host.lock:
             if host._currently_handling_node_up:
-                log.debug("Another thread is already handling up status of node %s", host)
+                log.debug(
+                    "Another thread is already handling up status of node %s", host
+                )
                 return
 
             if host.is_up:
@@ -1885,11 +2169,15 @@ class Cluster(object):
         have_future = False
         futures = set()
         try:
-            log.info("Host %s may be up; will prepare queries and open connection pool", host)
+            log.info(
+                "Host %s may be up; will prepare queries and open connection pool", host
+            )
 
             reconnector = host.get_and_set_reconnection_handler(None)
             if reconnector:
-                log.debug("Now that host %s is up, cancelling the reconnection handler", host)
+                log.debug(
+                    "Now that host %s is up, cancelling the reconnection handler", host
+                )
                 reconnector.cancel()
 
             if self.profile_manager.distance(host) != HostDistance.IGNORED:
@@ -1908,7 +2196,13 @@ class Cluster(object):
             log.debug("Attempting to open new connection pools for host %s", host)
             futures_lock = Lock()
             futures_results = []
-            callback = partial(self._on_up_future_completed, host, futures, futures_results, futures_lock)
+            callback = partial(
+                self._on_up_future_completed,
+                host,
+                futures,
+                futures_results,
+                futures_lock,
+            )
             for session in tuple(self.sessions):
                 future = session.add_or_renew_pool(host, is_host_addition=False)
                 if future is not None:
@@ -1946,9 +2240,16 @@ class Cluster(object):
         conn_factory = self._make_connection_factory(host)
 
         reconnector = _HostReconnectionHandler(
-            host, conn_factory, is_host_addition, self.on_add, self.on_up,
-            self.scheduler, schedule, host.get_and_set_reconnection_handler,
-            new_handler=None)
+            host,
+            conn_factory,
+            is_host_addition,
+            self.on_add,
+            self.on_up,
+            self.scheduler,
+            schedule,
+            host.get_and_set_reconnection_handler,
+            new_handler=None,
+        )
 
         old_reconnector = host.get_and_set_reconnection_handler(reconnector)
         if old_reconnector:
@@ -1982,18 +2283,23 @@ class Cluster(object):
 
             # ignore down signals if we have open pools to the host
             # this is to avoid closing pools when a control connection host became isolated
-            if self._discount_down_events and self.profile_manager.distance(host) != HostDistance.IGNORED:
+            if (
+                self._discount_down_events
+                and self.profile_manager.distance(host) != HostDistance.IGNORED
+            ):
                 connected = False
                 for session in tuple(self.sessions):
                     pool_states = session.get_pool_state()
                     pool_state = pool_states.get(host)
                     if pool_state:
-                        connected |= pool_state['open_count'] > 0
+                        connected |= pool_state["open_count"] > 0
                 if connected:
                     return
 
             host.set_down()
-            if (not was_up and not expect_host_to_be_down) or host.is_currently_reconnecting():
+            if (
+                not was_up and not expect_host_to_be_down
+            ) or host.is_currently_reconnecting():
                 return
         log.warning("Host %s has been marked down", host)
 
@@ -2014,8 +2320,11 @@ class Cluster(object):
             log.debug("Done preparing queries for new host %r", host)
 
         if distance == HostDistance.IGNORED:
-            log.debug("Not adding connection pool for new host %r because the "
-                      "load balancing policy has marked it as IGNORED", host)
+            log.debug(
+                "Not adding connection pool for new host %r because the "
+                "load balancing policy has marked it as IGNORED",
+                host,
+            )
             self._finalize_add(host, set_up=False)
             return
 
@@ -2035,14 +2344,20 @@ class Cluster(object):
                 if futures:
                     return
 
-            log.debug('All futures have completed for added host %s', host)
+            log.debug("All futures have completed for added host %s", host)
 
             for exc in [f for f in futures_results if isinstance(f, Exception)]:
-                log.error("Unexpected failure while adding node %s, will not mark up:", host, exc_info=exc)
+                log.error(
+                    "Unexpected failure while adding node %s, will not mark up:",
+                    host,
+                    exc_info=exc,
+                )
                 return
 
             if not all(futures_results):
-                log.warning("Connection pool could not be created, not marking node %s up", host)
+                log.warning(
+                    "Connection pool could not be created, not marking node %s up", host
+                )
                 return
 
             self._finalize_add(host)
@@ -2086,13 +2401,23 @@ class Cluster(object):
         if reconnection_handler:
             reconnection_handler.cancel()
 
-    def signal_connection_failure(self, host, connection_exc, is_host_addition, expect_host_to_be_down=False):
+    def signal_connection_failure(
+        self, host, connection_exc, is_host_addition, expect_host_to_be_down=False
+    ):
         is_down = host.signal_connection_failure(connection_exc)
         if is_down:
             self.on_down(host, is_host_addition, expect_host_to_be_down)
         return is_down
 
-    def add_host(self, endpoint, datacenter=None, rack=None, signal=True, refresh_nodes=True, host_id=None):
+    def add_host(
+        self,
+        endpoint,
+        datacenter=None,
+        rack=None,
+        signal=True,
+        refresh_nodes=True,
+        host_id=None,
+    ):
         """
         Called when adding initial contact points and when the control
         connection subsequently discovers a new node.
@@ -2102,8 +2427,18 @@ class Cluster(object):
         """
         with self.metadata._hosts_lock:
             if endpoint in self.metadata._host_id_by_endpoint:
-                return self.metadata._hosts[self.metadata._host_id_by_endpoint[endpoint]], False
-        host, new = self.metadata.add_or_return_host(Host(endpoint, self.conviction_policy_factory, datacenter, rack, host_id=host_id))
+                return self.metadata._hosts[
+                    self.metadata._host_id_by_endpoint[endpoint]
+                ], False
+        host, new = self.metadata.add_or_return_host(
+            Host(
+                endpoint,
+                self.conviction_policy_factory,
+                datacenter,
+                rack,
+                host_id=host_id,
+            )
+        )
         if new and signal:
             log.info("New Cassandra host %r discovered", host)
             self.on_add(host, refresh_nodes)
@@ -2129,7 +2464,7 @@ class Cluster(object):
             self._listeners.add(listener)
 
     def unregister_listener(self, listener):
-        """ Removes a registered listener. """
+        """Removes a registered listener."""
         with self._listener_lock:
             self._listeners.remove(listener)
 
@@ -2151,9 +2486,13 @@ class Cluster(object):
     def _validate_refresh_schema(keyspace, table, usertype, function, aggregate):
         if any((table, usertype, function, aggregate)):
             if not keyspace:
-                raise ValueError("keyspace is required to refresh specific sub-entity {table, usertype, function, aggregate}")
+                raise ValueError(
+                    "keyspace is required to refresh specific sub-entity {table, usertype, function, aggregate}"
+                )
             if sum(1 for e in (table, usertype, function) if e) > 1:
-                raise ValueError("{table, usertype, function, aggregate} are mutually exclusive")
+                raise ValueError(
+                    "{table, usertype, function, aggregate} are mutually exclusive"
+                )
 
     @staticmethod
     def _target_type_from_refresh_args(keyspace, table, usertype, function, aggregate):
@@ -2190,8 +2529,12 @@ class Cluster(object):
 
         An Exception is raised if schema refresh fails for any reason.
         """
-        if not self.control_connection.refresh_schema(schema_agreement_wait=max_schema_agreement_wait, force=True):
-            raise DriverException("Schema metadata was not refreshed. See log for details.")
+        if not self.control_connection.refresh_schema(
+            schema_agreement_wait=max_schema_agreement_wait, force=True
+        ):
+            raise DriverException(
+                "Schema metadata was not refreshed. See log for details."
+            )
 
     def refresh_keyspace_metadata(self, keyspace, max_schema_agreement_wait=None):
         """
@@ -2200,9 +2543,15 @@ class Cluster(object):
 
         See :meth:`~.Cluster.refresh_schema_metadata` for description of ``max_schema_agreement_wait`` behavior
         """
-        if not self.control_connection.refresh_schema(target_type=SchemaTargetType.KEYSPACE, keyspace=keyspace,
-                                                      schema_agreement_wait=max_schema_agreement_wait, force=True):
-            raise DriverException("Keyspace metadata was not refreshed. See log for details.")
+        if not self.control_connection.refresh_schema(
+            target_type=SchemaTargetType.KEYSPACE,
+            keyspace=keyspace,
+            schema_agreement_wait=max_schema_agreement_wait,
+            force=True,
+        ):
+            raise DriverException(
+                "Keyspace metadata was not refreshed. See log for details."
+            )
 
     def refresh_table_metadata(self, keyspace, table, max_schema_agreement_wait=None):
         """
@@ -2211,31 +2560,58 @@ class Cluster(object):
 
         See :meth:`~.Cluster.refresh_schema_metadata` for description of ``max_schema_agreement_wait`` behavior
         """
-        if not self.control_connection.refresh_schema(target_type=SchemaTargetType.TABLE, keyspace=keyspace, table=table,
-                                                      schema_agreement_wait=max_schema_agreement_wait, force=True):
-            raise DriverException("Table metadata was not refreshed. See log for details.")
+        if not self.control_connection.refresh_schema(
+            target_type=SchemaTargetType.TABLE,
+            keyspace=keyspace,
+            table=table,
+            schema_agreement_wait=max_schema_agreement_wait,
+            force=True,
+        ):
+            raise DriverException(
+                "Table metadata was not refreshed. See log for details."
+            )
 
-    def refresh_materialized_view_metadata(self, keyspace, view, max_schema_agreement_wait=None):
+    def refresh_materialized_view_metadata(
+        self, keyspace, view, max_schema_agreement_wait=None
+    ):
         """
         Synchronously refresh materialized view metadata.
 
         See :meth:`~.Cluster.refresh_schema_metadata` for description of ``max_schema_agreement_wait`` behavior
         """
-        if not self.control_connection.refresh_schema(target_type=SchemaTargetType.TABLE, keyspace=keyspace, table=view,
-                                                      schema_agreement_wait=max_schema_agreement_wait, force=True):
-            raise DriverException("View metadata was not refreshed. See log for details.")
+        if not self.control_connection.refresh_schema(
+            target_type=SchemaTargetType.TABLE,
+            keyspace=keyspace,
+            table=view,
+            schema_agreement_wait=max_schema_agreement_wait,
+            force=True,
+        ):
+            raise DriverException(
+                "View metadata was not refreshed. See log for details."
+            )
 
-    def refresh_user_type_metadata(self, keyspace, user_type, max_schema_agreement_wait=None):
+    def refresh_user_type_metadata(
+        self, keyspace, user_type, max_schema_agreement_wait=None
+    ):
         """
         Synchronously refresh user defined type metadata.
 
         See :meth:`~.Cluster.refresh_schema_metadata` for description of ``max_schema_agreement_wait`` behavior
         """
-        if not self.control_connection.refresh_schema(target_type=SchemaTargetType.TYPE, keyspace=keyspace, type=user_type,
-                                                      schema_agreement_wait=max_schema_agreement_wait, force=True):
-            raise DriverException("User Type metadata was not refreshed. See log for details.")
+        if not self.control_connection.refresh_schema(
+            target_type=SchemaTargetType.TYPE,
+            keyspace=keyspace,
+            type=user_type,
+            schema_agreement_wait=max_schema_agreement_wait,
+            force=True,
+        ):
+            raise DriverException(
+                "User Type metadata was not refreshed. See log for details."
+            )
 
-    def refresh_user_function_metadata(self, keyspace, function, max_schema_agreement_wait=None):
+    def refresh_user_function_metadata(
+        self, keyspace, function, max_schema_agreement_wait=None
+    ):
         """
         Synchronously refresh user defined function metadata.
 
@@ -2243,11 +2619,20 @@ class Cluster(object):
 
         See :meth:`~.Cluster.refresh_schema_metadata` for description of ``max_schema_agreement_wait`` behavior
         """
-        if not self.control_connection.refresh_schema(target_type=SchemaTargetType.FUNCTION, keyspace=keyspace, function=function,
-                                                      schema_agreement_wait=max_schema_agreement_wait, force=True):
-            raise DriverException("User Function metadata was not refreshed. See log for details.")
+        if not self.control_connection.refresh_schema(
+            target_type=SchemaTargetType.FUNCTION,
+            keyspace=keyspace,
+            function=function,
+            schema_agreement_wait=max_schema_agreement_wait,
+            force=True,
+        ):
+            raise DriverException(
+                "User Function metadata was not refreshed. See log for details."
+            )
 
-    def refresh_user_aggregate_metadata(self, keyspace, aggregate, max_schema_agreement_wait=None):
+    def refresh_user_aggregate_metadata(
+        self, keyspace, aggregate, max_schema_agreement_wait=None
+    ):
         """
         Synchronously refresh user defined aggregate metadata.
 
@@ -2255,9 +2640,16 @@ class Cluster(object):
 
         See :meth:`~.Cluster.refresh_schema_metadata` for description of ``max_schema_agreement_wait`` behavior
         """
-        if not self.control_connection.refresh_schema(target_type=SchemaTargetType.AGGREGATE, keyspace=keyspace, aggregate=aggregate,
-                                                      schema_agreement_wait=max_schema_agreement_wait, force=True):
-            raise DriverException("User Aggregate metadata was not refreshed. See log for details.")
+        if not self.control_connection.refresh_schema(
+            target_type=SchemaTargetType.AGGREGATE,
+            keyspace=keyspace,
+            aggregate=aggregate,
+            schema_agreement_wait=max_schema_agreement_wait,
+            force=True,
+        ):
+            raise DriverException(
+                "User Aggregate metadata was not refreshed. See log for details."
+            )
 
     def refresh_nodes(self, force_token_rebuild=False):
         """
@@ -2267,7 +2659,9 @@ class Cluster(object):
 
         An Exception is raised if node refresh fails for any reason.
         """
-        if not self.control_connection.refresh_node_list_and_token_map(force_token_rebuild):
+        if not self.control_connection.refresh_node_list_and_token_map(
+            force_token_rebuild
+        ):
             raise DriverException("Node list was not refreshed. See log for details.")
 
     def set_meta_refresh_enabled(self, enabled):
@@ -2282,23 +2676,35 @@ class Cluster(object):
         Meta refresh must be enabled for the driver to become aware of any cluster
         topology changes or schema updates.
         """
-        warn("Cluster.set_meta_refresh_enabled is deprecated and will be removed in 4.0. Set "
-             "Cluster.schema_metadata_enabled and Cluster.token_metadata_enabled instead.", DeprecationWarning)
+        warn(
+            "Cluster.set_meta_refresh_enabled is deprecated and will be removed in 4.0. Set "
+            "Cluster.schema_metadata_enabled and Cluster.token_metadata_enabled instead.",
+            DeprecationWarning,
+        )
         self.schema_metadata_enabled = enabled
         self.token_metadata_enabled = enabled
 
     @classmethod
     def _send_chunks(cls, connection, host, chunks, set_keyspace=False):
         for ks_chunk in chunks:
-            messages = [PrepareMessage(query=s.query_string,
-                                       keyspace=s.keyspace if set_keyspace else None)
-                        for s in ks_chunk]
+            messages = [
+                PrepareMessage(
+                    query=s.query_string, keyspace=s.keyspace if set_keyspace else None
+                )
+                for s in ks_chunk
+            ]
             # TODO: make this timeout configurable somehow?
-            responses = connection.wait_for_responses(*messages, timeout=5.0, fail_on_error=False)
+            responses = connection.wait_for_responses(
+                *messages, timeout=5.0, fail_on_error=False
+            )
             for success, response in responses:
                 if not success:
-                    log.debug("Got unexpected response when preparing "
-                              "statement on host %s: %r", host, response)
+                    log.debug(
+                        "Got unexpected response when preparing "
+                        "statement on host %s: %r",
+                        host,
+                        response,
+                    )
 
     def _prepare_all_queries(self, host):
         if not self._prepared_statements or not self.reprepare_on_up:
@@ -2313,10 +2719,12 @@ class Cluster(object):
                 # V5 protocol and higher, no need to set the keyspace
                 chunks = []
                 for i in range(0, len(statements), 10):
-                    chunks.append(statements[i:i + 10])
+                    chunks.append(statements[i : i + 10])
                     self._send_chunks(connection, host, chunks, True)
             else:
-                for keyspace, ks_statements in groupby(statements, lambda s: s.keyspace):
+                for keyspace, ks_statements in groupby(
+                    statements, lambda s: s.keyspace
+                ):
                     if keyspace is not None:
                         connection.set_keyspace_blocking(keyspace)
 
@@ -2324,14 +2732,22 @@ class Cluster(object):
                     ks_statements = list(ks_statements)
                     chunks = []
                     for i in range(0, len(ks_statements), 10):
-                        chunks.append(ks_statements[i:i + 10])
+                        chunks.append(ks_statements[i : i + 10])
                     self._send_chunks(connection, host, chunks)
 
-            log.debug("Done preparing all known prepared statements against host %s", host)
+            log.debug(
+                "Done preparing all known prepared statements against host %s", host
+            )
         except OperationTimedOut as timeout:
-            log.warning("Timed out trying to prepare all statements on host %s: %s", host, timeout)
+            log.warning(
+                "Timed out trying to prepare all statements on host %s: %s",
+                host,
+                timeout,
+            )
         except (ConnectionException, socket.error) as exc:
-            log.warning("Error trying to prepare all statements on host %s: %r", host, exc)
+            log.warning(
+                "Error trying to prepare all statements on host %s: %r", host, exc
+            )
         except Exception:
             log.exception("Error trying to prepare all statements on host %s", host)
         finally:
@@ -2341,6 +2757,7 @@ class Cluster(object):
     def add_prepared(self, query_id, prepared_statement):
         with self._prepared_statement_lock:
             self._prepared_statements[query_id] = prepared_statement
+
 
 class Session(object):
     """
@@ -2368,6 +2785,7 @@ class Session(object):
     _monitor_reporter = None
 
     _row_factory = staticmethod(named_tuple_factory)
+
     @property
     def row_factory(self):
         """
@@ -2385,7 +2803,7 @@ class Session(object):
 
     @row_factory.setter
     def row_factory(self, rf):
-        self._validate_set_legacy_config('row_factory', rf)
+        self._validate_set_legacy_config("row_factory", rf)
 
     _default_timeout = 10.0
 
@@ -2407,7 +2825,7 @@ class Session(object):
 
     @default_timeout.setter
     def default_timeout(self, timeout):
-        self._validate_set_legacy_config('default_timeout', timeout)
+        self._validate_set_legacy_config("default_timeout", timeout)
 
     _default_consistency_level = ConsistencyLevel.LOCAL_ONE
 
@@ -2432,10 +2850,12 @@ class Session(object):
         """
         *Deprecated:* use execution profiles instead
         """
-        warn("Setting the consistency level at the session level will be removed in 4.0. Consider using "
-             "execution profiles and setting the desired consistency level to the EXEC_PROFILE_DEFAULT profile."
-             , DeprecationWarning)
-        self._validate_set_legacy_config('default_consistency_level', cl)
+        warn(
+            "Setting the consistency level at the session level will be removed in 4.0. Consider using "
+            "execution profiles and setting the desired consistency level to the EXEC_PROFILE_DEFAULT profile.",
+            DeprecationWarning,
+        )
+        self._validate_set_legacy_config("default_consistency_level", cl)
 
     _default_serial_consistency_level = None
 
@@ -2452,13 +2872,14 @@ class Session(object):
 
     @default_serial_consistency_level.setter
     def default_serial_consistency_level(self, cl):
-        if (cl is not None and
-                not ConsistencyLevel.is_serial(cl)):
-            raise ValueError("default_serial_consistency_level must be either "
-                             "ConsistencyLevel.SERIAL "
-                             "or ConsistencyLevel.LOCAL_SERIAL.")
+        if cl is not None and not ConsistencyLevel.is_serial(cl):
+            raise ValueError(
+                "default_serial_consistency_level must be either "
+                "ConsistencyLevel.SERIAL "
+                "or ConsistencyLevel.LOCAL_SERIAL."
+            )
 
-        self._validate_set_legacy_config('default_serial_consistency_level', cl)
+        self._validate_set_legacy_config("default_serial_consistency_level", cl)
 
     max_trace_wait = 2.0
     """
@@ -2584,7 +3005,9 @@ class Session(object):
             if future:
                 self._initial_connect_futures.add(future)
 
-        futures = wait_futures(self._initial_connect_futures, return_when=FIRST_COMPLETED)
+        futures = wait_futures(
+            self._initial_connect_futures, return_when=FIRST_COMPLETED
+        )
         while futures.not_done and not any(f.result() for f in futures.done):
             futures = wait_futures(futures.not_done, return_when=FIRST_COMPLETED)
 
@@ -2601,15 +3024,19 @@ class Session(object):
                 self.client_protocol_handler = type(
                     str(self.session_id) + "-ProtocolHandler",
                     (ProtocolHandler,),
-                    {"column_encryption_policy": self.cluster.column_encryption_policy})
+                    {"column_encryption_policy": self.cluster.column_encryption_policy},
+                )
             except AttributeError:
                 log.info("Unable to set column encryption policy for session")
             raise Exception(
-                "column_encryption_policy is temporary disabled, until https://github.com/scylladb/python-driver/issues/365 is sorted out")
+                "column_encryption_policy is temporary disabled, until https://github.com/scylladb/python-driver/issues/365 is sorted out"
+            )
 
         if self.cluster.monitor_reporting_enabled:
             cc_host = self.cluster.get_control_connection_host()
-            valid_insights_version = (cc_host and version_supports_insights(cc_host.dse_version))
+            valid_insights_version = cc_host and version_supports_insights(
+                cc_host.dse_version
+            )
             if valid_insights_version:
                 self._monitor_reporter = MonitorReporter(
                     interval_sec=self.cluster.monitor_reporting_interval,
@@ -2617,16 +3044,32 @@ class Session(object):
                 )
             else:
                 if cc_host:
-                    log.debug('Not starting MonitorReporter thread for Insights; '
-                              'not supported by server version {v} on '
-                              'ControlConnection host {c}'.format(v=cc_host.release_version, c=cc_host))
+                    log.debug(
+                        "Not starting MonitorReporter thread for Insights; "
+                        "not supported by server version {v} on "
+                        "ControlConnection host {c}".format(
+                            v=cc_host.release_version, c=cc_host
+                        )
+                    )
 
-        log.debug('Started Session with client_id {} and session_id {}'.format(self.cluster.client_id,
-                                                                               self.session_id))
+        log.debug(
+            "Started Session with client_id {} and session_id {}".format(
+                self.cluster.client_id, self.session_id
+            )
+        )
 
-    def execute(self, query, parameters=None, timeout=_NOT_SET, trace=False,
-                custom_payload=None, execution_profile=EXEC_PROFILE_DEFAULT,
-                paging_state=None, host=None, execute_as=None):
+    def execute(
+        self,
+        query,
+        parameters=None,
+        timeout=_NOT_SET,
+        trace=False,
+        custom_payload=None,
+        execution_profile=EXEC_PROFILE_DEFAULT,
+        paging_state=None,
+        host=None,
+        execute_as=None,
+    ):
         """
         Execute the given query and synchronously wait for the response.
 
@@ -2667,11 +3110,30 @@ class Session(object):
         on a DSE cluster.
         """
 
-        return self.execute_async(query, parameters, trace, custom_payload, timeout, execution_profile, paging_state, host, execute_as).result()
+        return self.execute_async(
+            query,
+            parameters,
+            trace,
+            custom_payload,
+            timeout,
+            execution_profile,
+            paging_state,
+            host,
+            execute_as,
+        ).result()
 
-    def execute_async(self, query, parameters=None, trace=False, custom_payload=None,
-                      timeout=_NOT_SET, execution_profile=EXEC_PROFILE_DEFAULT,
-                      paging_state=None, host=None, execute_as=None):
+    def execute_async(
+        self,
+        query,
+        parameters=None,
+        trace=False,
+        custom_payload=None,
+        timeout=_NOT_SET,
+        execution_profile=EXEC_PROFILE_DEFAULT,
+        paging_state=None,
+        host=None,
+        execute_as=None,
+    ):
         """
         Execute the given query and return a :class:`~.ResponseFuture` object
         which callbacks may be attached to for asynchronous response
@@ -2711,14 +3173,28 @@ class Session(object):
             custom_payload[_proxy_execute_key] = execute_as.encode()
 
         future = self._create_response_future(
-            query, parameters, trace, custom_payload, timeout,
-            execution_profile, paging_state, host)
+            query,
+            parameters,
+            trace,
+            custom_payload,
+            timeout,
+            execution_profile,
+            paging_state,
+            host,
+        )
         future._protocol_handler = self.client_protocol_handler
         self._on_request(future)
         future.send_request()
         return future
 
-    def execute_graph(self, query, parameters=None, trace=False, execution_profile=EXEC_PROFILE_GRAPH_DEFAULT, execute_as=None):
+    def execute_graph(
+        self,
+        query,
+        parameters=None,
+        trace=False,
+        execution_profile=EXEC_PROFILE_GRAPH_DEFAULT,
+        execute_as=None,
+    ):
         """
         Executes a Gremlin query string or GraphStatement synchronously,
         and returns a ResultSet from this execution.
@@ -2730,18 +3206,31 @@ class Session(object):
 
         `execute_as` the user that will be used on the server to execute the request.
         """
-        return self.execute_graph_async(query, parameters, trace, execution_profile, execute_as).result()
+        return self.execute_graph_async(
+            query, parameters, trace, execution_profile, execute_as
+        ).result()
 
-    def execute_graph_async(self, query, parameters=None, trace=False, execution_profile=EXEC_PROFILE_GRAPH_DEFAULT, execute_as=None):
+    def execute_graph_async(
+        self,
+        query,
+        parameters=None,
+        trace=False,
+        execution_profile=EXEC_PROFILE_GRAPH_DEFAULT,
+        execute_as=None,
+    ):
         """
         Execute the graph query and return a :class:`ResponseFuture`
         object which callbacks may be attached to for asynchronous response delivery. You may also call ``ResponseFuture.result()`` to synchronously block for
         results at any time.
         """
         if self.cluster._config_mode is _ConfigMode.LEGACY:
-            raise ValueError(("Cannot execute graph queries using Cluster legacy parameters. "
-                              "Consider using Execution profiles: "
-                              "https://docs.datastax.com/en/developer/python-driver/latest/execution_profiles/#execution-profiles"))
+            raise ValueError(
+                (
+                    "Cannot execute graph queries using Cluster legacy parameters. "
+                    "Consider using Execution profiles: "
+                    "https://docs.datastax.com/en/developer/python-driver/latest/execution_profiles/#execution-profiles"
+                )
+            )
 
         if not isinstance(query, GraphStatement):
             query = SimpleGraphStatement(query)
@@ -2749,16 +3238,19 @@ class Session(object):
         # Clone and look up instance here so we can resolve and apply the extended attributes
         execution_profile = self.execution_profile_clone_update(execution_profile)
 
-        if not hasattr(execution_profile, 'graph_options'):
+        if not hasattr(execution_profile, "graph_options"):
             raise ValueError(
-                "Execution profile for graph queries must derive from GraphExecutionProfile, and provide graph_options")
+                "Execution profile for graph queries must derive from GraphExecutionProfile, and provide graph_options"
+            )
 
         self._resolve_execution_profile_options(execution_profile)
 
         # make sure the graphson context row factory is binded to this cluster
         try:
             if issubclass(execution_profile.row_factory, _GraphSONContextRowFactory):
-                execution_profile.row_factory = execution_profile.row_factory(self.cluster)
+                execution_profile.row_factory = execution_profile.row_factory(
+                    self.cluster
+                )
         except TypeError:
             # issubclass might fail if arg1 is an instance
             pass
@@ -2768,21 +3260,32 @@ class Session(object):
 
         graph_parameters = None
         if parameters:
-            graph_parameters = self._transform_params(parameters, graph_options=execution_profile.graph_options)
+            graph_parameters = self._transform_params(
+                parameters, graph_options=execution_profile.graph_options
+            )
 
         custom_payload = execution_profile.graph_options.get_options_map()
         if execute_as:
             custom_payload[_proxy_execute_key] = execute_as.encode()
-        custom_payload[_request_timeout_key] = int64_pack(int(execution_profile.request_timeout * 1000))
+        custom_payload[_request_timeout_key] = int64_pack(
+            int(execution_profile.request_timeout * 1000)
+        )
 
-        future = self._create_response_future(query, parameters=None, trace=trace, custom_payload=custom_payload,
-                                              timeout=_NOT_SET, execution_profile=execution_profile)
+        future = self._create_response_future(
+            query,
+            parameters=None,
+            trace=trace,
+            custom_payload=custom_payload,
+            timeout=_NOT_SET,
+            execution_profile=execution_profile,
+        )
 
         future.message.query_params = graph_parameters
         future._protocol_handler = self.client_protocol_handler
 
-        if execution_profile.graph_options.is_analytics_source and \
-                isinstance(execution_profile.load_balancing_policy, DefaultLoadBalancingPolicy):
+        if execution_profile.graph_options.is_analytics_source and isinstance(
+            execution_profile.load_balancing_policy, DefaultLoadBalancingPolicy
+        ):
             self._target_analytics_master(future)
         else:
             future.send_request()
@@ -2808,8 +3311,10 @@ class Session(object):
         - Default to graph_object_row_factory.
         - If `graph_options.graph_name` is specified and is a Core graph, set graph_graphson3_row_factory.
         """
-        if execution_profile.graph_options.graph_protocol is not None and \
-                execution_profile.row_factory is not None:
+        if (
+            execution_profile.graph_options.graph_protocol is not None
+            and execution_profile.row_factory is not None
+        ):
             return
 
         graph_options = execution_profile.graph_options
@@ -2817,10 +3322,10 @@ class Session(object):
         is_core_graph = False
         if graph_options.graph_name:
             # graph_options.graph_name is bytes ...
-            name = graph_options.graph_name.decode('utf-8')
+            name = graph_options.graph_name.decode("utf-8")
             if name in self.cluster.metadata.keyspaces:
                 ks_metadata = self.cluster.metadata.keyspaces[name]
-                if ks_metadata.graph_engine == 'Core':
+                if ks_metadata.graph_engine == "Core":
                     is_core_graph = True
 
         if is_core_graph:
@@ -2843,7 +3348,9 @@ class Session(object):
 
     def _transform_params(self, parameters, graph_options):
         if not isinstance(parameters, dict):
-            raise ValueError('The parameters must be a dictionary. Unnamed parameters are not allowed.')
+            raise ValueError(
+                "The parameters must be a dictionary. Unnamed parameters are not allowed."
+            )
 
         # Serialize python types to graphson
         serializer = GraphSON1Serializer
@@ -2852,45 +3359,68 @@ class Session(object):
         elif graph_options.graph_protocol == GraphProtocol.GRAPHSON_3_0:
             # only required for core graphs
             context = {
-                'cluster': self.cluster,
-                'graph_name': graph_options.graph_name.decode('utf-8') if graph_options.graph_name else None
+                "cluster": self.cluster,
+                "graph_name": graph_options.graph_name.decode("utf-8")
+                if graph_options.graph_name
+                else None,
             }
             serializer = GraphSON3Serializer(context)
 
         serialized_parameters = serializer.serialize(parameters)
-        return [json.dumps(serialized_parameters).encode('utf-8')]
+        return [json.dumps(serialized_parameters).encode("utf-8")]
 
     def _target_analytics_master(self, future):
         future._start_timer()
-        master_query_future = self._create_response_future("CALL DseClientTool.getAnalyticsGraphServer()",
-                                                           parameters=None, trace=False,
-                                                           custom_payload=None, timeout=future.timeout)
+        master_query_future = self._create_response_future(
+            "CALL DseClientTool.getAnalyticsGraphServer()",
+            parameters=None,
+            trace=False,
+            custom_payload=None,
+            timeout=future.timeout,
+        )
         master_query_future.row_factory = tuple_factory
         master_query_future.send_request()
 
         cb = self._on_analytics_master_result
         args = (master_query_future, future)
-        master_query_future.add_callbacks(callback=cb, callback_args=args, errback=cb, errback_args=args)
+        master_query_future.add_callbacks(
+            callback=cb, callback_args=args, errback=cb, errback_args=args
+        )
 
     def _on_analytics_master_result(self, response, master_future, query_future):
         try:
             row = master_future.result()[0]
-            addr = row[0]['location']
-            delimiter_index = addr.rfind(':')  # assumes <ip>:<port> - not robust, but that's what is being provided
+            addr = row[0]["location"]
+            delimiter_index = addr.rfind(
+                ":"
+            )  # assumes <ip>:<port> - not robust, but that's what is being provided
             if delimiter_index > 0:
                 addr = addr[:delimiter_index]
             targeted_query = HostTargetingStatement(query_future.query, addr)
-            query_future.query_plan = query_future._load_balancer.make_query_plan(self.keyspace, targeted_query)
+            query_future.query_plan = query_future._load_balancer.make_query_plan(
+                self.keyspace, targeted_query
+            )
         except Exception:
-            log.debug("Failed querying analytics master (request might not be routed optimally). "
-                      "Make sure the session is connecting to a graph analytics datacenter.", exc_info=True)
+            log.debug(
+                "Failed querying analytics master (request might not be routed optimally). "
+                "Make sure the session is connecting to a graph analytics datacenter.",
+                exc_info=True,
+            )
 
         self.submit(query_future.send_request)
 
-    def _create_response_future(self, query, parameters, trace, custom_payload,
-                                timeout, execution_profile=EXEC_PROFILE_DEFAULT,
-                                paging_state=None, host=None):
-        """ Returns the ResponseFuture before calling send_request() on it """
+    def _create_response_future(
+        self,
+        query,
+        parameters,
+        trace,
+        custom_payload,
+        timeout,
+        execution_profile=EXEC_PROFILE_DEFAULT,
+        paging_state=None,
+        host=None,
+    ):
+        """Returns the ResponseFuture before calling send_request() on it"""
 
         prepared_statement = None
 
@@ -2901,13 +3431,23 @@ class Session(object):
 
         if self.cluster._config_mode == _ConfigMode.LEGACY:
             if execution_profile is not EXEC_PROFILE_DEFAULT:
-                raise ValueError("Cannot specify execution_profile while using legacy parameters.")
+                raise ValueError(
+                    "Cannot specify execution_profile while using legacy parameters."
+                )
 
             if timeout is _NOT_SET:
                 timeout = self.default_timeout
 
-            cl = query.consistency_level if query.consistency_level is not None else self.default_consistency_level
-            serial_cl = query.serial_consistency_level if query.serial_consistency_level is not None else self.default_serial_consistency_level
+            cl = (
+                query.consistency_level
+                if query.consistency_level is not None
+                else self.default_consistency_level
+            )
+            serial_cl = (
+                query.serial_consistency_level
+                if query.serial_consistency_level is not None
+                else self.default_serial_consistency_level
+            )
 
             retry_policy = query.retry_policy or self.cluster.default_retry_policy
             row_factory = self.row_factory
@@ -2920,8 +3460,16 @@ class Session(object):
             if timeout is _NOT_SET:
                 timeout = execution_profile.request_timeout
 
-            cl = query.consistency_level if query.consistency_level is not None else execution_profile.consistency_level
-            serial_cl = query.serial_consistency_level if query.serial_consistency_level is not None else execution_profile.serial_consistency_level
+            cl = (
+                query.consistency_level
+                if query.consistency_level is not None
+                else execution_profile.consistency_level
+            )
+            serial_cl = (
+                query.serial_consistency_level
+                if query.serial_consistency_level is not None
+                else execution_profile.serial_consistency_level
+            )
             continuous_paging_options = execution_profile.continuous_paging_options
 
             retry_policy = query.retry_policy or execution_profile.retry_policy
@@ -2941,48 +3489,94 @@ class Session(object):
 
         if isinstance(query, SimpleStatement):
             query_string = query.query_string
-            statement_keyspace = query.keyspace if ProtocolVersion.uses_keyspace_flag(self._protocol_version) else None
+            statement_keyspace = (
+                query.keyspace
+                if ProtocolVersion.uses_keyspace_flag(self._protocol_version)
+                else None
+            )
             if parameters:
                 query_string = bind_params(query_string, parameters, self.encoder)
             message = QueryMessage(
-                query_string, cl, serial_cl,
-                fetch_size, paging_state, timestamp,
-                continuous_paging_options, statement_keyspace)
+                query_string,
+                cl,
+                serial_cl,
+                fetch_size,
+                paging_state,
+                timestamp,
+                continuous_paging_options,
+                statement_keyspace,
+            )
         elif isinstance(query, BoundStatement):
             prepared_statement = query.prepared_statement
             message = ExecuteMessage(
-                prepared_statement.query_id, query.values, cl,
-                serial_cl, fetch_size, paging_state, timestamp,
+                prepared_statement.query_id,
+                query.values,
+                cl,
+                serial_cl,
+                fetch_size,
+                paging_state,
+                timestamp,
                 skip_meta=bool(prepared_statement.result_metadata),
                 continuous_paging_options=continuous_paging_options,
-                result_metadata_id=prepared_statement.result_metadata_id)
+                result_metadata_id=prepared_statement.result_metadata_id,
+            )
         elif isinstance(query, BatchStatement):
             if self._protocol_version < 2:
                 raise UnsupportedOperation(
                     "BatchStatement execution is only supported with protocol version "
                     "2 or higher (supported in Cassandra 2.0 and higher).  Consider "
-                    "setting Cluster.protocol_version to 2 to support this operation.")
-            statement_keyspace = query.keyspace if ProtocolVersion.uses_keyspace_flag(self._protocol_version) else None
+                    "setting Cluster.protocol_version to 2 to support this operation."
+                )
+            statement_keyspace = (
+                query.keyspace
+                if ProtocolVersion.uses_keyspace_flag(self._protocol_version)
+                else None
+            )
             message = BatchMessage(
-                query.batch_type, query._statements_and_parameters, cl,
-                serial_cl, timestamp, statement_keyspace)
+                query.batch_type,
+                query._statements_and_parameters,
+                cl,
+                serial_cl,
+                timestamp,
+                statement_keyspace,
+            )
         elif isinstance(query, GraphStatement):
             # the statement_keyspace is not aplicable to GraphStatement
-            message = QueryMessage(query.query, cl, serial_cl, fetch_size,
-                                   paging_state, timestamp,
-                                   continuous_paging_options)
+            message = QueryMessage(
+                query.query,
+                cl,
+                serial_cl,
+                fetch_size,
+                paging_state,
+                timestamp,
+                continuous_paging_options,
+            )
 
         message.tracing = trace
         message.update_custom_payload(query.custom_payload)
         message.update_custom_payload(custom_payload)
         message.allow_beta_protocol_version = self.cluster.allow_beta_protocol_version
 
-        spec_exec_plan = spec_exec_policy.new_plan(query.keyspace or self.keyspace, query) if query.is_idempotent and spec_exec_policy else None
+        spec_exec_plan = (
+            spec_exec_policy.new_plan(query.keyspace or self.keyspace, query)
+            if query.is_idempotent and spec_exec_policy
+            else None
+        )
         return ResponseFuture(
-            self, message, query, timeout, metrics=self._metrics,
-            prepared_statement=prepared_statement, retry_policy=retry_policy, row_factory=row_factory,
-            load_balancer=load_balancing_policy, start_time=start_time, speculative_execution_plan=spec_exec_plan,
-            continuous_paging_state=None, host=host)
+            self,
+            message,
+            query,
+            timeout,
+            metrics=self._metrics,
+            prepared_statement=prepared_statement,
+            retry_policy=retry_policy,
+            row_factory=row_factory,
+            load_balancer=load_balancing_policy,
+            start_time=start_time,
+            speculative_execution_plan=spec_exec_plan,
+            continuous_paging_state=None,
+            host=host,
+        )
 
     def get_execution_profile(self, name):
         """
@@ -2995,11 +3589,15 @@ class Session(object):
             return profiles[name]
         except KeyError:
             eps = [_execution_profile_to_string(ep) for ep in profiles.keys()]
-            raise ValueError("Invalid execution_profile: %s; valid profiles are: %s." % (
-                _execution_profile_to_string(name), ', '.join(eps)))
+            raise ValueError(
+                "Invalid execution_profile: %s; valid profiles are: %s."
+                % (_execution_profile_to_string(name), ", ".join(eps))
+            )
 
     def _maybe_get_execution_profile(self, ep):
-        return ep if isinstance(ep, ExecutionProfile) else self.get_execution_profile(ep)
+        return (
+            ep if isinstance(ep, ExecutionProfile) else self.get_execution_profile(ep)
+        )
 
     def execution_profile_clone_update(self, ep, **kwargs):
         """
@@ -3099,8 +3697,18 @@ class Session(object):
 
         prepared_keyspace = keyspace if keyspace else None
         prepared_statement = PreparedStatement.from_message(
-            response.query_id, response.bind_metadata, response.pk_indexes, self.cluster.metadata, query, prepared_keyspace,
-            self._protocol_version, response.column_metadata, response.result_metadata_id, response.is_lwt, self.cluster.column_encryption_policy)
+            response.query_id,
+            response.bind_metadata,
+            response.pk_indexes,
+            self.cluster.metadata,
+            query,
+            prepared_keyspace,
+            self._protocol_version,
+            response.column_metadata,
+            response.result_metadata_id,
+            response.is_lwt,
+            self.cluster.column_encryption_policy,
+        )
         prepared_statement.custom_payload = future.custom_payload
 
         self.cluster.add_prepared(response.query_id, prepared_statement)
@@ -3108,7 +3716,9 @@ class Session(object):
         if self.cluster.prepare_on_all_hosts:
             host = future._current_host
             try:
-                self.prepare_on_all_hosts(prepared_statement.query_string, host, prepared_keyspace)
+                self.prepare_on_all_hosts(
+                    prepared_statement.query_string, host, prepared_keyspace
+                )
             except Exception:
                 log.exception("Error preparing query on all hosts:")
 
@@ -3122,8 +3732,12 @@ class Session(object):
         futures = []
         for host in tuple(self._pools.keys()):
             if host != excluded_host and host.is_up:
-                future = ResponseFuture(self, PrepareMessage(query=query, keyspace=keyspace),
-                                            None, self.default_timeout)
+                future = ResponseFuture(
+                    self,
+                    PrepareMessage(query=query, keyspace=keyspace),
+                    None,
+                    self.default_timeout,
+                )
 
                 # we don't care about errors preparing against specific hosts,
                 # since we can always prepare them as needed when the prepared
@@ -3136,8 +3750,11 @@ class Session(object):
 
                 if request_id is None:
                     # the error has already been logged by ResponsFuture
-                    log.debug("Failed to prepare query for host %s: %r",
-                              host, future._errors.get(host))
+                    log.debug(
+                        "Failed to prepare query for host %s: %r",
+                        host,
+                        future._errors.get(host),
+                    )
                     continue
 
                 futures.append((host, future))
@@ -3197,18 +3814,22 @@ class Session(object):
 
         def run_add_or_renew_pool():
             try:
-               new_pool = HostConnection(host, distance, self)
+                new_pool = HostConnection(host, distance, self)
             except AuthenticationFailed as auth_exc:
                 conn_exc = ConnectionException(str(auth_exc), endpoint=host)
                 self.cluster.signal_connection_failure(host, conn_exc, is_host_addition)
                 return False
             except Exception as conn_exc:
-                log.warning("Failed to create connection pool for new host %s:",
-                            host, exc_info=conn_exc)
+                log.warning(
+                    "Failed to create connection pool for new host %s:",
+                    host,
+                    exc_info=conn_exc,
+                )
                 # the host itself will still be marked down, so we need to pass
                 # a special flag to make sure the reconnector is created
                 self.cluster.signal_connection_failure(
-                    host, conn_exc, is_host_addition, expect_host_to_be_down=True)
+                    host, conn_exc, is_host_addition, expect_host_to_be_down=True
+                )
                 return False
 
             previous = self._pools.get(host)
@@ -3225,7 +3846,10 @@ class Session(object):
                     new_pool._set_keyspace_for_all_conns(self.keyspace, callback)
                     set_keyspace_event.wait(self.cluster.connect_timeout)
                     if not set_keyspace_event.is_set() or errors_returned:
-                        log.warning("Failed setting keyspace for pool after keyspace changed during connect: %s", errors_returned)
+                        log.warning(
+                            "Failed setting keyspace for pool after keyspace changed during connect: %s",
+                            errors_returned,
+                        )
                         self.cluster.on_down(host, is_host_addition)
                         new_pool.shutdown()
                         self._lock.acquire()
@@ -3292,7 +3916,7 @@ class Session(object):
             future.add_done_callback(lambda f: self.update_created_pools())
 
     def on_remove(self, host):
-        """ Internal """
+        """Internal"""
         self.on_down(host)
 
     def set_keyspace(self, keyspace):
@@ -3300,7 +3924,7 @@ class Session(object):
         Set the default keyspace for all queries made through this Session.
         This operation blocks until complete.
         """
-        self.execute('USE %s' % (protect_name(keyspace),))
+        self.execute("USE %s" % (protect_name(keyspace),))
 
     def _set_keyspace_for_all_pools(self, keyspace, callback):
         """
@@ -3339,39 +3963,51 @@ class Session(object):
             ks_meta = self.cluster.metadata.keyspaces[keyspace]
         except KeyError:
             raise UserTypeDoesNotExist(
-                'Keyspace %s does not exist or has not been discovered by the driver' % (keyspace,))
+                "Keyspace %s does not exist or has not been discovered by the driver"
+                % (keyspace,)
+            )
 
         try:
             type_meta = ks_meta.user_types[user_type]
         except KeyError:
             raise UserTypeDoesNotExist(
-                'User type %s does not exist in keyspace %s' % (user_type, keyspace))
+                "User type %s does not exist in keyspace %s" % (user_type, keyspace)
+            )
 
         field_names = type_meta.field_names
 
         def encode(val):
-            return '{ %s }' % ' , '.join('%s : %s' % (
-                field_name,
-                self.encoder.cql_encode_all_types(getattr(val, field_name, None))
-            ) for field_name in field_names)
+            return "{ %s }" % " , ".join(
+                "%s : %s"
+                % (
+                    field_name,
+                    self.encoder.cql_encode_all_types(getattr(val, field_name, None)),
+                )
+                for field_name in field_names
+            )
 
         self.encoder.mapping[klass] = encode
 
     def submit(self, fn, *args, **kwargs):
-        """ Internal """
+        """Internal"""
         if not self.is_shutdown:
             return self.cluster.executor.submit(fn, *args, **kwargs)
 
     def get_pool_state(self):
-        return dict((host, pool.get_state()) for host, pool in tuple(self._pools.items()))
+        return dict(
+            (host, pool.get_state()) for host, pool in tuple(self._pools.items())
+        )
 
     def get_pools(self):
         return self._pools.values()
 
     def _validate_set_legacy_config(self, attr_name, value):
         if self.cluster._config_mode == _ConfigMode.PROFILES:
-            raise ValueError("Cannot set Session.%s while using Configuration Profiles. Set this in a profile instead." % (attr_name,))
-        setattr(self, '_' + attr_name, value)
+            raise ValueError(
+                "Cannot set Session.%s while using Configuration Profiles. Set this in a profile instead."
+                % (attr_name,)
+            )
+        setattr(self, "_" + attr_name, value)
         self.cluster._config_mode = _ConfigMode.LEGACY
 
 
@@ -3381,6 +4017,7 @@ class UserTypeDoesNotExist(Exception):
 
     .. versionadded:: 2.1.0
     """
+
     pass
 
 
@@ -3440,9 +4077,13 @@ class ControlConnection(object):
     _SELECT_LOCAL = "SELECT broadcast_address, cluster_name, data_center, host_id, listen_address, partitioner, rack, release_version, rpc_address, schema_version, tokens FROM system.local WHERE key='local'"
     _SELECT_LOCAL_NO_TOKENS = "SELECT host_id, cluster_name, data_center, rack, partitioner, release_version, schema_version, rpc_address FROM system.local WHERE key='local'"
     # Used only when token_metadata_enabled is set to False
-    _SELECT_LOCAL_NO_TOKENS_RPC_ADDRESS = "SELECT rpc_address FROM system.local WHERE key='local'"
+    _SELECT_LOCAL_NO_TOKENS_RPC_ADDRESS = (
+        "SELECT rpc_address FROM system.local WHERE key='local'"
+    )
 
-    _SELECT_SCHEMA_PEERS_TEMPLATE = "SELECT peer, host_id, {nt_col_name}, schema_version FROM system.peers"
+    _SELECT_SCHEMA_PEERS_TEMPLATE = (
+        "SELECT peer, host_id, {nt_col_name}, schema_version FROM system.peers"
+    )
     _SELECT_SCHEMA_LOCAL = "SELECT schema_version FROM system.local WHERE key='local'"
 
     _SELECT_PEERS_V2 = "SELECT * FROM system.peers_v2"
@@ -3453,6 +4094,7 @@ class ControlConnection(object):
 
     class PeersQueryType(object):
         """internal Enum for _peers_query"""
+
         PEERS = 0
         PEERS_SCHEMA = 1
 
@@ -3475,13 +4117,17 @@ class ControlConnection(object):
     # for testing purposes
     _time = time
 
-    def __init__(self, cluster, timeout,
-                 schema_event_refresh_window,
-                 topology_event_refresh_window,
-                 status_event_refresh_window,
-                 schema_meta_enabled=True,
-                 token_meta_enabled=True,
-                 schema_meta_page_size=1000):
+    def __init__(
+        self,
+        cluster,
+        timeout,
+        schema_event_refresh_window,
+        topology_event_refresh_window,
+        status_event_refresh_window,
+        schema_meta_enabled=True,
+        token_meta_enabled=True,
+        schema_meta_page_size=1000,
+    ):
         # use a weak reference to allow the Cluster instance to be GC'ed (and
         # shutdown) since implementing __del__ disables the cycle detector
         self._cluster = weakref.proxy(cluster)
@@ -3510,7 +4156,9 @@ class ControlConnection(object):
         self._protocol_version = self._cluster.protocol_version
         self._set_new_connection(self._reconnect_internal())
 
-        self._cluster.metadata.dbaas = self._connection._product_type == dscloud.DATASTAX_CLOUD_PRODUCT_TYPE
+        self._cluster.metadata.dbaas = (
+            self._connection._product_type == dscloud.DATASTAX_CLOUD_PRODUCT_TYPE
+        )
 
     def _set_new_connection(self, conn):
         """
@@ -3521,23 +4169,39 @@ class ControlConnection(object):
             self._connection = conn
 
         if old:
-            log.debug("[control connection] Closing old connection %r, replacing with %r", old, conn)
+            log.debug(
+                "[control connection] Closing old connection %r, replacing with %r",
+                old,
+                conn,
+            )
             old.close()
 
     def _try_connect_to_hosts(self):
         errors = {}
 
-        lbp = self._cluster.load_balancing_policy \
-            if self._cluster._config_mode == _ConfigMode.LEGACY else self._cluster._default_load_balancing_policy
+        lbp = (
+            self._cluster.load_balancing_policy
+            if self._cluster._config_mode == _ConfigMode.LEGACY
+            else self._cluster._default_load_balancing_policy
+        )
 
-        for endpoint in chain((host.endpoint for host in lbp.make_query_plan()), self._cluster.endpoints_resolved):
+        for endpoint in chain(
+            (host.endpoint for host in lbp.make_query_plan()),
+            self._cluster.endpoints_resolved,
+        ):
             try:
                 return (self._try_connect(endpoint), None)
             except Exception as exc:
                 errors[str(endpoint)] = exc
-                log.warning("[control connection] Error connecting to %s:", endpoint, exc_info=True)
+                log.warning(
+                    "[control connection] Error connecting to %s:",
+                    endpoint,
+                    exc_info=True,
+                )
             if self._is_shutdown:
-                raise DriverException("[control connection] Reconnection in progress during shutdown")
+                raise DriverException(
+                    "[control connection] Reconnection in progress during shutdown"
+                )
 
         return (None, errors)
 
@@ -3574,7 +4238,9 @@ class ControlConnection(object):
 
         while True:
             try:
-                connection = self._cluster.connection_factory(endpoint, is_control_connection=True)
+                connection = self._cluster.connection_factory(
+                    endpoint, is_control_connection=True
+                )
                 if self._is_shutdown:
                     connection.close()
                     raise DriverException("Reconnecting during shutdown")
@@ -3585,14 +4251,21 @@ class ControlConnection(object):
                 # protocol v5 is out of beta in C* >=4.0-beta5 and is now the default driver
                 # protocol version. If the protocol version was not explicitly specified,
                 # and that the server raises a beta protocol error, we should downgrade.
-                if not self._cluster._protocol_version_explicit and e.is_beta_protocol_error:
-                    self._cluster.protocol_downgrade(endpoint, self._cluster.protocol_version)
+                if (
+                    not self._cluster._protocol_version_explicit
+                    and e.is_beta_protocol_error
+                ):
+                    self._cluster.protocol_downgrade(
+                        endpoint, self._cluster.protocol_version
+                    )
                 else:
                     raise
 
-        log.debug("[control connection] Established new connection %r, "
-                  "registering watchers and refreshing schema and topology",
-                  connection)
+        log.debug(
+            "[control connection] Established new connection %r, "
+            "registering watchers and refreshing schema and topology",
+            connection,
+        )
 
         # Indirect way to determine if conencted to a ScyllaDB cluster, which does not support peers_v2
         # If sharding information is available, it's a ScyllaDB cluster, so do not use peers_v2 table.
@@ -3601,8 +4274,12 @@ class ControlConnection(object):
 
         # Only ScyllaDB supports "USING TIMEOUT"
         # Sharding information signals it is ScyllaDB
-        self._metadata_request_timeout = None if connection.features.sharding_info is None or not self._cluster.metadata_request_timeout \
+        self._metadata_request_timeout = (
+            None
+            if connection.features.sharding_info is None
+            or not self._cluster.metadata_request_timeout
             else datetime.timedelta(seconds=self._cluster.metadata_request_timeout)
+        )
 
         self._tablets_routing_v1 = connection.features.tablets_routing_v1
 
@@ -3610,22 +4287,48 @@ class ControlConnection(object):
         # _clear_watcher will be called when this ControlConnection is about to be finalized
         # _watch_callback will get the actual callback from the Connection and relay it to
         # this object (after a dereferencing a weakref)
-        self_weakref = weakref.ref(self, partial(_clear_watcher, weakref.proxy(connection)))
+        self_weakref = weakref.ref(
+            self, partial(_clear_watcher, weakref.proxy(connection))
+        )
         try:
-            connection.register_watchers({
-                "TOPOLOGY_CHANGE": partial(_watch_callback, self_weakref, '_handle_topology_change'),
-                "STATUS_CHANGE": partial(_watch_callback, self_weakref, '_handle_status_change'),
-                "SCHEMA_CHANGE": partial(_watch_callback, self_weakref, '_handle_schema_change')
-            }, register_timeout=self._timeout)
+            connection.register_watchers(
+                {
+                    "TOPOLOGY_CHANGE": partial(
+                        _watch_callback, self_weakref, "_handle_topology_change"
+                    ),
+                    "STATUS_CHANGE": partial(
+                        _watch_callback, self_weakref, "_handle_status_change"
+                    ),
+                    "SCHEMA_CHANGE": partial(
+                        _watch_callback, self_weakref, "_handle_schema_change"
+                    ),
+                },
+                register_timeout=self._timeout,
+            )
 
             sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
-            sel_local = self._SELECT_LOCAL if self._token_meta_enabled else self._SELECT_LOCAL_NO_TOKENS
-            peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                       consistency_level=ConsistencyLevel.ONE)
-            local_query = QueryMessage(query=maybe_add_timeout_to_query(sel_local, self._metadata_request_timeout),
-                                       consistency_level=ConsistencyLevel.ONE)
-            (peers_success, peers_result), (local_success, local_result) = connection.wait_for_responses(
-                peers_query, local_query, timeout=self._timeout, fail_on_error=False)
+            sel_local = (
+                self._SELECT_LOCAL
+                if self._token_meta_enabled
+                else self._SELECT_LOCAL_NO_TOKENS
+            )
+            peers_query = QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    sel_peers, self._metadata_request_timeout
+                ),
+                consistency_level=ConsistencyLevel.ONE,
+            )
+            local_query = QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    sel_local, self._metadata_request_timeout
+                ),
+                consistency_level=ConsistencyLevel.ONE,
+            )
+            (peers_success, peers_result), (local_success, local_result) = (
+                connection.wait_for_responses(
+                    peers_query, local_query, timeout=self._timeout, fail_on_error=False
+                )
+            )
 
             if not local_success:
                 raise local_result
@@ -3634,14 +4337,23 @@ class ControlConnection(object):
                 # error with the peers v2 query, fallback to peers v1
                 self._uses_peers_v2 = False
                 sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
-                peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                           consistency_level=ConsistencyLevel.ONE)
+                peers_query = QueryMessage(
+                    query=maybe_add_timeout_to_query(
+                        sel_peers, self._metadata_request_timeout
+                    ),
+                    consistency_level=ConsistencyLevel.ONE,
+                )
                 peers_result = connection.wait_for_response(
-                    peers_query, timeout=self._timeout)
+                    peers_query, timeout=self._timeout
+                )
 
             shared_results = (peers_result, local_result)
-            self._refresh_node_list_and_token_map(connection, preloaded_results=shared_results)
-            self._refresh_schema(connection, preloaded_results=shared_results, schema_agreement_wait=-1)
+            self._refresh_node_list_and_token_map(
+                connection, preloaded_results=shared_results
+            )
+            self._refresh_schema(
+                connection, preloaded_results=shared_results, schema_agreement_wait=-1
+            )
         except Exception:
             connection.close()
             raise
@@ -3663,7 +4375,6 @@ class ControlConnection(object):
             schedule = self._cluster.reconnection_policy.new_schedule()
 
             with self._reconnection_lock:
-
                 # cancel existing reconnection attempts
                 if self._reconnection_handler:
                     self._reconnection_handler.cancel()
@@ -3672,9 +4383,12 @@ class ControlConnection(object):
                 # will be called with the new connection and then our
                 # _reconnection_handler will be cleared out
                 self._reconnection_handler = _ControlReconnectionHandler(
-                    self, self._cluster.scheduler, schedule,
+                    self,
+                    self._cluster.scheduler,
+                    schedule,
                     self._get_and_set_reconnection_handler,
-                    new_handler=None)
+                    new_handler=None,
+                )
                 self._reconnection_handler.start()
         except Exception:
             log.debug("[control connection] error reconnecting", exc_info=True)
@@ -3727,16 +4441,27 @@ class ControlConnection(object):
             self._signal_error()
         return False
 
-    def _refresh_schema(self, connection, preloaded_results=None, schema_agreement_wait=None, force=False, **kwargs):
+    def _refresh_schema(
+        self,
+        connection,
+        preloaded_results=None,
+        schema_agreement_wait=None,
+        force=False,
+        **kwargs,
+    ):
         if self._cluster.is_shutdown:
             return False
 
-        agreed = self.wait_for_schema_agreement(connection,
-                                                preloaded_results=preloaded_results,
-                                                wait_time=schema_agreement_wait)
+        agreed = self.wait_for_schema_agreement(
+            connection,
+            preloaded_results=preloaded_results,
+            wait_time=schema_agreement_wait,
+        )
 
         if not self._schema_meta_enabled and not force:
-            log.debug("[control connection] Skipping schema refresh because schema metadata is disabled")
+            log.debug(
+                "[control connection] Skipping schema refresh because schema metadata is disabled"
+            )
             return False
 
         if not agreed:
@@ -3748,26 +4473,35 @@ class ControlConnection(object):
             self._timeout,
             fetch_size=self._schema_meta_page_size,
             metadata_request_timeout=self._metadata_request_timeout,
-            **kwargs)
+            **kwargs,
+        )
 
         return True
 
     def refresh_node_list_and_token_map(self, force_token_rebuild=False):
         try:
             if self._connection:
-                self._refresh_node_list_and_token_map(self._connection, force_token_rebuild=force_token_rebuild)
+                self._refresh_node_list_and_token_map(
+                    self._connection, force_token_rebuild=force_token_rebuild
+                )
                 return True
         except ReferenceError:
             pass  # our weak reference to the Cluster is no good
         except Exception:
-            log.debug("[control connection] Error refreshing node list and token map", exc_info=True)
+            log.debug(
+                "[control connection] Error refreshing node list and token map",
+                exc_info=True,
+            )
             self._signal_error()
         return False
 
-    def _refresh_node_list_and_token_map(self, connection, preloaded_results=None,
-                                         force_token_rebuild=False):
+    def _refresh_node_list_and_token_map(
+        self, connection, preloaded_results=None, force_token_rebuild=False
+    ):
         if preloaded_results:
-            log.debug("[control connection] Refreshing node list and token map using preloaded results")
+            log.debug(
+                "[control connection] Refreshing node list and token map using preloaded results"
+            )
             peers_result = preloaded_results[0]
             local_result = preloaded_results[1]
         else:
@@ -3779,12 +4513,21 @@ class ControlConnection(object):
             else:
                 log.debug("[control connection] Refreshing node list and token map")
                 sel_local = self._SELECT_LOCAL
-            peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                       consistency_level=cl)
-            local_query = QueryMessage(query=maybe_add_timeout_to_query(sel_local, self._metadata_request_timeout),
-                                       consistency_level=cl)
+            peers_query = QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    sel_peers, self._metadata_request_timeout
+                ),
+                consistency_level=cl,
+            )
+            local_query = QueryMessage(
+                query=maybe_add_timeout_to_query(
+                    sel_local, self._metadata_request_timeout
+                ),
+                consistency_level=cl,
+            )
             peers_result, local_result = connection.wait_for_responses(
-                peers_query, local_query, timeout=self._timeout)
+                peers_query, local_query, timeout=self._timeout
+            )
 
         peers_result = dict_factory(peers_result.column_names, peers_result.parsed_rows)
 
@@ -3795,7 +4538,9 @@ class ControlConnection(object):
         found_endpoints = set()
 
         if local_result.parsed_rows:
-            local_rows = dict_factory(local_result.column_names, local_result.parsed_rows)
+            local_rows = dict_factory(
+                local_result.column_names, local_result.parsed_rows
+            )
             local_row = local_rows[0]
             cluster_name = local_row["cluster_name"]
             self._cluster.metadata.cluster_name = cluster_name
@@ -3808,7 +4553,9 @@ class ControlConnection(object):
         # Check metadata.partitioner to see if we haven't built anything yet. If
         # every node in the cluster was in the contact points, we won't discover
         # any new nodes, so we need this additional check.  (See PYTHON-90)
-        should_rebuild_token_map = force_token_rebuild or self._cluster.metadata.partitioner is None
+        should_rebuild_token_map = (
+            force_token_rebuild or self._cluster.metadata.partitioner is None
+        )
         for row in peers_result:
             if not self._is_valid_peer(row):
                 continue
@@ -3817,11 +4564,20 @@ class ControlConnection(object):
             host_id = row.get("host_id")
 
             if endpoint in found_endpoints:
-                log.warning("Found multiple hosts with the same endpoint(%s). Excluding peer %s - %s", endpoint, row.get("peer"), host_id)
+                log.warning(
+                    "Found multiple hosts with the same endpoint(%s). Excluding peer %s - %s",
+                    endpoint,
+                    row.get("peer"),
+                    host_id,
+                )
                 continue
 
             if host_id in found_host_ids:
-                log.warning("Found multiple hosts with the same host_id (%s). Excluding peer %s", host_id, row.get("peer"))
+                log.warning(
+                    "Found multiple hosts with the same host_id (%s). Excluding peer %s",
+                    host_id,
+                    row.get("peer"),
+                )
                 continue
 
             found_host_ids.add(host_id)
@@ -3833,11 +4589,18 @@ class ControlConnection(object):
             if host is None:
                 host = self._cluster.metadata.get_host_by_host_id(host_id)
                 if host and host.endpoint != endpoint:
-                    log.debug("[control connection] Updating host ip from %s to %s for (%s)", host.endpoint, endpoint, host_id)
+                    log.debug(
+                        "[control connection] Updating host ip from %s to %s for (%s)",
+                        host.endpoint,
+                        endpoint,
+                        host_id,
+                    )
                     reconnector = host.get_and_set_reconnection_handler(None)
                     if reconnector:
                         reconnector.cancel()
-                    self._cluster.on_down(host, is_host_addition=False, expect_host_to_be_down=True)
+                    self._cluster.on_down(
+                        host, is_host_addition=False, expect_host_to_be_down=True
+                    )
 
                     old_endpoint = host.endpoint
                     host.endpoint = endpoint
@@ -3845,11 +4608,22 @@ class ControlConnection(object):
                     self._cluster.on_up(host)
 
             if host is None:
-                log.debug("[control connection] Found new host to connect to: %s", endpoint)
-                host, _ = self._cluster.add_host(endpoint, datacenter=datacenter, rack=rack, signal=True, refresh_nodes=False, host_id=host_id)
+                log.debug(
+                    "[control connection] Found new host to connect to: %s", endpoint
+                )
+                host, _ = self._cluster.add_host(
+                    endpoint,
+                    datacenter=datacenter,
+                    rack=rack,
+                    signal=True,
+                    refresh_nodes=False,
+                    host_id=host_id,
+                )
                 should_rebuild_token_map = True
             else:
-                should_rebuild_token_map |= self._update_location_info(host, datacenter, rack)
+                should_rebuild_token_map |= self._update_location_info(
+                    host, datacenter, rack
+                )
 
             host.host_id = host_id
             host.broadcast_address = _NodeInfo.get_broadcast_address(row)
@@ -3869,12 +4643,19 @@ class ControlConnection(object):
         for old_host_id, old_host in self._cluster.metadata.all_hosts_items():
             if old_host_id not in found_host_ids:
                 should_rebuild_token_map = True
-                log.debug("[control connection] Removing host not found in peers metadata: %r", old_host)
-                self._cluster.metadata.remove_host_by_host_id(old_host_id, old_host.endpoint)
+                log.debug(
+                    "[control connection] Removing host not found in peers metadata: %r",
+                    old_host,
+                )
+                self._cluster.metadata.remove_host_by_host_id(
+                    old_host_id, old_host.endpoint
+                )
 
         log.debug("[control connection] Finished fetching ring info")
         if partitioner and should_rebuild_token_map:
-            log.debug("[control connection] Rebuilding token map due to topology changes")
+            log.debug(
+                "[control connection] Rebuilding token map due to topology changes"
+            )
             self._cluster.metadata.rebuild_token_map(partitioner, token_map)
 
     @staticmethod
@@ -3884,32 +4665,37 @@ class ControlConnection(object):
 
         if not broadcast_rpc:
             log.warning(
-                "Found an invalid row for peer - missing broadcast_rpc (full row: %s). Ignoring host." %
-                row)
+                "Found an invalid row for peer - missing broadcast_rpc (full row: %s). Ignoring host."
+                % row
+            )
             return False
 
         if not host_id:
             log.warning(
-                "Found an invalid row for peer - missing host_id (broadcast_rpc: %s). Ignoring host." %
-                broadcast_rpc)
+                "Found an invalid row for peer - missing host_id (broadcast_rpc: %s). Ignoring host."
+                % broadcast_rpc
+            )
             return False
 
         if not row.get("data_center"):
             log.warning(
-                "Found an invalid row for peer - missing data_center (broadcast_rpc: %s, host_id: %s). Ignoring host." %
-                (broadcast_rpc, host_id))
+                "Found an invalid row for peer - missing data_center (broadcast_rpc: %s, host_id: %s). Ignoring host."
+                % (broadcast_rpc, host_id)
+            )
             return False
 
         if not row.get("rack"):
             log.warning(
-                "Found an invalid row for peer - missing rack (broadcast_rpc: %s, host_id: %s). Ignoring host." %
-                (broadcast_rpc, host_id))
+                "Found an invalid row for peer - missing rack (broadcast_rpc: %s, host_id: %s). Ignoring host."
+                % (broadcast_rpc, host_id)
+            )
             return False
 
         if "tokens" in row and not row.get("tokens"):
             log.debug(
-                "Found a zero-token node - tokens is None (broadcast_rpc: %s, host_id: %s). Ignoring host." %
-                (broadcast_rpc, host_id))
+                "Found a zero-token node - tokens is None (broadcast_rpc: %s, host_id: %s). Ignoring host."
+                % (broadcast_rpc, host_id)
+            )
             return False
 
         return True
@@ -3954,8 +4740,12 @@ class ControlConnection(object):
         host = self._cluster.metadata.get_host(addr, port)
         if change_type == "NEW_NODE" or change_type == "MOVED_NODE":
             if self._topology_event_refresh_window >= 0:
-                delay = self._delay_for_event_type('topology_change', self._topology_event_refresh_window)
-                self._cluster.scheduler.schedule_unique(delay, self._refresh_nodes_if_not_up, host)
+                delay = self._delay_for_event_type(
+                    "topology_change", self._topology_event_refresh_window
+                )
+                self._cluster.scheduler.schedule_unique(
+                    delay, self._refresh_nodes_if_not_up, host
+                )
         elif change_type == "REMOVED_NODE":
             self._cluster.scheduler.schedule_unique(0, self._cluster.remove_host, host)
 
@@ -3964,12 +4754,18 @@ class ControlConnection(object):
         addr, port = event["address"]
         host = self._cluster.metadata.get_host(addr, port)
         if change_type == "UP":
-            delay = self._delay_for_event_type('status_change', self._status_event_refresh_window)
+            delay = self._delay_for_event_type(
+                "status_change", self._status_event_refresh_window
+            )
             if host is None:
                 # this is the first time we've seen the node
-                self._cluster.scheduler.schedule_unique(delay, self.refresh_node_list_and_token_map)
+                self._cluster.scheduler.schedule_unique(
+                    delay, self.refresh_node_list_and_token_map
+                )
             else:
-                self._cluster.scheduler.schedule_unique(delay, self._cluster.on_up, host)
+                self._cluster.scheduler.schedule_unique(
+                    delay, self._cluster.on_up, host
+                )
         elif change_type == "DOWN":
             # Note that there is a slight risk we can receive the event late and thus
             # mark the host down even though we already had reconnected successfully.
@@ -3982,12 +4778,20 @@ class ControlConnection(object):
     def _handle_schema_change(self, event):
         if self._schema_event_refresh_window < 0:
             return
-        delay = self._delay_for_event_type('schema_change', self._schema_event_refresh_window)
+        delay = self._delay_for_event_type(
+            "schema_change", self._schema_event_refresh_window
+        )
         self._cluster.scheduler.schedule_unique(delay, self.refresh_schema, **event)
 
-    def wait_for_schema_agreement(self, connection=None, preloaded_results=None, wait_time=None):
+    def wait_for_schema_agreement(
+        self, connection=None, preloaded_results=None, wait_time=None
+    ):
 
-        total_timeout = wait_time if wait_time is not None else self._cluster.max_schema_agreement_wait
+        total_timeout = (
+            wait_time
+            if wait_time is not None
+            else self._cluster.max_schema_agreement_wait
+        )
         if total_timeout <= 0:
             return True
 
@@ -4003,11 +4807,15 @@ class ControlConnection(object):
                 connection = self._connection
 
             if preloaded_results:
-                log.debug("[control connection] Attempting to use preloaded results for schema agreement")
+                log.debug(
+                    "[control connection] Attempting to use preloaded results for schema agreement"
+                )
 
                 peers_result = preloaded_results[0]
                 local_result = preloaded_results[1]
-                schema_mismatches = self._get_schema_mismatches(peers_result, local_result, connection.endpoint)
+                schema_mismatches = self._get_schema_mismatches(
+                    peers_result, local_result, connection.endpoint
+                )
                 if schema_mismatches is None:
                     return True
 
@@ -4016,30 +4824,48 @@ class ControlConnection(object):
             elapsed = 0
             cl = ConsistencyLevel.ONE
             schema_mismatches = None
-            select_peers_query = self._get_peers_query(self.PeersQueryType.PEERS_SCHEMA, connection)
+            select_peers_query = self._get_peers_query(
+                self.PeersQueryType.PEERS_SCHEMA, connection
+            )
 
             while elapsed < total_timeout:
-                peers_query = QueryMessage(query=maybe_add_timeout_to_query(select_peers_query, self._metadata_request_timeout),
-                                           consistency_level=cl)
-                local_query = QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_SCHEMA_LOCAL, self._metadata_request_timeout),
-                                           consistency_level=cl)
+                peers_query = QueryMessage(
+                    query=maybe_add_timeout_to_query(
+                        select_peers_query, self._metadata_request_timeout
+                    ),
+                    consistency_level=cl,
+                )
+                local_query = QueryMessage(
+                    query=maybe_add_timeout_to_query(
+                        self._SELECT_SCHEMA_LOCAL, self._metadata_request_timeout
+                    ),
+                    consistency_level=cl,
+                )
                 try:
                     timeout = min(self._timeout, total_timeout - elapsed)
                     peers_result, local_result = connection.wait_for_responses(
-                        peers_query, local_query, timeout=timeout)
+                        peers_query, local_query, timeout=timeout
+                    )
                 except OperationTimedOut as timeout:
-                    log.debug("[control connection] Timed out waiting for "
-                              "response during schema agreement check: %s", timeout)
+                    log.debug(
+                        "[control connection] Timed out waiting for "
+                        "response during schema agreement check: %s",
+                        timeout,
+                    )
                     elapsed = self._time.time() - start
                     continue
                 except ConnectionShutdown:
                     if self._is_shutdown:
-                        log.debug("[control connection] Aborting wait for schema match due to shutdown")
+                        log.debug(
+                            "[control connection] Aborting wait for schema match due to shutdown"
+                        )
                         return None
                     else:
                         raise
 
-                schema_mismatches = self._get_schema_mismatches(peers_result, local_result, connection.endpoint)
+                schema_mismatches = self._get_schema_mismatches(
+                    peers_result, local_result, connection.endpoint
+                )
                 if schema_mismatches is None:
                     return True
 
@@ -4047,8 +4873,11 @@ class ControlConnection(object):
                 self._time.sleep(0.2)
                 elapsed = self._time.time() - start
 
-            log.warning("Node %s is reporting a schema disagreement: %s",
-                        connection.endpoint, schema_mismatches)
+            log.warning(
+                "Node %s is reporting a schema disagreement: %s",
+                connection.endpoint,
+                schema_mismatches,
+            )
             return False
 
     def _get_schema_mismatches(self, peers_result, local_result, local_address):
@@ -4056,12 +4885,14 @@ class ControlConnection(object):
 
         versions = defaultdict(set)
         if local_result.parsed_rows:
-            local_row = dict_factory(local_result.column_names, local_result.parsed_rows)[0]
+            local_row = dict_factory(
+                local_result.column_names, local_result.parsed_rows
+            )[0]
             if local_row.get("schema_version"):
                 versions[local_row.get("schema_version")].add(local_address)
 
         for row in peers_result:
-            schema_ver = row.get('schema_version')
+            schema_ver = row.get("schema_version")
             if not schema_ver:
                 continue
             endpoint = self._cluster.endpoint_factory.create(row)
@@ -4090,29 +4921,56 @@ class ControlConnection(object):
         - use that to choose the column name for the transport address (see APOLLO-1130), and
         - use that column name in the provided peers query template.
         """
-        if peers_query_type not in (self.PeersQueryType.PEERS, self.PeersQueryType.PEERS_SCHEMA):
+        if peers_query_type not in (
+            self.PeersQueryType.PEERS,
+            self.PeersQueryType.PEERS_SCHEMA,
+        ):
             raise ValueError("Invalid peers query type: %s" % peers_query_type)
 
         if self._uses_peers_v2:
             if peers_query_type == self.PeersQueryType.PEERS:
-                query = self._SELECT_PEERS_V2 if self._token_meta_enabled else self._SELECT_PEERS_NO_TOKENS_V2
+                query = (
+                    self._SELECT_PEERS_V2
+                    if self._token_meta_enabled
+                    else self._SELECT_PEERS_NO_TOKENS_V2
+                )
             else:
                 query = self._SELECT_SCHEMA_PEERS_V2
         else:
-            if peers_query_type == self.PeersQueryType.PEERS and self._token_meta_enabled:
+            if (
+                peers_query_type == self.PeersQueryType.PEERS
+                and self._token_meta_enabled
+            ):
                 query = self._SELECT_PEERS
             else:
-                query_template = (self._SELECT_SCHEMA_PEERS_TEMPLATE
-                                  if peers_query_type == self.PeersQueryType.PEERS_SCHEMA
-                                  else self._SELECT_PEERS_NO_TOKENS_TEMPLATE)
-                original_endpoint_host = self._cluster.metadata.get_host(connection.original_endpoint)
-                host_release_version = None if original_endpoint_host is None else original_endpoint_host.release_version
-                host_dse_version = None if original_endpoint_host is None else original_endpoint_host.dse_version
+                query_template = (
+                    self._SELECT_SCHEMA_PEERS_TEMPLATE
+                    if peers_query_type == self.PeersQueryType.PEERS_SCHEMA
+                    else self._SELECT_PEERS_NO_TOKENS_TEMPLATE
+                )
+                original_endpoint_host = self._cluster.metadata.get_host(
+                    connection.original_endpoint
+                )
+                host_release_version = (
+                    None
+                    if original_endpoint_host is None
+                    else original_endpoint_host.release_version
+                )
+                host_dse_version = (
+                    None
+                    if original_endpoint_host is None
+                    else original_endpoint_host.dse_version
+                )
                 uses_native_address_query = (
-                    host_dse_version and Version(host_dse_version) >= self._MINIMUM_NATIVE_ADDRESS_DSE_VERSION)
+                    host_dse_version
+                    and Version(host_dse_version)
+                    >= self._MINIMUM_NATIVE_ADDRESS_DSE_VERSION
+                )
 
                 if uses_native_address_query:
-                    query = query_template.format(nt_col_name="native_transport_address")
+                    query = query_template.format(
+                        nt_col_name="native_transport_address"
+                    )
                 elif host_release_version:
                     query = query_template.format(nt_col_name="rpc_address")
                 else:
@@ -4133,7 +4991,8 @@ class ControlConnection(object):
                 # that errors have already been reported, so we're fine
                 if host:
                     self._cluster.signal_connection_failure(
-                        host, self._connection.last_error, is_host_addition=False)
+                        host, self._connection.last_error, is_host_addition=False
+                    )
                     return
 
         # if the connection is not defunct or the host already left, reconnect
@@ -4146,10 +5005,16 @@ class ControlConnection(object):
     def on_down(self, host):
 
         conn = self._connection
-        if conn and conn.endpoint == host.endpoint and \
-                self._reconnection_handler is None:
-            log.debug("[control connection] Control connection host (%s) is "
-                      "considered down, starting reconnection", host)
+        if (
+            conn
+            and conn.endpoint == host.endpoint
+            and self._reconnection_handler is None
+        ):
+            log.debug(
+                "[control connection] Control connection host (%s) is "
+                "considered down, starting reconnection",
+                host,
+            )
             # this will result in a task being submitted to the executor to reconnect
             self.reconnect()
 
@@ -4160,18 +5025,23 @@ class ControlConnection(object):
     def on_remove(self, host):
         c = self._connection
         if c and c.endpoint == host.endpoint:
-            log.debug("[control connection] Control connection host (%s) is being removed. Reconnecting", host)
+            log.debug(
+                "[control connection] Control connection host (%s) is being removed. Reconnecting",
+                host,
+            )
             # refresh will be done on reconnect
             self.reconnect()
         else:
             self.refresh_node_list_and_token_map(force_token_rebuild=True)
 
     def get_connections(self):
-        c = getattr(self, '_connection', None)
+        c = getattr(self, "_connection", None)
         return [c] if c else []
 
     def return_connection(self, connection):
-        if connection is self._connection and (connection.is_defunct or connection.is_closed):
+        if connection is self._connection and (
+            connection.is_defunct or connection.is_closed
+        ):
             self.reconnect()
 
 
@@ -4186,7 +5056,6 @@ def _stop_scheduler(scheduler, thread):
 
 
 class _Scheduler(Thread):
-
     _queue = None
     _scheduled_tasks = None
     _executor = None
@@ -4240,7 +5109,9 @@ class _Scheduler(Thread):
                     run_at, i, task = self._queue.get(block=True, timeout=None)
                     if self.is_shutdown:
                         if task:
-                            log.debug("Not executing scheduled task due to Scheduler shutdown")
+                            log.debug(
+                                "Not executing scheduled task due to Scheduler shutdown"
+                            )
                         return
                     if run_at <= time.time():
                         self._scheduled_tasks.discard(task)
@@ -4261,14 +5132,16 @@ class _Scheduler(Thread):
         if exc:
             log.warning(
                 "An internally scheduled tasked failed with an unhandled exception:",
-                exc_info=exc)
+                exc_info=exc,
+            )
 
 
 def refresh_schema_and_set_result(control_conn, response_future, connection, **kwargs):
     try:
-        log.debug("Refreshing schema in response to schema change. "
-                  "%s", kwargs)
-        response_future.is_schema_agreed = control_conn._refresh_schema(connection, **kwargs)
+        log.debug("Refreshing schema in response to schema change. %s", kwargs)
+        response_future.is_schema_agreed = control_conn._refresh_schema(
+            connection, **kwargs
+        )
     except Exception:
         log.exception("Exception refreshing schema in response to schema change:")
         response_future.session.submit(control_conn.refresh_schema, **kwargs)
@@ -4348,13 +5221,28 @@ class ResponseFuture(object):
 
     _warned_timeout = False
 
-    def __init__(self, session, message, query, timeout, metrics=None, prepared_statement=None,
-                 retry_policy=RetryPolicy(), row_factory=None, load_balancer=None, start_time=None,
-                 speculative_execution_plan=None, continuous_paging_state=None, host=None):
+    def __init__(
+        self,
+        session,
+        message,
+        query,
+        timeout,
+        metrics=None,
+        prepared_statement=None,
+        retry_policy=RetryPolicy(),
+        row_factory=None,
+        load_balancer=None,
+        start_time=None,
+        speculative_execution_plan=None,
+        continuous_paging_state=None,
+        host=None,
+    ):
         self.session = session
         # TODO: normalize handling of retry policy and row factory
         self.row_factory = row_factory or session.row_factory
-        self._load_balancer = load_balancer or session.cluster._default_load_balancing_policy
+        self._load_balancer = (
+            load_balancer or session.cluster._default_load_balancing_policy
+        )
         self.message = message
         self.query = query
         self.timeout = timeout
@@ -4364,7 +5252,9 @@ class ResponseFuture(object):
         self._callback_lock = Lock()
         self._start_time = start_time or time.time()
         self._host = host
-        self._spec_execution_plan = speculative_execution_plan or self._spec_execution_plan
+        self._spec_execution_plan = (
+            speculative_execution_plan or self._spec_execution_plan
+        )
         self._make_query_plan()
         self._event = Event()
         self._errors = {}
@@ -4385,10 +5275,14 @@ class ResponseFuture(object):
             spec_delay = self._spec_execution_plan.next_execution(self._current_host)
             if spec_delay >= 0:
                 if self._time_remaining is None or self._time_remaining > spec_delay:
-                    self._timer = self.session.cluster.connection_class.create_timer(spec_delay, self._on_speculative_execute)
+                    self._timer = self.session.cluster.connection_class.create_timer(
+                        spec_delay, self._on_speculative_execute
+                    )
                     return
             if self._time_remaining is not None:
-                self._timer = self.session.cluster.connection_class.create_timer(self._time_remaining, self._on_timeout)
+                self._timer = self.session.cluster.connection_class.create_timer(
+                    self._time_remaining, self._on_timeout
+                )
 
     def _cancel_timer(self):
         if self._timer:
@@ -4405,8 +5299,7 @@ class ResponseFuture(object):
         # PYTHON-853: for short timeouts, we sometimes race with our __init__
         if self._connection is None and _attempts < 3:
             self._timer = self.session.cluster.connection_class.create_timer(
-                0.01,
-                partial(self._on_timeout, _attempts=_attempts + 1)
+                0.01, partial(self._on_timeout, _attempts=_attempts + 1)
             )
             return
 
@@ -4419,7 +5312,9 @@ class ResponseFuture(object):
             # wait for it endlessly
             except KeyError:
                 key = "Connection defunct by heartbeat"
-                errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
+                errors = {
+                    key: "Client request timeout. See Session.execute[_async](timeout)"
+                }
                 self._set_final_exception(OperationTimedOut(errors, self._current_host))
                 return
 
@@ -4432,7 +5327,10 @@ class ResponseFuture(object):
                 # query could get a response from the old query
                 with self._connection.lock:
                     self._connection.orphaned_request_ids.add(self._req_id)
-                    if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
+                    if (
+                        len(self._connection.orphaned_request_ids)
+                        >= self._connection.orphaned_threshold
+                    ):
                         self._connection.orphaned_threshold_reached = True
 
                 pool.return_connection(self._connection, stream_was_orphaned=True)
@@ -4440,19 +5338,26 @@ class ResponseFuture(object):
         errors = self._errors
         if not errors:
             if self.is_schema_agreed:
-                key = str(self._current_host.endpoint) if self._current_host else 'no host queried before timeout'
-                errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
+                key = (
+                    str(self._current_host.endpoint)
+                    if self._current_host
+                    else "no host queried before timeout"
+                )
+                errors = {
+                    key: "Client request timeout. See Session.execute[_async](timeout)"
+                }
             else:
                 connection = self.session.cluster.control_connection._connection
-                host = str(connection.endpoint) if connection else 'unknown'
-                errors = {host: "Request timed out while waiting for schema agreement. See Session.execute[_async](timeout) and Cluster.max_schema_agreement_wait."}
+                host = str(connection.endpoint) if connection else "unknown"
+                errors = {
+                    host: "Request timed out while waiting for schema agreement. See Session.execute[_async](timeout) and Cluster.max_schema_agreement_wait."
+                }
 
         self._set_final_exception(OperationTimedOut(errors, self._current_host))
 
     def _on_speculative_execute(self):
         self._timer = None
         if not self._event.is_set():
-
             # PYTHON-836, the speculative queries must be after
             # the query is sent from the main thread, otherwise the
             # query from the main thread may raise NoHostAvailable
@@ -4461,7 +5366,9 @@ class ResponseFuture(object):
             # We reschedule this call until the main thread has succeeded
             # making a query
             if not self.attempted_hosts:
-                self._timer = self.session.cluster.connection_class.create_timer(0.01, self._on_speculative_execute)
+                self._timer = self.session.cluster.connection_class.create_timer(
+                    0.01, self._on_speculative_execute
+                )
                 return
 
             if self._time_remaining is not None:
@@ -4481,10 +5388,12 @@ class ResponseFuture(object):
             # convert the list/generator/etc to an iterator so that subsequent
             # calls to send_request (which retries may do) will resume where
             # they last left off
-            self.query_plan = iter(self._load_balancer.make_query_plan(self.session.keyspace, self.query))
+            self.query_plan = iter(
+                self._load_balancer.make_query_plan(self.session.keyspace, self.query)
+            )
 
     def send_request(self, error_no_hosts=True):
-        """ Internal """
+        """Internal"""
         # query_plan is an iterator, so this will resume where we last left
         # off if send_request() is called multiple times
         for host in self.query_plan:
@@ -4492,12 +5401,18 @@ class ResponseFuture(object):
             if req_id is not None:
                 self._req_id = req_id
                 return True
-            if self.timeout is not None and time.time() - self._start_time > self.timeout:
+            if (
+                self.timeout is not None
+                and time.time() - self._start_time > self.timeout
+            ):
                 self._on_timeout()
                 return True
         if error_no_hosts:
-            self._set_final_exception(NoHostAvailable(
-                "Unable to complete the operation against any hosts", self._errors))
+            self._set_final_exception(
+                NoHostAvailable(
+                    "Unable to complete the operation against any hosts", self._errors
+                )
+            )
         return False
 
     def _query(self, host, message=None, cb=None):
@@ -4506,7 +5421,9 @@ class ResponseFuture(object):
 
         pool = self.session._pools.get(host)
         if not pool:
-            self._errors[host] = ConnectionException("Host has been marked down or removed")
+            self._errors[host] = ConnectionException(
+                "Host has been marked down or removed"
+            )
             return None
         elif pool.is_shutdown:
             self._errors[host] = ConnectionException("Pool is shutdown")
@@ -4518,23 +5435,39 @@ class ResponseFuture(object):
         try:
             # TODO get connectTimeout from cluster settings
             if self.query:
-                connection, request_id = pool.borrow_connection(timeout=2.0, routing_key=self.query.routing_key, keyspace=self.query.keyspace, table=self.query.table)
+                connection, request_id = pool.borrow_connection(
+                    timeout=2.0,
+                    routing_key=self.query.routing_key,
+                    keyspace=self.query.keyspace,
+                    table=self.query.table,
+                )
             else:
                 connection, request_id = pool.borrow_connection(timeout=2.0)
             self._connection = connection
-            result_meta = self.prepared_statement.result_metadata if self.prepared_statement else []
+            result_meta = (
+                self.prepared_statement.result_metadata
+                if self.prepared_statement
+                else []
+            )
 
             if cb is None:
                 cb = partial(self._set_result, host, connection, pool)
 
-            self.request_encoded_size = connection.send_msg(message, request_id, cb=cb,
-                                                            encoder=self._protocol_handler.encode_message,
-                                                            decoder=self._protocol_handler.decode_message,
-                                                            result_metadata=result_meta)
+            self.request_encoded_size = connection.send_msg(
+                message,
+                request_id,
+                cb=cb,
+                encoder=self._protocol_handler.encode_message,
+                decoder=self._protocol_handler.decode_message,
+                result_metadata=result_meta,
+            )
             self.attempted_hosts.append(host)
             return request_id
         except NoConnectionsAvailable as exc:
-            log.debug("All connections for host %s are at capacity, moving to the next host", host)
+            log.debug(
+                "All connections for host %s are at capacity, moving to the next host",
+                host,
+            )
             self._errors[host] = exc
         except ConnectionBusy as exc:
             log.debug("Connection for host %s is busy, moving to the next host", host)
@@ -4575,7 +5508,9 @@ class ResponseFuture(object):
         """
         # TODO: When timers are introduced, just make this wait
         if not self._event.is_set():
-            raise DriverException("warnings cannot be retrieved before ResponseFuture is finalized")
+            raise DriverException(
+                "warnings cannot be retrieved before ResponseFuture is finalized"
+            )
         return self._warnings
 
     @property
@@ -4593,7 +5528,9 @@ class ResponseFuture(object):
         """
         # TODO: When timers are introduced, just make this wait
         if not self._event.is_set():
-            raise DriverException("custom_payload cannot be retrieved before ResponseFuture is finalized")
+            raise DriverException(
+                "custom_payload cannot be retrieved before ResponseFuture is finalized"
+            )
         return self._custom_payload
 
     def start_fetching_next_page(self):
@@ -4618,7 +5555,9 @@ class ResponseFuture(object):
         self.send_request()
 
     def _reprepare(self, prepare_message, host, connection, pool):
-        cb = partial(self.session.submit, self._execute_after_prepare, host, connection, pool)
+        cb = partial(
+            self.session.submit, self._execute_after_prepare, host, connection, pool
+        )
         request_id = self._query(host, prepare_message, cb=cb)
         if request_id is None:
             # try to submit the original prepared statement on some other host
@@ -4630,19 +5569,25 @@ class ResponseFuture(object):
             if pool and not pool.is_shutdown:
                 pool.return_connection(connection)
 
-            trace_id = getattr(response, 'trace_id', None)
+            trace_id = getattr(response, "trace_id", None)
             if trace_id:
                 if not self._query_traces:
                     self._query_traces = []
                 self._query_traces.append(QueryTrace(trace_id, self.session))
 
-            self._warnings = getattr(response, 'warnings', None)
-            self._custom_payload = getattr(response, 'custom_payload', None)
+            self._warnings = getattr(response, "warnings", None)
+            self._custom_payload = getattr(response, "custom_payload", None)
 
-            if self._custom_payload and self.session.cluster.control_connection._tablets_routing_v1 and 'tablets-routing-v1' in self._custom_payload:
+            if (
+                self._custom_payload
+                and self.session.cluster.control_connection._tablets_routing_v1
+                and "tablets-routing-v1" in self._custom_payload
+            ):
                 protocol = self.session.cluster.protocol_version
-                info = self._custom_payload.get('tablets-routing-v1')
-                ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
+                info = self._custom_payload.get("tablets-routing-v1")
+                ctype = types.lookup_casstype(
+                    "TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))"
+                )
                 tablet_routing_info = ctype.from_binary(info, protocol)
                 first_token = tablet_routing_info[0]
                 last_token = tablet_routing_info[1]
@@ -4650,11 +5595,13 @@ class ResponseFuture(object):
                 tablet = Tablet.from_row(first_token, last_token, tablet_replicas)
                 keyspace = self.query.keyspace
                 table = self.query.table
-                self.session.cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
+                self.session.cluster.metadata._tablets.add_tablet(
+                    keyspace, table, tablet
+                )
 
             if isinstance(response, ResultMessage):
                 if response.kind == RESULT_KIND_SET_KEYSPACE:
-                    session = getattr(self, 'session', None)
+                    session = getattr(self, "session", None)
                     # since we're running on the event loop thread, we need to
                     # use a non-blocking method for setting the keyspace on
                     # all connections in this session, otherwise the event
@@ -4664,7 +5611,8 @@ class ResponseFuture(object):
                     # event loop thread.
                     if session:
                         session._set_keyspace_for_all_pools(
-                            response.new_keyspace, self._set_keyspace_completed)
+                            response.new_keyspace, self._set_keyspace_completed
+                        )
                 elif response.kind == RESULT_KIND_SCHEMA_CHANGE:
                     # refresh the schema before responding, but do it in another
                     # thread instead of the event loop thread
@@ -4672,15 +5620,24 @@ class ResponseFuture(object):
                     self.session.submit(
                         refresh_schema_and_set_result,
                         self.session.cluster.control_connection,
-                        self, connection, **response.schema_change_event)
+                        self,
+                        connection,
+                        **response.schema_change_event,
+                    )
                 elif response.kind == RESULT_KIND_ROWS:
                     self._paging_state = response.paging_state
                     self._col_names = response.column_names
                     self._col_types = response.column_types
-                    if getattr(self.message, 'continuous_paging_options', None):
-                        self._handle_continuous_paging_first_response(connection, response)
+                    if getattr(self.message, "continuous_paging_options", None):
+                        self._handle_continuous_paging_first_response(
+                            connection, response
+                        )
                     else:
-                        self._set_final_result(self.row_factory(response.column_names, response.parsed_rows))
+                        self._set_final_result(
+                            self.row_factory(
+                                response.column_names, response.parsed_rows
+                            )
+                        )
                 elif response.kind == RESULT_KIND_VOID:
                     self._set_final_result(None)
                 else:
@@ -4692,71 +5649,107 @@ class ResponseFuture(object):
                     if self._metrics is not None:
                         self._metrics.on_read_timeout()
                     retry = retry_policy.on_read_timeout(
-                        self.query, retry_num=self._query_retries, **response.info)
+                        self.query, retry_num=self._query_retries, **response.info
+                    )
                 elif isinstance(response, WriteTimeoutErrorMessage):
                     if self._metrics is not None:
                         self._metrics.on_write_timeout()
                     retry = retry_policy.on_write_timeout(
-                        self.query, retry_num=self._query_retries, **response.info)
+                        self.query, retry_num=self._query_retries, **response.info
+                    )
                 elif isinstance(response, UnavailableErrorMessage):
                     if self._metrics is not None:
                         self._metrics.on_unavailable()
                     retry = retry_policy.on_unavailable(
-                        self.query, retry_num=self._query_retries, **response.info)
-                elif isinstance(response, (OverloadedErrorMessage,
-                                           IsBootstrappingErrorMessage,
-                                           TruncateError, ServerError)):
+                        self.query, retry_num=self._query_retries, **response.info
+                    )
+                elif isinstance(
+                    response,
+                    (
+                        OverloadedErrorMessage,
+                        IsBootstrappingErrorMessage,
+                        TruncateError,
+                        ServerError,
+                    ),
+                ):
                     log.warning("Host %s error: %s.", host, response.summary)
                     if self._metrics is not None:
                         self._metrics.on_other_error()
-                    cl = getattr(self.message, 'consistency_level', None)
+                    cl = getattr(self.message, "consistency_level", None)
                     retry = retry_policy.on_request_error(
-                        self.query, cl, error=response,
-                        retry_num=self._query_retries)
+                        self.query, cl, error=response, retry_num=self._query_retries
+                    )
                 elif isinstance(response, PreparedQueryNotFound):
                     if self.prepared_statement:
                         query_id = self.prepared_statement.query_id
-                        assert query_id == response.info, \
-                            "Got different query ID in server response (%s) than we " \
+                        assert query_id == response.info, (
+                            "Got different query ID in server response (%s) than we "
                             "had before (%s)" % (response.info, query_id)
+                        )
                     else:
                         query_id = response.info
 
                     try:
-                        prepared_statement = self.session.cluster._prepared_statements[query_id]
+                        prepared_statement = self.session.cluster._prepared_statements[
+                            query_id
+                        ]
                     except KeyError:
                         if not self.prepared_statement:
-                            log.error("Tried to execute unknown prepared statement: id=%s",
-                                      query_id.encode('hex'))
+                            log.error(
+                                "Tried to execute unknown prepared statement: id=%s",
+                                query_id.encode("hex"),
+                            )
                             self._set_final_exception(response)
                             return
                         else:
                             prepared_statement = self.prepared_statement
-                            self.session.cluster._prepared_statements[query_id] = prepared_statement
+                            self.session.cluster._prepared_statements[query_id] = (
+                                prepared_statement
+                            )
 
                     current_keyspace = self._connection.keyspace
                     prepared_keyspace = prepared_statement.keyspace
-                    if not ProtocolVersion.uses_keyspace_flag(self.session.cluster.protocol_version) \
-                            and prepared_keyspace  and current_keyspace != prepared_keyspace:
+                    if (
+                        not ProtocolVersion.uses_keyspace_flag(
+                            self.session.cluster.protocol_version
+                        )
+                        and prepared_keyspace
+                        and current_keyspace != prepared_keyspace
+                    ):
                         self._set_final_exception(
-                            ValueError("The Session's current keyspace (%s) does "
-                                       "not match the keyspace the statement was "
-                                       "prepared with (%s)" %
-                                       (current_keyspace, prepared_keyspace)))
+                            ValueError(
+                                "The Session's current keyspace (%s) does "
+                                "not match the keyspace the statement was "
+                                "prepared with (%s)"
+                                % (current_keyspace, prepared_keyspace)
+                            )
+                        )
                         return
 
-                    log.debug("Re-preparing unrecognized prepared statement against host %s: %s",
-                              host, prepared_statement.query_string)
-                    prepared_keyspace = prepared_statement.keyspace \
-                        if ProtocolVersion.uses_keyspace_flag(self.session.cluster.protocol_version) else None
-                    prepare_message = PrepareMessage(query=prepared_statement.query_string,
-                                                     keyspace=prepared_keyspace)
+                    log.debug(
+                        "Re-preparing unrecognized prepared statement against host %s: %s",
+                        host,
+                        prepared_statement.query_string,
+                    )
+                    prepared_keyspace = (
+                        prepared_statement.keyspace
+                        if ProtocolVersion.uses_keyspace_flag(
+                            self.session.cluster.protocol_version
+                        )
+                        else None
+                    )
+                    prepare_message = PrepareMessage(
+                        query=prepared_statement.query_string,
+                        keyspace=prepared_keyspace,
+                    )
                     # since this might block, run on the executor to avoid hanging
                     # the event loop thread
-                    self.session.submit(self._reprepare, prepare_message, host, connection, pool)
+                    self.session.submit(
+                        self._reprepare, prepare_message, host, connection, pool
+                    )
                     return
                 else:
-                    if hasattr(response, 'to_exception'):
+                    if hasattr(response, "to_exception"):
                         self._set_final_exception(response.to_exception())
                     else:
                         self._set_final_exception(response)
@@ -4768,12 +5761,13 @@ class ResponseFuture(object):
                     self._metrics.on_connection_error()
                 if not isinstance(response, ConnectionShutdown):
                     self._connection.defunct(response)
-                cl = getattr(self.message, 'consistency_level', None)
+                cl = getattr(self.message, "consistency_level", None)
                 retry = self._retry_policy.on_request_error(
-                    self.query, cl, error=response, retry_num=self._query_retries)
+                    self.query, cl, error=response, retry_num=self._query_retries
+                )
                 self._handle_retry_decision(retry, response, host)
             elif isinstance(response, Exception):
-                if hasattr(response, 'to_exception'):
+                if hasattr(response, "to_exception"):
                     self._set_final_exception(response.to_exception())
                 else:
                     self._set_final_exception(response)
@@ -4786,14 +5780,18 @@ class ResponseFuture(object):
                 self._set_final_exception(exc)
         except Exception as exc:
             # almost certainly caused by a bug, but we need to set something here
-            log.exception("Unexpected exception while handling result in ResponseFuture:")
+            log.exception(
+                "Unexpected exception while handling result in ResponseFuture:"
+            )
             self._set_final_exception(exc)
 
     def _handle_continuous_paging_first_response(self, connection, response):
-        self._continuous_paging_session = connection.new_continuous_paging_session(response.stream_id,
-                                                                                   self._protocol_handler.decode_message,
-                                                                                   self.row_factory,
-                                                                                   self._continuous_paging_state)
+        self._continuous_paging_session = connection.new_continuous_paging_session(
+            response.stream_id,
+            self._protocol_handler.decode_message,
+            self.row_factory,
+            self._continuous_paging_state,
+        )
         self._continuous_paging_session.on_message(response)
         self._set_final_result(self._continuous_paging_session.results())
 
@@ -4801,8 +5799,11 @@ class ResponseFuture(object):
         if not errors:
             self._set_final_result(None)
         else:
-            self._set_final_exception(ConnectionException(
-                "Failed to set keyspace on all hosts: %s" % (errors,)))
+            self._set_final_exception(
+                ConnectionException(
+                    "Failed to set keyspace on all hosts: %s" % (errors,)
+                )
+            )
 
     def _execute_after_prepare(self, host, connection, pool, response):
         """
@@ -4819,14 +5820,17 @@ class ResponseFuture(object):
             if response.kind == RESULT_KIND_PREPARED:
                 if self.prepared_statement:
                     if self.prepared_statement.query_id != response.query_id:
-                        self._set_final_exception(DriverException(
-                            "ID mismatch while trying to reprepare (expected {expected}, got {got}). "
-                            "This prepared statement won't work anymore. "
-                            "This usually happens when you run a 'USE...' "
-                            "query after the statement was prepared.".format(
-                                expected=hexlify(self.prepared_statement.query_id), got=hexlify(response.query_id)
+                        self._set_final_exception(
+                            DriverException(
+                                "ID mismatch while trying to reprepare (expected {expected}, got {got}). "
+                                "This prepared statement won't work anymore. "
+                                "This usually happens when you run a 'USE...' "
+                                "query after the statement was prepared.".format(
+                                    expected=hexlify(self.prepared_statement.query_id),
+                                    got=hexlify(response.query_id),
+                                )
                             )
-                        ))
+                        )
                     self.prepared_statement.result_metadata = response.column_metadata
                     new_metadata_id = response.result_metadata_id
                     if new_metadata_id is not None:
@@ -4839,24 +5843,33 @@ class ResponseFuture(object):
                     # this host errored out, move on to the next
                     self.send_request()
             else:
-                self._set_final_exception(ConnectionException(
-                    "Got unexpected response when preparing statement "
-                    "on host %s: %s" % (host, response)))
+                self._set_final_exception(
+                    ConnectionException(
+                        "Got unexpected response when preparing statement "
+                        "on host %s: %s" % (host, response)
+                    )
+                )
         elif isinstance(response, ErrorMessage):
-            if hasattr(response, 'to_exception'):
+            if hasattr(response, "to_exception"):
                 self._set_final_exception(response.to_exception())
             else:
                 self._set_final_exception(response)
         elif isinstance(response, ConnectionException):
-            log.debug("Connection error when preparing statement on host %s: %s",
-                      host, response)
+            log.debug(
+                "Connection error when preparing statement on host %s: %s",
+                host,
+                response,
+            )
             # try again on a different host, preparing again if necessary
             self._errors[host] = response
             self.send_request()
         else:
-            self._set_final_exception(ConnectionException(
-                "Got unexpected response type when preparing "
-                "statement on host %s: %s" % (host, response)))
+            self._set_final_exception(
+                ConnectionException(
+                    "Got unexpected response type when preparing "
+                    "statement on host %s: %s" % (host, response)
+                )
+            )
 
     def _set_final_result(self, response):
         self._cancel_timer()
@@ -4904,10 +5917,11 @@ class ResponseFuture(object):
     def _handle_retry_decision(self, retry_decision, response, host):
 
         def exception_from_response(response):
-            if hasattr(response, 'to_exception'):
+            if hasattr(response, "to_exception"):
                 return response.to_exception()
             else:
                 return response
+
         if len(retry_decision) == 2:
             retry_type, consistency = retry_decision
             delay = 0
@@ -4939,7 +5953,9 @@ class ResponseFuture(object):
             self.message.consistency_level = consistency_level
 
         # don't retry on the event loop thread
-        self.session.cluster.scheduler.schedule(delay, self._retry_task, reuse_connection, host)
+        self.session.cluster.scheduler.schedule(
+            delay, self._retry_task, reuse_connection, host
+        )
 
     def _retry_task(self, reuse_connection, host):
         if self._final_exception:
@@ -5006,19 +6022,27 @@ class ResponseFuture(object):
         """
         if self._final_result is _NOT_SET and self._final_exception is None:
             raise TraceUnavailable(
-                "Trace information was not available. The ResponseFuture is not done.")
+                "Trace information was not available. The ResponseFuture is not done."
+            )
 
         if self._query_traces:
-            return self._get_query_trace(len(self._query_traces) - 1, max_wait, query_cl)
+            return self._get_query_trace(
+                len(self._query_traces) - 1, max_wait, query_cl
+            )
 
-    def get_all_query_traces(self, max_wait_per=None, query_cl=ConsistencyLevel.LOCAL_ONE):
+    def get_all_query_traces(
+        self, max_wait_per=None, query_cl=ConsistencyLevel.LOCAL_ONE
+    ):
         """
         Fetches and returns the query traces for all query pages, if tracing was enabled.
 
         See note in :meth:`~.get_query_trace` regarding possible exceptions.
         """
         if self._query_traces:
-            return [self._get_query_trace(i, max_wait_per, query_cl) for i in range(len(self._query_traces))]
+            return [
+                self._get_query_trace(i, max_wait_per, query_cl)
+                for i in range(len(self._query_traces))
+            ]
         return []
 
     def _get_query_trace(self, i, max_wait, query_cl):
@@ -5094,9 +6118,15 @@ class ResponseFuture(object):
             fn(self._final_exception, *args, **kwargs)
         return self
 
-    def add_callbacks(self, callback, errback,
-                      callback_args=(), callback_kwargs=None,
-                      errback_args=(), errback_kwargs=None):
+    def add_callbacks(
+        self,
+        callback,
+        errback,
+        callback_args=(),
+        callback_kwargs=None,
+        errback_args=(),
+        errback_kwargs=None,
+    ):
         """
         A convenient combination of :meth:`.add_callback()` and
         :meth:`.add_errback()`.
@@ -5128,9 +6158,20 @@ class ResponseFuture(object):
             self._errbacks = []
 
     def __str__(self):
-        result = "(no result yet)" if self._final_result is _NOT_SET else self._final_result
-        return "<ResponseFuture: query='%s' request_id=%s result=%s exception=%s coordinator_host=%s>" \
-               % (self.query, self._req_id, result, self._final_exception, self.coordinator_host)
+        result = (
+            "(no result yet)" if self._final_result is _NOT_SET else self._final_result
+        )
+        return (
+            "<ResponseFuture: query='%s' request_id=%s result=%s exception=%s coordinator_host=%s>"
+            % (
+                self.query,
+                self._req_id,
+                result,
+                self._final_exception,
+                self.coordinator_host,
+            )
+        )
+
     __repr__ = __str__
 
 
@@ -5142,6 +6183,7 @@ class QueryExhausted(Exception):
 
     .. versionadded:: 2.0.0
     """
+
     pass
 
 
@@ -5252,7 +6294,9 @@ class ResultSet(object):
         if self.response_future.has_more_pages:
             self.response_future.start_fetching_next_page()
             result = self.response_future.result()
-            self._current_rows = result._current_rows  # ResultSet has already _set_current_rows to the appropriate form
+            self._current_rows = (
+                result._current_rows
+            )  # ResultSet has already _set_current_rows to the appropriate form
         else:
             self._current_rows = []
 
@@ -5261,7 +6305,9 @@ class ResultSet(object):
             self._current_rows = [result] if result else []
             return
         try:
-            iter(result)  # can't check directly for generator types because cython generators are different
+            iter(
+                result
+            )  # can't check directly for generator types because cython generators are different
             self._current_rows = result
         except TypeError:
             self._current_rows = [result] if result else []
@@ -5274,9 +6320,14 @@ class ResultSet(object):
         if self._list_mode:
             return
         if self._page_iter:
-            raise RuntimeError("Cannot use %s when results have been iterated." % operator)
+            raise RuntimeError(
+                "Cannot use %s when results have been iterated." % operator
+            )
         if self.response_future.has_more_pages:
-            log.warning("Using %s on paged results causes entire result set to be materialized.", operator)
+            log.warning(
+                "Using %s on paged results causes entire result set to be materialized.",
+                operator,
+            )
         self._fetch_all()  # done regardless of paging status in case the row factory produces a generator
         self._list_mode = True
 
@@ -5286,15 +6337,16 @@ class ResultSet(object):
 
     def __getitem__(self, i):
         if i == 0:
-            warn("ResultSet indexing support will be removed in 4.0. Consider using "
-                 "ResultSet.one() to get a single row.", DeprecationWarning)
+            warn(
+                "ResultSet indexing support will be removed in 4.0. Consider using "
+                "ResultSet.one() to get a single row.",
+                DeprecationWarning,
+            )
         self._enter_list_mode("index operator")
         return self._current_rows[i]
 
-    def __nonzero__(self):
+    def __bool__(self):
         return bool(self._current_rows)
-
-    __bool__ = __nonzero__
 
     def get_query_trace(self, max_wait_sec=None):
         """
@@ -5314,9 +6366,11 @@ class ResultSet(object):
         try:
             self.response_future._continuous_paging_session.cancel()
         except AttributeError:
-            raise DriverException("Attempted to cancel paging with no active session. This is only for requests with ContinuousdPagingOptions.")
+            raise DriverException(
+                "Attempted to cancel paging with no active session. This is only for requests with ContinuousdPagingOptions."
+            )
 
-    batch_regex = re.compile(r'^\s*BEGIN\s+[a-zA-Z]*\s*BATCH')
+    batch_regex = re.compile(r"^\s*BEGIN\s+[a-zA-Z]*\s*BATCH")
 
     @property
     def was_applied(self):
@@ -5329,22 +6383,36 @@ class ResultSet(object):
 
         Only valid when one of the of the internal row factories is in use.
         """
-        if self.response_future.row_factory not in (named_tuple_factory, dict_factory, tuple_factory):
-            raise RuntimeError("Cannot determine LWT result with row factory %s" % (self.response_future.row_factory,))
+        if self.response_future.row_factory not in (
+            named_tuple_factory,
+            dict_factory,
+            tuple_factory,
+        ):
+            raise RuntimeError(
+                "Cannot determine LWT result with row factory %s"
+                % (self.response_future.row_factory,)
+            )
 
-        is_batch_statement = isinstance(self.response_future.query, BatchStatement) \
-                            or (isinstance(self.response_future.query, SimpleStatement) and self.batch_regex.match(self.response_future.query.query_string))
-        if is_batch_statement and (not self.column_names or self.column_names[0] != "[applied]"):
+        is_batch_statement = isinstance(self.response_future.query, BatchStatement) or (
+            isinstance(self.response_future.query, SimpleStatement)
+            and self.batch_regex.match(self.response_future.query.query_string)
+        )
+        if is_batch_statement and (
+            not self.column_names or self.column_names[0] != "[applied]"
+        ):
             raise RuntimeError("No LWT were present in the BatchStatement")
 
         if not is_batch_statement and len(self.current_rows) != 1:
-            raise RuntimeError("LWT result should have exactly one row. This has %d." % (len(self.current_rows)))
+            raise RuntimeError(
+                "LWT result should have exactly one row. This has %d."
+                % (len(self.current_rows))
+            )
 
         row = self.current_rows[0]
         if isinstance(row, tuple):
             return row[0]
         else:
-            return row['[applied]']
+            return row["[applied]"]
 
     @property
     def paging_state(self):

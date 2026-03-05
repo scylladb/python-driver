@@ -671,27 +671,27 @@ class UnicodeIdentifiersTests(unittest.TestCase):
 
     def test_column_name_single_partition(self):
         tm = TableMetadata('ks', 'table')
-        cm = ColumnMetadata(tm, self.name, u'int')
+        cm = ColumnMetadata(tm, self.name, 'int')
         tm.columns[cm.name] = cm
         tm.partition_key.append(cm)
         tm.export_as_string()
 
     def test_column_name_single_partition_single_clustering(self):
         tm = TableMetadata('ks', 'table')
-        cm = ColumnMetadata(tm, self.name, u'int')
+        cm = ColumnMetadata(tm, self.name, 'int')
         tm.columns[cm.name] = cm
         tm.partition_key.append(cm)
-        cm = ColumnMetadata(tm, self.name + 'x', u'int')
+        cm = ColumnMetadata(tm, self.name + 'x', 'int')
         tm.columns[cm.name] = cm
         tm.clustering_key.append(cm)
         tm.export_as_string()
 
     def test_column_name_multiple_partition(self):
         tm = TableMetadata('ks', 'table')
-        cm = ColumnMetadata(tm, self.name, u'int')
+        cm = ColumnMetadata(tm, self.name, 'int')
         tm.columns[cm.name] = cm
         tm.partition_key.append(cm)
-        cm = ColumnMetadata(tm, self.name + 'x', u'int')
+        cm = ColumnMetadata(tm, self.name + 'x', 'int')
         tm.columns[cm.name] = cm
         tm.partition_key.append(cm)
         tm.export_as_string()
@@ -707,20 +707,20 @@ class UnicodeIdentifiersTests(unittest.TestCase):
 
     def test_function(self):
         fm = Function(keyspace=self.name, name=self.name,
-                      argument_types=(u'int', u'int'),
-                      argument_names=(u'x', u'y'),
-                      return_type=u'int', language=u'language',
+                      argument_types=('int', 'int'),
+                      argument_names=('x', 'y'),
+                      return_type='int', language='language',
                       body=self.name, called_on_null_input=False,
                       deterministic=True,
-                      monotonic=False, monotonic_on=(u'x',))
+                      monotonic=False, monotonic_on=('x',))
         fm.export_as_string()
 
     def test_aggregate(self):
-        am = Aggregate(self.name, self.name, (u'text',), self.name, u'text', self.name, self.name, u'text', True)
+        am = Aggregate(self.name, self.name, ('text',), self.name, 'text', self.name, self.name, 'text', True)
         am.export_as_string()
 
     def test_user_type(self):
-        um = UserType(self.name, self.name, [self.name, self.name], [u'int', u'text'])
+        um = UserType(self.name, self.name, [self.name, self.name], ['int', 'text'])
         um.export_as_string()
 
 
@@ -729,10 +729,10 @@ class FunctionToCQLTests(unittest.TestCase):
     base_vars = {
         'keyspace': 'ks_name',
         'name': 'function_name',
-        'argument_types': (u'int', u'int'),
-        'argument_names': (u'x', u'y'),
-        'return_type': u'int',
-        'language': u'language',
+        'argument_types': ('int', 'int'),
+        'argument_names': ('x', 'y'),
+        'return_type': 'int',
+        'language': 'language',
         'body': 'body',
         'called_on_null_input': False,
         'deterministic': True,
@@ -785,10 +785,10 @@ class AggregateToCQLTests(unittest.TestCase):
     base_vars = {
         'keyspace': 'ks_name',
         'name': 'function_name',
-        'argument_types': (u'int', u'int'),
+        'argument_types': ('int', 'int'),
         'state_func': 'funcname',
-        'state_type': u'int',
-        'return_type': u'int',
+        'state_type': 'int',
+        'return_type': 'int',
         'final_func': None,
         'initial_condition': '0',
         'deterministic': True

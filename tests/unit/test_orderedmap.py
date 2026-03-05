@@ -19,27 +19,28 @@ from cassandra.cqltypes import EMPTY, UTF8Type, lookup_casstype
 from tests.util import assertListEqual
 import pytest
 
+
 class OrderedMapTest(unittest.TestCase):
     def test_init(self):
-        a = OrderedMap(zip(['one', 'three', 'two'], [1, 3, 2]))
-        b = OrderedMap([('one', 1), ('three', 3), ('two', 2)])
+        a = OrderedMap(zip(["one", "three", "two"], [1, 3, 2]))
+        b = OrderedMap([("one", 1), ("three", 3), ("two", 2)])
         c = OrderedMap(a)
-        builtin = {'one': 1, 'two': 2, 'three': 3}
+        builtin = {"one": 1, "two": 2, "three": 3}
         assert a == b
         assert a == c
         assert a == builtin
         assert OrderedMap([(1, 1), (1, 2)]) == {1: 2}
 
-        d = OrderedMap({'': 3}, key1='v1', key2='v2')
-        assert d[''] == 3
-        assert d['key1'] == 'v1'
-        assert d['key2'] == 'v2'
+        d = OrderedMap({"": 3}, key1="v1", key2="v2")
+        assert d[""] == 3
+        assert d["key1"] == "v1"
+        assert d["key2"] == "v2"
 
         with pytest.raises(TypeError):
-            OrderedMap('too', 'many', 'args')
+            OrderedMap("too", "many", "args")
 
     def test_contains(self):
-        keys = ['first', 'middle', 'last']
+        keys = ["first", "middle", "last"]
 
         om = OrderedMap()
 
@@ -49,45 +50,45 @@ class OrderedMapTest(unittest.TestCase):
             assert k in om
             assert not k not in om
 
-        assert 'notthere' not in om
-        assert not 'notthere' in om
+        assert "notthere" not in om
+        assert not "notthere" in om
 
     def test_keys(self):
-        keys = ['first', 'middle', 'last']
+        keys = ["first", "middle", "last"]
         om = OrderedMap(zip(keys, range(len(keys))))
 
         assertListEqual(list(om.keys()), keys)
 
     def test_values(self):
-        keys = ['first', 'middle', 'last']
+        keys = ["first", "middle", "last"]
         values = list(range(len(keys)))
         om = OrderedMap(zip(keys, values))
 
         assertListEqual(list(om.values()), values)
 
     def test_items(self):
-        keys = ['first', 'middle', 'last']
+        keys = ["first", "middle", "last"]
         items = list(zip(keys, range(len(keys))))
         om = OrderedMap(items)
 
         assertListEqual(list(om.items()), items)
 
     def test_get(self):
-        keys = ['first', 'middle', 'last']
+        keys = ["first", "middle", "last"]
         om = OrderedMap(zip(keys, range(len(keys))))
 
         for v, k in enumerate(keys):
             assert om.get(k) == v
 
-        assert om.get('notthere', 'default') == 'default'
-        assert om.get('notthere') is None
+        assert om.get("notthere", "default") == "default"
+        assert om.get("notthere") is None
 
     def test_equal(self):
-        d1 = {'one': 1}
-        d12 = {'one': 1, 'two': 2}
-        om1 = OrderedMap({'one': 1})
-        om12 = OrderedMap([('one', 1), ('two', 2)])
-        om21 = OrderedMap([('two', 2), ('one', 1)])
+        d1 = {"one": 1}
+        d12 = {"one": 1, "two": 2}
+        om1 = OrderedMap({"one": 1})
+        om12 = OrderedMap([("one", 1), ("two", 2)])
+        om21 = OrderedMap([("two", 2), ("one", 1)])
 
         assert om1 == d1
         assert om12 == d12
@@ -99,20 +100,20 @@ class OrderedMapTest(unittest.TestCase):
         assert om12 != d1
         assert om1 != EMPTY
 
-        assert not OrderedMap([('three', 3), ('four', 4)]) == d12
+        assert not OrderedMap([("three", 3), ("four", 4)]) == d12
 
     def test_getitem(self):
-        keys = ['first', 'middle', 'last']
+        keys = ["first", "middle", "last"]
         om = OrderedMap(zip(keys, range(len(keys))))
 
         for v, k in enumerate(keys):
             assert om[k] == v
 
         with pytest.raises(KeyError):
-            om['notthere']
+            om["notthere"]
 
     def test_iter(self):
-        keys = ['first', 'middle', 'last']
+        keys = ["first", "middle", "last"]
         values = list(range(len(keys)))
         items = list(zip(keys, values))
         om = OrderedMap(items)
@@ -131,17 +132,24 @@ class OrderedMapTest(unittest.TestCase):
         assert len(OrderedMap([(1, 1)])) == 1
 
     def test_mutable_keys(self):
-        d = {'1': 1}
+        d = {"1": 1}
         s = set([1, 2, 3])
-        om = OrderedMap([(d, 'dict'), (s, 'set')])
+        om = OrderedMap([(d, "dict"), (s, "set")])
 
     def test_strings(self):
         # changes in 3.x
-        d = {'map': 'inner'}
+        d = {"map": "inner"}
         s = set([1, 2, 3])
-        assert repr(OrderedMap([('two', 2), ('one', 1), (d, 'value'), (s, 'another')])) == "OrderedMap([('two', 2), ('one', 1), (%r, 'value'), (%r, 'another')])" % (d, s)
+        assert repr(
+            OrderedMap([("two", 2), ("one", 1), (d, "value"), (s, "another")])
+        ) == "OrderedMap([('two', 2), ('one', 1), (%r, 'value'), (%r, 'another')])" % (
+            d,
+            s,
+        )
 
-        assert str(OrderedMap([('two', 2), ('one', 1), (d, 'value'), (s, 'another')])) == "{'two': 2, 'one': 1, %r: 'value', %r: 'another'}" % (d, s)
+        assert str(
+            OrderedMap([("two", 2), ("one", 1), (d, "value"), (s, "another")])
+        ) == "{'two': 2, 'one': 1, %r: 'value', %r: 'another'}" % (d, s)
 
     def test_popitem(self):
         item = (1, 2)
@@ -171,16 +179,20 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
         assert om == {}
 
     def test_normalized_lookup(self):
-        key_type = lookup_casstype('MapType(UTF8Type, Int32Type)')
+        key_type = lookup_casstype("MapType(UTF8Type, Int32Type)")
         protocol_version = 3
         om = OrderedMapSerializedKey(key_type, protocol_version)
-        key_ascii = {'one': 1}
-        key_unicode = {u'two': 2}
-        om._insert_unchecked(key_ascii, key_type.serialize(key_ascii, protocol_version), object())
-        om._insert_unchecked(key_unicode, key_type.serialize(key_unicode, protocol_version), object())
+        key_one = {"one": 1}
+        key_two = {"two": 2}
+        om._insert_unchecked(
+            key_one, key_type.serialize(key_one, protocol_version), object()
+        )
+        om._insert_unchecked(
+            key_two, key_type.serialize(key_two, protocol_version), object()
+        )
 
         # type lookup is normalized by key_type
         # PYTHON-231
-        assert om[{'one': 1}] is om[{u'one': 1}]
-        assert om[{'two': 2}] is om[{u'two': 2}]
-        assert om[{'one': 1}] is not om[{'two': 2}]
+        assert om[{"one": 1}] is om[{"one": 1}]
+        assert om[{"two": 2}] is om[{"two": 2}]
+        assert om[{"one": 1}] is not om[{"two": 2}]
