@@ -1,0 +1,1254 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             Getting Started | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://python-driver.docs.scylladb.com/stable/getting-started.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
+            
+        
+    
+        
+        
+            
+        <script type="text/javascript" src="_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="_static/js/main.bundle.js"></script>
+        
+            
+                <script src="_static/documentation_options.js?v=be4f90db"></script>
+            
+        
+            
+                <script src="_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+    </head>
+
+    <body class="brand-product">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University Live | Free Virtual Training Event</div>
+            <a class="promo-banner__button button button--reverse" href="#"
+               target="_blank" rel="noopener noreferrer">Learn more</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="index.html"
+           class="bread__highlight">
+            Scylla Python Driver
+        </a>
+    </span>
+    
+    <span class="bread__item bread__item--last">Getting Started</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+    <div class="admonition caution">
+        <p class="admonition-title">Caution</p>
+        <p>
+            
+                You're viewing documentation for a previous version of Scylla Python Driver.
+            
+            <a href="../stable/getting-started.html">Switch to the latest stable version.</a>
+        </p>
+    </div>
+
+                    
+
+                    <section id="getting-started">
+<h1>Getting Started<a class="headerlink" href="#getting-started" title="Link to this heading">¶</a></h1>
+<p>First, make sure you have the driver properly <a class="reference internal" href="installation.html"><span class="doc">installed</span></a>.</p>
+<section id="connecting-to-a-cluster">
+<h2>Connecting to a Cluster<a class="headerlink" href="#connecting-to-a-cluster" title="Link to this heading">¶</a></h2>
+<p>Before we can start executing any queries against a Cassandra cluster we need to setup
+an instance of <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Cluster" title="cassandra.cluster.Cluster"><code class="xref py py-class docutils literal notranslate"><span class="pre">Cluster</span></code></a>. As the name suggests, you will typically have one
+instance of <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Cluster" title="cassandra.cluster.Cluster"><code class="xref py py-class docutils literal notranslate"><span class="pre">Cluster</span></code></a> for each Cassandra cluster you want to interact
+with.</p>
+<p>First, make sure you have the Cassandra driver properly <a class="reference internal" href="installation.html"><span class="doc">installed</span></a>.</p>
+<section id="connecting-to-cassandra">
+<h3>Connecting to Cassandra<a class="headerlink" href="#connecting-to-cassandra" title="Link to this heading">¶</a></h3>
+<p>The simplest way to create a <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Cluster" title="cassandra.cluster.Cluster"><code class="xref py py-class docutils literal notranslate"><span class="pre">Cluster</span></code></a> is like this:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">cassandra.cluster</span><span class="w"> </span><span class="kn">import</span> <span class="n">Cluster</span>
+
+<span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>This will attempt to connection to a Cassandra instance on your
+local machine (127.0.0.1).  You can also specify a list of IP
+addresses for nodes in your cluster:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">cassandra.cluster</span><span class="w"> </span><span class="kn">import</span> <span class="n">Cluster</span>
+
+<span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">([</span><span class="s1">&#39;192.168.0.1&#39;</span><span class="p">,</span> <span class="s1">&#39;192.168.0.2&#39;</span><span class="p">])</span>
+</pre></div>
+</div>
+<p>The set of IP addresses we pass to the <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Cluster" title="cassandra.cluster.Cluster"><code class="xref py py-class docutils literal notranslate"><span class="pre">Cluster</span></code></a> is simply
+an initial set of contact points.  After the driver connects to one
+of these nodes it will <em>automatically discover</em> the rest of the
+nodes in the cluster and connect to them, so you don’t need to list
+every node in your cluster.</p>
+<p>If you need to use a non-standard port, use SSL, or customize the driver’s
+behavior in some other way, this is the place to do it:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">cassandra.cluster</span><span class="w"> </span><span class="kn">import</span> <span class="n">Cluster</span>
+<span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">([</span><span class="s1">&#39;192.168.0.1&#39;</span><span class="p">,</span> <span class="s1">&#39;192.168.0.2&#39;</span><span class="p">],</span> <span class="n">port</span><span class="o">=...</span><span class="p">,</span> <span class="n">ssl_context</span><span class="o">=...</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Instantiating a <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Cluster" title="cassandra.cluster.Cluster"><code class="xref py py-class docutils literal notranslate"><span class="pre">Cluster</span></code></a> does not actually connect us to any nodes.
+To establish connections and begin executing queries we need a
+<a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Session" title="cassandra.cluster.Session"><code class="xref py py-class docutils literal notranslate"><span class="pre">Session</span></code></a>, which is created by calling <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Cluster.connect" title="cassandra.cluster.Cluster.connect"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Cluster.connect()</span></code></a>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">()</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="session-keyspace">
+<h2>Session Keyspace<a class="headerlink" href="#session-keyspace" title="Link to this heading">¶</a></h2>
+<p>The <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Cluster.connect" title="cassandra.cluster.Cluster.connect"><code class="xref py py-meth docutils literal notranslate"><span class="pre">connect()</span></code></a> method takes an optional <code class="docutils literal notranslate"><span class="pre">keyspace</span></code> argument
+which sets the default keyspace for all queries made through that <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Session" title="cassandra.cluster.Session"><code class="xref py py-class docutils literal notranslate"><span class="pre">Session</span></code></a>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">()</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s1">&#39;mykeyspace&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>You can always change a Session’s keyspace using <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Session.set_keyspace" title="cassandra.cluster.Session.set_keyspace"><code class="xref py py-meth docutils literal notranslate"><span class="pre">set_keyspace()</span></code></a> or
+by executing a <code class="docutils literal notranslate"><span class="pre">USE</span> <span class="pre">&lt;keyspace&gt;</span></code> query:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">session</span><span class="o">.</span><span class="n">set_keyspace</span><span class="p">(</span><span class="s1">&#39;users&#39;</span><span class="p">)</span>
+<span class="c1"># or you can do this instead</span>
+<span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s1">&#39;USE users&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="execution-profiles">
+<h2>Execution Profiles<a class="headerlink" href="#execution-profiles" title="Link to this heading">¶</a></h2>
+<p>Profiles are passed in by <code class="docutils literal notranslate"><span class="pre">execution_profiles</span></code> dict.</p>
+<p>In this case we can construct the base <code class="docutils literal notranslate"><span class="pre">ExecutionProfile</span></code> passing all attributes:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">cassandra.cluster</span><span class="w"> </span><span class="kn">import</span> <span class="n">Cluster</span><span class="p">,</span> <span class="n">ExecutionProfile</span><span class="p">,</span> <span class="n">EXEC_PROFILE_DEFAULT</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">cassandra.policies</span><span class="w"> </span><span class="kn">import</span> <span class="n">WhiteListRoundRobinPolicy</span><span class="p">,</span> <span class="n">DowngradingConsistencyRetryPolicy</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">cassandra.query</span><span class="w"> </span><span class="kn">import</span> <span class="n">tuple_factory</span>
+
+<span class="n">profile</span> <span class="o">=</span> <span class="n">ExecutionProfile</span><span class="p">(</span>
+    <span class="n">load_balancing_policy</span><span class="o">=</span><span class="n">WhiteListRoundRobinPolicy</span><span class="p">([</span><span class="s1">&#39;127.0.0.1&#39;</span><span class="p">]),</span>
+    <span class="n">retry_policy</span><span class="o">=</span><span class="n">DowngradingConsistencyRetryPolicy</span><span class="p">(),</span>
+    <span class="n">consistency_level</span><span class="o">=</span><span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">LOCAL_QUORUM</span><span class="p">,</span>
+    <span class="n">serial_consistency_level</span><span class="o">=</span><span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">LOCAL_SERIAL</span><span class="p">,</span>
+    <span class="n">request_timeout</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span>
+    <span class="n">row_factory</span><span class="o">=</span><span class="n">tuple_factory</span>
+<span class="p">)</span>
+<span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">(</span><span class="n">execution_profiles</span><span class="o">=</span><span class="p">{</span><span class="n">EXEC_PROFILE_DEFAULT</span><span class="p">:</span> <span class="n">profile</span><span class="p">})</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;SELECT release_version FROM system.local&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">one</span><span class="p">())</span>
+</pre></div>
+</div>
+<p>Users are free to setup additional profiles to be used by name:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">profile_long</span> <span class="o">=</span> <span class="n">ExecutionProfile</span><span class="p">(</span><span class="n">request_timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+<span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">(</span><span class="n">execution_profiles</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;long&#39;</span><span class="p">:</span> <span class="n">profile_long</span><span class="p">})</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+<span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">statement</span><span class="p">,</span> <span class="n">execution_profile</span><span class="o">=</span><span class="s1">&#39;long&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Also, parameters passed to <code class="docutils literal notranslate"><span class="pre">Session.execute</span></code> or attached to <code class="docutils literal notranslate"><span class="pre">Statement</span></code>s are still honored as before.</p>
+</section>
+<section id="executing-queries">
+<h2>Executing Queries<a class="headerlink" href="#executing-queries" title="Link to this heading">¶</a></h2>
+<p>Now that we have a <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Session" title="cassandra.cluster.Session"><code class="xref py py-class docutils literal notranslate"><span class="pre">Session</span></code></a> we can begin to execute queries. The simplest
+way to execute a query is to use <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Session.execute" title="cassandra.cluster.Session.execute"><code class="xref py py-meth docutils literal notranslate"><span class="pre">execute()</span></code></a>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">rows</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s1">&#39;SELECT name, age, email FROM users&#39;</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">user_row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">user_row</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">user_row</span><span class="o">.</span><span class="n">age</span><span class="p">,</span> <span class="n">user_row</span><span class="o">.</span><span class="n">email</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>This will transparently pick a Cassandra node to execute the query against
+and handle any retries that are necessary if the operation fails.</p>
+<p>By default, each row in the result set will be a
+<a class="reference external" href="http://docs.python.org/2/library/collections.html#collections.namedtuple">namedtuple</a>.
+Each row will have a matching attribute for each column defined in the schema,
+such as <code class="docutils literal notranslate"><span class="pre">name</span></code>, <code class="docutils literal notranslate"><span class="pre">age</span></code>, and so on.  You can also treat them as normal tuples
+by unpacking them or accessing fields by position.  The following three
+examples are equivalent:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">rows</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s1">&#39;SELECT name, age, email FROM users&#39;</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">row</span><span class="o">.</span><span class="n">age</span><span class="p">,</span> <span class="n">row</span><span class="o">.</span><span class="n">email</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">rows</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s1">&#39;SELECT name, age, email FROM users&#39;</span><span class="p">)</span>
+<span class="k">for</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">age</span><span class="p">,</span> <span class="n">email</span><span class="p">)</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">age</span><span class="p">,</span> <span class="n">email</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">rows</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s1">&#39;SELECT name, age, email FROM users&#39;</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">row</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">row</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
+</pre></div>
+</div>
+<p>If you prefer another result format, such as a <code class="docutils literal notranslate"><span class="pre">dict</span></code> per row, you
+can change the <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Session.row_factory" title="cassandra.cluster.Session.row_factory"><code class="xref py py-attr docutils literal notranslate"><span class="pre">row_factory</span></code></a> attribute.</p>
+<p>As mentioned in our <a class="reference external" href="https://docs.datastax.com/en/devapp/doc/devapp/driversBestPractices.html#driversBestPractices__usePreparedStatements">Drivers Best Practices Guide</a>,
+it is highly recommended to use <a class="reference external" href="#prepared-statement">Prepared statements</a> for your
+frequently run queries.</p>
+</section>
+<section id="prepared-statement">
+<span id="id1"></span><h2>Prepared Statements<a class="headerlink" href="#prepared-statement" title="Link to this heading">¶</a></h2>
+<p>Prepared statements are queries that are parsed by Cassandra and then saved
+for later use.  When the driver uses a prepared statement, it only needs to
+send the values of parameters to bind.  This lowers network traffic
+and CPU utilization within Cassandra because Cassandra does not have to
+re-parse the query each time.</p>
+<p>To prepare a query, use <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Session.prepare" title="cassandra.cluster.Session.prepare"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Session.prepare()</span></code></a>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">user_lookup_stmt</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">prepare</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM users WHERE user_id=?&quot;</span><span class="p">)</span>
+
+<span class="n">users</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">user_id</span> <span class="ow">in</span> <span class="n">user_ids_to_query</span><span class="p">:</span>
+    <span class="n">user</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">user_lookup_stmt</span><span class="p">,</span> <span class="p">[</span><span class="n">user_id</span><span class="p">])</span>
+    <span class="n">users</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Session.prepare" title="cassandra.cluster.Session.prepare"><code class="xref py py-meth docutils literal notranslate"><span class="pre">prepare()</span></code></a> returns a <a class="reference internal" href="api/cassandra/query.html#cassandra.query.PreparedStatement" title="cassandra.query.PreparedStatement"><code class="xref py py-class docutils literal notranslate"><span class="pre">PreparedStatement</span></code></a> instance
+which can be used in place of <a class="reference internal" href="api/cassandra/query.html#cassandra.query.SimpleStatement" title="cassandra.query.SimpleStatement"><code class="xref py py-class docutils literal notranslate"><span class="pre">SimpleStatement</span></code></a> instances or literal
+string queries.  It is automatically prepared against all nodes, and the driver
+handles re-preparing against new nodes and restarted nodes when necessary.</p>
+<p>Note that the placeholders for prepared statements are <code class="docutils literal notranslate"><span class="pre">?</span></code> characters.  This
+is different than for simple, non-prepared statements (although future versions
+of the driver may use the same placeholders for both).</p>
+</section>
+<section id="passing-parameters-to-cql-queries">
+<h2>Passing Parameters to CQL Queries<a class="headerlink" href="#passing-parameters-to-cql-queries" title="Link to this heading">¶</a></h2>
+<p>Although it is not recommended, you can also pass parameters to non-prepared
+statements. The driver supports two forms of parameter place-holders: positional
+and named.</p>
+<p>Positional parameters are used with a <code class="docutils literal notranslate"><span class="pre">%s</span></code> placeholder.  For example,
+when you execute:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    INSERT INTO users (name, credits, user_id)</span>
+<span class="sd">    VALUES (%s, %s, %s)</span>
+<span class="sd">    &quot;&quot;&quot;</span><span class="p">,</span>
+    <span class="p">(</span><span class="s2">&quot;John O&#39;Reilly&quot;</span><span class="p">,</span> <span class="mi">42</span><span class="p">,</span> <span class="n">uuid</span><span class="o">.</span><span class="n">uuid1</span><span class="p">())</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>It is translated to the following CQL query:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">users</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">credits</span><span class="p">,</span> <span class="n">user_id</span><span class="p">)</span>
+<span class="n">VALUES</span> <span class="p">(</span><span class="s1">&#39;John O&#39;&#39;Reilly&#39;</span><span class="p">,</span> <span class="mi">42</span><span class="p">,</span> <span class="mi">2644</span><span class="n">bada</span><span class="o">-</span><span class="mi">852</span><span class="n">c</span><span class="o">-</span><span class="mf">11e3</span><span class="o">-</span><span class="mi">89</span><span class="n">fb</span><span class="o">-</span><span class="n">e0b9a54a6d93</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Note that you should use <code class="docutils literal notranslate"><span class="pre">%s</span></code> for all types of arguments, not just strings.
+For example, this would be <strong>wrong</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;INSERT INTO USERS (name, age) VALUES (</span><span class="si">%s</span><span class="s2">, </span><span class="si">%d</span><span class="s2">)&quot;</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;bob&quot;</span><span class="p">,</span> <span class="mi">42</span><span class="p">))</span>  <span class="c1"># wrong</span>
+</pre></div>
+</div>
+<p>Instead, use <code class="docutils literal notranslate"><span class="pre">%s</span></code> for the age placeholder.</p>
+<p>If you need to use a literal <code class="docutils literal notranslate"><span class="pre">%</span></code> character, use <code class="docutils literal notranslate"><span class="pre">%%</span></code>.</p>
+<p><strong>Note</strong>: you must always use a sequence for the second argument, even if you are
+only passing in a single variable:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;INSERT INTO foo (bar) VALUES (</span><span class="si">%s</span><span class="s2">)&quot;</span><span class="p">,</span> <span class="s2">&quot;blah&quot;</span><span class="p">)</span>  <span class="c1"># wrong</span>
+<span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;INSERT INTO foo (bar) VALUES (</span><span class="si">%s</span><span class="s2">)&quot;</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;blah&quot;</span><span class="p">))</span>  <span class="c1"># wrong</span>
+<span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;INSERT INTO foo (bar) VALUES (</span><span class="si">%s</span><span class="s2">)&quot;</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;blah&quot;</span><span class="p">,</span> <span class="p">))</span>  <span class="c1"># right</span>
+<span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;INSERT INTO foo (bar) VALUES (</span><span class="si">%s</span><span class="s2">)&quot;</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;blah&quot;</span><span class="p">])</span>  <span class="c1"># right</span>
+</pre></div>
+</div>
+<p>Note that the second line is incorrect because in Python, single-element tuples
+require a comma.</p>
+<p>Named place-holders use the <code class="docutils literal notranslate"><span class="pre">%(name)s</span></code> form:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    INSERT INTO users (name, credits, user_id, username)</span>
+<span class="sd">    VALUES (%(name)s, %(credits)s, %(user_id)s, %(name)s)</span>
+<span class="sd">    &quot;&quot;&quot;</span><span class="p">,</span>
+    <span class="p">{</span><span class="s1">&#39;name&#39;</span><span class="p">:</span> <span class="s2">&quot;John O&#39;Reilly&quot;</span><span class="p">,</span> <span class="s1">&#39;credits&#39;</span><span class="p">:</span> <span class="mi">42</span><span class="p">,</span> <span class="s1">&#39;user_id&#39;</span><span class="p">:</span> <span class="n">uuid</span><span class="o">.</span><span class="n">uuid1</span><span class="p">()}</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>Note that you can repeat placeholders with the same name, such as <code class="docutils literal notranslate"><span class="pre">%(name)s</span></code>
+in the above example.</p>
+<p>Only data values should be supplied this way.  Other items, such as keyspaces,
+table names, and column names should be set ahead of time (typically using
+normal string formatting).</p>
+</section>
+<section id="type-conversions">
+<span id="id2"></span><h2>Type Conversions<a class="headerlink" href="#type-conversions" title="Link to this heading">¶</a></h2>
+<p>For non-prepared statements, Python types are cast to CQL literals in the
+following way:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Python Type</p></th>
+<th class="head"><p>CQL Literal Type</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">None</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">NULL</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">float</span></code></p></td>
+<td><div class="line-block">
+<div class="line"><code class="docutils literal notranslate"><span class="pre">float</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">double</span></code></div>
+</div>
+</td>
+</tr>
+<tr class="row-odd"><td><div class="line-block">
+<div class="line"><code class="docutils literal notranslate"><span class="pre">int</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">long</span></code></div>
+</div>
+</td>
+<td><div class="line-block">
+<div class="line"><code class="docutils literal notranslate"><span class="pre">int</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">bigint</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">varint</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">smallint</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">tinyint</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">counter</span></code></div>
+</div>
+</td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">decimal.Decimal</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">decimal</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><div class="line-block">
+<div class="line"><code class="docutils literal notranslate"><span class="pre">str</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">unicode</span></code></div>
+</div>
+</td>
+<td><div class="line-block">
+<div class="line"><code class="docutils literal notranslate"><span class="pre">ascii</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">varchar</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">text</span></code></div>
+</div>
+</td>
+</tr>
+<tr class="row-even"><td><div class="line-block">
+<div class="line"><code class="docutils literal notranslate"><span class="pre">buffer</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">bytearray</span></code></div>
+</div>
+</td>
+<td><p><code class="docutils literal notranslate"><span class="pre">blob</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">date</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">date</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">datetime</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timestamp</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">time</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">time</span></code></p></td>
+</tr>
+<tr class="row-even"><td><div class="line-block">
+<div class="line"><code class="docutils literal notranslate"><span class="pre">list</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">tuple</span></code></div>
+<div class="line">generator</div>
+</div>
+</td>
+<td><p><code class="docutils literal notranslate"><span class="pre">list</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><div class="line-block">
+<div class="line"><code class="docutils literal notranslate"><span class="pre">set</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">frozenset</span></code></div>
+</div>
+</td>
+<td><p><code class="docutils literal notranslate"><span class="pre">set</span></code></p></td>
+</tr>
+<tr class="row-even"><td><div class="line-block">
+<div class="line"><code class="docutils literal notranslate"><span class="pre">dict</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">OrderedDict</span></code></div>
+</div>
+</td>
+<td><p><code class="docutils literal notranslate"><span class="pre">map</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">uuid.UUID</span></code></p></td>
+<td><div class="line-block">
+<div class="line"><code class="docutils literal notranslate"><span class="pre">timeuuid</span></code></div>
+<div class="line"><code class="docutils literal notranslate"><span class="pre">uuid</span></code></div>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="asynchronous-queries">
+<h2>Asynchronous Queries<a class="headerlink" href="#asynchronous-queries" title="Link to this heading">¶</a></h2>
+<p>The driver supports asynchronous query execution through
+<a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.Session.execute_async" title="cassandra.cluster.Session.execute_async"><code class="xref py py-meth docutils literal notranslate"><span class="pre">execute_async()</span></code></a>.  Instead of waiting for the query to
+complete and returning rows directly, this method almost immediately
+returns a <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.ResponseFuture" title="cassandra.cluster.ResponseFuture"><code class="xref py py-class docutils literal notranslate"><span class="pre">ResponseFuture</span></code></a> object.  There are two ways of
+getting the final result from this object.</p>
+<p>The first is by calling <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.ResponseFuture.result" title="cassandra.cluster.ResponseFuture.result"><code class="xref py py-meth docutils literal notranslate"><span class="pre">result()</span></code></a> on it. If
+the query has not yet completed, this will block until it has and
+then return the result or raise an Exception if an error occurred.
+For example:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">cassandra</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReadTimeout</span>
+
+<span class="n">query</span> <span class="o">=</span> <span class="s2">&quot;SELECT * FROM users WHERE user_id=</span><span class="si">%s</span><span class="s2">&quot;</span>
+<span class="n">future</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute_async</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="p">[</span><span class="n">user_id</span><span class="p">])</span>
+
+<span class="c1"># ... do some other work</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">rows</span> <span class="o">=</span> <span class="n">future</span><span class="o">.</span><span class="n">result</span><span class="p">()</span>
+    <span class="n">user</span> <span class="o">=</span> <span class="n">rows</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">user</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">user</span><span class="o">.</span><span class="n">age</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">ReadTimeout</span><span class="p">:</span>
+    <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="s2">&quot;Query timed out:&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>This works well for executing many queries concurrently:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># build a list of futures</span>
+<span class="n">futures</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">query</span> <span class="o">=</span> <span class="s2">&quot;SELECT * FROM users WHERE user_id=</span><span class="si">%s</span><span class="s2">&quot;</span>
+<span class="k">for</span> <span class="n">user_id</span> <span class="ow">in</span> <span class="n">ids_to_fetch</span><span class="p">:</span>
+    <span class="n">futures</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">session</span><span class="o">.</span><span class="n">execute_async</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="p">[</span><span class="n">user_id</span><span class="p">])</span>
+
+<span class="c1"># wait for them to complete and use the results</span>
+<span class="k">for</span> <span class="n">future</span> <span class="ow">in</span> <span class="n">futures</span><span class="p">:</span>
+    <span class="n">rows</span> <span class="o">=</span> <span class="n">future</span><span class="o">.</span><span class="n">result</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">rows</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Alternatively, instead of calling <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.ResponseFuture.result" title="cassandra.cluster.ResponseFuture.result"><code class="xref py py-meth docutils literal notranslate"><span class="pre">result()</span></code></a>,
+you can attach callback and errback functions through the
+<a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.ResponseFuture.add_callback" title="cassandra.cluster.ResponseFuture.add_callback"><code class="xref py py-meth docutils literal notranslate"><span class="pre">add_callback()</span></code></a>,
+<a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.ResponseFuture.add_errback" title="cassandra.cluster.ResponseFuture.add_errback"><code class="xref py py-meth docutils literal notranslate"><span class="pre">add_errback()</span></code></a>, and
+<a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.ResponseFuture.add_callbacks" title="cassandra.cluster.ResponseFuture.add_callbacks"><code class="xref py py-meth docutils literal notranslate"><span class="pre">add_callbacks()</span></code></a>, methods.  If you have used
+Twisted Python before, this is designed to be a lightweight version of
+that:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">handle_success</span><span class="p">(</span><span class="n">rows</span><span class="p">):</span>
+    <span class="n">user</span> <span class="o">=</span> <span class="n">rows</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">process_user</span><span class="p">(</span><span class="n">user</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">user</span><span class="o">.</span><span class="n">age</span><span class="p">,</span> <span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+        <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Failed to process user </span><span class="si">%s</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">)</span>
+        <span class="c1"># don&#39;t re-raise errors in the callback</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">handle_error</span><span class="p">(</span><span class="n">exception</span><span class="p">):</span>
+    <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Failed to fetch user info: </span><span class="si">%s</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">exception</span><span class="p">)</span>
+
+
+<span class="n">future</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute_async</span><span class="p">(</span><span class="n">query</span><span class="p">)</span>
+<span class="n">future</span><span class="o">.</span><span class="n">add_callbacks</span><span class="p">(</span><span class="n">handle_success</span><span class="p">,</span> <span class="n">handle_error</span><span class="p">)</span>
+</pre></div>
+</div>
+<dl class="simple">
+<dt>There are a few important things to remember when working with callbacks:</dt><dd><ul class="simple">
+<li><p><strong>Exceptions that are raised inside the callback functions will be logged and then ignored.</strong></p></li>
+<li><p>Your callback will be run on the event loop thread, so any long-running
+operations will prevent other requests from being handled</p></li>
+</ul>
+</dd>
+</dl>
+</section>
+<section id="setting-a-consistency-level">
+<h2>Setting a Consistency Level<a class="headerlink" href="#setting-a-consistency-level" title="Link to this heading">¶</a></h2>
+<p>The consistency level used for a query determines how many of the
+replicas of the data you are interacting with need to respond for
+the query to be considered a success.</p>
+<p>By default, <a class="reference internal" href="api/cassandra.html#cassandra.ConsistencyLevel.LOCAL_ONE" title="cassandra.ConsistencyLevel.LOCAL_ONE"><code class="xref py py-attr docutils literal notranslate"><span class="pre">ConsistencyLevel.LOCAL_ONE</span></code></a> will be used for all queries.
+You can specify a different default by setting the <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.ExecutionProfile.consistency_level" title="cassandra.cluster.ExecutionProfile.consistency_level"><code class="xref py py-attr docutils literal notranslate"><span class="pre">ExecutionProfile.consistency_level</span></code></a>
+for the execution profile with key <a class="reference internal" href="api/cassandra/cluster.html#cassandra.cluster.EXEC_PROFILE_DEFAULT" title="cassandra.cluster.EXEC_PROFILE_DEFAULT"><code class="xref py py-data docutils literal notranslate"><span class="pre">EXEC_PROFILE_DEFAULT</span></code></a>.
+To specify a different consistency level per request, wrap queries
+in a <a class="reference internal" href="api/cassandra/query.html#cassandra.query.SimpleStatement" title="cassandra.query.SimpleStatement"><code class="xref py py-class docutils literal notranslate"><span class="pre">SimpleStatement</span></code></a>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">cassandra</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConsistencyLevel</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">cassandra.query</span><span class="w"> </span><span class="kn">import</span> <span class="n">SimpleStatement</span>
+
+<span class="n">query</span> <span class="o">=</span> <span class="n">SimpleStatement</span><span class="p">(</span>
+    <span class="s2">&quot;INSERT INTO users (name, age) VALUES (</span><span class="si">%s</span><span class="s2">, </span><span class="si">%s</span><span class="s2">)&quot;</span><span class="p">,</span>
+    <span class="n">consistency_level</span><span class="o">=</span><span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">QUORUM</span><span class="p">)</span>
+<span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="p">(</span><span class="s1">&#39;John&#39;</span><span class="p">,</span> <span class="mi">42</span><span class="p">))</span>
+</pre></div>
+</div>
+</section>
+<section id="setting-a-consistency-level-with-prepared-statements">
+<h2>Setting a Consistency Level with Prepared Statements<a class="headerlink" href="#setting-a-consistency-level-with-prepared-statements" title="Link to this heading">¶</a></h2>
+<p>To specify a consistency level for prepared statements, you have two options.</p>
+<p>The first is to set a default consistency level for every execution of the
+prepared statement:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">cassandra</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConsistencyLevel</span>
+
+<span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">()</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">&quot;mykeyspace&quot;</span><span class="p">)</span>
+<span class="n">user_lookup_stmt</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">prepare</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM users WHERE user_id=?&quot;</span><span class="p">)</span>
+<span class="n">user_lookup_stmt</span><span class="o">.</span><span class="n">consistency_level</span> <span class="o">=</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">QUORUM</span>
+
+<span class="c1"># these will both use QUORUM</span>
+<span class="n">user1</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">user_lookup_stmt</span><span class="p">,</span> <span class="p">[</span><span class="n">user_id1</span><span class="p">])[</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">user2</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">user_lookup_stmt</span><span class="p">,</span> <span class="p">[</span><span class="n">user_id2</span><span class="p">])[</span><span class="mi">0</span><span class="p">]</span>
+</pre></div>
+</div>
+<p>The second option is to create a <a class="reference internal" href="api/cassandra/query.html#cassandra.query.BoundStatement" title="cassandra.query.BoundStatement"><code class="xref py py-class docutils literal notranslate"><span class="pre">BoundStatement</span></code></a> from the
+<a class="reference internal" href="api/cassandra/query.html#cassandra.query.PreparedStatement" title="cassandra.query.PreparedStatement"><code class="xref py py-class docutils literal notranslate"><span class="pre">PreparedStatement</span></code></a> and binding parameters and set a consistency
+level on that:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># override the QUORUM default</span>
+<span class="n">user3_lookup</span> <span class="o">=</span> <span class="n">user_lookup_stmt</span><span class="o">.</span><span class="n">bind</span><span class="p">([</span><span class="n">user_id3</span><span class="p">])</span>
+<span class="n">user3_lookup</span><span class="o">.</span><span class="n">consistency_level</span> <span class="o">=</span> <span class="n">ConsistencyLevel</span><span class="o">.</span><span class="n">ALL</span>
+<span class="n">user3</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">user3_lookup</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="speculative-execution">
+<h2>Speculative Execution<a class="headerlink" href="#speculative-execution" title="Link to this heading">¶</a></h2>
+<p>Speculative execution is a way to minimize latency by preemptively executing several
+instances of the same query against different nodes. For more details about this
+technique, see <a class="reference external" href="https://docs.datastax.com/en/devapp/doc/devapp/driversSpeculativeRetry.html">Speculative Execution with DataStax Drivers</a>.</p>
+<p>To enable speculative execution:</p>
+<ul class="simple">
+<li><p>Configure a <a class="reference internal" href="api/cassandra/policies.html#cassandra.policies.SpeculativeExecutionPolicy" title="cassandra.policies.SpeculativeExecutionPolicy"><code class="xref py py-class docutils literal notranslate"><span class="pre">SpeculativeExecutionPolicy</span></code></a> with the ExecutionProfile</p></li>
+<li><p>Mark your query as idempotent, which mean it can be applied multiple
+times without changing the result of the initial application.
+See <a class="reference external" href="https://docs.datastax.com/en/devapp/doc/devapp/driversQueryIdempotence.html">Query Idempotence</a> for more details.</p></li>
+</ul>
+<p>Example:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">cassandra.cluster</span><span class="w"> </span><span class="kn">import</span> <span class="n">Cluster</span><span class="p">,</span> <span class="n">ExecutionProfile</span><span class="p">,</span> <span class="n">EXEC_PROFILE_DEFAULT</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">cassandra.policies</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConstantSpeculativeExecutionPolicy</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">cassandra.query</span><span class="w"> </span><span class="kn">import</span> <span class="n">SimpleStatement</span>
+
+<span class="c1"># Configure the speculative execution policy</span>
+<span class="n">ep</span> <span class="o">=</span> <span class="n">ExecutionProfile</span><span class="p">(</span>
+    <span class="n">speculative_execution_policy</span><span class="o">=</span><span class="n">ConstantSpeculativeExecutionPolicy</span><span class="p">(</span><span class="n">delay</span><span class="o">=</span><span class="mf">.5</span><span class="p">,</span> <span class="n">max_attempts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<span class="p">)</span>
+<span class="n">cluster</span> <span class="o">=</span> <span class="n">Cluster</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">execution_profiles</span><span class="o">=</span><span class="p">{</span><span class="n">EXEC_PROFILE_DEFAULT</span><span class="p">:</span> <span class="n">ep</span><span class="p">})</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+
+<span class="c1"># Mark the query idempotent</span>
+<span class="n">query</span> <span class="o">=</span> <span class="n">SimpleStatement</span><span class="p">(</span>
+    <span class="s2">&quot;UPDATE my_table SET list_col = [1] WHERE pk = 1&quot;</span><span class="p">,</span>
+    <span class="n">is_idempotent</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">)</span>
+
+<span class="c1"># Execute. A new query will be sent to the server every 0.5 second</span>
+<span class="c1"># until we receive a response, for a max number attempts of 10.</span>
+<span class="n">session</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">query</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page Getting Started&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.28.2-scylla/getting-started%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="installation.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />Installation
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="scylla-specific.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />Scylla Specific Features
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <div class="notice">
+<p>
+ScyllaDB Python Driver is available under the <a href="https://www.apache.org/licenses/LICENSE-2.0.html">Apache v2 License</a>.
+ScyllaDB Python Driver is a fork of <a href="https://github.com/datastax/python-driver">DataStax Python Driver</a>.
+See Copyright <a href="https://python-driver.docs.scylladb.com/stable/#copyright">here</a>.</p>
+</div>
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/python-driver/issues/new?title=docs:%20Issue on page Getting Started&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://python-driver.docs.scylladb.com/3.28.2-scylla/getting-started%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/python-driver/edit/master/docs/getting-started.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">Getting Started</a><ul>
+<li><a class="reference internal" href="#connecting-to-a-cluster">Connecting to a Cluster</a><ul>
+<li><a class="reference internal" href="#connecting-to-cassandra">Connecting to Cassandra</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#session-keyspace">Session Keyspace</a></li>
+<li><a class="reference internal" href="#execution-profiles">Execution Profiles</a></li>
+<li><a class="reference internal" href="#executing-queries">Executing Queries</a></li>
+<li><a class="reference internal" href="#prepared-statement">Prepared Statements</a></li>
+<li><a class="reference internal" href="#passing-parameters-to-cql-queries">Passing Parameters to CQL Queries</a></li>
+<li><a class="reference internal" href="#type-conversions">Type Conversions</a></li>
+<li><a class="reference internal" href="#asynchronous-queries">Asynchronous Queries</a></li>
+<li><a class="reference internal" href="#setting-a-consistency-level">Setting a Consistency Level</a></li>
+<li><a class="reference internal" href="#setting-a-consistency-level-with-prepared-statements">Setting a Consistency Level with Prepared Statements</a></li>
+<li><a class="reference internal" href="#speculative-execution">Speculative Execution</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="index.html">Scylla Python Driver</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                3.28.2
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+            
+            
+                
+                    <li>
+                        <a href="../stable/getting-started.html">
+                            3.29.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.7-scylla/getting-started.html">
+                            3.29.7
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.6-scylla/getting-started.html">
+                            3.29.6
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.5-scylla/getting-started.html">
+                            3.29.5
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.4-scylla/getting-started.html">
+                            3.29.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.3-scylla/getting-started.html">
+                            3.29.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.2-scylla/getting-started.html">
+                            3.29.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.29.0-scylla/getting-started.html">
+                            3.29.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="getting-started.html">
+                            3.28.2
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.28.1-scylla/getting-started.html">
+                            3.28.1
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.28.0-scylla/getting-started.html">
+                            3.28.0
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.26.9-scylla/getting-started.html">
+                            3.26.9
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.25.11-scylla/index.html">
+                            3.25.11
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.25.4-scylla/index.html">
+                            3.25.4
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.24.8-scylla/index.html">
+                            3.24.8
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.22.3-scylla/index.html">
+                            3.22.3
+                        </a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../3.21.0-scylla/index.html">
+                            3.21.0
+                        </a>
+                    </li>
+                
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 has-children"><a class="reference internal" href="api/index.html">API Documentation</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cassandra</span></code> - Exceptions and Enums</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cluster.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cluster</span></code> - Clusters and Sessions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/policies.html"><code class="docutils literal notranslate"><span class="pre">cassandra.policies</span></code> - Load balancing and Failure Handling Policies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/auth.html"><code class="docutils literal notranslate"><span class="pre">cassandra.auth</span></code> - Authentication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/metadata.html"><code class="docutils literal notranslate"><span class="pre">cassandra.metadata</span></code> - Schema and Ring Topology</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/metrics.html"><code class="docutils literal notranslate"><span class="pre">cassandra.metrics</span></code> - Performance Metrics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/query.html"><code class="docutils literal notranslate"><span class="pre">cassandra.query</span></code> - Prepared Statements, Batch Statements, Tracing, and Row Factories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/pool.html"><code class="docutils literal notranslate"><span class="pre">cassandra.pool</span></code> - Hosts and Connection Pools</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/protocol.html"><code class="docutils literal notranslate"><span class="pre">cassandra.protocol</span></code> - Protocol Features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/encoder.html"><code class="docutils literal notranslate"><span class="pre">cassandra.encoder</span></code> - Encoders for non-prepared Statements</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/decoder.html"><code class="docutils literal notranslate"><span class="pre">cassandra.decoder</span></code> - Data Return Formats</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/concurrent.html"><code class="docutils literal notranslate"><span class="pre">cassandra.concurrent</span></code> - Utilities for Concurrent Statement Execution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/connection.html"><code class="docutils literal notranslate"><span class="pre">cassandra.connection</span></code> - Low Level Connection Info</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/util.html"><code class="docutils literal notranslate"><span class="pre">cassandra.util</span></code> - Utilities</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/timestamps.html"><code class="docutils literal notranslate"><span class="pre">cassandra.timestamps</span></code> - Timestamp Generation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/io/asyncioreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.asyncioreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">asyncio</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/io/asyncorereactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.asyncorereactor</span></code> - <code class="docutils literal notranslate"><span class="pre">asyncore</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/io/eventletreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.eventletreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">eventlet</span></code>-compatible Connection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/io/libevreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.libevreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">libev</span></code> Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/io/geventreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.geventreactor</span></code> - <code class="docutils literal notranslate"><span class="pre">gevent</span></code>-compatible Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/io/twistedreactor.html"><code class="docutils literal notranslate"><span class="pre">cassandra.io.twistedreactor</span></code> - Twisted Event Loop</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cqlengine/models.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.models</span></code> - Table models for object mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cqlengine/columns.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.columns</span></code> - Column types for object mapping models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cqlengine/query.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.query</span></code> - Query and filter model objects</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cqlengine/connection.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.connection</span></code> - Connection management for cqlengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cqlengine/management.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.management</span></code> - Schema management for cqlengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/cassandra/cqlengine/usertype.html"><code class="docutils literal notranslate"><span class="pre">cassandra.cqlengine.usertype</span></code> - Model classes for User Defined Types</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="scylla-specific.html">Scylla Specific Features</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="upgrading.html">Upgrading</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="simple">
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="execution-profiles.html">Execution Profiles</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance.html">Performance Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="query-paging.html">Paging Large Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="lwt.html">Lightweight Transactions (Compare-and-set)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="security.html">Security</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user-defined-types.html">User Defined Types</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="object-mapper.html">Object Mapper</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/upgrade-guide.html">Upgrade Guide</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/models.html">Models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/queryset.html">Making Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/batches.html">Batch Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/connections.html">Connections</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/third-party.html">Third party integrations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlengine/faq.html">Frequently Asked Questions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="dates-and-times.html">Working with Dates and Times</a></li>
+<li class="toctree-l1"><a class="reference internal" href="scylla-cloud.html">ScyllaDB Cloud</a></li>
+<li class="toctree-l1"><a class="reference internal" href="scylla-cloud-serverless.html">ScyllaDB Cloud Serverless</a></li>
+<li class="toctree-l1"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; ScyllaDB 2021 and © DataStax 2013-2017
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.2.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>
