@@ -4345,6 +4345,7 @@ class ResponseFuture(object):
     _spec_execution_plan = NoSpeculativeExecutionPlan()
     _continuous_paging_session = None
     _host = None
+    _TABLET_ROUTING_CTYPE = None
 
     _warned_timeout = False
 
@@ -4642,7 +4643,10 @@ class ResponseFuture(object):
             if self._custom_payload and self.session.cluster.control_connection._tablets_routing_v1 and 'tablets-routing-v1' in self._custom_payload:
                 protocol = self.session.cluster.protocol_version
                 info = self._custom_payload.get('tablets-routing-v1')
-                ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
+                ctype = ResponseFuture._TABLET_ROUTING_CTYPE
+                if ctype is None:
+                    ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
+                    ResponseFuture._TABLET_ROUTING_CTYPE = ctype
                 tablet_routing_info = ctype.from_binary(info, protocol)
                 first_token = tablet_routing_info[0]
                 last_token = tablet_routing_info[1]
