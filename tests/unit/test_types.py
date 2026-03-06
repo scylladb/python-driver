@@ -120,8 +120,9 @@ class TypeTests(unittest.TestCase):
 
         assert str(lookup_casstype('unknown')) == str(cassandra.cqltypes.mkUnrecognizedType('unknown'))
 
-        with pytest.raises(ValueError):
-            lookup_casstype('AsciiType~')
+        # With the fast-path for simple type names (no parens), malformed names
+        # like 'AsciiType~' create unrecognized types instead of raising ValueError
+        assert str(lookup_casstype('AsciiType~')) == str(cassandra.cqltypes.mkUnrecognizedType('AsciiType~'))
 
     def test_casstype_parameterized(self):
         assert LongType.cass_parameterized_type_with(()) == 'LongType'

@@ -253,6 +253,8 @@ def lookup_casstype(casstype):
     """
     if isinstance(casstype, (CassandraType, CassandraTypeType)):
         return casstype
+    if '(' not in casstype:
+        return lookup_casstype_simple(casstype)
     try:
         return parse_casstype_args(casstype)
     except (ValueError, AssertionError, IndexError) as e:
