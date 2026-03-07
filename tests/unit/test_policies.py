@@ -1445,6 +1445,106 @@ class TokenAwarePolicyTest(unittest.TestCase):
         # Cache should remain empty (tablet results are not cached)
         assert len(policy._replica_cache) == 0
 
+    # --- LWT determinism tests ---
+
+    def _make_lwt_query(self, routing_key, keyspace="ks"):
+        """Create a Statement that reports is_lwt()=True."""
+        query = Statement(routing_key=routing_key, keyspace=keyspace)
+        query.is_lwt = lambda: True
+        return query
+
+    @patch("cassandra.policies.shuffle")
+    def test_lwt_no_shuffle(self, patched_shuffle):
+        """LWT queries should yield replicas in deterministic order."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        query = self._make_lwt_query(routing_key=b"key1")
+
+        plans = [list(policy.make_query_plan(None, query)) for _ in range(5)]
+
+        # All plans should be identical (deterministic)
+        for plan in plans[1:]:
+            assert plan == plans[0]
+
+        # shuffle should never have been called
+        assert patched_shuffle.call_count == 0
+
+    @patch("cassandra.policies.shuffle")
+    def test_lwt_replicas_not_copied(self, patched_shuffle):
+        """LWT path should not copy the replicas list (no list() call)."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        query = self._make_lwt_query(routing_key=b"key1")
+        list(policy.make_query_plan(None, query))
+
+        # shuffle was never called, which means list() was also not called
+        assert patched_shuffle.call_count == 0
+
+    @patch("cassandra.policies.shuffle")
+    def test_non_lwt_shuffled(self, patched_shuffle):
+        """Non-LWT queries with shuffle_replicas=True should shuffle."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b"key1", keyspace="ks")
+        list(policy.make_query_plan(None, query))
+
+        assert patched_shuffle.call_count == 1
+
+    @patch("cassandra.policies.shuffle")
+    def test_lwt_with_cache_deterministic(self, patched_shuffle):
+        """LWT + cache should produce identical plans on repeated calls."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        query = self._make_lwt_query(routing_key=b"key1")
+
+        plan1 = list(policy.make_query_plan(None, query))
+        plan2 = list(policy.make_query_plan(None, query))
+
+        assert plan1 == plan2
+        assert patched_shuffle.call_count == 0
+        # Should have been a cache hit on the second call
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
+
 
 class ConvictionPolicyTest(unittest.TestCase):
     def test_not_implemented(self):

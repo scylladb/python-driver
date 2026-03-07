@@ -770,9 +770,10 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                     exc_info=True,
                 )
 
-        if self.shuffle_replicas and not query.is_lwt():
-            replicas = list(replicas)
-            shuffle(replicas)
+        if self.shuffle_replicas:
+            if not query.is_lwt():
+                replicas = list(replicas)
+                shuffle(replicas)
 
         local_rack = []
         local = []
