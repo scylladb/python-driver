@@ -13,7 +13,7 @@
 # limitations under the License.
 import random
 
-from collections import namedtuple
+from collections import namedtuple, OrderedDict
 from itertools import islice, cycle, groupby, repeat
 import logging
 from random import randint, shuffle
@@ -629,14 +629,29 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
     If no :attr:`~.Statement.routing_key` is set on the query, the child
     policy's query plan will be used as is.
+
+    An LRU cache of size :attr:`cache_replicas_size` (default 1024) avoids
+    repeated token-to-replica lookups for the same (keyspace, routing_key)
+    pair.  Set to 0 to disable caching.  The cache is automatically
+    invalidated when the cluster topology changes.
     """
 
-    __slots__ = ("_child_policy", "_cluster_metadata", "shuffle_replicas")
+    __slots__ = (
+        "_child_policy",
+        "_cluster_metadata",
+        "shuffle_replicas",
+        "_replica_cache",
+        "_replica_cache_token_map_id",
+        "_cache_replicas_size",
+    )
 
-    def __init__(self, child_policy, shuffle_replicas=True):
+    def __init__(self, child_policy, shuffle_replicas=True, cache_replicas_size=1024):
         self._child_policy = child_policy
         self.shuffle_replicas = shuffle_replicas
         self._cluster_metadata = None
+        self._cache_replicas_size = max(0, cache_replicas_size)
+        self._replica_cache = OrderedDict()
+        self._replica_cache_token_map_id = None
 
     def populate(self, cluster, hosts):
         self._cluster_metadata = cluster.metadata
@@ -654,6 +669,45 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
     def distance(self, *args, **kwargs):
         return self._child_policy.distance(*args, **kwargs)
+
+    def _get_cached_replicas(self, keyspace, routing_key_bytes, token_map):
+        """
+        Return cached (token, replicas) for the given keyspace and routing key,
+        or None on cache miss.  The cache is invalidated whenever the token_map
+        object identity changes (i.e. after a topology rebuild).
+        """
+        if not self._cache_replicas_size:
+            return None
+        tm_id = id(token_map)
+        if tm_id != self._replica_cache_token_map_id:
+            # Token map was rebuilt -- entire cache is stale.
+            self._replica_cache = OrderedDict()
+            self._replica_cache_token_map_id = tm_id
+        cache_key = (keyspace, routing_key_bytes)
+        entry = self._replica_cache.get(cache_key)
+        if entry is not None:
+            # Promote to most-recently-used.
+            self._replica_cache.move_to_end(cache_key)
+        return entry
+
+    def _put_cached_replicas(
+        self, keyspace, routing_key_bytes, token, replicas, token_map
+    ):
+        """
+        Store (token, replicas) in the LRU cache, evicting the oldest
+        entry if the cache exceeds its configured size.
+        """
+        if not self._cache_replicas_size:
+            return
+        tm_id = id(token_map)
+        if tm_id != self._replica_cache_token_map_id:
+            self._replica_cache = OrderedDict()
+            self._replica_cache_token_map_id = tm_id
+        cache_key = (keyspace, routing_key_bytes)
+        self._replica_cache[cache_key] = (token, replicas)
+        self._replica_cache.move_to_end(cache_key)
+        if len(self._replica_cache) > self._cache_replicas_size:
+            self._replica_cache.popitem(last=False)
 
     def make_query_plan(self, working_keyspace=None, query=None):
         keyspace = query.keyspace if query and query.keyspace else working_keyspace
@@ -680,14 +734,24 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                         host for host in child_plan if host.host_id in replicas_mapped
                     ]
                 else:
-                    try:
-                        replicas = token_map.get_replicas(keyspace, token)
-                    except Exception:
-                        log.debug(
-                            "Failed to get replicas from token_map, falling back to cluster metadata"
-                        )
-                        replicas = cluster_metadata.get_replicas(
-                            keyspace, query.routing_key
+                    cached = self._get_cached_replicas(
+                        keyspace, query.routing_key, token_map
+                    )
+                    if cached is not None:
+                        token, replicas = cached
+                    else:
+                        try:
+                            replicas = token_map.get_replicas(keyspace, token)
+                        except Exception:
+                            log.debug(
+                                "Failed to get replicas from token_map, "
+                                "falling back to cluster metadata"
+                            )
+                            replicas = cluster_metadata.get_replicas(
+                                keyspace, query.routing_key
+                            )
+                        self._put_cached_replicas(
+                            keyspace, query.routing_key, token, replicas, token_map
                         )
             except Exception:
                 log.debug(
@@ -918,7 +982,9 @@ class HostFilterPolicy(LoadBalancingPolicy):
             if self.predicate(host):
                 yield host
 
-    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+    def make_query_plan_with_exclusion(
+        self, working_keyspace=None, query=None, excluded=()
+    ):
         if excluded:
             excluded = set(excluded)
         child_qp = self._child_policy.make_query_plan_with_exclusion(
@@ -1645,13 +1711,15 @@ class DefaultLoadBalancingPolicy(WrapperPolicy):
             for h in child.make_query_plan(keyspace, query):
                 yield h
 
-    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+    def make_query_plan_with_exclusion(
+        self, working_keyspace=None, query=None, excluded=()
+    ):
         if query and query.keyspace:
             keyspace = query.keyspace
         else:
             keyspace = working_keyspace
 
-        addr = getattr(query, 'target_host', None) if query else None
+        addr = getattr(query, "target_host", None) if query else None
         target_host = self._cluster_metadata.get_host(addr)
 
         if excluded:
