@@ -15,7 +15,8 @@
 include 'cython_marshal.pyx'
 from cassandra.buffer cimport Buffer, from_ptr_and_size
 
-from libc.stdint cimport int32_t
+from libc.stdint cimport int32_t, uint32_t
+from libc.string cimport memcpy
 from cassandra.bytesio cimport BytesIOReader
 
 
@@ -41,7 +42,8 @@ cdef inline int get_buf(BytesIOReader reader, Buffer *buf_out) except -1:
     return 0
 
 cdef inline int32_t read_int(BytesIOReader reader) except ?0xDEAD:
-    cdef Buffer buf
-    buf.ptr = reader.read(4)
-    buf.size = 4
-    return unpack_num[int32_t](&buf)
+    """Read a big-endian int32 directly from the reader using memcpy for alignment safety."""
+    cdef char *src = reader.read(4)
+    cdef uint32_t temp
+    memcpy(&temp, src, 4)
+    return <int32_t>ntohl(temp)
