@@ -37,3 +37,22 @@ def test_read_eof():
     with pytest.raises(EOFError):
         reader.read(2)
     reader.read(1) # see that we can still read this
+
+def test_read_offset():
+    buf = b'abcdef'
+    cdef BytesIOReader reader = BytesIOReader(buf, 2)
+    # Zero-copy: the reader aliases the caller's bytes at the offset.
+    assert reader.buf is buf
+    assert reader.buf_ptr == <char*>buf + 2
+    assert reader.read(3) == <char*>buf + 2
+    reader = BytesIOReader(buf, 2)
+    assert reader.read(3)[:3] == b'cde'
+    with pytest.raises(EOFError):
+        reader.read(2)
+    for offset in (-1, 7):
+        with pytest.raises(ValueError):
+            BytesIOReader(b'abcdef', offset)
+    # offset == len(buf) is valid: an empty reader
+    empty = BytesIOReader(b'abcdef', 6)
+    with pytest.raises(EOFError):
+        empty.read(1)
