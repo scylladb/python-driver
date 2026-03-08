@@ -16,12 +16,18 @@ cdef class BytesIOReader:
     """
     This class provides efficient support for reading bytes from a 'bytes' buffer,
     by returning char * values directly without allocating intermediate objects.
+
+    An optional offset allows reading from the middle of an existing buffer,
+    avoiding a copy when only a suffix of the bytes is needed.
     """
 
-    def __init__(self, bytes buf):
+    def __init__(self, bytes buf, Py_ssize_t offset=0):
+        if offset < 0 or offset > len(buf):
+            raise ValueError("offset %d out of range for buffer of length %d" % (offset, len(buf)))
         self.buf = buf
-        self.size = len(buf)
-        self.buf_ptr = self.buf
+        self._initial_offset = offset
+        self.size = len(buf) - offset
+        self.buf_ptr = <char*>self.buf + offset
 
     cdef char *read(self, Py_ssize_t n = -1) except NULL:
         """Read at most size bytes from the file
