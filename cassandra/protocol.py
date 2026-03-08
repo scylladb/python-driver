@@ -56,6 +56,54 @@ class NotSupportedError(Exception):
 class InternalError(Exception):
     pass
 
+
+class BytesReader:
+    """
+    Lightweight reader for bytes data without BytesIO overhead.
+    Provides the same read() interface but operates directly on a
+    bytes object, avoiding internal buffer copies.
+
+    Unlike io.BytesIO.read(n), read(n) raises EOFError when fewer than
+    n bytes remain.  This is intentional: protocol parsing should fail
+    fast on truncated or malformed frames rather than silently returning
+    short data.
+
+    A plain, already-immutable ``bytes`` object is stored as-is (no copy):
+    downstream zero-copy consumers (e.g. the Cython row parser) keep a
+    reference to it via ``remaining_buffer()``, which is only safe because
+    ``bytes`` can never be mutated in place. Any other buffer-like input
+    (``memoryview``, ``bytearray``, ...) is materialized into a fresh
+    ``bytes`` copy up front, so a caller mutating or recycling its original
+    buffer afterwards can never corrupt or dangle a reader that's still
+    holding onto (or handing out slices of) this data.
+    """
+    __slots__ = ('_data', '_pos', '_size')
+
+    def __init__(self, data):
+        # Only a plain `bytes` object is guaranteed immutable and safe to
+        # alias without copying; anything else (memoryview, bytearray, ...)
+        # is materialized up front.
+        self._data = data if isinstance(data, bytes) else bytes(data)
+        self._pos = 0
+        self._size = len(self._data)
+
+    def read(self, n=-1):
+        if n < 0:
+            result = self._data[self._pos:]
+            self._pos = self._size
+        else:
+            end = self._pos + n
+            if end > self._size:
+                raise EOFError("Cannot read past the end of the buffer")
+            result = self._data[self._pos:end]
+            self._pos = end
+        return result
+
+    def remaining_buffer(self):
+        """Return (underlying_bytes, current_position) for zero-copy handoff."""
+        return self._data, self._pos
+
+
 ColumnMetadata = namedtuple("ColumnMetadata", ['keyspace_name', 'table_name', 'name', 'type'])
 
 HEADER_DIRECTION_TO_CLIENT = 0x80
@@ -1207,32 +1255,53 @@ class _ProtocolHandler(object):
             body = decompressor(body)
             flags ^= COMPRESSED_FLAG
 
-        body = io.BytesIO(body)
-        if flags & TRACING_FLAG:
-            trace_id = UUID(bytes=body.read(16))
-            flags ^= TRACING_FLAG
-        else:
-            trace_id = None
+        # Use lightweight BytesReader instead of io.BytesIO to avoid buffer copy.
+        #
+        # Unlike io.BytesIO, BytesReader.read(n) raises EOFError (rather than
+        # silently returning a short read) when the body is truncated. EOFError
+        # is not part of the driver's public decode-error vocabulary, so it is
+        # caught here -- at the decode_message() API boundary -- and translated
+        # into the canonical ProtocolError, the same exception type already
+        # used for other malformed-frame conditions (see _read_frame_header in
+        # connection.py). This keeps BytesReader itself generic/reusable while
+        # ensuring callers of this public entry point only ever see driver
+        # exception types for decode failures.
+        body = BytesReader(body)
+        try:
+            if flags & TRACING_FLAG:
+                trace_id = UUID(bytes=body.read(16))
+                flags ^= TRACING_FLAG
+            else:
+                trace_id = None
 
-        if flags & WARNING_FLAG:
-            warnings = read_stringlist(body)
-            flags ^= WARNING_FLAG
-        else:
-            warnings = None
+            if flags & WARNING_FLAG:
+                warnings = read_stringlist(body)
+                flags ^= WARNING_FLAG
+            else:
+                warnings = None
 
-        if flags & CUSTOM_PAYLOAD_FLAG:
-            custom_payload = read_bytesmap(body)
-            flags ^= CUSTOM_PAYLOAD_FLAG
-        else:
-            custom_payload = None
+            if flags & CUSTOM_PAYLOAD_FLAG:
+                custom_payload = read_bytesmap(body)
+                flags ^= CUSTOM_PAYLOAD_FLAG
+            else:
+                custom_payload = None
 
-        flags &= USE_BETA_MASK  # will only be set if we asserted it in connection estabishment
+            flags &= USE_BETA_MASK  # will only be set if we asserted it in connection estabishment
 
-        if flags:
-            log.warning("Unknown protocol flags set: %02x. May cause problems.", flags)
+            if flags:
+                log.warning("Unknown protocol flags set: %02x. May cause problems.", flags)
 
-        msg_class = cls.message_types_by_opcode[opcode]
-        msg = msg_class.recv_body(body, protocol_version, protocol_features, user_type_map, result_metadata, cls.column_encryption_policy)
+            msg_class = cls.message_types_by_opcode[opcode]
+            msg = msg_class.recv_body(body, protocol_version, protocol_features, user_type_map, result_metadata, cls.column_encryption_policy)
+        except EOFError as exc:
+            # Local import to avoid a circular import at module load time:
+            # cassandra.connection imports from cassandra.protocol, so
+            # cassandra.protocol cannot import cassandra.connection at
+            # module scope.
+            from cassandra.connection import ProtocolError
+            raise ProtocolError(
+                "Ran out of data decoding %r message body (opcode %r): %s" %
+                (cls.message_types_by_opcode.get(opcode, opcode), opcode, exc)) from exc
         msg.stream_id = stream_id
         msg.trace_id = trace_id
         msg.custom_payload = custom_payload
