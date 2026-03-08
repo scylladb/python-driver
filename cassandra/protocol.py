@@ -53,6 +53,43 @@ class NotSupportedError(Exception):
 class InternalError(Exception):
     pass
 
+
+class BytesReader:
+    """
+    Lightweight reader for bytes data without BytesIO overhead.
+    Provides the same read() interface but operates directly on a
+    bytes object, avoiding internal buffer copies.
+
+    Unlike io.BytesIO.read(n), read(n) raises EOFError when fewer than
+    n bytes remain.  This is intentional: protocol parsing should fail
+    fast on truncated or malformed frames rather than silently returning
+    short data.
+    """
+    __slots__ = ('_data', '_pos', '_size')
+
+    def __init__(self, data):
+        # Materialize memoryview up front so read() never needs to check
+        self._data = bytes(data) if isinstance(data, memoryview) else data
+        self._pos = 0
+        self._size = len(self._data)
+
+    def read(self, n=-1):
+        if n < 0:
+            result = self._data[self._pos:]
+            self._pos = self._size
+        else:
+            end = self._pos + n
+            if end > self._size:
+                raise EOFError("Cannot read past the end of the buffer")
+            result = self._data[self._pos:end]
+            self._pos = end
+        return result
+
+    def remaining_buffer(self):
+        """Return (underlying_bytes, current_position) for zero-copy handoff."""
+        return self._data, self._pos
+
+
 ColumnMetadata = namedtuple("ColumnMetadata", ['keyspace_name', 'table_name', 'name', 'type'])
 
 HEADER_DIRECTION_TO_CLIENT = 0x80
@@ -1154,7 +1191,8 @@ class _ProtocolHandler(object):
             body = decompressor(body)
             flags ^= COMPRESSED_FLAG
 
-        body = io.BytesIO(body)
+        # Use lightweight BytesReader instead of io.BytesIO to avoid buffer copy
+        body = BytesReader(body)
         if flags & TRACING_FLAG:
             trace_id = UUID(bytes=body.read(16))
             flags ^= TRACING_FLAG
