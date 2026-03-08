@@ -876,6 +876,17 @@ class Cluster(object):
     To try with your own workload, set ``sockopts = [(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)]``
     """
 
+    in_buffer_size = None
+    """
+    An optional override (in bytes) for the per-connection socket receive
+    buffer size (see :attr:`.Connection.in_buffer_size`, which defaults to
+    16 KiB). A larger value reduces the number of ``recv()`` calls needed to
+    read large result sets, at the cost of additional steady-state memory
+    per connection -- a cost that is multiplied by the number of connections
+    in the pool, so it may matter at scale. Leave unset to use the
+    connection class's default.
+    """
+
     max_schema_agreement_wait = 10
     """
     The maximum duration (in seconds) that the driver will wait for schema
@@ -1190,6 +1201,7 @@ class Cluster(object):
                  connection_class=None,
                  ssl_options=None,
                  sockopts=None,
+                 in_buffer_size=None,
                  cql_version=None,
                  protocol_version=_NOT_SET,
                  executor_threads=2,
@@ -1469,6 +1481,7 @@ class Cluster(object):
         self.ssl_options = ssl_options
         self.ssl_context = ssl_context
         self.sockopts = sockopts
+        self.in_buffer_size = in_buffer_size
         self.cql_version = cql_version
         self.max_schema_agreement_wait = max_schema_agreement_wait
         self.control_connection_timeout = control_connection_timeout
@@ -1689,6 +1702,7 @@ class Cluster(object):
         kwargs_dict.setdefault('port', self.port)
         kwargs_dict.setdefault('compression', self.compression)
         kwargs_dict.setdefault('sockopts', self.sockopts)
+        kwargs_dict.setdefault('in_buffer_size', self.in_buffer_size)
         kwargs_dict.setdefault('ssl_options', self.ssl_options)
         kwargs_dict.setdefault('ssl_context', self.ssl_context)
         kwargs_dict.setdefault('cql_version', self.cql_version)
