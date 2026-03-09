@@ -63,7 +63,7 @@ cdef class TupleRowParser(RowParser):
 
         (obj1, ..., objN)
     If CE (Column encryption) policy is enabled - use unpack_col_encrypted_row(),
-    otherwsise use unpack_plain_row()
+    otherwise use unpack_plain_row()
     """
 
     @cython.boundscheck(False)

@@ -741,19 +741,24 @@ class ResultMessage(_MessageType):
         try:
             self.parsed_rows = [decode_row(row) for row in rows]
         except Exception:
-            if not column_encryption_policy:
-                col_descs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata]
-            for row in rows:
-                for val, col_md, col_desc in zip(row, column_metadata, col_descs):
-                    try:
-                        if column_encryption_policy:
+            if column_encryption_policy:
+                for row in rows:
+                    for val, col_md, col_desc in zip(row, column_metadata, col_descs):
+                        try:
                             decode_val(val, col_md, col_desc)
-                        else:
+                        except Exception as e:
+                            raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
+                                                                                                         col_md[3].cql_parameterized_type(),
+                                                                                                         str(e)))
+            else:
+                for row in rows:
+                    for val, col_md in zip(row, column_metadata):
+                        try:
                             col_md[3].from_binary(val, protocol_version)
-                    except Exception as e:
-                        raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
-                                                                                                     col_md[3].cql_parameterized_type(),
-                                                                                                     str(e)))
+                        except Exception as e:
+                            raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
+                                                                                                         col_md[3].cql_parameterized_type(),
+                                                                                                         str(e)))
 
     def recv_results_prepared(self, f, protocol_version, protocol_features, user_type_map):
         self.query_id = read_binary_string(f)
