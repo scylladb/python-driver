@@ -22,6 +22,7 @@ from cassandra.parsing cimport ParseDesc, ColumnParser, RowParser
 from cassandra.tuple cimport tuple_new, tuple_set
 
 from cpython.bytes cimport PyBytes_AsStringAndSize
+cimport cython
 
 
 cdef class ListParser(ColumnParser):
@@ -65,9 +66,9 @@ cdef class TupleRowParser(RowParser):
     otherwsise use unpack_plain_row()
     """
 
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
     cpdef unpack_col_encrypted_row(self, BytesIOReader reader, ParseDesc desc):
-        assert desc.rowsize >= 0
-
         cdef Buffer buf
         cdef Buffer newbuf
         cdef Py_ssize_t i, rowsize = desc.rowsize
@@ -101,6 +102,8 @@ cdef class TupleRowParser(RowParser):
 
         return res
 
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
     cpdef unpack_plain_row(self, BytesIOReader reader, ParseDesc desc):
         cdef Buffer buf
         cdef Py_ssize_t i, rowsize = desc.rowsize
