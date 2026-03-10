@@ -29,7 +29,7 @@ from functools import partial, reduce, wraps
 from itertools import groupby, count, chain
 import json
 import logging
-from typing import Optional, Union
+from typing import Any, Dict, Optional, Union
 from warnings import warn
 from random import random
 import re
@@ -48,7 +48,8 @@ from cassandra import (ConsistencyLevel, AuthenticationFailed, InvalidRequest,
                        SchemaTargetType, DriverException, ProtocolVersion,
                        UnresolvableContactPoints, DependencyException)
 from cassandra.auth import _proxy_execute_key, PlainTextAuthProvider
-from cassandra.connection import (ConnectionException, ConnectionShutdown,
+from cassandra.client_routes import ClientRoutesChangeType, ClientRoutesConfig, _ClientRoutesHandler
+from cassandra.connection import (ClientRoutesEndPointFactory, ConnectionException, ConnectionShutdown,
                                   ConnectionHeartbeat, ProtocolVersionUnsupported,
                                   EndPoint, DefaultEndPoint, DefaultEndPointFactory,
                                   SniEndPointFactory, ConnectionBusy, locally_supported_compressions)
@@ -1215,7 +1216,8 @@ class Cluster(object):
                  shard_aware_options=None,
                  metadata_request_timeout: Optional[float] = None,
                  column_encryption_policy=None,
-                 application_info:Optional[ApplicationInfoBase]=None
+                 application_info:Optional[ApplicationInfoBase]=None,
+                 client_routes_config:Optional[ClientRoutesConfig]=None
                  ):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
@@ -1280,6 +1282,45 @@ class Cluster(object):
         if column_encryption_policy is not None:
             self.column_encryption_policy = column_encryption_policy
 
+        if client_routes_config is not None and endpoint_factory is not None:
+            raise ValueError("client_routes_config and endpoint_factory are mutually exclusive")
+
+        self._client_routes_handler = None
+        if client_routes_config is not None:
+            if not isinstance(client_routes_config, ClientRoutesConfig):
+                raise TypeError("client_routes_config must be a ClientRoutesConfig instance")
+
+            # SSL hostname verification is incompatible with client routes:
+            # connections go through NLB proxies whose addresses won't match
+            # server certificates.
+            _check_hostname_enabled = False
+            if ssl_context is not None and ssl_context.check_hostname:
+                _check_hostname_enabled = True
+            if ssl_options is not None and ssl_options.get('check_hostname', False):
+                _check_hostname_enabled = True
+            if _check_hostname_enabled:
+                raise ValueError(
+                    "SSL hostname verification (check_hostname=True) is incompatible "
+                    "with client_routes_config. When using client routes, connections "
+                    "go through NLB proxies whose addresses won't match server "
+                    "certificates. Disable hostname verification by setting "
+                    "ssl_context.check_hostname = False."
+                )
+
+            ssl_enabled = ssl_context is not None or ssl_options is not None
+            self._client_routes_handler = _ClientRoutesHandler(client_routes_config, ssl_enabled=ssl_enabled)
+
+            if contact_points is _NOT_SET or not self._contact_points_explicit:
+                seed_addrs = [dep.connection_addr for dep in client_routes_config.proxies
+                             if dep.connection_addr]
+                if seed_addrs:
+                    self.contact_points = seed_addrs
+                    self._contact_points_explicit = True
+                    log.info("[client routes] Using %d deployment connection addresses as contact points",
+                            len(seed_addrs))
+
+        if self._client_routes_handler is not None:
+            endpoint_factory = ClientRoutesEndPointFactory(self._client_routes_handler, self.port)
         self.endpoint_factory = endpoint_factory or DefaultEndPointFactory(port=self.port)
         self.endpoint_factory.configure(self)
 
@@ -1714,6 +1755,13 @@ class Cluster(object):
                 try:
                     self.control_connection.connect()
                     self._populate_hosts()
+
+                    if self._client_routes_handler is not None:
+                        try:
+                            self._client_routes_handler.initialize(self.control_connection)
+                        except Exception as e:
+                            log.error("[control connection] Failed to initialize client routes handler: %s", e, exc_info=True)
+                            raise
 
                     log.debug("Control connection created")
                 except Exception:
@@ -3612,11 +3660,16 @@ class ControlConnection(object):
         # this object (after a dereferencing a weakref)
         self_weakref = weakref.ref(self, partial(_clear_watcher, weakref.proxy(connection)))
         try:
-            connection.register_watchers({
+            watchers = {
                 "TOPOLOGY_CHANGE": partial(_watch_callback, self_weakref, '_handle_topology_change'),
                 "STATUS_CHANGE": partial(_watch_callback, self_weakref, '_handle_status_change'),
                 "SCHEMA_CHANGE": partial(_watch_callback, self_weakref, '_handle_schema_change')
-            }, register_timeout=self._timeout)
+            }
+
+            if self._cluster._client_routes_handler is not None:
+                watchers["CLIENT_ROUTES_CHANGE"] = partial(_watch_callback, self_weakref, '_handle_client_routes_change')
+
+            connection.register_watchers(watchers, register_timeout=self._timeout)
 
             sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
             sel_local = self._SELECT_LOCAL if self._token_meta_enabled else self._SELECT_LOCAL_NO_TOKENS
@@ -3658,6 +3711,12 @@ class ControlConnection(object):
         log.debug("[control connection] Attempting to reconnect")
         try:
             self._set_new_connection(self._reconnect_internal())
+
+            if self._cluster._client_routes_handler is not None:
+                try:
+                    self._cluster._client_routes_handler.handle_control_connection_reconnect(self)
+                except Exception as e:
+                    log.warning("[control connection] Failed to notify client routes handler of reconnection: %s", e)
         except NoHostAvailable:
             # make a retry schedule (which includes backoff)
             schedule = self._cluster.reconnection_policy.new_schedule()
@@ -3978,6 +4037,34 @@ class ControlConnection(object):
             if host is not None:
                 # this will be run by the scheduler
                 self._cluster.on_down(host, is_host_addition=False)
+
+    def _handle_client_routes_change(self, event: Dict[str, Any]) -> None:
+        """
+        Handle CLIENT_ROUTES_CHANGE event from the server.
+
+        This event indicates that the system.client_routes table has been updated
+        and we need to refresh our route mappings.
+        """
+        if self._cluster._client_routes_handler is None:
+            log.warning("[control connection] Received CLIENT_ROUTES_CHANGE but no handler configured")
+            return
+
+        raw_change_type = event.get("change_type")
+        try:
+            change_type = ClientRoutesChangeType(raw_change_type)
+        except ValueError:
+            log.warning("[control connection] Unknown CLIENT_ROUTES_CHANGE type: %s", raw_change_type)
+            return
+
+        connection_ids = tuple(event.get("connection_ids", []))
+        host_ids = tuple(event.get("host_ids", []))
+
+        # Handle the event asynchronously
+        self._cluster.scheduler.schedule_unique(
+            0,
+            self._cluster._client_routes_handler.handle_client_routes_change,
+            self, change_type, connection_ids, host_ids
+        )
 
     def _handle_schema_change(self, event):
         if self._schema_event_refresh_window < 0:
