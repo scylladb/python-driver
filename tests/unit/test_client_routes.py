@@ -89,7 +89,7 @@ class TestRouteStore(unittest.TestCase):
         )
 
         routes.update([route1])
-        routes.merge([route2])
+        routes.merge([route2], affected_host_ids={host_id2})
 
         self.assertIsNotNone(routes.get_by_host_id(host_id1))
         self.assertIsNotNone(routes.get_by_host_id(host_id2))
