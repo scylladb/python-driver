@@ -611,9 +611,10 @@ class QueryMessage(_QueryMessage):
     name = 'QUERY'
 
     def __init__(self, query, consistency_level, serial_consistency_level=None,
-                 fetch_size=None, paging_state=None, timestamp=None, continuous_paging_options=None, keyspace=None):
+                 fetch_size=None, paging_state=None, timestamp=None, continuous_paging_options=None, keyspace=None,
+                 query_params=None):
         self.query = query
-        super(QueryMessage, self).__init__(None, consistency_level, serial_consistency_level, fetch_size,
+        super(QueryMessage, self).__init__(query_params, consistency_level, serial_consistency_level, fetch_size,
                                            paging_state, timestamp, False, continuous_paging_options, keyspace)
 
     def send_body(self, f, protocol_version):
