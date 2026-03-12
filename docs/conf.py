@@ -51,7 +51,7 @@ extensions = [
     'sphinx_sitemap',
     'sphinx_scylladb_theme',
     'sphinx_multiversion',  # optional
-    'recommonmark',  # optional
+    'myst_parser',  # optional
 ]
 
 # Add any paths that contain templates here, relative to this directory.
