@@ -440,12 +440,15 @@ cdef class GenericDeserializer(Deserializer):
 #--------------------------------------------------------------------------
 # Helper utilities
 
-# Cache make_deserializers results keyed on the tuple of cqltype ids.
+# Cache make_deserializers results keyed on the tuple of cqltype objects.
+# Using the cqltype objects themselves (rather than id()) as keys ensures
+# the dict holds strong references, preventing GC and id() reuse issues
+# with non-singleton parameterized types.
 cdef dict _make_deserializers_cache = {}
 
 def make_deserializers(cqltypes):
     """Create an array of Deserializers for each given cqltype in cqltypes"""
-    cdef tuple key = tuple(id(ct) for ct in cqltypes)
+    cdef tuple key = tuple(cqltypes)
     try:
         return _make_deserializers_cache[key]
     except KeyError:
@@ -457,15 +460,16 @@ def make_deserializers(cqltypes):
 
 cdef dict classes = globals()
 
-# Cache deserializer instances keyed on cqltype identity to avoid repeated
-# class lookups and object creation on every result set.
+# Cache deserializer instances keyed on the cqltype object itself to avoid
+# repeated class lookups and object creation on every result set.
+# Using the object as key (rather than id()) holds a strong reference,
+# preventing GC and id() reuse issues with parameterized types.
 cdef dict _deserializer_cache = {}
 
 cpdef Deserializer find_deserializer(cqltype):
     """Find a deserializer for a cqltype"""
-    cdef Py_ssize_t key = id(cqltype)
     try:
-        return <Deserializer>_deserializer_cache[key]
+        return <Deserializer>_deserializer_cache[cqltype]
     except KeyError:
         pass
 
@@ -497,7 +501,7 @@ cpdef Deserializer find_deserializer(cqltype):
         cls = GenericDeserializer
 
     cdef Deserializer result = cls(cqltype)
-    _deserializer_cache[key] = result
+    _deserializer_cache[cqltype] = result
     return result
 
 
