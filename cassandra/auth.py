@@ -21,16 +21,7 @@ try:
 except ImportError:
     _have_kerberos = False
 
-try:
-    from puresasl.client import SASLClient
-    _have_puresasl = True
-except ImportError:
-    _have_puresasl = False
-
-try:
-    from puresasl.client import SASLClient
-except ImportError:
-    SASLClient = None
+from cassandra.sasl import SASLClient
 
 log = logging.getLogger(__name__)
 
@@ -184,8 +175,6 @@ class SaslAuthProvider(AuthProvider):
     """
 
     def __init__(self, **sasl_kwargs):
-        if SASLClient is None:
-            raise ImportError('The puresasl library has not been installed')
         if 'host' in sasl_kwargs:
             raise ValueError("kwargs should not contain 'host' since it is passed dynamically to new_authenticator")
         self.sasl_kwargs = sasl_kwargs
@@ -196,15 +185,12 @@ class SaslAuthProvider(AuthProvider):
 
 class SaslAuthenticator(Authenticator):
     """
-    A pass-through :class:`~.Authenticator` using the third party package
-    'pure-sasl' for authentication
+    A :class:`~.Authenticator` using SASL for authentication
 
     .. versionadded:: 2.1.4
     """
 
     def __init__(self, host, service, mechanism='GSSAPI', **sasl_kwargs):
-        if SASLClient is None:
-            raise ImportError('The puresasl library has not been installed')
         self.sasl = SASLClient(host, service, mechanism, **sasl_kwargs)
 
     def initial_response(self):
@@ -225,15 +211,13 @@ class DSEGSSAPIAuthProvider(AuthProvider):
     def __init__(self, service='dse', qops=('auth',), resolve_host_name=True, **properties):
         """
         :param service: name of the service
-        :param qops: iterable of "Quality of Protection" allowed; see ``puresasl.QOP``
+        :param qops: iterable of "Quality of Protection" allowed; see ``cassandra.sasl.QOP``
         :param resolve_host_name: boolean flag indicating whether the authenticator should reverse-lookup an FQDN when
             creating a new authenticator. Default is ``True``, which will resolve, or return the numeric address if there is no PTR
             record. Setting ``False`` creates the authenticator with the numeric address known by Cassandra
-        :param properties: additional keyword properties to pass for the ``puresasl.mechanisms.GSSAPIMechanism`` class.
-            Presently, 'principal' (user) is the only one referenced in the ``pure-sasl`` implementation
+        :param properties: additional keyword properties to pass for the GSSAPI mechanism.
+            Presently, 'principal' (user) is the only one referenced in the implementation
         """
-        if not _have_puresasl:
-            raise ImportError('The puresasl library has not been installed')
         if not _have_kerberos:
             raise ImportError('The kerberos library has not been installed')
         self.service = service
