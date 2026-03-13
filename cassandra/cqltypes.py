@@ -33,6 +33,7 @@ from binascii import unhexlify
 import calendar
 from collections import namedtuple
 from decimal import Decimal
+import functools
 import io
 from itertools import chain
 import logging
@@ -56,7 +57,6 @@ import ipaddress
 
 apache_cassandra_type_prefix = 'org.apache.cassandra.db.marshal.'
 
-cassandra_empty_type = 'org.apache.cassandra.db.marshal.EmptyType'
 cql_empty_type = 'empty'
 
 log = logging.getLogger(__name__)
@@ -185,6 +185,7 @@ def strip_frozen(cql):
     return cql
 
 
+@functools.lru_cache(maxsize=256)
 def lookup_casstype_simple(casstype):
     """
     Given a Cassandra type name (either fully distinguished or not), hand
@@ -203,6 +204,7 @@ def lookup_casstype_simple(casstype):
     return typeclass
 
 
+@functools.lru_cache(maxsize=256)
 def parse_casstype_args(typestring):
     tokens, remainder = casstype_scanner.scan(typestring)
     if remainder:
@@ -215,7 +217,7 @@ def parse_casstype_args(typestring):
             args.append(([], []))
         elif tok == ')':
             types, names = args.pop()
-            prev_types, prev_names = args[-1]
+            prev_types, _ = args[-1]
             prev_types[-1] = prev_types[-1].apply_parameters(types, names)
         else:
             types, names = args[-1]
@@ -235,6 +237,7 @@ def parse_casstype_args(typestring):
     # return the first (outer) type, which will have all parameters applied
     return args[0][0][0]
 
+
 def lookup_casstype(casstype):
     """
     Given a Cassandra type as a string (possibly including parameters), hand
@@ -247,12 +250,17 @@ def lookup_casstype(casstype):
         <class 'cassandra.cqltypes.MapType(UTF8Type, Int32Type)'>
 
     """
+    # Fast path: already a type object
     if isinstance(casstype, (CassandraType, CassandraTypeType)):
         return casstype
-    try:
-        return parse_casstype_args(casstype)
-    except (ValueError, AssertionError, IndexError) as e:
-        raise ValueError("Don't know how to parse type string %r: %s" % (casstype, e))
+
+    # Fast path: simple type without parameters (no parentheses)
+    # This avoids regex scanning for the most common case
+    if '(' not in casstype:
+        return lookup_casstype_simple(casstype)
+
+    # Complex type with parameters: use cached parser
+    return parse_casstype_args(casstype)
 
 
 def is_reversed_casstype(data_type):
