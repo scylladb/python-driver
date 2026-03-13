@@ -14,6 +14,7 @@
 
 
 from libc.stdint cimport int32_t, uint16_t
+from cpython.unicode cimport PyUnicode_DecodeASCII, PyUnicode_DecodeUTF8
 
 include 'cython_marshal.pyx'
 from cassandra.buffer cimport Buffer, to_bytes, slice_buffer
@@ -88,7 +89,14 @@ cdef class DesAsciiType(Deserializer):
     cdef deserialize(self, Buffer *buf, int protocol_version):
         if buf.size == 0:
             return ""
-        return to_bytes(buf).decode('ascii')
+        # buf.size is the exact valid length backing buf.ptr (see
+        # cassandra.buffer.to_bytes, which slices buf.ptr[:buf.size] the
+        # same way), so this cannot read out of bounds. errors=NULL selects
+        # strict decoding: on malformed input CPython sets a UnicodeDecodeError
+        # and returns NULL here, which Cython detects (this function returns
+        # a Python object) and propagates as an exception -- identical to
+        # the previous to_bytes(buf).decode('ascii') behavior.
+        return PyUnicode_DecodeASCII(buf.ptr, buf.size, NULL)
 
 
 cdef class DesFloatType(Deserializer):
@@ -173,8 +181,11 @@ cdef class DesUTF8Type(Deserializer):
     cdef deserialize(self, Buffer *buf, int protocol_version):
         if buf.size == 0:
             return ""
-        cdef val = to_bytes(buf)
-        return val.decode('utf8')
+        # See DesAsciiType.deserialize above: buf.size always matches the
+        # valid extent of buf.ptr, and errors=NULL (strict) makes malformed
+        # UTF-8 from the server raise UnicodeDecodeError, exactly as
+        # to_bytes(buf).decode('utf8') did before.
+        return PyUnicode_DecodeUTF8(buf.ptr, buf.size, NULL)
 
 
 cdef class DesVarcharType(DesUTF8Type):
