@@ -19,6 +19,45 @@ from cassandra.deserializers import make_deserializers
 
 include "ioutils.pyx"
 
+# Cache for ParseDesc objects keyed by id(column_metadata).
+# For prepared statements, result_metadata is stored on PreparedStatement
+# and reused across executions, so id() is stable.
+# Cache value: (column_metadata_ref, column_encryption_policy_ref,
+#               protocol_version, desc, column_names, column_types)
+cdef dict _parse_desc_cache = {}
+
+cdef inline object _get_or_build_parse_desc(object column_metadata, object column_encryption_policy, int protocol_version):
+    """Look up or build a ParseDesc for the given column_metadata."""
+    cdef object cache_key = id(column_metadata)
+    cdef tuple cached = <tuple>_parse_desc_cache.get(cache_key)
+
+    if cached is not None:
+        # Verify identity — the object at this id must be the same list
+        # and session-level settings must match
+        if (cached[0] is column_metadata and
+            cached[1] is column_encryption_policy and
+            cached[2] == protocol_version):
+            return cached  # hit
+
+    # Cache miss — build everything
+    cdef list column_names = [md[2] for md in column_metadata]
+    cdef list column_types = [md[3] for md in column_metadata]
+    cdef object desc = ParseDesc(
+        column_names, column_types, column_encryption_policy,
+        [ColDesc(md[0], md[1], md[2]) for md in column_metadata],
+        make_deserializers(column_types), protocol_version)
+
+    cached = (column_metadata, column_encryption_policy, protocol_version,
+              desc, column_names, column_types)
+    _parse_desc_cache[cache_key] = cached
+    return cached
+
+
+def clear_parse_desc_cache():
+    """Clear the ParseDesc cache. Exposed for testing."""
+    _parse_desc_cache.clear()
+
+
 def make_recv_results_rows(ColumnParser colparser):
     def recv_results_rows(self, f, int protocol_version, user_type_map, result_metadata, column_encryption_policy):
         """
@@ -29,12 +68,11 @@ def make_recv_results_rows(ColumnParser colparser):
 
         column_metadata = self.column_metadata or result_metadata
 
-        self.column_names = [md[2] for md in column_metadata]
-        self.column_types = [md[3] for md in column_metadata]
+        cached = _get_or_build_parse_desc(column_metadata, column_encryption_policy, protocol_version)
+        self.column_names = cached[4]
+        self.column_types = cached[5]
+        desc = cached[3]
 
-        desc = ParseDesc(self.column_names, self.column_types, column_encryption_policy,
-                        [ColDesc(md[0], md[1], md[2]) for md in column_metadata],
-                        make_deserializers(self.column_types), protocol_version)
         reader = BytesIOReader(f.read())
         try:
             self.parsed_rows = colparser.parse_rows(reader, desc)
