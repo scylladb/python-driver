@@ -1647,31 +1647,18 @@ def escape_name(name):
 class ColumnMetadata(object):
     """
     A representation of a single column in a table.
+
+    Attributes:
+        table: The :class:`.TableMetadata` this column belongs to.
+        name: The string name of this column.
+        cql_type: The CQL type for the column.
+        is_static: If this column is static (available in Cassandra 2.1+), this
+    will be :const:`True`, otherwise :const:`False`.
+        is_reversed: If this column is reversed (DESC) as in clustering order.
+        _cass_type: Internal cache for the cassandra type.
     """
 
-    table = None
-    """ The :class:`.TableMetadata` this column belongs to. """
-
-    name = None
-    """ The string name of this column. """
-
-    cql_type = None
-    """
-    The CQL type for the column.
-    """
-
-    is_static = False
-    """
-    If this column is static (available in Cassandra 2.1+), this will
-    be :const:`True`, otherwise :const:`False`.
-    """
-
-    is_reversed = False
-    """
-    If this column is reversed (DESC) as in clustering order
-    """
-
-    _cass_type = None
+    __slots__ = ('table', 'name', 'cql_type', 'is_static', 'is_reversed', '_cass_type')
 
     def __init__(self, table_metadata, column_name, cql_type, is_static=False, is_reversed=False):
         self.table = table_metadata
@@ -1679,6 +1666,7 @@ class ColumnMetadata(object):
         self.cql_type = cql_type
         self.is_static = is_static
         self.is_reversed = is_reversed
+        self._cass_type = None
 
     def __str__(self):
         return "%s %s" % (self.name, self.cql_type)
@@ -1687,21 +1675,16 @@ class ColumnMetadata(object):
 class IndexMetadata(object):
     """
     A representation of a secondary index on a column.
+
+    Attributes:
+        keyspace_name: A string name of the keyspace.
+        table_name: A string name of the table this index is on.
+        name: A string name for the index.
+        kind: A string representing the kind of index (COMPOSITE, CUSTOM, ...).
+        index_options: A dict of index options.
     """
-    keyspace_name = None
-    """ A string name of the keyspace. """
 
-    table_name = None
-    """ A string name of the table this index is on. """
-
-    name = None
-    """ A string name for the index. """
-
-    kind = None
-    """ A string representing the kind of index (COMPOSITE, CUSTOM,...). """
-
-    index_options = {}
-    """ A dict of index options. """
+    __slots__ = ('keyspace_name', 'table_name', 'name', 'kind', 'index_options')
 
     def __init__(self, keyspace_name, table_name, index_name, kind, index_options):
         self.keyspace_name = keyspace_name
@@ -1746,30 +1729,18 @@ class IndexMetadata(object):
 class TokenMap(object):
     """
     Information about the layout of the ring.
+
+    Attributes:
+        token_class: A subclass of :class:`.Token`, depending on what partitioner the cluster uses.
+        token_to_host_owner: A map of :class:`.Token` objects to the :class:`.Host` that owns that token.
+        tokens_to_hosts_by_ks: A map of keyspace names to a nested map of :class:`.Token` objects to sets of :class:`.Host` objects.
+        ring: An ordered list of :class:`.Token` instances in the ring.
+        _metadata: Metadata reference for internal use.
+        _rebuild_lock: Lock for thread-safe operations.
     """
 
-    token_class = None
-    """
-    A subclass of :class:`.Token`, depending on what partitioner the cluster uses.
-    """
-
-    token_to_host_owner = None
-    """
-    A map of :class:`.Token` objects to the :class:`.Host` that owns that token.
-    """
-
-    tokens_to_hosts_by_ks = None
-    """
-    A map of keyspace names to a nested map of :class:`.Token` objects to
-    sets of :class:`.Host` objects.
-    """
-
-    ring = None
-    """
-    An ordered list of :class:`.Token` instances in the ring.
-    """
-
-    _metadata = None
+    __slots__ = ('token_class', 'token_to_host_owner', 'tokens_to_hosts_by_ks',
+                 'ring', '_metadata', '_rebuild_lock')
 
     def __init__(self, token_class, token_to_host_owner, all_tokens, metadata):
         self.token_class = token_class
@@ -1832,6 +1803,8 @@ class Token(object):
     Abstract class representing a token.
     """
 
+    __slots__ = ('value',)
+
     def __init__(self, token):
         self.value = token
 
@@ -1871,6 +1844,8 @@ class NoMurmur3(Exception):
 
 class HashToken(Token):
 
+    __slots__ = ()
+
     @classmethod
     def from_string(cls, token_string):
         """ `token_string` should be the string representation from the server. """
@@ -1882,6 +1857,8 @@ class Murmur3Token(HashToken):
     """
     A token for ``Murmur3Partitioner``.
     """
+
+    __slots__ = ()
 
     @classmethod
     def hash_fn(cls, key):
@@ -1901,6 +1878,8 @@ class MD5Token(HashToken):
     A token for ``RandomPartitioner``.
     """
 
+    __slots__ = ()
+
     @classmethod
     def hash_fn(cls, key):
         if isinstance(key, str):
@@ -1912,6 +1891,8 @@ class BytesToken(Token):
     """
     A token for ``ByteOrderedPartitioner``.
     """
+
+    __slots__ = ()
 
     @classmethod
     def from_string(cls, token_string):

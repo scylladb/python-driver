@@ -4319,10 +4319,8 @@ class ResponseFuture(object):
     session = None
     row_factory = None
     message = None
-    default_timeout = None
 
     _retry_policy = None
-    _profile_manager = None
 
     _req_id = None
     _final_result = _NOT_SET
@@ -4346,8 +4344,6 @@ class ResponseFuture(object):
     _continuous_paging_session = None
     _host = None
     _TABLET_ROUTING_CTYPE = None
-
-    _warned_timeout = False
 
     def __init__(self, session, message, query, timeout, metrics=None, prepared_statement=None,
                  retry_policy=RetryPolicy(), row_factory=None, load_balancer=None, start_time=None,
