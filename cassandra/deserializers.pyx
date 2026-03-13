@@ -440,16 +440,35 @@ cdef class GenericDeserializer(Deserializer):
 #--------------------------------------------------------------------------
 # Helper utilities
 
+# Cache make_deserializers results keyed on the tuple of cqltype ids.
+cdef dict _make_deserializers_cache = {}
+
 def make_deserializers(cqltypes):
     """Create an array of Deserializers for each given cqltype in cqltypes"""
-    cdef Deserializer[::1] deserializers
-    return obj_array([find_deserializer(ct) for ct in cqltypes])
+    cdef tuple key = tuple(id(ct) for ct in cqltypes)
+    try:
+        return _make_deserializers_cache[key]
+    except KeyError:
+        pass
+    result = obj_array([find_deserializer(ct) for ct in cqltypes])
+    _make_deserializers_cache[key] = result
+    return result
 
 
 cdef dict classes = globals()
 
+# Cache deserializer instances keyed on cqltype identity to avoid repeated
+# class lookups and object creation on every result set.
+cdef dict _deserializer_cache = {}
+
 cpdef Deserializer find_deserializer(cqltype):
     """Find a deserializer for a cqltype"""
+    cdef Py_ssize_t key = id(cqltype)
+    try:
+        return <Deserializer>_deserializer_cache[key]
+    except KeyError:
+        pass
+
     name = 'Des' + cqltype.__name__
 
     if name in globals():
@@ -477,7 +496,9 @@ cpdef Deserializer find_deserializer(cqltype):
     else:
         cls = GenericDeserializer
 
-    return cls(cqltype)
+    cdef Deserializer result = cls(cqltype)
+    _deserializer_cache[key] = result
+    return result
 
 
 def obj_array(list objs):
