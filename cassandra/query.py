@@ -33,6 +33,12 @@ from cassandra.policies import ColDesc
 from cassandra.protocol import _UNSET_VALUE
 from cassandra.util import OrderedDict, _sanitize_identifiers
 
+try:
+    from cassandra.serializers import make_serializers as _cython_make_serializers
+    _HAVE_CYTHON_SERIALIZERS = True
+except ImportError:
+    _HAVE_CYTHON_SERIALIZERS = False
+
 import logging
 log = logging.getLogger(__name__)
 
@@ -474,6 +480,30 @@ class PreparedStatement(object):
         self.is_idempotent = False
         self._is_lwt = is_lwt
 
+    @property
+    def _serializers(self):
+        """Lazily create and cache Cython serializers for column types.
+
+        Returns a list of Serializer objects if Cython serializers are available
+        and there is no column encryption policy, otherwise returns None.
+
+        The column_encryption_policy check is performed on every access (not
+        cached) so that serializers are correctly bypassed if a policy is set
+        after construction.
+        """
+        if self.column_encryption_policy:
+            return None
+        try:
+            return self.__serializers
+        except AttributeError:
+            pass
+        if _HAVE_CYTHON_SERIALIZERS and self.column_metadata:
+            self.__serializers = _cython_make_serializers(
+                [col.type for col in self.column_metadata])
+        else:
+            self.__serializers = None
+        return self.__serializers
+
     @classmethod
     def from_message(cls, query_id, column_metadata, pk_indexes, cluster_metadata,
                      query, prepared_keyspace, protocol_version, result_metadata,
@@ -530,6 +560,14 @@ class PreparedStatement(object):
         return (u'<PreparedStatement query="%s", consistency=%s>' %
                 (self.query_string, consistency))
     __repr__ = __str__
+
+
+def _raise_bind_serialize_error(col_spec, value, exc):
+    """Wrap serialization errors with column context for all bind loop paths."""
+    actual_type = type(value)
+    message = ('Received an argument of invalid type for column "%s". '
+               'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
+    raise TypeError(message)
 
 
 class BoundStatement(Statement):
@@ -636,28 +674,65 @@ class BoundStatement(Statement):
 
         self.raw_values = values
         self.values = []
-        for value, col_spec in zip(values, col_meta):
-            if value is None:
-                self.values.append(None)
-            elif value is UNSET_VALUE:
-                if proto_version >= 4:
-                    self._append_unset_value()
+        if ce_policy:
+            # Column encryption path: check each column for CE policy
+            for value, col_spec in zip(values, col_meta):
+                if value is None:
+                    self.values.append(None)
+                elif value is UNSET_VALUE:
+                    if proto_version >= 4:
+                        self._append_unset_value()
+                    else:
+                        raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
                 else:
-                    raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
+                    try:
+                        col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
+                        uses_ce = ce_policy.contains_column(col_desc)
+                        if uses_ce:
+                            col_type = ce_policy.column_type(col_desc)
+                            col_bytes = col_type.serialize(value, proto_version)
+                            col_bytes = ce_policy.encrypt(col_desc, col_bytes)
+                        else:
+                            col_bytes = col_spec.type.serialize(value, proto_version)
+                        self.values.append(col_bytes)
+                    # OverflowError: Cython int32/float casts may raise on out-of-range values
+                    except (TypeError, struct.error, OverflowError) as exc:
+                        _raise_bind_serialize_error(col_spec, value, exc)
+        else:
+            # Fast path: no column encryption, use Cython serializers if available
+            serializers = self.prepared_statement._serializers
+            if serializers is not None:
+                for ser, value, col_spec in zip(serializers, values, col_meta):
+                    if value is None:
+                        self.values.append(None)
+                    elif value is UNSET_VALUE:
+                        if proto_version >= 4:
+                            self._append_unset_value()
+                        else:
+                            raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
+                    else:
+                        try:
+                            col_bytes = ser.serialize(value, proto_version)
+                            self.values.append(col_bytes)
+                        # OverflowError: Cython int32/float casts may raise on out-of-range values
+                        except (TypeError, struct.error, OverflowError) as exc:
+                            _raise_bind_serialize_error(col_spec, value, exc)
             else:
-                try:
-                    col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
-                    uses_ce = ce_policy and ce_policy.contains_column(col_desc)
-                    col_type = ce_policy.column_type(col_desc) if uses_ce else col_spec.type
-                    col_bytes = col_type.serialize(value, proto_version)
-                    if uses_ce:
-                        col_bytes = ce_policy.encrypt(col_desc, col_bytes)
-                    self.values.append(col_bytes)
-                except (TypeError, struct.error) as exc:
-                    actual_type = type(value)
-                    message = ('Received an argument of invalid type for column "%s". '
-                               'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
-                    raise TypeError(message)
+                for value, col_spec in zip(values, col_meta):
+                    if value is None:
+                        self.values.append(None)
+                    elif value is UNSET_VALUE:
+                        if proto_version >= 4:
+                            self._append_unset_value()
+                        else:
+                            raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
+                    else:
+                        try:
+                            col_bytes = col_spec.type.serialize(value, proto_version)
+                            self.values.append(col_bytes)
+                        # OverflowError: Cython int32/float casts may raise on out-of-range values
+                        except (TypeError, struct.error, OverflowError) as exc:
+                            _raise_bind_serialize_error(col_spec, value, exc)
 
         if proto_version >= 4:
             diff = col_meta_len - len(self.values)

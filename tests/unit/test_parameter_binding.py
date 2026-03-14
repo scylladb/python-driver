@@ -216,3 +216,123 @@ class BoundStatementTestV4(BoundStatementTestV3):
 
 class BoundStatementTestV5(BoundStatementTestV4):
     protocol_version = 5
+
+
+class StubSerializer:
+    """Stub that mimics a Cython Serializer object for testing the fast path."""
+
+    def __init__(self, cqltype):
+        self.cqltype = cqltype
+
+    def serialize(self, value, protocol_version):
+        return self.cqltype.serialize(value, protocol_version)
+
+
+class OverflowSerializer:
+    """Stub that raises OverflowError, mimicking Cython <int32_t> cast overflow."""
+
+    def __init__(self, cqltype):
+        self.cqltype = cqltype
+
+    def serialize(self, value, protocol_version):
+        raise OverflowError('value too large to convert to int32_t')
+
+
+class CythonBindPathTest(unittest.TestCase):
+    """Tests for the Cython serializer fast path in BoundStatement.bind().
+
+    These tests inject stub serializers via the PreparedStatement's cached
+    __serializers attribute to exercise the Cython bind branch without
+    requiring compiled Cython.
+    """
+
+    protocol_version = 4
+
+    def _make_prepared(self, column_metadata, serializers=None):
+        """Create a PreparedStatement and inject serializers into its cache."""
+        prepared = PreparedStatement(column_metadata=column_metadata,
+                                     query_id=None,
+                                     routing_key_indexes=[],
+                                     query=None,
+                                     keyspace='keyspace',
+                                     protocol_version=self.protocol_version,
+                                     result_metadata=None,
+                                     result_metadata_id=None)
+        # Inject directly into the name-mangled cache attribute used by
+        # the _serializers property, bypassing the lazy initialization.
+        prepared._PreparedStatement__serializers = serializers
+        return prepared
+
+    def test_cython_path_normal_serialization(self):
+        """Cython fast path produces the same result as the plain Python path."""
+        column_metadata = [ColumnMetadata('keyspace', 'cf', 'c0', Int32Type),
+                           ColumnMetadata('keyspace', 'cf', 'c1', Int32Type)]
+        serializers = [StubSerializer(Int32Type), StubSerializer(Int32Type)]
+        prepared = self._make_prepared(column_metadata, serializers)
+
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((42, -1))
+        assert bound.values == [Int32Type.serialize(42, self.protocol_version),
+                                Int32Type.serialize(-1, self.protocol_version)]
+
+    def test_cython_path_none_value(self):
+        """None values pass through the Cython path without serialization."""
+        column_metadata = [ColumnMetadata('keyspace', 'cf', 'c0', Int32Type)]
+        serializers = [StubSerializer(Int32Type)]
+        prepared = self._make_prepared(column_metadata, serializers)
+
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((None,))
+        assert bound.values == [None]
+
+    def test_cython_path_unset_value(self):
+        """UNSET_VALUE is handled correctly in the Cython fast path (v4+)."""
+        column_metadata = [ColumnMetadata('keyspace', 'cf', 'c0', Int32Type),
+                           ColumnMetadata('keyspace', 'cf', 'c1', Int32Type)]
+        serializers = [StubSerializer(Int32Type), StubSerializer(Int32Type)]
+        prepared = self._make_prepared(column_metadata, serializers)
+
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((42, UNSET_VALUE))
+        assert bound.values[0] == Int32Type.serialize(42, self.protocol_version)
+        assert bound.values[1] == UNSET_VALUE
+
+    def test_cython_path_overflow_error_wrapped(self):
+        """OverflowError from Cython cast is caught and wrapped with column context."""
+        column_metadata = [ColumnMetadata('keyspace', 'cf', 'v0', Int32Type)]
+        serializers = [OverflowSerializer(Int32Type)]
+        prepared = self._make_prepared(column_metadata, serializers)
+
+        bound = BoundStatement(prepared_statement=prepared)
+        with pytest.raises(TypeError) as exc:
+            bound.bind((2**31,))
+        msg = str(exc.value)
+        assert 'v0' in msg
+        assert 'Int32Type' in msg
+        assert 'int' in msg
+
+    def test_cython_path_type_error_wrapped(self):
+        """TypeError from serializer is caught and wrapped with column context."""
+        column_metadata = [ColumnMetadata('keyspace', 'cf', 'v0', Int32Type)]
+        serializers = [StubSerializer(Int32Type)]
+        prepared = self._make_prepared(column_metadata, serializers)
+
+        bound = BoundStatement(prepared_statement=prepared)
+        with pytest.raises(TypeError) as exc:
+            bound.bind(('not_an_int',))
+        msg = str(exc.value)
+        assert 'v0' in msg
+        assert 'Int32Type' in msg
+
+    def test_plain_path_overflow_error_wrapped(self):
+        """OverflowError in the plain Python path is also caught and wrapped."""
+        column_metadata = [ColumnMetadata('keyspace', 'cf', 'v0', Int32Type)]
+        # Force the plain Python path (no Cython serializers)
+        prepared = self._make_prepared(column_metadata, serializers=None)
+
+        bound = BoundStatement(prepared_statement=prepared)
+        with pytest.raises(TypeError) as exc:
+            bound.bind((2**31,))
+        msg = str(exc.value)
+        assert 'v0' in msg
+        assert 'Int32Type' in msg
