@@ -130,7 +130,7 @@ def cqltype_to_python(cql_string):
         (r'<', lambda s, t: ', ['),
         (r'>', lambda s, t: ']'),
         (r'[, ]', lambda s, t: t),
-        (r'".*?"', lambda s, t: "'{}'".format(t)),
+        (r'".*?"', lambda s, t: "'{}'".format(t.replace('\\', '\\\\'))),
     ))
 
     scanned_tokens = scanner.scan(cql_string)[0]
