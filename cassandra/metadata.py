@@ -46,6 +46,46 @@ from cassandra.connection import EndPoint
 from cassandra.tablets import Tablets
 from cassandra.util import maybe_add_timeout_to_query
 
+
+class _RowView(object):
+    """
+    Lightweight read-only view over a row tuple, supporting dict-like access.
+    Shares a single index map across all rows from the same result set,
+    avoiding per-row dict allocation overhead.
+    """
+
+    __slots__ = ("_row", "_index_map")
+
+    def __init__(self, row, index_map):
+        self._row = row
+        self._index_map = index_map
+
+    def __getitem__(self, key):
+        return self._row[self._index_map[key]]
+
+    def get(self, key, default=None):
+        idx = self._index_map.get(key)
+        if idx is not None:
+            return self._row[idx]
+        return default
+
+    def __contains__(self, key):
+        return key in self._index_map
+
+    def __repr__(self):
+        return repr({k: self._row[i] for k, i in self._index_map.items()})
+
+
+def _row_factory(colnames, rows):
+    """
+    Lightweight replacement for dict_factory used internally by schema parsers.
+    Returns a list of _RowView objects that support row["key"] and row.get("key")
+    but store data as tuples with a shared column-name-to-index map.
+    """
+    index_map = {name: i for i, name in enumerate(colnames)}
+    return [_RowView(row, index_map) for row in rows]
+
+
 log = logging.getLogger(__name__)
 
 cql_keywords = set((
@@ -1927,7 +1967,7 @@ class _SchemaParser(object):
                         yield next_result.parsed_rows
 
                 result.parsed_rows += itertools.chain(*get_next_pages())
-            return dict_factory(result.column_names, result.parsed_rows) if result else []
+            return _row_factory(result.column_names, result.parsed_rows) if result else []
         else:
             raise result
 
@@ -2932,11 +2972,13 @@ class SchemaParserV4(SchemaParserV3):
 
     @staticmethod
     def _build_keyspace_metadata_internal(row):
-        # necessary fields that aren't int virtual ks
-        row["durable_writes"] = row.get("durable_writes", None)
-        row["replication"] = row.get("replication", {})
-        row["replication"]["class"] = row["replication"].get("class", None)
-        return super(SchemaParserV4, SchemaParserV4)._build_keyspace_metadata_internal(row)
+        # necessary fields that aren't in virtual ks — read without mutating the row
+        name = row["keyspace_name"]
+        durable_writes = row.get("durable_writes", None)
+        replication = dict(row.get("replication")) if "replication" in row else {}
+        replication_class = replication.pop("class") if "class" in replication else None
+        graph_engine = row.get("graph_engine", None)
+        return KeyspaceMetadata(name, durable_writes, replication_class, replication, graph_engine)
 
 
 class SchemaParserDSE67(SchemaParserV4):
@@ -3331,7 +3373,7 @@ def get_column_from_system_local(connection, column_name: str, timeout, metadata
         , timeout=timeout, fail_on_error=False)
     if not success or not local_result.parsed_rows:
         return ""
-    local_rows = dict_factory(local_result.column_names, local_result.parsed_rows)
+    local_rows = _row_factory(local_result.column_names, local_result.parsed_rows)
     local_row = local_rows[0]
     return local_row.get(column_name)
 
