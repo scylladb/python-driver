@@ -32,7 +32,8 @@ from cassandra.metadata import (Murmur3Token, MD5Token,
                                 _UnknownStrategy, ColumnMetadata, TableMetadata,
                                 IndexMetadata, Function, Aggregate,
                                 Metadata, TokenMap, ReplicationFactor,
-                                SchemaParserDSE68)
+                                SchemaParserDSE68,
+                                _RowView, _row_factory)
 from cassandra.policies import SimpleConvictionPolicy
 from cassandra.pool import Host
 from cassandra.protocol import QueryMessage
@@ -846,3 +847,67 @@ class MetadataHelpersTest(unittest.TestCase):
         for argument, expected_result in argument_to_expected_results:
             result = strip_frozen(argument)
             assert result == expected_result, "strip_frozen() arg: {}".format(argument)
+
+
+class RowViewTest(unittest.TestCase):
+    """Tests for the internal _RowView and _row_factory helpers."""
+
+    def test_getitem(self):
+        rv = _RowView(("a_val", "b_val"), {"a": 0, "b": 1})
+        self.assertEqual(rv["a"], "a_val")
+        self.assertEqual(rv["b"], "b_val")
+
+    def test_getitem_missing_key(self):
+        rv = _RowView(("a_val",), {"a": 0})
+        with self.assertRaises(KeyError):
+            rv["missing"]
+
+    def test_get_present(self):
+        rv = _RowView(("a_val", "b_val"), {"a": 0, "b": 1})
+        self.assertEqual(rv.get("a"), "a_val")
+        self.assertEqual(rv.get("b"), "b_val")
+
+    def test_get_missing_returns_default(self):
+        rv = _RowView(("a_val",), {"a": 0})
+        self.assertIsNone(rv.get("missing"))
+        self.assertEqual(rv.get("missing", 42), 42)
+
+    def test_contains(self):
+        rv = _RowView(("a_val",), {"a": 0})
+        self.assertIn("a", rv)
+        self.assertNotIn("b", rv)
+
+    def test_repr(self):
+        rv = _RowView(("a_val", "b_val"), {"a": 0, "b": 1})
+        r = repr(rv)
+        self.assertIn("'a'", r)
+        self.assertIn("'a_val'", r)
+
+    def test_shared_index_map(self):
+        """All _RowView objects from the same _row_factory call share one index map."""
+        rows = _row_factory(["x", "y"], [("x1", "y1"), ("x2", "y2")])
+        self.assertIs(rows[0]._index_map, rows[1]._index_map)
+
+    def test_read_only(self):
+        """_RowView must not allow item assignment or deletion."""
+        rv = _RowView(("val",), {"col": 0})
+        with self.assertRaises(TypeError):
+            rv["col"] = "new"
+        with self.assertRaises(TypeError):
+            del rv["col"]
+
+    def test_row_factory_empty(self):
+        result = _row_factory(["a", "b"], [])
+        self.assertEqual(result, [])
+
+    def test_row_factory_single_column(self):
+        rows = _row_factory(["only"], [("v1",), ("v2",)])
+        self.assertEqual(rows[0]["only"], "v1")
+        self.assertEqual(rows[1]["only"], "v2")
+
+    def test_row_factory_values(self):
+        rows = _row_factory(["id", "name"], [(1, "alice"), (2, "bob")])
+        self.assertEqual(rows[0]["id"], 1)
+        self.assertEqual(rows[0]["name"], "alice")
+        self.assertEqual(rows[1]["id"], 2)
+        self.assertEqual(rows[1]["name"], "bob")
