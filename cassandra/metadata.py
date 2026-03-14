@@ -40,7 +40,7 @@ from cassandra.encoder import Encoder
 from cassandra.marshal import varint_unpack
 from cassandra.protocol import QueryMessage
 from cassandra.query import dict_factory, bind_params
-from cassandra.util import OrderedDict, Version
+from cassandra.util import Version
 from cassandra.pool import HostDistance
 from cassandra.connection import EndPoint
 from cassandra.tablets import Tablets
@@ -1241,11 +1241,11 @@ class TableMetadata(object):
         self.name = name
         self.partition_key = [] if partition_key is None else partition_key
         self.clustering_key = [] if clustering_key is None else clustering_key
-        self.columns = OrderedDict() if columns is None else columns
+        self.columns = {} if columns is None else columns
         self.indexes = {}
         self.options = {} if options is None else options
         self.comparator = None
-        self.triggers = OrderedDict() if triggers is None else triggers
+        self.triggers = {} if triggers is None else triggers
         self.views = {}
         self.virtual = virtual
         self.is_compact_storage = False
@@ -2643,8 +2643,8 @@ class SchemaParserV3(SchemaParserV22):
         if len(partition_rows) > 1:
             partition_rows = sorted(partition_rows, key=lambda row: row.get('position'))
         for r in partition_rows:
-            # we have to add meta here (and not in the later loop) because TableMetadata.columns is an
-            # OrderedDict, and it assumes keys are inserted first, in order, when exporting CQL
+            # we have to add meta here (and not in the later loop) because TableMetadata.columns
+            # assumes keys are inserted first, in order, when exporting CQL
             column_meta = self._build_column_metadata(meta, r)
             meta.columns[column_meta.name] = column_meta
             meta.partition_key.append(meta.columns[r.get('column_name')])
@@ -3194,7 +3194,7 @@ class MaterializedViewMetadata(object):
         self.base_table_name = base_table_name
         self.partition_key = []
         self.clustering_key = []
-        self.columns = OrderedDict()
+        self.columns = {}
         self.include_all_columns = include_all_columns
         self.where_clause = where_clause
         self.options = options or {}
