@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import unittest
+import warnings
 
 from binascii import unhexlify
 import logging
@@ -21,7 +22,7 @@ import timeit
 import uuid
 
 import cassandra
-from cassandra.cqltypes import strip_frozen
+from cassandra.cqltypes import cqltype_to_python, python_to_cqltype, strip_frozen
 from cassandra.marshal import uint16_unpack, uint16_pack
 from cassandra.metadata import (Murmur3Token, MD5Token,
                                 BytesToken, ReplicationStrategy,
@@ -846,3 +847,39 @@ class MetadataHelpersTest(unittest.TestCase):
         for argument, expected_result in argument_to_expected_results:
             result = strip_frozen(argument)
             assert result == expected_result, "strip_frozen() arg: {}".format(argument)
+
+    def test_cqltype_backslash_escape(self):
+        """Verify that UDT names containing backslashes don't trigger SyntaxWarning (python-driver#750)."""
+        udt_input = r'map<"!@#$%^&*()[]\ frozen >>>", int>'
+
+        # Parsing must not emit SyntaxWarning
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            result = cqltype_to_python(udt_input)
+        syntax_warnings = [w for w in caught if issubclass(w.category, SyntaxWarning)]
+        self.assertEqual(syntax_warnings, [], 'cqltype_to_python emitted SyntaxWarning')
+
+        # Parsed result should preserve the quoted UDT name with backslash
+        self.assertEqual(result[0], 'map')
+        self.assertIsInstance(result[1], list)
+        self.assertEqual(result[1][0], r'"!@#$%^&*()[]\ frozen >>>"')
+        self.assertEqual(result[1][1], 'int')
+
+        # Round-trip: python_to_cqltype(cqltype_to_python(x)) == x
+        round_tripped = python_to_cqltype(result)
+        self.assertEqual(round_tripped, udt_input)
+
+    def test_cqltype_single_quote_in_identifier(self):
+        """Verify that UDT names containing single quotes parse and round-trip correctly."""
+        udt_input = 'map<"it\'s", int>'
+
+        result = cqltype_to_python(udt_input)
+
+        self.assertEqual(result[0], 'map')
+        self.assertIsInstance(result[1], list)
+        self.assertEqual(result[1][0], '"it\'s"')
+        self.assertEqual(result[1][1], 'int')
+
+        # Round-trip: python_to_cqltype(cqltype_to_python(x)) == x
+        round_tripped = python_to_cqltype(result)
+        self.assertEqual(round_tripped, udt_input)
