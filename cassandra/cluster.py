@@ -114,6 +114,11 @@ try:
 except ImportError:
     from cassandra.util import WeakSet  # NOQA
 
+try:
+    from cassandra.row_parser import clear_parse_desc_cache as _clear_parse_desc_cache
+except ImportError:
+    _clear_parse_desc_cache = None
+
 def _is_gevent_monkey_patched():
     if 'gevent.monkey' not in sys.modules:
         return False
@@ -1799,6 +1804,9 @@ class Cluster(object):
             self.metrics.shutdown()
 
         _discard_cluster_shutdown(self)
+
+        if _clear_parse_desc_cache is not None:
+            _clear_parse_desc_cache()
 
     def __enter__(self):
         return self
