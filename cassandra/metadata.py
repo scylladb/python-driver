@@ -2489,7 +2489,7 @@ class SchemaParserV3(SchemaParserV22):
     """
     _SELECT_KEYSPACES = "SELECT * FROM system_schema.keyspaces"
     _SELECT_TABLES = "SELECT * FROM system_schema.tables"
-    _SELECT_COLUMNS = "SELECT * FROM system_schema.columns"
+    _SELECT_COLUMNS = "SELECT keyspace_name, table_name, column_name, clustering_order, kind, position, type FROM system_schema.columns"
     _SELECT_INDEXES = "SELECT * FROM system_schema.indexes"
     _SELECT_TRIGGERS = "SELECT * FROM system_schema.triggers"
     _SELECT_TYPES = "SELECT * FROM system_schema.types"
