@@ -715,6 +715,27 @@ def xfail_scylla_version_lt(reason, oss_scylla_version, ent_scylla_version, *arg
 
     return pytest.mark.xfail(current_version < Version(oss_scylla_version), reason=reason, *args, **kwargs)
 
+
+def skip_scylla_version_lt(reason, scylla_version):
+    """
+    Skip tests on scylla versions older than the specified thresholds.
+    :param reason: message explaining why the test is skipped
+    :param scylla_version: str, version from which test supposed to work
+    """
+    if not (reason.startswith("scylladb/scylladb#") or reason.startswith("scylladb/scylla-enterprise#")):
+        raise ValueError('reason should start with scylladb/scylladb#<issue-id> or scylladb/scylla-enterprise#<issue-id> to reference issue in scylla repo')
+
+    if not isinstance(scylla_version, str):
+        raise ValueError('scylla_version should be a str')
+
+    if SCYLLA_VERSION is None:
+        return pytest.mark.skipif(False, reason="It is just a NoOP Decor, should not skip anything")
+
+    current_version = Version(get_scylla_version(SCYLLA_VERSION))
+
+    return pytest.mark.skipif(current_version < Version(scylla_version), reason=reason)
+
+
 class UpDownWaiter(object):
 
     def __init__(self, host):

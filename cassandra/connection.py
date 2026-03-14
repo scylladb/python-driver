@@ -25,12 +25,14 @@ import sys
 from threading import Thread, Event, RLock, Condition
 import time
 import ssl
+import uuid
 import weakref
 import random
 import itertools
-from typing import Optional, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 from cassandra.application_info import ApplicationInfoBase
+from cassandra.client_routes import _ClientRoutesHandler
 from cassandra.protocol_features import ProtocolFeatures
 
 if 'gevent.monkey' in sys.modules:
@@ -230,7 +232,7 @@ class DefaultEndPointFactory(EndPointFactory):
     port = None
     """
     If no port is discovered in the row, this is the default port
-    used for endpoint creation. 
+    used for endpoint creation.
     """
 
     def __init__(self, port=None):
@@ -328,6 +330,50 @@ class SniEndPointFactory(EndPointFactory):
         return SniEndPoint(self._proxy_address, sni, self._port)
 
 
+class ClientRoutesEndPointFactory(EndPointFactory):
+    """
+    EndPointFactory for Client Routes (Private Link) support.
+
+    Creates ClientRoutesEndPoint instances that defer both address translation
+    (host_id -> hostname lookup) and DNS resolution until connection time.
+    This ensures immediate reaction to infrastructure changes.
+    """
+
+    client_routes_handler: _ClientRoutesHandler
+    default_port: Optional[int]
+
+    def __init__(self, client_routes_handler: _ClientRoutesHandler, port: Optional[int] = None) -> None:
+        """
+        :param client_routes_handler: _ClientRoutesHandler instance to lookup routes
+        :param port: Default port if none found in row
+        """
+        self.client_routes_handler = client_routes_handler
+        self.default_port = port
+
+    def create(self, row: Dict[str, Any]) -> 'ClientRoutesEndPoint':
+        """
+        Create a ClientRoutesEndPoint from a system.peers row.
+
+        Stores only the host_id and handler reference. Both translation
+        (route lookup) and DNS resolution happen later in resolve().
+        """
+        from cassandra.metadata import _NodeInfo
+        host_id = row.get("host_id")
+
+        if host_id is None:
+            raise ValueError("No host_id to create ClientRoutesEndPoint")
+
+        addr = _NodeInfo.get_broadcast_rpc_address(row)
+        port = _NodeInfo.get_broadcast_rpc_port(row) or _NodeInfo.get_broadcast_port(row) or self.default_port
+
+        return ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.client_routes_handler,
+            original_address=addr,
+            original_port=port,
+        )
+
+
 @total_ordering
 class UnixSocketEndPoint(EndPoint):
     """
@@ -367,6 +413,78 @@ class UnixSocketEndPoint(EndPoint):
 
     def __repr__(self):
         return "<%s: %s>" % (self.__class__.__name__, self._unix_socket_path)
+
+
+@total_ordering
+class ClientRoutesEndPoint(EndPoint):
+    """
+    Client Routes (Private Link) EndPoint implementation.
+
+    Defers both address translation (route lookup) and DNS resolution
+    until resolve() is called at connection time. This ensures immediate
+    reaction to infrastructure changes and CLIENT_ROUTES_CHANGE events.
+    """
+
+    _host_id: uuid.UUID
+    _handler: _ClientRoutesHandler
+    _original_address: str
+    _original_port: Optional[int]
+
+    def __init__(self, host_id: uuid.UUID, handler: _ClientRoutesHandler, original_address: str, original_port: Optional[int] = None) -> None:
+        """
+        :param host_id: Host UUID for route lookup
+        :param handler: _ClientRoutesHandler instance
+        :param original_address: Original address from system.peers (for identification)
+        :param original_port: Original port if route doesn't specify one
+        """
+        self._host_id = host_id
+        self._handler = handler
+        self._original_address = original_address
+        self._original_port = original_port
+
+    @property
+    def address(self) -> str:
+        """Returns the original address (updated by resolve())."""
+        return self._original_address
+
+    @property
+    def port(self) -> Optional[int]:
+        return self._original_port
+
+    @property
+    def host_id(self) -> uuid.UUID:
+        return self._host_id
+
+    def resolve(self) -> Tuple[str, int]:
+        """
+        Resolve endpoint by delegating to the handler.
+        Falls back to original address/port if no route mapping is available.
+        """
+        result = self._handler.resolve_host(self._host_id)
+        if result is None:
+            return self._original_address, self._original_port
+        return result
+
+    def __eq__(self, other):
+        return (isinstance(other, ClientRoutesEndPoint) and
+                self._host_id == other._host_id and
+                self._original_address == other._original_address)
+
+    def __hash__(self):
+        return hash((self._host_id, self._original_address))
+
+    def __lt__(self, other):
+        if not isinstance(other, ClientRoutesEndPoint):
+            return NotImplemented
+        return ((self._host_id, self._original_address) <
+                (other._host_id, other._original_address))
+
+    def __str__(self):
+        return str("%s (host_id=%s)" % (self._original_address, self._host_id))
+
+    def __repr__(self):
+        return "<%s: host_id=%s, original_addr=%s>" % (
+            self.__class__.__name__, self._host_id, self._original_address)
 
 
 class _Frame(object):
