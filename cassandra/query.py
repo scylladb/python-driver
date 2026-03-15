@@ -635,13 +635,24 @@ class BoundStatement(Statement):
                 (value_len, len(self.prepared_statement.routing_key_indexes)))
 
         self.raw_values = values
-        self.values = []
-        for value, col_spec in zip(values, col_meta):
+
+        # Pre-allocate the values list to avoid repeated append() calls and
+        # list resizing. For proto v4+, trailing unbound columns default to
+        # UNSET_VALUE; for proto v3, we only allocate for provided values.
+        if proto_version >= 4:
+            result = [UNSET_VALUE] * col_meta_len
+        else:
+            result = [None] * value_len
+
+        for i, (value, col_spec) in enumerate(zip(values, col_meta)):
             if value is None:
-                self.values.append(None)
+                result[i] = None
             elif value is UNSET_VALUE:
                 if proto_version >= 4:
-                    self._append_unset_value()
+                    if self.prepared_statement.is_routing_key_index(i):
+                        raise ValueError(
+                            "Cannot bind UNSET_VALUE as a part of the routing key '%s'" % col_spec.name)
+                    # result[i] is already UNSET_VALUE from pre-allocation
                 else:
                     raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
             else:
@@ -652,18 +663,21 @@ class BoundStatement(Statement):
                     col_bytes = col_type.serialize(value, proto_version)
                     if uses_ce:
                         col_bytes = ce_policy.encrypt(col_desc, col_bytes)
-                    self.values.append(col_bytes)
+                    result[i] = col_bytes
                 except (TypeError, struct.error) as exc:
                     actual_type = type(value)
                     message = ('Received an argument of invalid type for column "%s". '
                                'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
                     raise TypeError(message)
 
-        if proto_version >= 4:
-            diff = col_meta_len - len(self.values)
-            if diff:
-                for _ in range(diff):
-                    self._append_unset_value()
+        # Validate that trailing UNSET_VALUE padding doesn't cover routing key columns
+        if proto_version >= 4 and value_len < col_meta_len:
+            for i in range(value_len, col_meta_len):
+                if self.prepared_statement.is_routing_key_index(i):
+                    raise ValueError(
+                        "Cannot bind UNSET_VALUE as a part of the routing key '%s'" % col_meta[i].name)
+
+        self.values = result
 
         return self
 
