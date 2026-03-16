@@ -385,8 +385,10 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
             current_hosts = self._dc_live_hosts.get(dc, ())
             if host not in current_hosts:
                 self._dc_live_hosts[dc] = current_hosts + (host,)
+                if dc != self.local_dc:
+                    refresh_remote = True
 
-            if refresh_remote or dc != self.local_dc:
+            if refresh_remote:
                 self._refresh_remote_hosts()
 
     def on_down(self, host):
@@ -642,16 +644,12 @@ class TokenAwarePolicy(LoadBalancingPolicy):
     invalidated when the cluster topology changes.
     """
 
-    __slots__ = (
-        "_child_policy",
-        "_cluster_metadata",
-        "shuffle_replicas",
-        "_replica_cache",
-        "_replica_cache_token_map_ref",
-        "_cache_replicas_size",
-        "_hosts_lock",
-        "_cache_lock",
-    )
+    _child_policy = None
+    _cluster_metadata = None
+    shuffle_replicas = True
+    """
+    Yield local replicas in a random order.
+    """
 
     def __init__(self, child_policy, shuffle_replicas=True, cache_replicas_size=1024):
         super().__init__()
@@ -806,8 +804,21 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                 yielded.add(replica)
                 yield replica
 
-            # yield rest of the cluster
-            yield from child.make_query_plan_with_exclusion(keyspace, query, yielded)
+            # yield rest of the cluster, sorted by distance
+            remaining_local_rack = []
+            remaining_local = []
+            remaining_remote = []
+            for host in child.make_query_plan_with_exclusion(keyspace, query, yielded):
+                d = child_distance(host)
+                if d == HostDistance.LOCAL_RACK:
+                    remaining_local_rack.append(host)
+                elif d == HostDistance.LOCAL:
+                    remaining_local.append(host)
+                elif d == HostDistance.REMOTE:
+                    remaining_remote.append(host)
+            yield from remaining_local_rack
+            yield from remaining_local
+            yield from remaining_remote
         else:
             yield from child.make_query_plan(keyspace, query)
 
