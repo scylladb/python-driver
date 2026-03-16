@@ -49,6 +49,9 @@ See https://issues.apache.org/jira/browse/CASSANDRA-7304 for further details on 
 Only valid when using native protocol v4+
 """
 
+_BIND_SENTINEL = object()
+"""Sentinel for dict.get() in BoundStatement.bind() to distinguish missing keys from None values."""
+
 NON_ALPHA_REGEX = re.compile('[^a-zA-Z0-9]')
 START_BADCHAR_REGEX = re.compile('^[^a-zA-Z0-9]*')
 END_BADCHAR_REGEX = re.compile('[^a-zA-Z0-9_]*$')
@@ -608,15 +611,15 @@ class BoundStatement(Statement):
 
             # sort values accordingly
             for col in col_meta:
-                try:
-                    values.append(values_dict[col.name])
-                except KeyError:
-                    if proto_version >= 4:
-                        values.append(UNSET_VALUE)
-                    else:
-                        raise KeyError(
-                            'Column name `%s` not found in bound dict.' %
-                            (col.name))
+                val = values_dict.get(col.name, _BIND_SENTINEL)
+                if val is not _BIND_SENTINEL:
+                    values.append(val)
+                elif proto_version >= 4:
+                    values.append(UNSET_VALUE)
+                else:
+                    raise KeyError(
+                        'Column name `%s` not found in bound dict.' %
+                        (col.name))
 
         value_len = len(values)
         col_meta_len = len(col_meta)
