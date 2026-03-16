@@ -804,21 +804,31 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                 yielded.add(replica)
                 yield replica
 
-            # yield rest of the cluster, sorted by distance
-            remaining_local_rack = []
-            remaining_local = []
-            remaining_remote = []
-            for host in child.make_query_plan_with_exclusion(keyspace, query, yielded):
-                d = child_distance(host)
-                if d == HostDistance.LOCAL_RACK:
-                    remaining_local_rack.append(host)
-                elif d == HostDistance.LOCAL:
-                    remaining_local.append(host)
-                elif d == HostDistance.REMOTE:
-                    remaining_remote.append(host)
-            yield from remaining_local_rack
-            yield from remaining_local
-            yield from remaining_remote
+            # Yield the rest of the cluster (non-replica hosts).
+            # DCAware and RackAware already yield in distance order
+            # (local_rack → local → remote), so we can stream directly.
+            # For other child policies we must re-sort by distance.
+            if isinstance(child, (DCAwareRoundRobinPolicy, RackAwareRoundRobinPolicy)):
+                yield from child.make_query_plan_with_exclusion(
+                    keyspace, query, yielded
+                )
+            else:
+                remaining_local_rack = []
+                remaining_local = []
+                remaining_remote = []
+                for host in child.make_query_plan_with_exclusion(
+                    keyspace, query, yielded
+                ):
+                    d = child_distance(host)
+                    if d == HostDistance.LOCAL_RACK:
+                        remaining_local_rack.append(host)
+                    elif d == HostDistance.LOCAL:
+                        remaining_local.append(host)
+                    elif d == HostDistance.REMOTE:
+                        remaining_remote.append(host)
+                yield from remaining_local_rack
+                yield from remaining_local
+                yield from remaining_remote
         else:
             yield from child.make_query_plan(keyspace, query)
 
