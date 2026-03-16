@@ -12,14 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from cassandra.cqlengine import UnicodeMixin
-
 
 class QueryOperatorException(Exception):
     pass
 
 
-class BaseQueryOperator(UnicodeMixin):
+class BaseQueryOperator:
     # The symbol that identifies this operator in kwargs
     # ie: colname__<symbol>
     symbol = None
@@ -27,16 +25,15 @@ class BaseQueryOperator(UnicodeMixin):
     # The comparator symbol this operator uses in cql
     cql_symbol = None
 
-    def __unicode__(self):
+    def __str__(self):
         if self.cql_symbol is None:
             raise QueryOperatorException("cql symbol is None")
         return self.cql_symbol
 
 
 class OpMapMeta(type):
-
     def __init__(cls, name, bases, dct):
-        if not hasattr(cls, 'opmap'):
+        if not hasattr(cls, "opmap"):
             cls.opmap = {}
         else:
             cls.opmap[cls.symbol] = cls
@@ -44,60 +41,63 @@ class OpMapMeta(type):
 
 
 class BaseWhereOperator(BaseQueryOperator, metaclass=OpMapMeta):
-    """ base operator used for where clauses """
+    """base operator used for where clauses"""
+
     @classmethod
     def get_operator(cls, symbol):
         try:
             return cls.opmap[symbol.upper()]
         except KeyError:
-            raise QueryOperatorException("{0} doesn't map to a QueryOperator".format(symbol))
+            raise QueryOperatorException(
+                "{0} doesn't map to a QueryOperator".format(symbol)
+            )
 
 
 class EqualsOperator(BaseWhereOperator):
-    symbol = 'EQ'
-    cql_symbol = '='
+    symbol = "EQ"
+    cql_symbol = "="
 
 
 class NotEqualsOperator(BaseWhereOperator):
-    symbol = 'NE'
-    cql_symbol = '!='
+    symbol = "NE"
+    cql_symbol = "!="
 
 
 class InOperator(EqualsOperator):
-    symbol = 'IN'
-    cql_symbol = 'IN'
+    symbol = "IN"
+    cql_symbol = "IN"
 
 
 class GreaterThanOperator(BaseWhereOperator):
     symbol = "GT"
-    cql_symbol = '>'
+    cql_symbol = ">"
 
 
 class GreaterThanOrEqualOperator(BaseWhereOperator):
     symbol = "GTE"
-    cql_symbol = '>='
+    cql_symbol = ">="
 
 
 class LessThanOperator(BaseWhereOperator):
     symbol = "LT"
-    cql_symbol = '<'
+    cql_symbol = "<"
 
 
 class LessThanOrEqualOperator(BaseWhereOperator):
     symbol = "LTE"
-    cql_symbol = '<='
+    cql_symbol = "<="
 
 
 class ContainsOperator(EqualsOperator):
     symbol = "CONTAINS"
-    cql_symbol = 'CONTAINS'
+    cql_symbol = "CONTAINS"
 
 
 class LikeOperator(EqualsOperator):
     symbol = "LIKE"
-    cql_symbol = 'LIKE'
+    cql_symbol = "LIKE"
 
 
 class IsNotNullOperator(EqualsOperator):
     symbol = "IS NOT NULL"
-    cql_symbol = 'IS NOT NULL'
+    cql_symbol = "IS NOT NULL"

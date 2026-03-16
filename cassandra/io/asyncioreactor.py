@@ -23,8 +23,8 @@ try:
     asyncio.run_coroutine_threadsafe
 except AttributeError:
     raise ImportError(
-        'Cannot use asyncioreactor without access to '
-        'asyncio.run_coroutine_threadsafe (added in 3.4.6 and 3.5.1)'
+        "Cannot use asyncioreactor without access to "
+        "asyncio.run_coroutine_threadsafe (added in 3.4.6 and 3.5.1)"
     )
 
 
@@ -38,12 +38,12 @@ class AsyncioTimer(object):
 
     @property
     def end(self):
-        raise NotImplementedError('{} is not compatible with TimerManager and '
-                                  'does not implement .end()')
+        raise NotImplementedError(
+            "{} is not compatible with TimerManager and does not implement .end()"
+        )
 
     def __init__(self, timeout, callback, loop):
-        delayed = self._call_delayed_coro(timeout=timeout,
-                                          callback=callback)
+        delayed = self._call_delayed_coro(timeout=timeout, callback=callback)
         self._handle = asyncio.run_coroutine_threadsafe(delayed, loop=loop)
 
     @staticmethod
@@ -63,8 +63,9 @@ class AsyncioTimer(object):
     def finish(self):
         # connection.Timer method not implemented here because we can't inspect
         # the Handle returned from call_later
-        raise NotImplementedError('{} is not compatible with TimerManager and '
-                                  'does not implement .finish()')
+        raise NotImplementedError(
+            "{} is not compatible with TimerManager and does not implement .finish()"
+        )
 
 
 class AsyncioConnection(Connection):
@@ -92,8 +93,8 @@ class AsyncioConnection(Connection):
         self._connect_socket()
         self._socket.setblocking(0)
         loop_args = dict()
-        if sys.version_info[0] == 3 and sys.version_info[1] < 10:
-            loop_args['loop'] = self._loop
+        if sys.version_info < (3, 10):
+            loop_args["loop"] = self._loop
         self._write_queue = asyncio.Queue(**loop_args)
         self._write_queue_lock = asyncio.Lock(**loop_args)
 
@@ -106,8 +107,6 @@ class AsyncioConnection(Connection):
             self.handle_write(), loop=self._loop
         )
         self._send_options_message()
-
-
 
     @classmethod
     def initialize_reactor(cls):
@@ -126,8 +125,9 @@ class AsyncioConnection(Connection):
                 cls._loop = asyncio.new_event_loop()
                 # daemonize so the loop will be shut down on interpreter
                 # shutdown
-                cls._loop_thread = Thread(target=cls._loop.run_forever,
-                                          daemon=True, name="asyncio_thread")
+                cls._loop_thread = Thread(
+                    target=cls._loop.run_forever, daemon=True, name="asyncio_thread"
+                )
                 cls._loop_thread.start()
 
     @classmethod
@@ -142,9 +142,7 @@ class AsyncioConnection(Connection):
 
         # close from the loop thread to avoid races when removing file
         # descriptors
-        asyncio.run_coroutine_threadsafe(
-            self._close(), loop=self._loop
-        )
+        asyncio.run_coroutine_threadsafe(self._close(), loop=self._loop)
 
     async def _close(self):
         log.debug("Closing connection (%s) to %s" % (id(self), self.endpoint))
@@ -172,15 +170,12 @@ class AsyncioConnection(Connection):
         if len(data) > buff_size:
             chunks = []
             for i in range(0, len(data), buff_size):
-                chunks.append(data[i:i + buff_size])
+                chunks.append(data[i : i + buff_size])
         else:
             chunks = [data]
 
         if self._loop_thread != threading.current_thread():
-            asyncio.run_coroutine_threadsafe(
-                self._push_msg(chunks),
-                loop=self._loop
-            )
+            asyncio.run_coroutine_threadsafe(self._push_msg(chunks), loop=self._loop)
         else:
             # avoid races/hangs by just scheduling this, not using threadsafe
             task = self._loop.create_task(self._push_msg(chunks))
@@ -193,7 +188,6 @@ class AsyncioConnection(Connection):
         async with self._write_queue_lock:
             for chunk in chunks:
                 self._write_queue.put_nowait(chunk)
-
 
     async def handle_write(self):
         while True:
@@ -223,8 +217,7 @@ class AsyncioConnection(Connection):
                 await asyncio.sleep(0)
                 continue
             except socket.error as err:
-                log.debug("Exception during socket recv for %s: %s",
-                          self, err)
+                log.debug("Exception during socket recv for %s: %s", self, err)
                 self.defunct(err)
                 return  # leave the read loop
             except asyncio.CancelledError:

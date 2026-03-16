@@ -323,7 +323,7 @@ class QueryTests(BasicSharedKeyspaceUnitTestCase):
         result_set = self.session.execute("SELECT * FROM {0}.{1}".format(self.keyspace_name, self.function_table_name))
         assert result_set.column_types is not None
 
-        assert result_set.column_names == [u'user', u'game', u'year', u'month', u'day', u'score']
+        assert result_set.column_names == ['user', 'game', 'year', 'month', 'day', 'score']
 
     @greaterthanorequalcass30
     def test_basic_json_query(self):
@@ -759,11 +759,11 @@ class BatchStatementTests(BasicSharedKeyspaceUnitTestCase):
                 k int PRIMARY KEY,
                 v text )'''
         self.session.execute(ddl)
-        unicode_text = u'Fran\u00E7ois'
-        query = u'INSERT INTO test3rf.testtext (k, v) VALUES (%s, %s)'
+        unicode_text = 'Fran\u00E7ois'
+        query = 'INSERT INTO test3rf.testtext (k, v) VALUES (%s, %s)'
         try:
             batch = BatchStatement(BatchType.LOGGED)
-            batch.add(u"INSERT INTO test3rf.testtext (k, v) VALUES (%s, %s)", (0, unicode_text))
+            batch.add("INSERT INTO test3rf.testtext (k, v) VALUES (%s, %s)", (0, unicode_text))
             self.session.execute(batch)
         finally:
             self.session.execute("DROP TABLE test3rf.testtext")
@@ -1338,12 +1338,12 @@ class UnicodeQueryTest(BasicSharedKeyspaceUnitTestCase):
         @test_category query
         """
 
-        unicode_text = u'Fran\u00E7ois'
+        unicode_text = 'Fran\u00E7ois'
         batch = BatchStatement(BatchType.LOGGED)
-        batch.add(u"INSERT INTO {0}.{1} (k, v) VALUES (%s, %s)".format(self.keyspace_name, self.function_table_name), (0, unicode_text))
+        batch.add("INSERT INTO {0}.{1} (k, v) VALUES (%s, %s)".format(self.keyspace_name, self.function_table_name), (0, unicode_text))
         self.session.execute(batch)
-        self.session.execute(u"INSERT INTO {0}.{1} (k, v) VALUES (%s, %s)".format(self.keyspace_name, self.function_table_name), (0, unicode_text))
-        prepared = self.session.prepare(u"INSERT INTO {0}.{1} (k, v) VALUES (?, ?)".format(self.keyspace_name, self.function_table_name))
+        self.session.execute("INSERT INTO {0}.{1} (k, v) VALUES (%s, %s)".format(self.keyspace_name, self.function_table_name), (0, unicode_text))
+        prepared = self.session.prepare("INSERT INTO {0}.{1} (k, v) VALUES (?, ?)".format(self.keyspace_name, self.function_table_name))
         bound = prepared.bind((1, unicode_text))
         self.session.execute(bound)
 
