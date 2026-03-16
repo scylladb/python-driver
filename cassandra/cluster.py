@@ -5701,7 +5701,7 @@ class ResponseFuture(object):
                         if not self.prepared_statement:
                             log.error(
                                 "Tried to execute unknown prepared statement: id=%s",
-                                query_id.encode("hex"),
+                                query_id.hex(),
                             )
                             self._set_final_exception(response)
                             return
