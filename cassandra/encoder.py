@@ -116,10 +116,10 @@ class Encoder(object):
         """
         Encodes a string value with quote escaping.
 
-        .. deprecated::
-            This method is unused internally since Python 2 support was
-            removed (``str`` is always unicode on Python 3).  It is kept
-            for backward compatibility with user subclasses of
+        .. note::
+            This method is deprecated and unused internally since Python 2
+            support was removed (``str`` is always unicode on Python 3). It
+            is kept for backward compatibility with user subclasses of
             :class:`Encoder`.
         """
         return cql_quote(val)
