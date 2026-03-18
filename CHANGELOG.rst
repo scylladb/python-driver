@@ -1,3 +1,25 @@
+3.29.9
+======
+March 18, 2026
+
+Features
+--------
+* Add Private Link support via client routes handler
+* Add optional query_params parameter to QueryMessage
+
+Bug Fixes
+---------
+* Fix segmentation fault in libev prepare_callback during shutdown
+* Add null checks to io_callback and timer_callback in libev wrapper
+* Fix RecursionError in execute_concurrent on synchronous errbacks
+* Fix floating-point precision loss for timestamps far from epoch
+
+Others
+------
+* Cache parsed tablet routing type in ResponseFuture
+* Remove deprecated setup_requires in favor of PEP 517 build-system.requires
+* Update dependency hatchling to v1.29.0
+
 3.29.8
 ======
 February 09, 2026
