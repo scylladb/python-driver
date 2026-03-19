@@ -1,0 +1,2 @@
+# Track uv.lock for reproducible docs builds
+!uv.lock
