@@ -4811,28 +4811,26 @@ class ResponseFuture(object):
                         self.query, cl, error=response,
                         retry_num=self._query_retries)
                 elif isinstance(response, PreparedQueryNotFound):
+                    query_id = response.info
+
                     if self.prepared_statement:
-                        query_id = self.prepared_statement.query_id
-                        assert query_id == response.info, \
-                            "Got different query ID in server response (%s) than we " \
-                            "had before (%s)" % (response.info, query_id)
-                    else:
-                        query_id = response.info
+                        # Cache local in-flight context first so lookup by either id can succeed.
+                        self.session.cluster.add_prepared(self.prepared_statement.query_id, self.prepared_statement)
 
                     try:
-                        prepared_statement = self.session.cluster._prepared_statements[query_id]
+                        self.prepared_statement = self.session.cluster._prepared_statements[query_id]
                     except KeyError:
                         if not self.prepared_statement:
-                            log.error("Tried to execute unknown prepared statement: id=%s",
-                                      query_id.encode('hex'))
+                            log.error("Tried to execute unknown prepared statement: id=%s", hexlify(query_id))
                             self._set_final_exception(response)
                             return
-                        else:
-                            prepared_statement = self.prepared_statement
-                            self.session.cluster._prepared_statements[query_id] = prepared_statement
+                        log.warning(
+                            "UNPREPARED for query id %s while executing statement id %s. "
+                            "Could not resolve returned id in cache, proceeding with in-flight context.",
+                            hexlify(query_id), hexlify(self.prepared_statement.query_id))
 
                     current_keyspace = self._connection.keyspace
-                    prepared_keyspace = prepared_statement.keyspace
+                    prepared_keyspace = self.prepared_statement.keyspace
                     if not ProtocolVersion.uses_keyspace_flag(self.session.cluster.protocol_version) \
                             and prepared_keyspace  and current_keyspace != prepared_keyspace:
                         self._set_final_exception(
@@ -4842,11 +4840,13 @@ class ResponseFuture(object):
                                        (current_keyspace, prepared_keyspace)))
                         return
 
-                    log.debug("Re-preparing unrecognized prepared statement against host %s: %s",
-                              host, prepared_statement.query_string)
-                    prepared_keyspace = prepared_statement.keyspace \
+                    log.debug(
+                        "Re-preparing unrecognized prepared statement against host %s: %s",
+                        host, self.prepared_statement.query_string
+                    )
+                    prepared_keyspace = self.prepared_statement.keyspace \
                         if ProtocolVersion.uses_keyspace_flag(self.session.cluster.protocol_version) else None
-                    prepare_message = PrepareMessage(query=prepared_statement.query_string,
+                    prepare_message = PrepareMessage(query=self.prepared_statement.query_string,
                                                      keyspace=prepared_keyspace)
                     # since this might block, run on the executor to avoid hanging
                     # the event loop thread
