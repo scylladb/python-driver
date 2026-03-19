@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import unittest
+import struct
 import pytest
 
 from cassandra.encoder import Encoder
@@ -244,20 +245,20 @@ class StubSerializer:
 
 
 class OverflowSerializer:
-    """Stub that raises OverflowError, mimicking Cython <int32_t> cast overflow."""
+    """Stub that raises struct.error, mimicking Cython int32 range check."""
 
     def __init__(self, cqltype):
         self.cqltype = cqltype
 
     def serialize(self, value, protocol_version):
-        raise OverflowError("value too large to convert to int32_t")
+        raise struct.error("'i' format requires -2147483648 <= number <= 2147483647")
 
 
 class CythonBindPathTest(unittest.TestCase):
     """Tests for the Cython serializer fast path in BoundStatement.bind().
 
     These tests inject stub serializers via the PreparedStatement's cached
-    __serializers attribute to exercise the Cython bind branch without
+    _cached_serializers attribute to exercise the Cython bind branch without
     requiring compiled Cython.
     """
 
@@ -275,9 +276,9 @@ class CythonBindPathTest(unittest.TestCase):
             result_metadata=None,
             result_metadata_id=None,
         )
-        # Inject directly into the name-mangled cache attribute used by
-        # the _serializers property, bypassing the lazy initialization.
-        prepared._PreparedStatement__serializers = serializers
+        # Inject directly into the cache attribute used by the _serializers
+        # property, bypassing the lazy initialization.
+        prepared._cached_serializers = serializers
         return prepared
 
     def test_cython_path_normal_serialization(self):
@@ -321,7 +322,7 @@ class CythonBindPathTest(unittest.TestCase):
         assert bound.values[1] == UNSET_VALUE
 
     def test_cython_path_overflow_error_wrapped(self):
-        """OverflowError from Cython cast is caught and wrapped with column context."""
+        """struct.error from Cython int32 range check is caught and wrapped with column context."""
         column_metadata = [ColumnMetadata("keyspace", "cf", "v0", Int32Type)]
         serializers = [OverflowSerializer(Int32Type)]
         prepared = self._make_prepared(column_metadata, serializers)
@@ -348,7 +349,8 @@ class CythonBindPathTest(unittest.TestCase):
         assert "Int32Type" in msg
 
     def test_plain_path_overflow_error_wrapped(self):
-        """OverflowError in the plain Python path is also caught and wrapped."""
+        """Out-of-range int in the plain Python path raises struct.error (caught
+        alongside OverflowError) and is wrapped with column context."""
         column_metadata = [ColumnMetadata("keyspace", "cf", "v0", Int32Type)]
         # Force the plain Python path (no Cython serializers)
         prepared = self._make_prepared(column_metadata, serializers=None)
@@ -383,7 +385,7 @@ class UnsetValueBindingTest(unittest.TestCase):
             result_metadata=None,
             result_metadata_id=None,
         )
-        prepared._PreparedStatement__serializers = serializers
+        prepared._cached_serializers = serializers
         return prepared
 
     def _three_column_metadata(self):
