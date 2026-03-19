@@ -26,15 +26,47 @@ For all other types, GenericSerializer delegates to the Python-level
 cqltype.serialize() classmethod.
 """
 
-from libc.stdint cimport int32_t, uint32_t
+from libc.stdint cimport int32_t
 from libc.string cimport memcpy
-from libc.stdlib cimport malloc, free
-from cpython.bytes cimport PyBytes_FromStringAndSize
+from libc.math cimport isinf, isnan
+from libc.float cimport FLT_MAX
+from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AS_STRING
 
 from cassandra import cqltypes
 
 cdef bint is_little_endian
 from cassandra.util import is_little_endian
+
+
+# ---------------------------------------------------------------------------
+# Range-check helpers (match struct.pack error semantics)
+# ---------------------------------------------------------------------------
+
+cdef inline void _check_float_range(double value) except *:
+    """Raise OverflowError for finite values outside float32 range.
+
+    Matches the behavior of struct.pack('>f', value), which raises
+    struct.error for values that cannot be represented as a 32-bit
+    IEEE 754 float. inf, -inf, and nan pass through unchanged.
+    """
+    if not isinf(value) and not isnan(value):
+        if value > <double>FLT_MAX or value < -<double>FLT_MAX:
+            raise OverflowError(
+                "Value %r too large for float32 (max %r)" % (value, FLT_MAX))
+
+
+cdef inline void _check_int32_range(object value) except *:
+    """Raise OverflowError for values outside the signed int32 range.
+
+    Matches the behavior of struct.pack('>i', value), which raises
+    struct.error for values outside [-2147483648, 2147483647]. The check
+    must be done on the Python int *before* the C-level <int32_t> cast,
+    which would silently truncate.
+    """
+    if value > 2147483647 or value < -2147483648:
+        raise OverflowError(
+            "Value %r out of range for int32 "
+            "(must be between -2147483648 and 2147483647)" % (value,))
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +91,7 @@ cdef class SerFloatType(Serializer):
     """Serialize a Python float to 4-byte big-endian IEEE 754."""
 
     cpdef bytes serialize(self, object value, int protocol_version):
+        _check_float_range(<double>value)
         cdef float val = <float>value
         cdef char out[4]
         cdef char *src = <char *>&val
@@ -101,6 +134,7 @@ cdef class SerInt32Type(Serializer):
     """Serialize a Python int to 4-byte big-endian signed int32."""
 
     cpdef bytes serialize(self, object value, int protocol_version):
+        _check_int32_range(value)
         cdef int32_t val = <int32_t>value
         cdef char out[4]
         cdef char *src = <char *>&val
@@ -184,95 +218,91 @@ cdef class SerVectorType(Serializer):
         """Serialize a list of floats into a contiguous big-endian buffer."""
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 4
-        cdef char *buf = <char *>malloc(buf_size)
-        if buf == NULL:
-            raise MemoryError("Failed to allocate %d bytes for vector serialization" % buf_size)
+        if buf_size == 0:
+            return b""
 
+        cdef object result = PyBytes_FromStringAndSize(NULL, buf_size)
+        cdef char *buf = PyBytes_AS_STRING(result)
         cdef float val
         cdef char *src
         cdef char *dst
 
-        try:
-            for i in range(self.vector_size):
-                val = <float>values[i]
-                src = <char *>&val
-                dst = buf + i * 4
+        for i in range(self.vector_size):
+            _check_float_range(<double>values[i])
+            val = <float>values[i]
+            src = <char *>&val
+            dst = buf + i * 4
 
-                if is_little_endian:
-                    dst[0] = src[3]
-                    dst[1] = src[2]
-                    dst[2] = src[1]
-                    dst[3] = src[0]
-                else:
-                    memcpy(dst, src, 4)
+            if is_little_endian:
+                dst[0] = src[3]
+                dst[1] = src[2]
+                dst[2] = src[1]
+                dst[3] = src[0]
+            else:
+                memcpy(dst, src, 4)
 
-            return PyBytes_FromStringAndSize(buf, buf_size)
-        finally:
-            free(buf)
+        return result
 
     cdef inline bytes _serialize_double(self, object values):
         """Serialize a list of doubles into a contiguous big-endian buffer."""
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 8
-        cdef char *buf = <char *>malloc(buf_size)
-        if buf == NULL:
-            raise MemoryError("Failed to allocate %d bytes for vector serialization" % buf_size)
+        if buf_size == 0:
+            return b""
 
+        cdef object result = PyBytes_FromStringAndSize(NULL, buf_size)
+        cdef char *buf = PyBytes_AS_STRING(result)
         cdef double val
         cdef char *src
         cdef char *dst
 
-        try:
-            for i in range(self.vector_size):
-                val = <double>values[i]
-                src = <char *>&val
-                dst = buf + i * 8
+        for i in range(self.vector_size):
+            val = <double>values[i]
+            src = <char *>&val
+            dst = buf + i * 8
 
-                if is_little_endian:
-                    dst[0] = src[7]
-                    dst[1] = src[6]
-                    dst[2] = src[5]
-                    dst[3] = src[4]
-                    dst[4] = src[3]
-                    dst[5] = src[2]
-                    dst[6] = src[1]
-                    dst[7] = src[0]
-                else:
-                    memcpy(dst, src, 8)
+            if is_little_endian:
+                dst[0] = src[7]
+                dst[1] = src[6]
+                dst[2] = src[5]
+                dst[3] = src[4]
+                dst[4] = src[3]
+                dst[5] = src[2]
+                dst[6] = src[1]
+                dst[7] = src[0]
+            else:
+                memcpy(dst, src, 8)
 
-            return PyBytes_FromStringAndSize(buf, buf_size)
-        finally:
-            free(buf)
+        return result
 
     cdef inline bytes _serialize_int32(self, object values):
         """Serialize a list of int32 values into a contiguous big-endian buffer."""
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 4
-        cdef char *buf = <char *>malloc(buf_size)
-        if buf == NULL:
-            raise MemoryError("Failed to allocate %d bytes for vector serialization" % buf_size)
+        if buf_size == 0:
+            return b""
 
+        cdef object result = PyBytes_FromStringAndSize(NULL, buf_size)
+        cdef char *buf = PyBytes_AS_STRING(result)
         cdef int32_t val
         cdef char *src
         cdef char *dst
 
-        try:
-            for i in range(self.vector_size):
-                val = <int32_t>values[i]
-                src = <char *>&val
-                dst = buf + i * 4
+        for i in range(self.vector_size):
+            _check_int32_range(values[i])
+            val = <int32_t>values[i]
+            src = <char *>&val
+            dst = buf + i * 4
 
-                if is_little_endian:
-                    dst[0] = src[3]
-                    dst[1] = src[2]
-                    dst[2] = src[1]
-                    dst[3] = src[0]
-                else:
-                    memcpy(dst, src, 4)
+            if is_little_endian:
+                dst[0] = src[3]
+                dst[1] = src[2]
+                dst[2] = src[1]
+                dst[3] = src[0]
+            else:
+                memcpy(dst, src, 4)
 
-            return PyBytes_FromStringAndSize(buf, buf_size)
-        finally:
-            free(buf)
+        return result
 
     cdef inline bytes _serialize_generic(self, object values, int protocol_version):
         """Fallback: element-by-element Python serialization for non-optimized types."""
