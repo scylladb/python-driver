@@ -547,7 +547,9 @@ class PreparedStatement(object):
 
         The column_encryption_policy check is performed on every access (not
         cached) so that serializers are correctly bypassed if a policy is set
-        after construction.
+        after construction.  This means the cache never goes stale: once a CE
+        policy is present, we always return None and fall through to the
+        encryption-aware bind path.
         """
         if self.column_encryption_policy:
             return None
@@ -667,15 +669,25 @@ def _raise_bind_serialize_error(col_spec, value, exc):
 
     Called from all three bind loop paths (CE, Cython, plain Python) to
     provide a uniform error message that includes the column name and
-    expected type.  struct.error arises from int32 out-of-range values;
-    OverflowError from float out-of-range values.  Other exception types
-    (e.g. ValueError from VectorType dimension mismatch) propagate
-    without wrapping.
+    expected type.  The message distinguishes between wrong-type and
+    out-of-range scenarios:
+
+    - TypeError           -> "invalid type"
+    - OverflowError       -> "value out of range"
+    - struct.error        -> "value out of range"
+
+    Other exception types (e.g. ValueError from VectorType dimension
+    mismatch) propagate without wrapping.
     """
     actual_type = type(value)
+    if isinstance(exc, (OverflowError, struct.error)):
+        reason = "value out of range"
+    else:
+        reason = "invalid type"
     message = (
-        'Received an argument of invalid type for column "%s". '
-        "Expected: %s, Got: %s; (%s)" % (col_spec.name, col_spec.type, actual_type, exc)
+        'Received an argument with %s for column "%s". '
+        "Expected: %s, Got: %s; (%s)"
+        % (reason, col_spec.name, col_spec.type, actual_type, exc)
     )
     raise TypeError(message) from exc
 
@@ -888,7 +900,7 @@ class BoundStatement(Statement):
             # Fill remaining unbound columns with UNSET_VALUE (v4+ feature).
             # The pre-allocated list already has slots for these, so index
             # assignment works directly without trimming first.
-            for i in range(idx, col_meta_len):
+            while idx < col_meta_len:
                 idx = self._append_unset_value(idx)
         elif idx < col_meta_len:
             # Pre-v4: trim trailing unused slots (no UNSET_VALUE support)

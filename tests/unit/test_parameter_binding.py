@@ -1,4 +1,4 @@
-# Copyright DataStax, Inc.
+# Copyright ScyllaDB, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -349,8 +349,9 @@ class CythonBindPathTest(unittest.TestCase):
         assert "Int32Type" in msg
 
     def test_plain_path_overflow_error_wrapped(self):
-        """Out-of-range int in the plain Python path raises struct.error (caught
-        alongside OverflowError) and is wrapped with column context."""
+        """Out-of-range int in the plain Python path raises OverflowError (from
+        the Cython serializer) or struct.error (from the pure-Python fallback)
+        and is wrapped with column context."""
         column_metadata = [ColumnMetadata("keyspace", "cf", "v0", Int32Type)]
         # Force the plain Python path (no Cython serializers)
         prepared = self._make_prepared(column_metadata, serializers=None)
