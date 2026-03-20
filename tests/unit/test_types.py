@@ -747,6 +747,10 @@ class VectorTests(unittest.TestCase):
         and should raise ValueError from DesVectorType._deserialize_generic.
         The pure Python VectorType.deserialize handles these correctly.
 
+        Note: This test is forward-looking — it validates the Cython deserializer
+        that is introduced in a companion PR.  The skipTest guards below ensure
+        the test is silently skipped when the extension is not yet compiled.
+
         @since 3.x
         @expected_result Cython deserializer raises ValueError for variable-size subtypes;
                          pure Python path correctly deserializes them
@@ -787,7 +791,6 @@ class VectorTests(unittest.TestCase):
         @test_category data_types:vector
         """
         import struct
-        from cassandra.cqltypes import DoubleType
 
         vector_size = 64  # >= 32 threshold for numpy path
 
