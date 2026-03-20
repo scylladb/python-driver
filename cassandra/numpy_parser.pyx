@@ -25,7 +25,7 @@ as numpy is an optional dependency.
 include "ioutils.pyx"
 
 cimport cython
-from libc.stdint cimport uint64_t, uint8_t
+from libc.stdint cimport uint64_t
 from libc.string cimport memset
 from cpython.ref cimport Py_INCREF, PyObject
 
@@ -73,8 +73,6 @@ _cqltype_to_numpy = {
 }
 
 obj_dtype = np.dtype('O')
-
-cdef uint8_t mask_true = 0x01
 
 cdef class NumpyParser(ColumnParser):
     """Decode a ResultMessage into a bunch of NumPy arrays"""
@@ -181,6 +179,10 @@ cdef inline int unpack_row(
             Py_INCREF(val)
             (<PyObject **> arr.buf_ptr)[0] = <PyObject *> val
         elif buf.size >= 0:
+            if buf.size > arr.stride:
+                raise ValueError(
+                    "Column %d: received %d bytes but array stride is %d" %
+                    (i, buf.size, arr.stride))
             memcpy(<char *> arr.buf_ptr, buf.ptr, buf.size)
         else:
             memset(<char *>arr.mask_ptr, 1, arr.mask_stride)
