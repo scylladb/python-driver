@@ -1,4 +1,4 @@
-# Copyright DataStax, Inc.
+# Copyright ScyllaDB, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -39,6 +39,13 @@ Run with:
 import io
 import struct
 import pytest
+
+# Skip the entire module when pytest-benchmark is not installed.
+# The benchmark fixture is provided by the pytest-benchmark plugin which
+# is not in the project's dev dependencies.  This guard prevents
+# "fixture 'benchmark' not found" errors when running bare `pytest` from
+# the repo root.
+pytest.importorskip("pytest_benchmark")
 
 from cassandra import cqltypes
 from cassandra.policies import ColDesc
