@@ -40,11 +40,51 @@ from cassandra.encoder import Encoder
 from cassandra.marshal import varint_unpack
 from cassandra.protocol import QueryMessage
 from cassandra.query import dict_factory, bind_params
-from cassandra.util import OrderedDict, Version
+from cassandra.util import Version
 from cassandra.pool import HostDistance
 from cassandra.connection import EndPoint
 from cassandra.tablets import Tablets
 from cassandra.util import maybe_add_timeout_to_query
+
+
+class _RowView(object):
+    """
+    Lightweight read-only view over a row tuple, supporting dict-like access.
+    Shares a single index map across all rows from the same result set,
+    avoiding per-row dict allocation overhead.
+    """
+
+    __slots__ = ("_row", "_index_map")
+
+    def __init__(self, row, index_map):
+        self._row = row
+        self._index_map = index_map
+
+    def __getitem__(self, key):
+        return self._row[self._index_map[key]]
+
+    def get(self, key, default=None):
+        idx = self._index_map.get(key)
+        if idx is not None:
+            return self._row[idx]
+        return default
+
+    def __contains__(self, key):
+        return key in self._index_map
+
+    def __repr__(self):
+        return repr({k: self._row[i] for k, i in self._index_map.items()})
+
+
+def _row_factory(colnames, rows):
+    """
+    Lightweight replacement for dict_factory used internally by schema parsers.
+    Returns a list of _RowView objects that support row["key"] and row.get("key")
+    but store data as tuples with a shared column-name-to-index map.
+    """
+    index_map = {name: i for i, name in enumerate(colnames)}
+    return [_RowView(row, index_map) for row in rows]
+
 
 log = logging.getLogger(__name__)
 
@@ -736,73 +776,53 @@ class LocalStrategy(ReplicationStrategy):
 class KeyspaceMetadata(object):
     """
     A representation of the schema for a single keyspace.
+
+    Attributes
+    ----------
+    name : str
+        The string name of the keyspace.
+    durable_writes : bool
+        A boolean indicating whether durable writes are enabled for this keyspace
+        or not.
+    replication_strategy : :class:`.ReplicationStrategy`
+        A :class:`.ReplicationStrategy` subclass object.
+    tables : dict
+        A map from table names to instances of :class:`~.TableMetadata`.
+    indexes : dict
+        A dict mapping index names to :class:`.IndexMetadata` instances.
+    user_types : dict
+        A map from user-defined type names to instances of
+        :class:`~cassandra.metadata.UserType`.
+
+        .. versionadded:: 2.1.0
+    functions : dict
+        A map from user-defined function signatures to instances of
+        :class:`~cassandra.metadata.Function`.
+
+        .. versionadded:: 2.6.0
+    aggregates : dict
+        A map from user-defined aggregate signatures to instances of
+        :class:`~cassandra.metadata.Aggregate`.
+
+        .. versionadded:: 2.6.0
+    views : dict
+        A dict mapping view names to :class:`.MaterializedViewMetadata` instances.
+    virtual : bool
+        A boolean indicating if this is a virtual keyspace or not. Always ``False``
+        for clusters running Cassandra pre-4.0 and DSE pre-6.7 versions.
+
+        .. versionadded:: 3.15
+    graph_engine : str or None
+        A string indicating whether a graph engine is enabled for this keyspace
+        (Core/Classic).
     """
 
-    name = None
-    """ The string name of the keyspace. """
-
-    durable_writes = True
-    """
-    A boolean indicating whether durable writes are enabled for this keyspace
-    or not.
-    """
-
-    replication_strategy = None
-    """
-    A :class:`.ReplicationStrategy` subclass object.
-    """
-
-    tables = None
-    """
-    A map from table names to instances of :class:`~.TableMetadata`.
-    """
-
-    indexes = None
-    """
-    A dict mapping index names to :class:`.IndexMetadata` instances.
-    """
-
-    user_types = None
-    """
-    A map from user-defined type names to instances of :class:`~cassandra.metadata.UserType`.
-
-    .. versionadded:: 2.1.0
-    """
-
-    functions = None
-    """
-    A map from user-defined function signatures to instances of :class:`~cassandra.metadata.Function`.
-
-    .. versionadded:: 2.6.0
-    """
-
-    aggregates = None
-    """
-    A map from user-defined aggregate signatures to instances of :class:`~cassandra.metadata.Aggregate`.
-
-    .. versionadded:: 2.6.0
-    """
-
-    views = None
-    """
-    A dict mapping view names to :class:`.MaterializedViewMetadata` instances.
-    """
-
-    virtual = False
-    """
-    A boolean indicating if this is a virtual keyspace or not. Always ``False``
-    for clusters running Cassandra pre-4.0 and DSE pre-6.7 versions.
-
-    .. versionadded:: 3.15
-    """
-
-    graph_engine = None
-    """
-    A string indicating whether a graph engine is enabled for this keyspace (Core/Classic).
-    """
-
-    _exc_info = None
-    """ set if metadata parsing failed """
+    __slots__ = (
+        'name', 'durable_writes', 'replication_strategy',
+        'tables', 'indexes', 'user_types', 'functions', 'aggregates',
+        'views', 'virtual', 'graph_engine', '_exc_info',
+        '__dict__', '__weakref__',
+    )
 
     def __init__(self, name, durable_writes, strategy_class, strategy_options, graph_engine=None):
         self.name = name
@@ -815,6 +835,8 @@ class KeyspaceMetadata(object):
         self.aggregates = {}
         self.views = {}
         self.graph_engine = graph_engine
+        self.virtual = False
+        self._exc_info = None
 
     @property
     def is_graph_enabled(self):
@@ -934,27 +956,20 @@ class UserType(object):
     User-defined types were introduced in Cassandra 2.1.
 
     .. versionadded:: 2.1.0
+
+    Attributes
+    ----------
+    keyspace : str
+        The string name of the keyspace in which this type is defined.
+    name : str
+        The name of this type.
+    field_names : list
+        An ordered list of the names for each field in this user-defined type.
+    field_types : list
+        An ordered list of the types for each field in this user-defined type.
     """
 
-    keyspace = None
-    """
-    The string name of the keyspace in which this type is defined.
-    """
-
-    name = None
-    """
-    The name of this type.
-    """
-
-    field_names = None
-    """
-    An ordered list of the names for each field in this user-defined type.
-    """
-
-    field_types = None
-    """
-    An ordered list of the types for each field in this user-defined type.
-    """
+    __slots__ = ('keyspace', 'name', 'field_names', 'field_types', '__dict__', '__weakref__')
 
     def __init__(self, keyspace, name, field_names, field_types):
         self.keyspace = keyspace
@@ -1000,53 +1015,35 @@ class Aggregate(object):
     Aggregate functions were introduced in Cassandra 2.2
 
     .. versionadded:: 2.6.0
+
+    Attributes
+    ----------
+    keyspace : str
+        The string name of the keyspace in which this aggregate is defined.
+    name : str
+        The name of this aggregate.
+    argument_types : list
+        An ordered list of the types for each argument to the aggregate.
+    state_func : str
+        Name of a state function.
+    state_type : str
+        Type of the aggregate state.
+    final_func : str
+        Name of a final function.
+    initial_condition : str
+        Initial condition of the aggregate.
+    return_type : str
+        Return type of the aggregate.
+    deterministic : bool or None
+        Flag indicating if this function is guaranteed to produce the same result
+        for a particular input and state. This is available only with DSE >=6.0.
     """
 
-    keyspace = None
-    """
-    The string name of the keyspace in which this aggregate is defined
-    """
-
-    name = None
-    """
-    The name of this aggregate
-    """
-
-    argument_types = None
-    """
-    An ordered list of the types for each argument to the aggregate
-    """
-
-    final_func = None
-    """
-    Name of a final function
-    """
-
-    initial_condition = None
-    """
-    Initial condition of the aggregate
-    """
-
-    return_type = None
-    """
-    Return type of the aggregate
-    """
-
-    state_func = None
-    """
-    Name of a state function
-    """
-
-    state_type = None
-    """
-    Type of the aggregate state
-    """
-
-    deterministic = None
-    """
-    Flag indicating if this function is guaranteed to produce the same result
-    for a particular input and state. This is available only with DSE >=6.0.
-    """
+    __slots__ = (
+        'keyspace', 'name', 'argument_types', 'state_func', 'state_type',
+        'final_func', 'initial_condition', 'return_type', 'deterministic',
+        '__dict__', '__weakref__',
+    )
 
     def __init__(self, keyspace, name, argument_types, state_func,
                  state_type, final_func, initial_condition, return_type,
@@ -1099,66 +1096,44 @@ class Function(object):
     User-defined functions were introduced in Cassandra 2.2
 
     .. versionadded:: 2.6.0
+
+    Attributes
+    ----------
+    keyspace : str
+        The string name of the keyspace in which this function is defined.
+    name : str
+        The name of this function.
+    argument_types : list
+        An ordered list of the types for each argument to the function.
+    argument_names : list
+        An ordered list of the names of each argument to the function.
+    return_type : str
+        Return type of the function.
+    language : str
+        Language of the function body.
+    body : str
+        Function body string.
+    called_on_null_input : bool
+        Flag indicating whether this function should be called for rows with null values
+        (convenience function to avoid handling nulls explicitly if the result will just
+        be null).
+    deterministic : bool or None
+        Flag indicating if this function is guaranteed to produce the same result
+        for a particular input. This is available only for DSE >=6.0.
+    monotonic : bool or None
+        Flag indicating if this function is guaranteed to increase or decrease
+        monotonically on any of its arguments. This is available only for DSE >=6.0.
+    monotonic_on : list or None
+        A list containing the argument or arguments over which this function is
+        monotonic. This is available only for DSE >=6.0.
     """
 
-    keyspace = None
-    """
-    The string name of the keyspace in which this function is defined
-    """
-
-    name = None
-    """
-    The name of this function
-    """
-
-    argument_types = None
-    """
-    An ordered list of the types for each argument to the function
-    """
-
-    argument_names = None
-    """
-    An ordered list of the names of each argument to the function
-    """
-
-    return_type = None
-    """
-    Return type of the function
-    """
-
-    language = None
-    """
-    Language of the function body
-    """
-
-    body = None
-    """
-    Function body string
-    """
-
-    called_on_null_input = None
-    """
-    Flag indicating whether this function should be called for rows with null values
-    (convenience function to avoid handling nulls explicitly if the result will just be null)
-    """
-
-    deterministic = None
-    """
-    Flag indicating if this function is guaranteed to produce the same result
-    for a particular input. This is available only for DSE >=6.0.
-    """
-
-    monotonic = None
-    """
-    Flag indicating if this function is guaranteed to increase or decrease
-    monotonically on any of its arguments. This is available only for DSE >=6.0.
-    """
-
-    monotonic_on = None
-    """
-    A list containing the argument or arguments over which this function is
-    monotonic. This is available only for DSE >=6.0.
-    """
+    __slots__ = (
+        'keyspace', 'name', 'argument_types', 'argument_names',
+        'return_type', 'language', 'body', 'called_on_null_input',
+        'deterministic', 'monotonic', 'monotonic_on',
+        '__dict__', '__weakref__',
+    )
 
     def __init__(self, keyspace, name, argument_types, argument_names,
                  return_type, language, body, called_on_null_input,
@@ -1225,30 +1200,55 @@ class Function(object):
 class TableMetadata(object):
     """
     A representation of the schema for a single table.
+
+    Attributes
+    ----------
+    keyspace_name : str
+        String name of this Table's keyspace.
+    name : str
+        The string name of the table.
+    partition_key : list
+        A list of :class:`.ColumnMetadata` instances representing the columns in
+        the partition key for this table.  This will always hold at least one
+        column.
+    clustering_key : list
+        A list of :class:`.ColumnMetadata` instances representing the columns
+        in the clustering key for this table.  These are all of the
+        :attr:`.primary_key` columns that are not in the :attr:`.partition_key`.
+
+        Note that a table may have no clustering keys, in which case this will
+        be an empty list.
+    columns : dict
+        A dict mapping column names to :class:`.ColumnMetadata` instances.
+    indexes : dict
+        A dict mapping index names to :class:`.IndexMetadata` instances.
+    options : dict
+        A dict mapping table option names to their specific settings for this
+        table.
+    triggers : dict
+        A dict mapping trigger names to :class:`.TriggerMetadata` instances.
+    views : dict
+        A dict mapping view names to :class:`.MaterializedViewMetadata` instances.
+    virtual : bool
+        A boolean indicating if this is a virtual table or not. Always ``False``
+        for clusters running Cassandra pre-4.0 and DSE pre-6.7 versions.
+
+        .. versionadded:: 3.15
+    extensions : dict or None
+        Metadata describing configuration for table extensions.
     """
 
-    keyspace_name = None
-    """ String name of this Table's keyspace """
+    __slots__ = (
+        'keyspace_name', 'name', 'partition_key', 'clustering_key',
+        'columns', 'indexes', 'is_compact_storage', 'options',
+        'comparator', 'triggers', 'views', '_exc_info', 'virtual', 'extensions',
+        '__dict__', '__weakref__',
+    )
 
-    name = None
-    """ The string name of the table. """
-
-    partition_key = None
-    """
-    A list of :class:`.ColumnMetadata` instances representing the columns in
-    the partition key for this table.  This will always hold at least one
-    column.
-    """
-
-    clustering_key = None
-    """
-    A list of :class:`.ColumnMetadata` instances representing the columns
-    in the clustering key for this table.  These are all of the
-    :attr:`.primary_key` columns that are not in the :attr:`.partition_key`.
-
-    Note that a table may have no clustering keys, in which case this will
-    be an empty list.
-    """
+    compaction_options = {
+        "min_compaction_threshold": "min_threshold",
+        "max_compaction_threshold": "max_threshold",
+        "compaction_strategy_class": "class"}
 
     @property
     def primary_key(self):
@@ -1257,50 +1257,6 @@ class TableMetadata(object):
         the primary key for this table.
         """
         return self.partition_key + self.clustering_key
-
-    columns = None
-    """
-    A dict mapping column names to :class:`.ColumnMetadata` instances.
-    """
-
-    indexes = None
-    """
-    A dict mapping index names to :class:`.IndexMetadata` instances.
-    """
-
-    is_compact_storage = False
-
-    options = None
-    """
-    A dict mapping table option names to their specific settings for this
-    table.
-    """
-
-    compaction_options = {
-        "min_compaction_threshold": "min_threshold",
-        "max_compaction_threshold": "max_threshold",
-        "compaction_strategy_class": "class"}
-
-    triggers = None
-    """
-    A dict mapping trigger names to :class:`.TriggerMetadata` instances.
-    """
-
-    views = None
-    """
-    A dict mapping view names to :class:`.MaterializedViewMetadata` instances.
-    """
-
-    _exc_info = None
-    """ set if metadata parsing failed """
-
-    virtual = False
-    """
-    A boolean indicating if this is a virtual table or not. Always ``False``
-    for clusters running Cassandra pre-4.0 and DSE pre-6.7 versions.
-
-    .. versionadded:: 3.15
-    """
 
     @property
     def is_cql_compatible(self):
@@ -1320,23 +1276,21 @@ class TableMetadata(object):
             return not incompatible
         return True
 
-    extensions = None
-    """
-    Metadata describing configuration for table extensions
-    """
-
     def __init__(self, keyspace_name, name, partition_key=None, clustering_key=None, columns=None, triggers=None, options=None, virtual=False):
         self.keyspace_name = keyspace_name
         self.name = name
         self.partition_key = [] if partition_key is None else partition_key
         self.clustering_key = [] if clustering_key is None else clustering_key
-        self.columns = OrderedDict() if columns is None else columns
+        self.columns = {} if columns is None else columns
         self.indexes = {}
         self.options = {} if options is None else options
         self.comparator = None
-        self.triggers = OrderedDict() if triggers is None else triggers
+        self.triggers = {} if triggers is None else triggers
         self.views = {}
         self.virtual = virtual
+        self.is_compact_storage = False
+        self._exc_info = None
+        self.extensions = None
 
     def export_as_string(self):
         """
@@ -1494,6 +1448,8 @@ class TableMetadataV3(TableMetadata):
     For C* 3.0+. `option_maps` take a superset of map names, so if  nothing
     changes structurally, new option maps can just be appended to the list.
     """
+    __slots__ = ()
+
     compaction_options = {}
 
     option_maps = [
@@ -1527,12 +1483,21 @@ class TableMetadataV3(TableMetadata):
 
 
 class TableMetadataDSE68(TableMetadataV3):
+    """
+    Attributes
+    ----------
+    vertex : :class:`.VertexMetadata` or None
+        A :class:`.VertexMetadata` instance, if graph enabled.
+    edge : :class:`.EdgeMetadata` or None
+        A :class:`.EdgeMetadata` instance, if graph enabled.
+    """
 
-    vertex = None
-    """A :class:`.VertexMetadata` instance, if graph enabled"""
+    __slots__ = ('vertex', 'edge')
 
-    edge = None
-    """A :class:`.EdgeMetadata` instance, if graph enabled"""
+    def __init__(self, *args, **kwargs):
+        super(TableMetadataDSE68, self).__init__(*args, **kwargs)
+        self.vertex = None
+        self.edge = None
 
     def as_cql_query(self, formatted=False):
         ret = super(TableMetadataDSE68, self).as_cql_query(formatted)
@@ -1647,31 +1612,23 @@ def escape_name(name):
 class ColumnMetadata(object):
     """
     A representation of a single column in a table.
+
+    Attributes
+    ----------
+    table : :class:`.TableMetadata`
+        The :class:`.TableMetadata` this column belongs to.
+    name : str
+        The string name of this column.
+    cql_type : str
+        The CQL type for the column.
+    is_static : bool
+        If this column is static (available in Cassandra 2.1+), this will
+        be :const:`True`, otherwise :const:`False`.
+    is_reversed : bool
+        If this column is reversed (DESC) as in clustering order.
     """
 
-    table = None
-    """ The :class:`.TableMetadata` this column belongs to. """
-
-    name = None
-    """ The string name of this column. """
-
-    cql_type = None
-    """
-    The CQL type for the column.
-    """
-
-    is_static = False
-    """
-    If this column is static (available in Cassandra 2.1+), this will
-    be :const:`True`, otherwise :const:`False`.
-    """
-
-    is_reversed = False
-    """
-    If this column is reversed (DESC) as in clustering order
-    """
-
-    _cass_type = None
+    __slots__ = ('table', 'name', 'cql_type', 'is_static', 'is_reversed', '_cass_type', '__dict__', '__weakref__')
 
     def __init__(self, table_metadata, column_name, cql_type, is_static=False, is_reversed=False):
         self.table = table_metadata
@@ -1679,6 +1636,7 @@ class ColumnMetadata(object):
         self.cql_type = cql_type
         self.is_static = is_static
         self.is_reversed = is_reversed
+        self._cass_type = None
 
     def __str__(self):
         return "%s %s" % (self.name, self.cql_type)
@@ -1687,21 +1645,22 @@ class ColumnMetadata(object):
 class IndexMetadata(object):
     """
     A representation of a secondary index on a column.
+
+    Attributes
+    ----------
+    keyspace_name : str
+        A string name of the keyspace.
+    table_name : str
+        A string name of the table this index is on.
+    name : str
+        A string name for the index.
+    kind : str
+        A string representing the kind of index (COMPOSITE, CUSTOM,...).
+    index_options : dict
+        A dict of index options.
     """
-    keyspace_name = None
-    """ A string name of the keyspace. """
 
-    table_name = None
-    """ A string name of the table this index is on. """
-
-    name = None
-    """ A string name for the index. """
-
-    kind = None
-    """ A string representing the kind of index (COMPOSITE, CUSTOM,...). """
-
-    index_options = {}
-    """ A dict of index options. """
+    __slots__ = ('keyspace_name', 'table_name', 'name', 'kind', 'index_options', '__dict__', '__weakref__')
 
     def __init__(self, keyspace_name, table_name, index_name, kind, index_options):
         self.keyspace_name = keyspace_name
@@ -1926,19 +1885,20 @@ class BytesToken(Token):
 class TriggerMetadata(object):
     """
     A representation of a trigger for a table.
+
+    Attributes
+    ----------
+    table : :class:`.TableMetadata`
+        The :class:`.TableMetadata` this trigger belongs to.
+    name : str
+        The string name of this trigger.
+    options : dict or None
+        A dict mapping trigger option names to their specific settings for this
+        table.
     """
 
-    table = None
-    """ The :class:`.TableMetadata` this trigger belongs to. """
+    __slots__ = ('table', 'name', 'options', '__dict__', '__weakref__')
 
-    name = None
-    """ The string name of this trigger. """
-
-    options = None
-    """
-    A dict mapping trigger option names to their specific settings for this
-    table.
-    """
     def __init__(self, table_metadata, trigger_name, options=None):
         self.table = table_metadata
         self.name = trigger_name
@@ -2007,7 +1967,7 @@ class _SchemaParser(object):
                         yield next_result.parsed_rows
 
                 result.parsed_rows += itertools.chain(*get_next_pages())
-            return dict_factory(result.column_names, result.parsed_rows) if result else []
+            return _row_factory(result.column_names, result.parsed_rows) if result else []
         else:
             raise result
 
@@ -2569,7 +2529,7 @@ class SchemaParserV3(SchemaParserV22):
     """
     _SELECT_KEYSPACES = "SELECT * FROM system_schema.keyspaces"
     _SELECT_TABLES = "SELECT * FROM system_schema.tables"
-    _SELECT_COLUMNS = "SELECT * FROM system_schema.columns"
+    _SELECT_COLUMNS = "SELECT keyspace_name, table_name, column_name, clustering_order, kind, position, type FROM system_schema.columns"
     _SELECT_INDEXES = "SELECT * FROM system_schema.indexes"
     _SELECT_TRIGGERS = "SELECT * FROM system_schema.triggers"
     _SELECT_TYPES = "SELECT * FROM system_schema.types"
@@ -2717,31 +2677,40 @@ class SchemaParserV3(SchemaParserV22):
         return dict((o, row.get(o)) for o in self.recognized_table_options if o in row)
 
     def _build_table_columns(self, meta, col_rows, compact_static=False, is_dense=False, virtual=False):
-        # partition key
-        partition_rows = [r for r in col_rows
-                          if r.get('kind', None) == "partition_key"]
+        # Single-pass classification of column rows by kind
+        partition_rows = []
+        clustering_rows = []
+        other_rows = []
+        for r in col_rows:
+            kind = r.get('kind', None)
+            if kind == "partition_key":
+                partition_rows.append(r)
+            elif kind == "clustering":
+                if not compact_static:
+                    clustering_rows.append(r)
+                # else: skip clustering rows entirely for compact_static tables
+            else:
+                other_rows.append(r)
+
+        # partition key — must be inserted first into meta.columns for CQL export ordering
         if len(partition_rows) > 1:
-            partition_rows = sorted(partition_rows, key=lambda row: row.get('position'))
+            partition_rows.sort(key=lambda row: row.get('position'))
         for r in partition_rows:
-            # we have to add meta here (and not in the later loop) because TableMetadata.columns is an
-            # OrderedDict, and it assumes keys are inserted first, in order, when exporting CQL
             column_meta = self._build_column_metadata(meta, r)
             meta.columns[column_meta.name] = column_meta
-            meta.partition_key.append(meta.columns[r.get('column_name')])
+            meta.partition_key.append(column_meta)
 
         # clustering key
-        if not compact_static:
-            clustering_rows = [r for r in col_rows
-                               if r.get('kind', None) == "clustering"]
+        if clustering_rows:
             if len(clustering_rows) > 1:
-                clustering_rows = sorted(clustering_rows, key=lambda row: row.get('position'))
+                clustering_rows.sort(key=lambda row: row.get('position'))
             for r in clustering_rows:
                 column_meta = self._build_column_metadata(meta, r)
                 meta.columns[column_meta.name] = column_meta
-                meta.clustering_key.append(meta.columns[r.get('column_name')])
+                meta.clustering_key.append(column_meta)
 
-        for col_row in (r for r in col_rows
-                        if r.get('kind', None) not in ('partition_key', 'clustering_key')):
+        # remaining columns (static, regular, etc.)
+        for col_row in other_rows:
             column_meta = self._build_column_metadata(meta, col_row)
             if is_dense and column_meta.cql_type == types.cql_empty_type:
                 continue
@@ -3012,11 +2981,13 @@ class SchemaParserV4(SchemaParserV3):
 
     @staticmethod
     def _build_keyspace_metadata_internal(row):
-        # necessary fields that aren't int virtual ks
-        row["durable_writes"] = row.get("durable_writes", None)
-        row["replication"] = row.get("replication", {})
-        row["replication"]["class"] = row["replication"].get("class", None)
-        return super(SchemaParserV4, SchemaParserV4)._build_keyspace_metadata_internal(row)
+        # necessary fields that aren't in virtual ks — read without mutating the row
+        name = row["keyspace_name"]
+        durable_writes = row.get("durable_writes", None)
+        replication = dict(row.get("replication")) if "replication" in row else {}
+        replication_class = replication.pop("class") if "class" in replication else None
+        graph_engine = row.get("graph_engine", None)
+        return KeyspaceMetadata(name, durable_writes, replication_class, replication, graph_engine)
 
 
 class SchemaParserDSE67(SchemaParserV4):
@@ -3227,56 +3198,46 @@ class SchemaParserDSE68(SchemaParserDSE67):
 
 
 class MaterializedViewMetadata(object):
-    """
-    A representation of a materialized view on a table
+    r"""
+    A representation of a materialized view on a table.
+
+    Attributes
+    ----------
+    keyspace_name : str
+        A string name of the keyspace of this view.
+    name : str
+        A string name of the view.
+    base_table_name : str
+        A string name of the base table for this view.
+    partition_key : list
+        A list of :class:`.ColumnMetadata` instances representing the columns in
+        the partition key for this view.  This will always hold at least one
+        column.
+    clustering_key : list
+        A list of :class:`.ColumnMetadata` instances representing the columns
+        in the clustering key for this view.
+
+        Note that a table may have no clustering keys, in which case this will
+        be an empty list.
+    columns : dict
+        A dict mapping column names to :class:`.ColumnMetadata` instances.
+    include_all_columns : bool or None
+        A flag indicating whether the view was created AS SELECT \*.
+    where_clause : str or None
+        String WHERE clause for the view select statement. From server metadata.
+    options : dict
+        A dict mapping table option names to their specific settings for this
+        view.
+    extensions : dict or None
+        Metadata describing configuration for table extensions.
     """
 
-    keyspace_name = None
-    """ A string name of the keyspace of this view."""
-
-    name = None
-    """ A string name of the view."""
-
-    base_table_name = None
-    """ A string name of the base table for this view."""
-
-    partition_key = None
-    """
-    A list of :class:`.ColumnMetadata` instances representing the columns in
-    the partition key for this view.  This will always hold at least one
-    column.
-    """
-
-    clustering_key = None
-    """
-    A list of :class:`.ColumnMetadata` instances representing the columns
-    in the clustering key for this view.
-
-    Note that a table may have no clustering keys, in which case this will
-    be an empty list.
-    """
-
-    columns = None
-    """
-    A dict mapping column names to :class:`.ColumnMetadata` instances.
-    """
-
-    include_all_columns = None
-    """ A flag indicating whether the view was created AS SELECT * """
-
-    where_clause = None
-    """ String WHERE clause for the view select statement. From server metadata """
-
-    options = None
-    """
-    A dict mapping table option names to their specific settings for this
-    view.
-    """
-
-    extensions = None
-    """
-    Metadata describing configuration for table extensions
-    """
+    __slots__ = (
+        'keyspace_name', 'name', 'base_table_name',
+        'partition_key', 'clustering_key', 'columns',
+        'include_all_columns', 'where_clause', 'options', 'extensions',
+        '__dict__', '__weakref__',
+    )
 
     def __init__(self, keyspace_name, view_name, base_table_name, include_all_columns, where_clause, options):
         self.keyspace_name = keyspace_name
@@ -3284,10 +3245,11 @@ class MaterializedViewMetadata(object):
         self.base_table_name = base_table_name
         self.partition_key = []
         self.clustering_key = []
-        self.columns = OrderedDict()
+        self.columns = {}
         self.include_all_columns = include_all_columns
         self.where_clause = where_clause
         self.options = options or {}
+        self.extensions = None
 
     def as_cql_query(self, formatted=False):
         """
@@ -3420,7 +3382,7 @@ def get_column_from_system_local(connection, column_name: str, timeout, metadata
         , timeout=timeout, fail_on_error=False)
     if not success or not local_result.parsed_rows:
         return ""
-    local_rows = dict_factory(local_result.column_names, local_result.parsed_rows)
+    local_rows = _row_factory(local_result.column_names, local_result.parsed_rows)
     local_row = local_rows[0]
     return local_row.get(column_name)
 
