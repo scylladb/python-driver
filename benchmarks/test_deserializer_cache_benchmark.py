@@ -1,4 +1,4 @@
-# Copyright DataStax, Inc.
+# Copyright ScyllaDB, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,9 +16,15 @@
 Benchmarks for find_deserializer / make_deserializers with and without caching.
 
 Run with: pytest benchmarks/test_deserializer_cache_benchmark.py -v
+
+Requires the ``pytest-benchmark`` plugin and Cython extensions to be built.
+Skipped automatically when either dependency is unavailable.
 """
 
 import pytest
+
+pytest.importorskip("pytest_benchmark")
+pytest.importorskip("cassandra.deserializers")
 
 from cassandra import cqltypes
 from cassandra.deserializers import (
