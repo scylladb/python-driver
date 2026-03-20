@@ -1235,7 +1235,18 @@ class TokenAwarePolicyTest(unittest.TestCase):
                 child_policy.make_query_plan.assert_called_with(keyspace, query)
                 child_policy.make_query_plan_with_exclusion.assert_called()
             elif child_policy.make_query_plan_with_exclusion.called:
-                child_policy.make_query_plan_with_exclusion.assert_called()
+                # Non-tablet path with replicas: exclusion set should contain
+                # the replicas that were already yielded
+                exc_call = child_policy.make_query_plan_with_exclusion.call_args
+                excluded_hosts = (
+                    exc_call[0][2]
+                    if len(exc_call[0]) > 2
+                    else exc_call[1].get("excluded", set())
+                )
+                assert set(replicas).issubset(excluded_hosts), (
+                    "Exclusion set should contain the yielded replicas, "
+                    "got %s, expected superset of %s" % (excluded_hosts, set(replicas))
+                )
             else:
                 child_policy.make_query_plan.assert_called_once_with(keyspace, query)
             assert patched_shuffle.call_count == 1
