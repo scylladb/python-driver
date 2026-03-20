@@ -19,7 +19,6 @@ Verifies byte-for-byte equivalence with the Python-level cqltype.serialize()
 implementations, plus correct error behavior for edge cases.
 """
 
-import math
 import struct
 import unittest
 
@@ -38,11 +37,10 @@ from cassandra.cqltypes import (
     UTF8Type,
     LongType,
     BooleanType,
-    parse_casstype_args,
 )
 
 # Import serializers only if Cython is available
-if HAVE_CYTHON:
+if HAVE_CYTHON or VERIFY_CYTHON:
     from cassandra.serializers import (
         Serializer,
         SerFloatType,

@@ -45,9 +45,9 @@ from cassandra.util import is_little_endian
 cdef inline void _check_float_range(double value) except *:
     """Raise OverflowError for finite values outside float32 range.
 
-    Matches the behavior of struct.pack('>f', value), which raises
-    struct.error for values that cannot be represented as a 32-bit
-    IEEE 754 float. inf, -inf, and nan pass through unchanged.
+    Intentionally raises OverflowError (not struct.error) so callers
+    can catch a single exception type. The accepted range matches
+    struct.pack('>f', ...).  inf, -inf, and nan pass through unchanged.
     """
     if not isinf(value) and not isnan(value):
         if value > <double>FLT_MAX or value < -<double>FLT_MAX:
@@ -58,9 +58,10 @@ cdef inline void _check_float_range(double value) except *:
 cdef inline void _check_int32_range(object value) except *:
     """Raise OverflowError for values outside the signed int32 range.
 
-    Matches the behavior of struct.pack('>i', value), which raises
-    struct.error for values outside [-2147483648, 2147483647]. The check
-    must be done on the Python int *before* the C-level <int32_t> cast,
+    Intentionally raises OverflowError (not struct.error) so callers
+    can catch a single exception type. The accepted range matches
+    struct.pack('>i', ...): [-2147483648, 2147483647]. The check must
+    be done on the Python int *before* the C-level <int32_t> cast,
     which would silently truncate.
     """
     if value > 2147483647 or value < -2147483648:
@@ -215,7 +216,12 @@ cdef class SerVectorType(Serializer):
             return self._serialize_generic(value, protocol_version)
 
     cdef inline bytes _serialize_float(self, object values):
-        """Serialize a list of floats into a contiguous big-endian buffer."""
+        """Serialize a list of floats into a contiguous big-endian buffer.
+
+        Uses ``values[i]`` (``__getitem__``) intentionally rather than
+        iteration so Cython can emit a tight indexed loop with minimal
+        Python overhead.  Callers must pass a sequence (list, tuple, etc.).
+        """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 4
         if buf_size == 0:
@@ -244,7 +250,12 @@ cdef class SerVectorType(Serializer):
         return result
 
     cdef inline bytes _serialize_double(self, object values):
-        """Serialize a list of doubles into a contiguous big-endian buffer."""
+        """Serialize a list of doubles into a contiguous big-endian buffer.
+
+        Uses ``values[i]`` (``__getitem__``) intentionally rather than
+        iteration so Cython can emit a tight indexed loop with minimal
+        Python overhead.  Callers must pass a sequence (list, tuple, etc.).
+        """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 8
         if buf_size == 0:
@@ -276,7 +287,12 @@ cdef class SerVectorType(Serializer):
         return result
 
     cdef inline bytes _serialize_int32(self, object values):
-        """Serialize a list of int32 values into a contiguous big-endian buffer."""
+        """Serialize a list of int32 values into a contiguous big-endian buffer.
+
+        Uses ``values[i]`` (``__getitem__``) intentionally rather than
+        iteration so Cython can emit a tight indexed loop with minimal
+        Python overhead.  Callers must pass a sequence (list, tuple, etc.).
+        """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 4
         if buf_size == 0:
