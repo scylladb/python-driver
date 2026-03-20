@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import glob
 import importlib.machinery
 import os
 import warnings
@@ -33,22 +32,28 @@ def pytest_configure(config):
     This hook detects such staleness at test-session startup so the developer
     is alerted immediately.
     """
-    seen = set()
     stale = []
-    # Use the current interpreter's extension suffixes so we only check
-    # extensions that would actually be loaded (correct ABI tag), and
-    # handle both .so (POSIX) and .pyd (Windows) automatically.
-    for suffix in importlib.machinery.EXTENSION_SUFFIXES:
-        for ext_path in glob.glob(os.path.join(_CASSANDRA_DIR, f"*{suffix}")):
-            module_name = os.path.basename(ext_path).split(".")[0]
-            if module_name in seen:
+    # Iterate over .py sources and, for each module, look for the first
+    # existing compiled extension in EXTENSION_SUFFIXES order.  This mirrors
+    # how Python's import machinery selects an extension module, and avoids
+    # globbing patterns like "*{suffix}" that can pick up ABI-tagged
+    # extensions built for other Python versions.
+    if os.path.isdir(_CASSANDRA_DIR):
+        for entry in os.listdir(_CASSANDRA_DIR):
+            if not entry.endswith(".py"):
                 continue
-            py_path = os.path.join(_CASSANDRA_DIR, module_name + ".py")
-            if os.path.exists(py_path) and os.path.getmtime(py_path) > os.path.getmtime(
-                ext_path
-            ):
-                seen.add(module_name)
-                stale.append((module_name, ext_path, py_path))
+            module_name, _ = os.path.splitext(entry)
+            py_path = os.path.join(_CASSANDRA_DIR, entry)
+            # For this module, find the first extension file Python would load.
+            for suffix in importlib.machinery.EXTENSION_SUFFIXES:
+                ext_path = os.path.join(_CASSANDRA_DIR, module_name + suffix)
+                if not os.path.exists(ext_path):
+                    continue
+                if os.path.getmtime(py_path) > os.path.getmtime(ext_path):
+                    stale.append((module_name, ext_path, py_path))
+                # Only consider the first matching suffix; this is the one
+                # the import system would actually use.
+                break
 
     if stale:
         names = ", ".join(m for m, _, _ in stale)
