@@ -27,13 +27,28 @@ from threading import Thread
 from cassandra import ConsistencyLevel
 from cassandra.cluster import Cluster, ControlConnection
 from cassandra.metadata import Metadata
-from cassandra.policies import (RackAwareRoundRobinPolicy, RoundRobinPolicy, WhiteListRoundRobinPolicy, DCAwareRoundRobinPolicy,
-                                TokenAwarePolicy, SimpleConvictionPolicy,
-                                HostDistance, ExponentialReconnectionPolicy,
-                                RetryPolicy, WriteType,
-                                DowngradingConsistencyRetryPolicy, ConstantReconnectionPolicy,
-                                LoadBalancingPolicy, ConvictionPolicy, ReconnectionPolicy, FallthroughRetryPolicy,
-                                IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy, ExponentialBackoffRetryPolicy)
+from cassandra.policies import (
+    RackAwareRoundRobinPolicy,
+    RoundRobinPolicy,
+    WhiteListRoundRobinPolicy,
+    DCAwareRoundRobinPolicy,
+    TokenAwarePolicy,
+    SimpleConvictionPolicy,
+    HostDistance,
+    ExponentialReconnectionPolicy,
+    RetryPolicy,
+    WriteType,
+    DowngradingConsistencyRetryPolicy,
+    ConstantReconnectionPolicy,
+    LoadBalancingPolicy,
+    ConvictionPolicy,
+    ReconnectionPolicy,
+    FallthroughRetryPolicy,
+    IdentityTranslator,
+    EC2MultiRegionTranslator,
+    HostFilterPolicy,
+    ExponentialBackoffRetryPolicy,
+)
 from cassandra.connection import DefaultEndPoint, UnixSocketEndPoint
 from cassandra.pool import Host
 from cassandra.query import Statement
@@ -47,7 +62,9 @@ class LoadBalancingPolicyTest(unittest.TestCase):
         """
 
         policy = LoadBalancingPolicy()
-        host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host = Host(
+            DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         host.set_location_info("dc1", "rack1")
 
         with pytest.raises(NotImplementedError):
@@ -71,7 +88,6 @@ class LoadBalancingPolicyTest(unittest.TestCase):
 
 
 class RoundRobinPolicyTest(unittest.TestCase):
-
     def test_basic(self):
         hosts = [0, 1, 2, 3]
         policy = RoundRobinPolicy()
@@ -150,7 +166,7 @@ class RoundRobinPolicyTest(unittest.TestCase):
 
         # make the GIL switch after every instruction, maximizing
         # the chance of race conditions
-        check = '__pypy__' in sys.builtin_module_names
+        check = "__pypy__" in sys.builtin_module_names
         if check:
             original_interval = sys.getcheckinterval()
         else:
@@ -187,9 +203,48 @@ class RoundRobinPolicyTest(unittest.TestCase):
         qplan = list(policy.make_query_plan())
         assert qplan == []
 
-@pytest.mark.parametrize("policy_specialization, constructor_args", [(DCAwareRoundRobinPolicy, ("dc1", )), (RackAwareRoundRobinPolicy, ("dc1", "rack1"))])
-class TestRackOrDCAwareRoundRobinPolicy:
+    def test_make_query_plan_with_exclusion_basic(self):
+        hosts = [0, 1, 2, 3]
+        policy = RoundRobinPolicy()
+        policy.populate(None, hosts)
+        excluded = {1, 3}
+        qplan = list(policy.make_query_plan_with_exclusion(excluded=excluded))
+        assert 1 not in qplan
+        assert 3 not in qplan
+        assert sorted(qplan) == [0, 2]
 
+    def test_make_query_plan_with_exclusion_empty(self):
+        hosts = [0, 1, 2, 3]
+        policy = RoundRobinPolicy()
+        policy.populate(None, hosts)
+        qplan = list(policy.make_query_plan_with_exclusion(excluded=()))
+        assert sorted(qplan) == hosts
+
+    def test_make_query_plan_with_exclusion_all_excluded(self):
+        hosts = [0, 1, 2, 3]
+        policy = RoundRobinPolicy()
+        policy.populate(None, hosts)
+        excluded = set(hosts)
+        qplan = list(policy.make_query_plan_with_exclusion(excluded=excluded))
+        assert qplan == []
+
+    def test_make_query_plan_with_exclusion_superset(self):
+        hosts = [0, 1, 2, 3]
+        policy = RoundRobinPolicy()
+        policy.populate(None, hosts)
+        excluded = {0, 1, 2, 3, 99, 100}
+        qplan = list(policy.make_query_plan_with_exclusion(excluded=excluded))
+        assert qplan == []
+
+
+@pytest.mark.parametrize(
+    "policy_specialization, constructor_args",
+    [
+        (DCAwareRoundRobinPolicy, ("dc1",)),
+        (RackAwareRoundRobinPolicy, ("dc1", "rack1")),
+    ],
+)
+class TestRackOrDCAwareRoundRobinPolicy:
     def test_no_remote(self, policy_specialization, constructor_args):
         hosts = []
         for i in range(2):
@@ -197,7 +252,9 @@ class TestRackOrDCAwareRoundRobinPolicy:
             h.set_location_info("dc1", "rack2")
             hosts.append(h)
         for i in range(2):
-            h = Host(DefaultEndPoint(i + 2), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            h = Host(
+                DefaultEndPoint(i + 2), SimpleConvictionPolicy, host_id=uuid.uuid4()
+            )
             h.set_location_info("dc1", "rack1")
             hosts.append(h)
 
@@ -209,7 +266,10 @@ class TestRackOrDCAwareRoundRobinPolicy:
         assert sorted(qplan) == sorted(hosts)
 
     def test_with_remotes(self, policy_specialization, constructor_args):
-        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(6)]
+        hosts = [
+            Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(6)
+        ]
         for h in hosts[:2]:
             h.set_location_info("dc1", "rack1")
         for h in hosts[2:4]:
@@ -219,8 +279,12 @@ class TestRackOrDCAwareRoundRobinPolicy:
 
         random.shuffle(hosts)
 
-        local_rack_hosts = set(h for h in hosts if h.datacenter == "dc1" and h.rack == "rack1")
-        local_hosts = set(h for h in hosts if h.datacenter == "dc1" and h.rack != "rack1")
+        local_rack_hosts = set(
+            h for h in hosts if h.datacenter == "dc1" and h.rack == "rack1"
+        )
+        local_hosts = set(
+            h for h in hosts if h.datacenter == "dc1" and h.rack != "rack1"
+        )
         remote_hosts = set(h for h in hosts if h.datacenter != "dc1")
 
         # allow all of the remote hosts to be used
@@ -264,7 +328,9 @@ class TestRackOrDCAwareRoundRobinPolicy:
         policy = policy_specialization(*constructor_args, used_hosts_per_remote_dc=0)
 
         # same dc, same rack
-        host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host = Host(
+            DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         host.set_location_info("dc1", "rack1")
         policy.populate(Mock(), [host])
 
@@ -274,14 +340,28 @@ class TestRackOrDCAwareRoundRobinPolicy:
             assert policy.distance(host) == HostDistance.LOCAL_RACK
 
         # same dc different rack
-        host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        # Reset policy state to simulate a fresh view or handle the "move" correctly
+        # In a real scenario, a host moving racks would be handled by on_down/on_up or distinct host objects.
+        # Here we are reusing the same policy instance with populate(), which merges hosts.
+        # To avoid the host existing in both rack1 and rack2 buckets due to address equality,
+        # we clear the internal state.
+        if hasattr(policy, "_live_hosts"):
+            policy._live_hosts.clear()
+        if hasattr(policy, "_dc_live_hosts"):
+            policy._dc_live_hosts.clear()
+
+        host = Host(
+            DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         host.set_location_info("dc1", "rack2")
         policy.populate(Mock(), [host])
 
         assert policy.distance(host) == HostDistance.LOCAL
 
         # used_hosts_per_remote_dc is set to 0, so ignore it
-        remote_host = Host(DefaultEndPoint("ip2"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        remote_host = Host(
+            DefaultEndPoint("ip2"), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         remote_host.set_location_info("dc2", "rack1")
         assert policy.distance(remote_host) == HostDistance.IGNORED
 
@@ -295,14 +375,21 @@ class TestRackOrDCAwareRoundRobinPolicy:
 
         # since used_hosts_per_remote_dc is set to 1, only the first
         # remote host in dc2 will be REMOTE, the rest are IGNORED
-        second_remote_host = Host(DefaultEndPoint("ip3"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        second_remote_host = Host(
+            DefaultEndPoint("ip3"), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         second_remote_host.set_location_info("dc2", "rack1")
         policy.populate(Mock(), [host, remote_host, second_remote_host])
-        distances = set([policy.distance(remote_host), policy.distance(second_remote_host)])
+        distances = set(
+            [policy.distance(remote_host), policy.distance(second_remote_host)]
+        )
         assert distances == set([HostDistance.REMOTE, HostDistance.IGNORED])
 
     def test_status_updates(self, policy_specialization, constructor_args):
-        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(5)]
+        hosts = [
+            Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(5)
+        ]
         for h in hosts[:2]:
             h.set_location_info("dc1", "rack1")
         for h in hosts[2:4]:
@@ -315,11 +402,15 @@ class TestRackOrDCAwareRoundRobinPolicy:
         policy.on_down(hosts[0])
         policy.on_remove(hosts[2])
 
-        new_local_host = Host(DefaultEndPoint(5), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        new_local_host = Host(
+            DefaultEndPoint(5), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         new_local_host.set_location_info("dc1", "rack1")
         policy.on_up(new_local_host)
 
-        new_remote_host = Host(DefaultEndPoint(6), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        new_remote_host = Host(
+            DefaultEndPoint(6), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         new_remote_host.set_location_info("dc9000", "rack1")
         policy.on_add(new_remote_host)
 
@@ -343,8 +434,13 @@ class TestRackOrDCAwareRoundRobinPolicy:
         qplan = list(policy.make_query_plan())
         assert qplan == []
 
-    def test_modification_during_generation(self, policy_specialization, constructor_args):
-        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+    def test_modification_during_generation(
+        self, policy_specialization, constructor_args
+    ):
+        hosts = [
+            Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(4)
+        ]
         for h in hosts[:2]:
             h.set_location_info("dc1", "rack1")
         for h in hosts[2:]:
@@ -358,7 +454,9 @@ class TestRackOrDCAwareRoundRobinPolicy:
         # approach that changes specific things during known phases of the
         # generator.
 
-        new_host = Host(DefaultEndPoint(4), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        new_host = Host(
+            DefaultEndPoint(4), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         new_host.set_location_info("dc1", "rack1")
 
         # new local before iteration
@@ -469,7 +567,9 @@ class TestRackOrDCAwareRoundRobinPolicy:
         policy.on_up(hosts[2])
         policy.on_up(hosts[3])
 
-        another_host = Host(DefaultEndPoint(5), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        another_host = Host(
+            DefaultEndPoint(5), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         another_host.set_location_info("dc3", "rack1")
         new_host.set_location_info("dc3", "rack1")
 
@@ -527,8 +627,74 @@ class TestRackOrDCAwareRoundRobinPolicy:
         qplan = list(policy.make_query_plan())
         assert qplan == []
 
+    def test_make_query_plan_with_exclusion_basic(
+        self, policy_specialization, constructor_args
+    ):
+        hosts = [
+            Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(6)
+        ]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:4]:
+            h.set_location_info("dc1", "rack2")
+        for h in hosts[4:]:
+            h.set_location_info("dc2", "rack1")
+
+        policy = policy_specialization(*constructor_args, used_hosts_per_remote_dc=2)
+        policy.populate(Mock(), hosts)
+
+        # exclude some local and remote hosts
+        excluded = {hosts[0], hosts[4]}
+        qplan = list(policy.make_query_plan_with_exclusion(excluded=excluded))
+        assert hosts[0] not in qplan
+        assert hosts[4] not in qplan
+        assert len(qplan) == 4  # 6 total - 2 excluded
+
+    def test_make_query_plan_with_exclusion_empty(
+        self, policy_specialization, constructor_args
+    ):
+        hosts = [
+            Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(4)
+        ]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:]:
+            h.set_location_info("dc1", "rack2")
+
+        policy = policy_specialization(*constructor_args)
+        policy.populate(Mock(), hosts)
+
+        # empty exclusion should return all hosts
+        qplan_excl = list(policy.make_query_plan_with_exclusion(excluded=()))
+        qplan_normal = list(policy.make_query_plan())
+        assert sorted(qplan_excl, key=id) == sorted(qplan_normal, key=id)
+
+    def test_make_query_plan_with_exclusion_all_excluded(
+        self, policy_specialization, constructor_args
+    ):
+        hosts = [
+            Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(4)
+        ]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:]:
+            h.set_location_info("dc1", "rack2")
+
+        policy = policy_specialization(*constructor_args)
+        policy.populate(Mock(), hosts)
+
+        excluded = set(hosts)
+        qplan = list(policy.make_query_plan_with_exclusion(excluded=excluded))
+        assert qplan == []
+
     def test_wrong_dc(self, policy_specialization, constructor_args):
-        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(3)]
+        hosts = [
+            Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(3)
+        ]
         for h in hosts[:3]:
             h.set_location_info("dc2", "rack2")
 
@@ -537,12 +703,18 @@ class TestRackOrDCAwareRoundRobinPolicy:
         qplan = list(policy.make_query_plan())
         assert len(qplan) == 0
 
-class DCAwareRoundRobinPolicyTest(unittest.TestCase):
 
+class DCAwareRoundRobinPolicyTest(unittest.TestCase):
     def test_default_dc(self):
-        host_local = Host(DefaultEndPoint(1), SimpleConvictionPolicy, 'local', host_id=uuid.uuid4())
-        host_remote = Host(DefaultEndPoint(2), SimpleConvictionPolicy, 'remote', host_id=uuid.uuid4())
-        host_none = Host(DefaultEndPoint(1), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host_local = Host(
+            DefaultEndPoint(1), SimpleConvictionPolicy, "local", host_id=uuid.uuid4()
+        )
+        host_remote = Host(
+            DefaultEndPoint(2), SimpleConvictionPolicy, "remote", host_id=uuid.uuid4()
+        )
+        host_none = Host(
+            DefaultEndPoint(1), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
 
         # contact point is '1'
         cluster = Mock(endpoints_resolved=[DefaultEndPoint(1)])
@@ -570,31 +742,41 @@ class DCAwareRoundRobinPolicyTest(unittest.TestCase):
         policy.on_add(host_remote)
         assert policy.local_dc
 
-class TokenAwarePolicyTest(unittest.TestCase):
 
+class TokenAwarePolicyTest(unittest.TestCase):
     def test_wrap_round_robin(self):
         cluster = Mock(spec=Cluster)
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
-        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        hosts = [
+            Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(4)
+        ]
         for host in hosts:
             host.set_up()
 
         def get_replicas(keyspace, packed_key):
-            index = struct.unpack('>i', packed_key)[0]
+            index = struct.unpack(">i", packed_key)[0]
             return list(islice(cycle(hosts), index, index + 2))
 
         cluster.metadata.get_replicas.side_effect = get_replicas
+        cluster.metadata.token_map.get_replicas.side_effect = (
+            cluster.metadata.get_replicas
+        )
 
-        policy = TokenAwarePolicy(RoundRobinPolicy())
+        policy = TokenAwarePolicy(RoundRobinPolicy(), shuffle_replicas=False)
         policy.populate(cluster, hosts)
 
         for i in range(4):
-            query = Statement(routing_key=struct.pack('>i', i), keyspace='keyspace_name')
+            query = Statement(
+                routing_key=struct.pack(">i", i), keyspace="keyspace_name"
+            )
             qplan = list(policy.make_query_plan(None, query))
 
-            replicas = get_replicas(None, struct.pack('>i', i))
+            replicas = get_replicas(None, struct.pack(">i", i))
             other = set(h for h in hosts if h not in replicas)
             assert sorted(replicas) == sorted(qplan[:2])
             assert other == set(qplan[2:])
@@ -610,7 +792,12 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
-        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        hosts = [
+            Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(4)
+        ]
         for host in hosts:
             host.set_up()
         for h in hosts[:2]:
@@ -619,7 +806,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
             h.set_location_info("dc2", "rack1")
 
         def get_replicas(keyspace, packed_key):
-            index = struct.unpack('>i', packed_key)[0]
+            index = struct.unpack(">i", packed_key)[0]
             # return one node from each DC
             if index % 2 == 0:
                 return [hosts[0], hosts[2]]
@@ -627,14 +814,22 @@ class TokenAwarePolicyTest(unittest.TestCase):
                 return [hosts[1], hosts[3]]
 
         cluster.metadata.get_replicas.side_effect = get_replicas
+        cluster.metadata.token_map.get_replicas.side_effect = (
+            cluster.metadata.get_replicas
+        )
 
-        policy = TokenAwarePolicy(DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=2))
+        policy = TokenAwarePolicy(
+            DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=2),
+            shuffle_replicas=False,
+        )
         policy.populate(cluster, hosts)
 
         for i in range(4):
-            query = Statement(routing_key=struct.pack('>i', i), keyspace='keyspace_name')
+            query = Statement(
+                routing_key=struct.pack(">i", i), keyspace="keyspace_name"
+            )
             qplan = list(policy.make_query_plan(None, query))
-            replicas = get_replicas(None, struct.pack('>i', i))
+            replicas = get_replicas(None, struct.pack(">i", i))
 
             # first should be the only local replica
             assert qplan[0] in replicas
@@ -659,7 +854,12 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
-        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(8)]
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        hosts = [
+            Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(8)
+        ]
         for host in hosts:
             host.set_up()
         hosts[0].set_location_info("dc1", "rack1")
@@ -672,7 +872,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         hosts[7].set_location_info("dc2", "rack2")
 
         def get_replicas(keyspace, packed_key):
-            index = struct.unpack('>i', packed_key)[0]
+            index = struct.unpack(">i", packed_key)[0]
             # return one node from each DC
             if index % 2 == 0:
                 return [hosts[0], hosts[1], hosts[2], hosts[3]]
@@ -680,14 +880,22 @@ class TokenAwarePolicyTest(unittest.TestCase):
                 return [hosts[4], hosts[5], hosts[6], hosts[7]]
 
         cluster.metadata.get_replicas.side_effect = get_replicas
+        cluster.metadata.token_map.get_replicas.side_effect = (
+            cluster.metadata.get_replicas
+        )
 
-        policy = TokenAwarePolicy(RackAwareRoundRobinPolicy("dc1", "rack1", used_hosts_per_remote_dc=4))
+        policy = TokenAwarePolicy(
+            RackAwareRoundRobinPolicy("dc1", "rack1", used_hosts_per_remote_dc=4),
+            shuffle_replicas=False,
+        )
         policy.populate(cluster, hosts)
 
         for i in range(4):
-            query = Statement(routing_key=struct.pack('>i', i), keyspace='keyspace_name')
+            query = Statement(
+                routing_key=struct.pack(">i", i), keyspace="keyspace_name"
+            )
             qplan = list(policy.make_query_plan(None, query))
-            replicas = get_replicas(None, struct.pack('>i', i))
+            replicas = get_replicas(None, struct.pack(">i", i))
 
             print(qplan)
             print(replicas)
@@ -722,8 +930,12 @@ class TokenAwarePolicyTest(unittest.TestCase):
         policy.child_policy is needed to change child policy settings
         """
 
-        policy = TokenAwarePolicy(DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=0))
-        host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        policy = TokenAwarePolicy(
+            DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=0)
+        )
+        host = Host(
+            DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         host.set_location_info("dc1", "rack1")
 
         policy.populate(self.FakeCluster(), [host])
@@ -731,7 +943,9 @@ class TokenAwarePolicyTest(unittest.TestCase):
         assert policy.distance(host) == HostDistance.LOCAL
 
         # used_hosts_per_remote_dc is set to 0, so ignore it
-        remote_host = Host(DefaultEndPoint("ip2"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        remote_host = Host(
+            DefaultEndPoint("ip2"), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         remote_host.set_location_info("dc2", "rack1")
         assert policy.distance(remote_host) == HostDistance.IGNORED
 
@@ -745,10 +959,14 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         # since used_hosts_per_remote_dc is set to 1, only the first
         # remote host in dc2 will be REMOTE, the rest are IGNORED
-        second_remote_host = Host(DefaultEndPoint("ip3"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        second_remote_host = Host(
+            DefaultEndPoint("ip3"), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         second_remote_host.set_location_info("dc2", "rack1")
         policy.populate(self.FakeCluster(), [host, remote_host, second_remote_host])
-        distances = set([policy.distance(remote_host), policy.distance(second_remote_host)])
+        distances = set(
+            [policy.distance(remote_host), policy.distance(second_remote_host)]
+        )
         assert distances == set([HostDistance.REMOTE, HostDistance.IGNORED])
 
     def test_status_updates(self):
@@ -756,22 +974,31 @@ class TokenAwarePolicyTest(unittest.TestCase):
         Same test as DCAwareRoundRobinPolicyTest.test_status_updates()
         """
 
-        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        hosts = [
+            Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(4)
+        ]
         for h in hosts[:2]:
             h.set_location_info("dc1", "rack1")
         for h in hosts[2:]:
             h.set_location_info("dc2", "rack1")
 
-        policy = TokenAwarePolicy(DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=1))
+        policy = TokenAwarePolicy(
+            DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=1)
+        )
         policy.populate(self.FakeCluster(), hosts)
         policy.on_down(hosts[0])
         policy.on_remove(hosts[2])
 
-        new_local_host = Host(DefaultEndPoint(4), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        new_local_host = Host(
+            DefaultEndPoint(4), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         new_local_host.set_location_info("dc1", "rack1")
         policy.on_up(new_local_host)
 
-        new_remote_host = Host(DefaultEndPoint(5), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        new_remote_host = Host(
+            DefaultEndPoint(5), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         new_remote_host.set_location_info("dc9000", "rack1")
         policy.on_add(new_remote_host)
 
@@ -794,7 +1021,10 @@ class TokenAwarePolicyTest(unittest.TestCase):
         assert qplan == []
 
     def test_statement_keyspace(self):
-        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        hosts = [
+            Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(4)
+        ]
         for host in hosts:
             host.set_up()
 
@@ -804,17 +1034,25 @@ class TokenAwarePolicyTest(unittest.TestCase):
         replicas = hosts[2:]
         cluster.metadata.get_replicas.return_value = replicas
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.side_effect = (
+            cluster.metadata.get_replicas
+        )
 
         child_policy = Mock()
         child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
         child_policy.distance.return_value = HostDistance.LOCAL
 
-        policy = TokenAwarePolicy(child_policy)
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
         policy.populate(cluster, hosts)
 
         # no keyspace, child policy is called
         keyspace = None
-        routing_key = 'routing_key'
+        routing_key = "routing_key"
         query = Statement(routing_key=routing_key)
         qplan = list(policy.make_query_plan(keyspace, query))
         assert hosts == qplan
@@ -823,8 +1061,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         # working keyspace, no statement
         cluster.metadata.get_replicas.reset_mock()
-        keyspace = 'working_keyspace'
-        routing_key = 'routing_key'
+        keyspace = "working_keyspace"
+        routing_key = "routing_key"
         query = Statement(routing_key=routing_key)
         qplan = list(policy.make_query_plan(keyspace, query))
         assert replicas + hosts[:2] == qplan
@@ -833,22 +1071,26 @@ class TokenAwarePolicyTest(unittest.TestCase):
         # statement keyspace, no working
         cluster.metadata.get_replicas.reset_mock()
         working_keyspace = None
-        statement_keyspace = 'statement_keyspace'
-        routing_key = 'routing_key'
+        statement_keyspace = "statement_keyspace"
+        routing_key = "routing_key"
         query = Statement(routing_key=routing_key, keyspace=statement_keyspace)
         qplan = list(policy.make_query_plan(working_keyspace, query))
         assert replicas + hosts[:2] == qplan
-        cluster.metadata.get_replicas.assert_called_with(statement_keyspace, routing_key)
+        cluster.metadata.get_replicas.assert_called_with(
+            statement_keyspace, routing_key
+        )
 
         # both keyspaces set, statement keyspace used for routing
         cluster.metadata.get_replicas.reset_mock()
-        working_keyspace = 'working_keyspace'
-        statement_keyspace = 'statement_keyspace'
-        routing_key = 'routing_key'
+        working_keyspace = "working_keyspace"
+        statement_keyspace = "statement_keyspace"
+        routing_key = "routing_key"
         query = Statement(routing_key=routing_key, keyspace=statement_keyspace)
         qplan = list(policy.make_query_plan(working_keyspace, query))
         assert replicas + hosts[:2] == qplan
-        cluster.metadata.get_replicas.assert_called_with(statement_keyspace, routing_key)
+        # get_replicas may not be called here due to cache hit from the
+        # previous query with the same (statement_keyspace, routing_key) pair.
+        # The important assertion is that the plan result is correct above.
 
     def test_shuffles_if_given_keyspace_and_routing_key(self):
         """
@@ -860,8 +1102,16 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         @test_category policy
         """
-        self._assert_shuffle(cluster=self._prepare_cluster_with_vnodes(), keyspace='keyspace', routing_key='routing_key')
-        self._assert_shuffle(cluster=self._prepare_cluster_with_tablets(), keyspace='keyspace', routing_key='routing_key')
+        self._assert_shuffle(
+            cluster=self._prepare_cluster_with_vnodes(),
+            keyspace="keyspace",
+            routing_key="routing_key",
+        )
+        self._assert_shuffle(
+            cluster=self._prepare_cluster_with_tablets(),
+            keyspace="keyspace",
+            routing_key="routing_key",
+        )
 
     def test_no_shuffle_if_given_no_keyspace(self):
         """
@@ -872,8 +1122,16 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         @test_category policy
         """
-        self._assert_shuffle(cluster=self._prepare_cluster_with_vnodes(), keyspace=None, routing_key='routing_key')
-        self._assert_shuffle(cluster=self._prepare_cluster_with_tablets(), keyspace=None, routing_key='routing_key')
+        self._assert_shuffle(
+            cluster=self._prepare_cluster_with_vnodes(),
+            keyspace=None,
+            routing_key="routing_key",
+        )
+        self._assert_shuffle(
+            cluster=self._prepare_cluster_with_tablets(),
+            keyspace=None,
+            routing_key="routing_key",
+        )
 
     def test_no_shuffle_if_given_no_routing_key(self):
         """
@@ -884,11 +1142,22 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         @test_category policy
         """
-        self._assert_shuffle(cluster=self._prepare_cluster_with_vnodes(), keyspace='keyspace', routing_key=None)
-        self._assert_shuffle(cluster=self._prepare_cluster_with_tablets(), keyspace='keyspace', routing_key=None)
+        self._assert_shuffle(
+            cluster=self._prepare_cluster_with_vnodes(),
+            keyspace="keyspace",
+            routing_key=None,
+        )
+        self._assert_shuffle(
+            cluster=self._prepare_cluster_with_tablets(),
+            keyspace="keyspace",
+            routing_key=None,
+        )
 
     def _prepare_cluster_with_vnodes(self):
-        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        hosts = [
+            Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(4)
+        ]
         for host in hosts:
             host.set_up()
         cluster = Mock(spec=Cluster)
@@ -897,10 +1166,18 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata.all_hosts.return_value = hosts
         cluster.metadata.get_replicas.return_value = hosts[2:]
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.side_effect = (
+            cluster.metadata.get_replicas
+        )
         return cluster
 
     def _prepare_cluster_with_tablets(self):
-        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        hosts = [
+            Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(4)
+        ]
         for host in hosts:
             host.set_up()
         cluster = Mock(spec=Cluster)
@@ -908,15 +1185,29 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata.all_hosts.return_value = hosts
         cluster.metadata.get_replicas.return_value = hosts[2:]
-        cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(replicas=[(h.host_id, 0) for h in hosts[2:]])
+        cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(
+            replicas=[(h.host_id, 0) for h in hosts[2:]]
+        )
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.side_effect = (
+            cluster.metadata.get_replicas
+        )
         return cluster
 
-    @patch('cassandra.policies.shuffle')
+    @patch("cassandra.policies.shuffle")
     def _assert_shuffle(self, patched_shuffle, cluster, keyspace, routing_key):
         hosts = cluster.metadata.all_hosts()
-        replicas = cluster.metadata.get_replicas()
+        # Configure get_host_by_host_id to return hosts from the list
+        host_map = {h.host_id: h for h in hosts}
+        cluster.metadata.get_host_by_host_id.side_effect = lambda hid: host_map.get(hid)
+
+        replicas = list(cluster.metadata.get_replicas())
         child_policy = Mock()
         child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
         child_policy.distance.return_value = HostDistance.LOCAL
 
         policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
@@ -926,6 +1217,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         cluster.metadata.get_replicas.reset_mock()
         child_policy.make_query_plan.reset_mock()
+        child_policy.make_query_plan_with_exclusion.reset_mock()
         query = Statement(routing_key=routing_key)
         qplan = list(policy.make_query_plan(keyspace, query))
         if keyspace is None or routing_key is None:
@@ -936,12 +1228,333 @@ class TokenAwarePolicyTest(unittest.TestCase):
         else:
             assert set(replicas) == set(qplan[:2])
             assert hosts[:2] == qplan[2:]
+
             if is_tablets:
+                # Tablet path: make_query_plan called once for replica ordering,
+                # make_query_plan_with_exclusion called once for remaining hosts
                 child_policy.make_query_plan.assert_called_with(keyspace, query)
-                assert child_policy.make_query_plan.call_count == 2
+                child_policy.make_query_plan_with_exclusion.assert_called()
+            elif child_policy.make_query_plan_with_exclusion.called:
+                # Non-tablet path with replicas: exclusion set should contain
+                # the replicas that were already yielded
+                exc_call = child_policy.make_query_plan_with_exclusion.call_args
+                excluded_hosts = (
+                    exc_call[0][2]
+                    if len(exc_call[0]) > 2
+                    else exc_call[1].get("excluded", set())
+                )
+                assert set(replicas).issubset(excluded_hosts), (
+                    "Exclusion set should contain the yielded replicas, "
+                    "got %s, expected superset of %s" % (excluded_hosts, set(replicas))
+                )
             else:
                 child_policy.make_query_plan.assert_called_once_with(keyspace, query)
             assert patched_shuffle.call_count == 1
+
+    # --- Replica cache tests ---
+
+    def _make_cache_cluster(self):
+        """Create a mock cluster suitable for cache tests."""
+        hosts = [
+            Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(4)
+        ]
+        for host in hosts:
+            host.set_up()
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.return_value = hosts[2:]
+        return cluster, hosts
+
+    def test_cache_hit(self):
+        """Same (keyspace, routing_key) should only call get_replicas once."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b"key1", keyspace="ks")
+        list(policy.make_query_plan(None, query))
+        list(policy.make_query_plan(None, query))
+
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
+
+    def test_cache_miss_different_key(self):
+        """Different routing_key should cause separate get_replicas calls."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        q1 = Statement(routing_key=b"key1", keyspace="ks")
+        q2 = Statement(routing_key=b"key2", keyspace="ks")
+        list(policy.make_query_plan(None, q1))
+        list(policy.make_query_plan(None, q2))
+
+        assert cluster.metadata.token_map.get_replicas.call_count == 2
+
+    def test_cache_miss_different_keyspace(self):
+        """Different keyspace with same routing_key should miss cache."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        q1 = Statement(routing_key=b"key1", keyspace="ks1")
+        q2 = Statement(routing_key=b"key1", keyspace="ks2")
+        list(policy.make_query_plan(None, q1))
+        list(policy.make_query_plan(None, q2))
+
+        assert cluster.metadata.token_map.get_replicas.call_count == 2
+
+    def test_cache_invalidation_on_topology_change(self):
+        """Cache should be invalidated when token_map object changes."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b"key1", keyspace="ks")
+        list(policy.make_query_plan(None, query))
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
+
+        # Simulate topology change: replace token_map with a new mock object
+        new_token_map = Mock()
+        new_token_map.token_class.from_key.side_effect = lambda key: key
+        new_token_map.get_replicas.return_value = hosts[2:]
+        cluster.metadata.token_map = new_token_map
+
+        list(policy.make_query_plan(None, query))
+        # The old token_map still has 1 call; new one should have 1 call
+        assert new_token_map.get_replicas.call_count == 1
+
+    def test_cache_eviction(self):
+        """Oldest entries should be evicted when cache exceeds size."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(
+            child_policy, shuffle_replicas=False, cache_replicas_size=2
+        )
+        policy.populate(cluster, hosts)
+
+        # Fill cache with 3 entries; size=2 so first should be evicted
+        for i in range(3):
+            q = Statement(routing_key=f"key{i}".encode(), keyspace="ks")
+            list(policy.make_query_plan(None, q))
+
+        assert cluster.metadata.token_map.get_replicas.call_count == 3
+
+        # key2 (most recent) should be cached
+        cluster.metadata.token_map.get_replicas.reset_mock()
+        q = Statement(routing_key=b"key2", keyspace="ks")
+        list(policy.make_query_plan(None, q))
+        assert cluster.metadata.token_map.get_replicas.call_count == 0
+
+        # key0 (evicted) should miss
+        q = Statement(routing_key=b"key0", keyspace="ks")
+        list(policy.make_query_plan(None, q))
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
+
+    def test_cache_disabled(self):
+        """cache_replicas_size=0 should bypass caching entirely."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(
+            child_policy, shuffle_replicas=False, cache_replicas_size=0
+        )
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b"key1", keyspace="ks")
+        list(policy.make_query_plan(None, query))
+        list(policy.make_query_plan(None, query))
+        list(policy.make_query_plan(None, query))
+
+        # Every call should reach get_replicas
+        assert cluster.metadata.token_map.get_replicas.call_count == 3
+
+    def test_tablet_path_not_cached(self):
+        """Tablet path should bypass the cache entirely."""
+        hosts = [
+            Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            for i in range(4)
+        ]
+        for host in hosts:
+            host.set_up()
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(
+            replicas=[(h.host_id, 0) for h in hosts[2:]]
+        )
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.return_value = hosts[2:]
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b"key1", keyspace="ks")
+        list(policy.make_query_plan(None, query))
+        list(policy.make_query_plan(None, query))
+
+        # token_map.get_replicas should NOT be called (tablet path used)
+        assert cluster.metadata.token_map.get_replicas.call_count == 0
+        # Cache should remain empty (tablet results are not cached)
+        assert len(policy._replica_cache) == 0
+
+    # --- LWT determinism tests ---
+
+    def _make_lwt_query(self, routing_key, keyspace="ks"):
+        """Create a Statement that reports is_lwt()=True."""
+        query = Statement(routing_key=routing_key, keyspace=keyspace)
+        query.is_lwt = lambda: True
+        return query
+
+    @patch("cassandra.policies.shuffle")
+    def test_lwt_no_shuffle(self, patched_shuffle):
+        """LWT queries should yield replicas in deterministic order."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        query = self._make_lwt_query(routing_key=b"key1")
+
+        plans = [list(policy.make_query_plan(None, query)) for _ in range(5)]
+
+        # All plans should be identical (deterministic)
+        for plan in plans[1:]:
+            assert plan == plans[0]
+
+        # shuffle should never have been called
+        assert patched_shuffle.call_count == 0
+
+    @patch("cassandra.policies.shuffle")
+    def test_lwt_replicas_not_copied(self, patched_shuffle):
+        """LWT path should not copy the replicas list (no list() call)."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        query = self._make_lwt_query(routing_key=b"key1")
+        list(policy.make_query_plan(None, query))
+
+        # shuffle was never called, which means list() was also not called
+        assert patched_shuffle.call_count == 0
+
+    @patch("cassandra.policies.shuffle")
+    def test_non_lwt_shuffled(self, patched_shuffle):
+        """Non-LWT queries with shuffle_replicas=True should shuffle."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b"key1", keyspace="ks")
+        list(policy.make_query_plan(None, query))
+
+        assert patched_shuffle.call_count == 1
+
+    @patch("cassandra.policies.shuffle")
+    def test_lwt_with_cache_deterministic(self, patched_shuffle):
+        """LWT + cache should produce identical plans on repeated calls."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [
+            h for h in hosts if h not in e
+        ]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        query = self._make_lwt_query(routing_key=b"key1")
+
+        plan1 = list(policy.make_query_plan(None, query))
+        plan2 = list(policy.make_query_plan(None, query))
+
+        assert plan1 == plan2
+        assert patched_shuffle.call_count == 0
+        # Should have been a cache hit on the second call
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
 
 
 class ConvictionPolicyTest(unittest.TestCase):
@@ -980,7 +1593,6 @@ class ReconnectionPolicyTest(unittest.TestCase):
 
 
 class ConstantReconnectionPolicyTest(unittest.TestCase):
-
     def test_bad_vals(self):
         """
         Test initialization values
@@ -996,7 +1608,9 @@ class ConstantReconnectionPolicyTest(unittest.TestCase):
 
         configured_delay = 2
         max_attempts = 100
-        policy = ConstantReconnectionPolicy(delay=configured_delay, max_attempts=max_attempts)
+        policy = ConstantReconnectionPolicy(
+            delay=configured_delay, max_attempts=max_attempts
+        )
         schedule = list(policy.new_schedule())
         assert len(schedule) == max_attempts
         for i, delay in enumerate(schedule):
@@ -1023,7 +1637,6 @@ class ConstantReconnectionPolicyTest(unittest.TestCase):
 
 
 class ExponentialReconnectionPolicyTest(unittest.TestCase):
-
     def _assert_between(self, value, min, max):
         assert min <= value <= max
 
@@ -1041,27 +1654,31 @@ class ExponentialReconnectionPolicyTest(unittest.TestCase):
         base_delay = 2.0
         max_delay = 100.0
         test_iter = 10000
-        policy = ExponentialReconnectionPolicy(base_delay=base_delay, max_delay=max_delay, max_attempts=None)
+        policy = ExponentialReconnectionPolicy(
+            base_delay=base_delay, max_delay=max_delay, max_attempts=None
+        )
         sched_slice = list(islice(policy.new_schedule(), 0, test_iter))
-        self._assert_between(sched_slice[0], base_delay*0.85, base_delay*1.15)
-        self._assert_between(sched_slice[-1], max_delay*0.85, max_delay*1.15)
+        self._assert_between(sched_slice[0], base_delay * 0.85, base_delay * 1.15)
+        self._assert_between(sched_slice[-1], max_delay * 0.85, max_delay * 1.15)
         assert len(sched_slice) == test_iter
 
     def test_schedule_with_max(self):
         base_delay = 2.0
         max_delay = 100.0
         max_attempts = 64
-        policy = ExponentialReconnectionPolicy(base_delay=base_delay, max_delay=max_delay, max_attempts=max_attempts)
+        policy = ExponentialReconnectionPolicy(
+            base_delay=base_delay, max_delay=max_delay, max_attempts=max_attempts
+        )
         schedule = list(policy.new_schedule())
         assert len(schedule) == max_attempts
         for i, delay in enumerate(schedule):
             if i == 0:
-                self._assert_between(delay, base_delay*0.85, base_delay*1.15)
+                self._assert_between(delay, base_delay * 0.85, base_delay * 1.15)
             elif i < 6:
-                value =  base_delay * (2 ** i)
-                self._assert_between(delay, value*85/100, value*1.15)
+                value = base_delay * (2**i)
+                self._assert_between(delay, value * 85 / 100, value * 1.15)
             else:
-                self._assert_between(delay, max_delay*85/100, max_delay*1.15)
+                self._assert_between(delay, max_delay * 85 / 100, max_delay * 1.15)
 
     def test_schedule_exactly_one_attempt(self):
         base_delay = 2.0
@@ -1091,7 +1708,9 @@ class ExponentialReconnectionPolicyTest(unittest.TestCase):
         base_delay = sys.float_info.max - 1
         max_delay = sys.float_info.max
         max_attempts = 2**12
-        policy = ExponentialReconnectionPolicy(base_delay=base_delay, max_delay=max_delay, max_attempts=max_attempts)
+        policy = ExponentialReconnectionPolicy(
+            base_delay=base_delay, max_delay=max_delay, max_attempts=max_attempts
+        )
         schedule = list(policy.new_schedule())
         for number in schedule:
             assert number <= sys.float_info.max
@@ -1105,13 +1724,13 @@ class ExponentialReconnectionPolicyTest(unittest.TestCase):
         """
         for i in range(100):
             base_delay = float(randint(2, 5))
-            max_delay = (base_delay - 1)  * 100.0
+            max_delay = (base_delay - 1) * 100.0
             ep = ExponentialReconnectionPolicy(base_delay, max_delay, max_attempts=64)
             schedule = ep.new_schedule()
             for i in range(64):
-                exp_delay = min(base_delay * (2 ** i), max_delay)
-                min_jitter_delay = max(base_delay, exp_delay*85/100)
-                max_jitter_delay = min(max_delay, exp_delay*115/100)
+                exp_delay = min(base_delay * (2**i), max_delay)
+                min_jitter_delay = max(base_delay, exp_delay * 85 / 100)
+                max_jitter_delay = min(max_delay, exp_delay * 115 / 100)
                 delay = next(schedule)
                 self._assert_between(delay, min_jitter_delay, max_jitter_delay)
 
@@ -1120,35 +1739,54 @@ ONE = ConsistencyLevel.ONE
 
 
 class RetryPolicyTest(unittest.TestCase):
-
     def test_read_timeout(self):
         policy = RetryPolicy()
 
         # if this is the second or greater attempt, rethrow
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=1, received_responses=2,
-            data_retrieved=True, retry_num=1)
+            query=None,
+            consistency=ONE,
+            required_responses=1,
+            received_responses=2,
+            data_retrieved=True,
+            retry_num=1,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         # if we didn't get enough responses, rethrow
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=2, received_responses=1,
-            data_retrieved=True, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_responses=2,
+            received_responses=1,
+            data_retrieved=True,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         # if we got enough responses, but also got a data response, rethrow
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=2, received_responses=2,
-            data_retrieved=True, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_responses=2,
+            received_responses=2,
+            data_retrieved=True,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         # we got enough responses but no data response, so retry
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=2, received_responses=2,
-            data_retrieved=False, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_responses=2,
+            received_responses=2,
+            data_retrieved=False,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETRY
         assert consistency == ONE
 
@@ -1157,22 +1795,37 @@ class RetryPolicyTest(unittest.TestCase):
 
         # if this is the second or greater attempt, rethrow
         retry, consistency = policy.on_write_timeout(
-            query=None, consistency=ONE, write_type=WriteType.SIMPLE,
-            required_responses=1, received_responses=2, retry_num=1)
+            query=None,
+            consistency=ONE,
+            write_type=WriteType.SIMPLE,
+            required_responses=1,
+            received_responses=2,
+            retry_num=1,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         # if it's not a BATCH_LOG write, don't retry it
         retry, consistency = policy.on_write_timeout(
-            query=None, consistency=ONE, write_type=WriteType.SIMPLE,
-            required_responses=1, received_responses=2, retry_num=0)
+            query=None,
+            consistency=ONE,
+            write_type=WriteType.SIMPLE,
+            required_responses=1,
+            received_responses=2,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         # retry BATCH_LOG writes regardless of received responses
         retry, consistency = policy.on_write_timeout(
-            query=None, consistency=ONE, write_type=WriteType.BATCH_LOG,
-            required_responses=10000, received_responses=1, retry_num=0)
+            query=None,
+            consistency=ONE,
+            write_type=WriteType.BATCH_LOG,
+            required_responses=10000,
+            received_responses=1,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETRY
         assert consistency == ONE
 
@@ -1183,26 +1836,37 @@ class RetryPolicyTest(unittest.TestCase):
         policy = RetryPolicy()
 
         retry, consistency = policy.on_unavailable(
-            query=None, consistency=ONE,
-            required_replicas=1, alive_replicas=2, retry_num=1)
+            query=None,
+            consistency=ONE,
+            required_replicas=1,
+            alive_replicas=2,
+            retry_num=1,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         retry, consistency = policy.on_unavailable(
-            query=None, consistency=ONE,
-            required_replicas=1, alive_replicas=2, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_replicas=1,
+            alive_replicas=2,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETRY_NEXT_HOST
         assert consistency == None
 
         retry, consistency = policy.on_unavailable(
-            query=None, consistency=ONE,
-            required_replicas=10000, alive_replicas=1, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_replicas=10000,
+            alive_replicas=1,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETRY_NEXT_HOST
         assert consistency == None
 
 
 class FallthroughRetryPolicyTest(unittest.TestCase):
-
     """
     Use the same tests for test_write_timeout, but ensure they only RETHROW
     """
@@ -1211,26 +1875,46 @@ class FallthroughRetryPolicyTest(unittest.TestCase):
         policy = FallthroughRetryPolicy()
 
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=1, received_responses=2,
-            data_retrieved=True, retry_num=1)
+            query=None,
+            consistency=ONE,
+            required_responses=1,
+            received_responses=2,
+            data_retrieved=True,
+            retry_num=1,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=2, received_responses=1,
-            data_retrieved=True, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_responses=2,
+            received_responses=1,
+            data_retrieved=True,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=2, received_responses=2,
-            data_retrieved=True, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_responses=2,
+            received_responses=2,
+            data_retrieved=True,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=2, received_responses=2,
-            data_retrieved=False, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_responses=2,
+            received_responses=2,
+            data_retrieved=False,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
@@ -1238,20 +1922,35 @@ class FallthroughRetryPolicyTest(unittest.TestCase):
         policy = FallthroughRetryPolicy()
 
         retry, consistency = policy.on_write_timeout(
-            query=None, consistency=ONE, write_type=WriteType.SIMPLE,
-            required_responses=1, received_responses=2, retry_num=1)
+            query=None,
+            consistency=ONE,
+            write_type=WriteType.SIMPLE,
+            required_responses=1,
+            received_responses=2,
+            retry_num=1,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         retry, consistency = policy.on_write_timeout(
-            query=None, consistency=ONE, write_type=WriteType.SIMPLE,
-            required_responses=1, received_responses=2, retry_num=0)
+            query=None,
+            consistency=ONE,
+            write_type=WriteType.SIMPLE,
+            required_responses=1,
+            received_responses=2,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         retry, consistency = policy.on_write_timeout(
-            query=None, consistency=ONE, write_type=WriteType.BATCH_LOG,
-            required_responses=10000, received_responses=1, retry_num=0)
+            query=None,
+            consistency=ONE,
+            write_type=WriteType.BATCH_LOG,
+            required_responses=10000,
+            received_responses=1,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
@@ -1259,75 +1958,121 @@ class FallthroughRetryPolicyTest(unittest.TestCase):
         policy = FallthroughRetryPolicy()
 
         retry, consistency = policy.on_unavailable(
-            query=None, consistency=ONE,
-            required_replicas=1, alive_replicas=2, retry_num=1)
+            query=None,
+            consistency=ONE,
+            required_replicas=1,
+            alive_replicas=2,
+            retry_num=1,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         retry, consistency = policy.on_unavailable(
-            query=None, consistency=ONE,
-            required_replicas=1, alive_replicas=2, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_replicas=1,
+            alive_replicas=2,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         retry, consistency = policy.on_unavailable(
-            query=None, consistency=ONE,
-            required_replicas=10000, alive_replicas=1, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_replicas=10000,
+            alive_replicas=1,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
 
 class DowngradingConsistencyRetryPolicyTest(unittest.TestCase):
-
     def test_read_timeout(self):
         policy = DowngradingConsistencyRetryPolicy()
 
         # if this is the second or greater attempt, rethrow
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=1, received_responses=2,
-            data_retrieved=True, retry_num=1)
+            query=None,
+            consistency=ONE,
+            required_responses=1,
+            received_responses=2,
+            data_retrieved=True,
+            retry_num=1,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         # if we didn't get enough responses, retry at a lower consistency
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=4, received_responses=3,
-            data_retrieved=True, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_responses=4,
+            received_responses=3,
+            data_retrieved=True,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETRY
         assert consistency == ConsistencyLevel.THREE
 
         # if we didn't get enough responses, retry at a lower consistency
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=3, received_responses=2,
-            data_retrieved=True, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_responses=3,
+            received_responses=2,
+            data_retrieved=True,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETRY
         assert consistency == ConsistencyLevel.TWO
 
         # retry consistency level goes down based on the # of recv'd responses
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=3, received_responses=1,
-            data_retrieved=True, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_responses=3,
+            received_responses=1,
+            data_retrieved=True,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETRY
         assert consistency == ConsistencyLevel.ONE
 
         # if we got no responses, rethrow
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=3, received_responses=0,
-            data_retrieved=True, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_responses=3,
+            received_responses=0,
+            data_retrieved=True,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         # if we got enough response but no data, retry
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=3, received_responses=3,
-            data_retrieved=False, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_responses=3,
+            received_responses=3,
+            data_retrieved=False,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETRY
         assert consistency == ONE
 
         # if we got enough responses, but also got a data response, rethrow
         retry, consistency = policy.on_read_timeout(
-            query=None, consistency=ONE, required_responses=2, received_responses=2,
-            data_retrieved=True, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_responses=2,
+            received_responses=2,
+            data_retrieved=True,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
@@ -1336,41 +2081,71 @@ class DowngradingConsistencyRetryPolicyTest(unittest.TestCase):
 
         # if this is the second or greater attempt, rethrow
         retry, consistency = policy.on_write_timeout(
-            query=None, consistency=ONE, write_type=WriteType.SIMPLE,
-            required_responses=1, received_responses=2, retry_num=1)
+            query=None,
+            consistency=ONE,
+            write_type=WriteType.SIMPLE,
+            required_responses=1,
+            received_responses=2,
+            retry_num=1,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         for write_type in (WriteType.SIMPLE, WriteType.BATCH, WriteType.COUNTER):
             # ignore failures if at least one response (replica persisted)
             retry, consistency = policy.on_write_timeout(
-                query=None, consistency=ONE, write_type=write_type,
-                required_responses=1, received_responses=2, retry_num=0)
+                query=None,
+                consistency=ONE,
+                write_type=write_type,
+                required_responses=1,
+                received_responses=2,
+                retry_num=0,
+            )
             assert retry == RetryPolicy.IGNORE
             # retrhow if we can't be sure we have a replica
             retry, consistency = policy.on_write_timeout(
-                query=None, consistency=ONE, write_type=write_type,
-                required_responses=1, received_responses=0, retry_num=0)
+                query=None,
+                consistency=ONE,
+                write_type=write_type,
+                required_responses=1,
+                received_responses=0,
+                retry_num=0,
+            )
             assert retry == RetryPolicy.RETHROW
 
         # downgrade consistency level on unlogged batch writes
         retry, consistency = policy.on_write_timeout(
-            query=None, consistency=ONE, write_type=WriteType.UNLOGGED_BATCH,
-            required_responses=3, received_responses=1, retry_num=0)
+            query=None,
+            consistency=ONE,
+            write_type=WriteType.UNLOGGED_BATCH,
+            required_responses=3,
+            received_responses=1,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETRY
         assert consistency == ConsistencyLevel.ONE
 
         # retry batch log writes at the same consistency level
         retry, consistency = policy.on_write_timeout(
-            query=None, consistency=ONE, write_type=WriteType.BATCH_LOG,
-            required_responses=3, received_responses=1, retry_num=0)
+            query=None,
+            consistency=ONE,
+            write_type=WriteType.BATCH_LOG,
+            required_responses=3,
+            received_responses=1,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETRY
         assert consistency == ONE
 
         # timeout on an unknown write_type
         retry, consistency = policy.on_write_timeout(
-            query=None, consistency=ONE, write_type=None,
-            required_responses=1, received_responses=2, retry_num=0)
+            query=None,
+            consistency=ONE,
+            write_type=None,
+            required_responses=1,
+            received_responses=2,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
@@ -1379,13 +2154,23 @@ class DowngradingConsistencyRetryPolicyTest(unittest.TestCase):
 
         # if this is the second or greater attempt, rethrow
         retry, consistency = policy.on_unavailable(
-            query=None, consistency=ONE, required_replicas=3, alive_replicas=1, retry_num=1)
+            query=None,
+            consistency=ONE,
+            required_replicas=3,
+            alive_replicas=1,
+            retry_num=1,
+        )
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
         # downgrade consistency on unavailable exceptions
         retry, consistency = policy.on_unavailable(
-            query=None, consistency=ONE, required_replicas=3, alive_replicas=1, retry_num=0)
+            query=None,
+            consistency=ONE,
+            required_replicas=3,
+            alive_replicas=1,
+            retry_num=0,
+        )
         assert retry == RetryPolicy.RETRY
         assert consistency == ConsistencyLevel.ONE
 
@@ -1404,16 +2189,21 @@ class ExponentialRetryPolicyTest(unittest.TestCase):
         for attempts, delay in cases:
             for i in range(100):
                 d = policy._calculate_backoff(attempts)
-                assert d > delay - (0.1 / 2), f"d={d} attempts={attempts}, delay={delay}"
-                assert d < delay + (0.1 / 2), f"d={d} attempts={attempts}, delay={delay}"
+                assert d > delay - (0.1 / 2), (
+                    f"d={d} attempts={attempts}, delay={delay}"
+                )
+                assert d < delay + (0.1 / 2), (
+                    f"d={d} attempts={attempts}, delay={delay}"
+                )
 
 
 class WhiteListRoundRobinPolicyTest(unittest.TestCase):
-
     def test_hosts_with_hostname(self):
-        hosts = ['localhost']
+        hosts = ["localhost"]
         policy = WhiteListRoundRobinPolicy(hosts)
-        host = Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host = Host(
+            DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
         policy.populate(None, [host])
 
         qplan = list(policy.make_query_plan())
@@ -1422,9 +2212,13 @@ class WhiteListRoundRobinPolicyTest(unittest.TestCase):
         assert policy.distance(host) == HostDistance.LOCAL
 
     def test_hosts_with_socket_hostname(self):
-        hosts = [UnixSocketEndPoint('/tmp/scylla-workdir/cql.m')]
+        hosts = [UnixSocketEndPoint("/tmp/scylla-workdir/cql.m")]
         policy = WhiteListRoundRobinPolicy(hosts)
-        host = Host(UnixSocketEndPoint('/tmp/scylla-workdir/cql.m'), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host = Host(
+            UnixSocketEndPoint("/tmp/scylla-workdir/cql.m"),
+            SimpleConvictionPolicy,
+            host_id=uuid.uuid4(),
+        )
         policy.populate(None, [host])
 
         qplan = list(policy.make_query_plan())
@@ -1434,31 +2228,31 @@ class WhiteListRoundRobinPolicyTest(unittest.TestCase):
 
 
 class AddressTranslatorTest(unittest.TestCase):
-
     def test_identity_translator(self):
         IdentityTranslator()
 
-    @patch('socket.getfqdn', return_value='localhost')
+    @patch("socket.getfqdn", return_value="localhost")
     def test_ec2_multi_region_translator(self, *_):
         ec2t = EC2MultiRegionTranslator()
-        addr = '127.0.0.1'
+        addr = "127.0.0.1"
         translated = ec2t.translate(addr)
         assert translated is not addr  # verifies that the resolver path is followed
         assert translated == addr  # and that it resolves to the same address
 
 
 class HostFilterPolicyInitTest(unittest.TestCase):
-
     def setUp(self):
-        self.child_policy, self.predicate = (Mock(name='child_policy'),
-                                             Mock(name='predicate'))
+        self.child_policy, self.predicate = (
+            Mock(name="child_policy"),
+            Mock(name="predicate"),
+        )
 
     def _check_init(self, hfp):
         assert hfp._child_policy is self.child_policy
         assert isinstance(hfp._hosts_lock, LockType)
 
         # we can't use a simple assertIs because we wrap the function
-        arg0, arg1 = Mock(name='arg0'), Mock(name='arg1')
+        arg0, arg1 = Mock(name="arg0"), Mock(name="arg1")
         hfp.predicate(arg0)
         hfp.predicate(arg1)
         self.predicate.assert_has_calls([call(arg0), call(arg1)])
@@ -1467,39 +2261,39 @@ class HostFilterPolicyInitTest(unittest.TestCase):
         self._check_init(HostFilterPolicy(self.child_policy, self.predicate))
 
     def test_init_kwargs(self):
-        self._check_init(HostFilterPolicy(
-            predicate=self.predicate, child_policy=self.child_policy
-        ))
+        self._check_init(
+            HostFilterPolicy(predicate=self.predicate, child_policy=self.child_policy)
+        )
 
     def test_immutable_predicate(self):
         if sys.version_info >= (3, 11):
             expected_message_regex = "has no setter"
         else:
             expected_message_regex = "can't set attribute"
-        hfp = HostFilterPolicy(child_policy=Mock(name='child_policy'),
-                               predicate=Mock(name='predicate'))
+        hfp = HostFilterPolicy(
+            child_policy=Mock(name="child_policy"), predicate=Mock(name="predicate")
+        )
         with pytest.raises(AttributeError, match=expected_message_regex):
             hfp.predicate = object()
 
 
 class HostFilterPolicyDeferralTest(unittest.TestCase):
-
     def setUp(self):
         self.passthrough_hfp = HostFilterPolicy(
-            child_policy=Mock(name='child_policy'),
-            predicate=Mock(name='passthrough_predicate',
-                           return_value=True)
+            child_policy=Mock(name="child_policy"),
+            predicate=Mock(name="passthrough_predicate", return_value=True),
         )
         self.filterall_hfp = HostFilterPolicy(
-            child_policy=Mock(name='child_policy'),
-            predicate=Mock(name='filterall_predicate',
-                           return_value=False)
+            child_policy=Mock(name="child_policy"),
+            predicate=Mock(name="filterall_predicate", return_value=False),
         )
 
     def _check_host_triggered_method(self, policy, name):
-        arg, kwarg = Mock(name='arg'), Mock(name='kwarg')
-        method, child_policy_method = (getattr(policy, name),
-                                       getattr(policy._child_policy, name))
+        arg, kwarg = Mock(name="arg"), Mock(name="kwarg")
+        method, child_policy_method = (
+            getattr(policy, name),
+            getattr(policy._child_policy, name),
+        )
 
         result = method(arg, kw=kwarg)
 
@@ -1509,28 +2303,28 @@ class HostFilterPolicyDeferralTest(unittest.TestCase):
         assert result is child_policy_method.return_value
 
     def test_defer_on_up_to_child_policy(self):
-        self._check_host_triggered_method(self.passthrough_hfp, 'on_up')
+        self._check_host_triggered_method(self.passthrough_hfp, "on_up")
 
     def test_defer_on_down_to_child_policy(self):
-        self._check_host_triggered_method(self.passthrough_hfp, 'on_down')
+        self._check_host_triggered_method(self.passthrough_hfp, "on_down")
 
     def test_defer_on_add_to_child_policy(self):
-        self._check_host_triggered_method(self.passthrough_hfp, 'on_add')
+        self._check_host_triggered_method(self.passthrough_hfp, "on_add")
 
     def test_defer_on_remove_to_child_policy(self):
-        self._check_host_triggered_method(self.passthrough_hfp, 'on_remove')
+        self._check_host_triggered_method(self.passthrough_hfp, "on_remove")
 
     def test_filtered_host_on_up_doesnt_call_child_policy(self):
-        self._check_host_triggered_method(self.filterall_hfp, 'on_up')
+        self._check_host_triggered_method(self.filterall_hfp, "on_up")
 
     def test_filtered_host_on_down_doesnt_call_child_policy(self):
-        self._check_host_triggered_method(self.filterall_hfp, 'on_down')
+        self._check_host_triggered_method(self.filterall_hfp, "on_down")
 
     def test_filtered_host_on_add_doesnt_call_child_policy(self):
-        self._check_host_triggered_method(self.filterall_hfp, 'on_add')
+        self._check_host_triggered_method(self.filterall_hfp, "on_add")
 
     def test_filtered_host_on_remove_doesnt_call_child_policy(self):
-        self._check_host_triggered_method(self.filterall_hfp, 'on_remove')
+        self._check_host_triggered_method(self.filterall_hfp, "on_remove")
 
     def _check_check_supported_deferral(self, policy):
         policy.check_supported()
@@ -1544,14 +2338,21 @@ class HostFilterPolicyDeferralTest(unittest.TestCase):
 
 
 class HostFilterPolicyDistanceTest(unittest.TestCase):
-
     def setUp(self):
         self.hfp = HostFilterPolicy(
-            child_policy=Mock(name='child_policy', distance=Mock(name='distance')),
-            predicate=lambda host: host.address == 'acceptme'
+            child_policy=Mock(name="child_policy", distance=Mock(name="distance")),
+            predicate=lambda host: host.address == "acceptme",
         )
-        self.ignored_host = Host(DefaultEndPoint('ignoreme'), conviction_policy_factory=Mock(), host_id=uuid.uuid4())
-        self.accepted_host = Host(DefaultEndPoint('acceptme'), conviction_policy_factory=Mock(), host_id=uuid.uuid4())
+        self.ignored_host = Host(
+            DefaultEndPoint("ignoreme"),
+            conviction_policy_factory=Mock(),
+            host_id=uuid.uuid4(),
+        )
+        self.accepted_host = Host(
+            DefaultEndPoint("acceptme"),
+            conviction_policy_factory=Mock(),
+            host_id=uuid.uuid4(),
+        )
 
     def test_ignored_with_filter(self):
         assert self.hfp.distance(self.ignored_host) == HostDistance.IGNORED
@@ -1569,58 +2370,53 @@ class HostFilterPolicyDistanceTest(unittest.TestCase):
 
 
 class HostFilterPolicyPopulateTest(unittest.TestCase):
-
     def test_populate_deferred_to_child(self):
         hfp = HostFilterPolicy(
-            child_policy=Mock(name='child_policy'),
-            predicate=lambda host: True
+            child_policy=Mock(name="child_policy"), predicate=lambda host: True
         )
-        mock_cluster, hosts = (Mock(name='cluster'),
-                               ['host1', 'host2', 'host3'])
+        mock_cluster, hosts = (Mock(name="cluster"), ["host1", "host2", "host3"])
         hfp.populate(mock_cluster, hosts)
         hfp._child_policy.populate.assert_called_once_with(
-            cluster=mock_cluster,
-            hosts=hosts
+            cluster=mock_cluster, hosts=hosts
         )
 
     def test_child_is_populated_with_filtered_hosts(self):
         hfp = HostFilterPolicy(
-            child_policy=Mock(name='child_policy'),
-            predicate=lambda host: False
+            child_policy=Mock(name="child_policy"), predicate=lambda host: False
         )
-        mock_cluster, hosts = (Mock(name='cluster'),
-                               ['acceptme0', 'acceptme1'])
+        mock_cluster, hosts = (Mock(name="cluster"), ["acceptme0", "acceptme1"])
         hfp.populate(mock_cluster, hosts)
         hfp._child_policy.populate.assert_called_once()
-        assert hfp._child_policy.populate.call_args[1]['hosts'] == ['acceptme0', 'acceptme1']
+        assert hfp._child_policy.populate.call_args[1]["hosts"] == [
+            "acceptme0",
+            "acceptme1",
+        ]
 
 
 class HostFilterPolicyQueryPlanTest(unittest.TestCase):
-
     def test_query_plan_deferred_to_child(self):
         child_policy = Mock(
-            name='child_policy',
-            make_query_plan=Mock(
-                return_value=[object(), object(), object()]
-            )
+            name="child_policy",
+            make_query_plan=Mock(return_value=[object(), object(), object()]),
         )
-        hfp = HostFilterPolicy(
-            child_policy=child_policy,
-            predicate=lambda host: True
-        )
-        working_keyspace, query = (Mock(name='working_keyspace'),
-                                   Mock(name='query'))
-        qp = list(hfp.make_query_plan(working_keyspace=working_keyspace,
-                                      query=query))
+        hfp = HostFilterPolicy(child_policy=child_policy, predicate=lambda host: True)
+        working_keyspace, query = (Mock(name="working_keyspace"), Mock(name="query"))
+        qp = list(hfp.make_query_plan(working_keyspace=working_keyspace, query=query))
         hfp._child_policy.make_query_plan.assert_called_once_with(
-            working_keyspace=working_keyspace,
-            query=query
+            working_keyspace=working_keyspace, query=query
         )
         assert qp == hfp._child_policy.make_query_plan.return_value
 
     def test_wrap_token_aware(self):
         cluster = Mock(spec=Cluster)
-        hosts = [Host(DefaultEndPoint("127.0.0.{}".format(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(1, 6)]
+        hosts = [
+            Host(
+                DefaultEndPoint("127.0.0.{}".format(i)),
+                SimpleConvictionPolicy,
+                host_id=uuid.uuid4(),
+            )
+            for i in range(1, 6)
+        ]
         for host in hosts:
             host.set_up()
 
@@ -1630,30 +2426,55 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
         cluster.metadata.get_replicas.side_effect = get_replicas
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.side_effect = (
+            cluster.metadata.get_replicas
+        )
 
-        child_policy = TokenAwarePolicy(RoundRobinPolicy())
+        child_policy = TokenAwarePolicy(RoundRobinPolicy(), shuffle_replicas=False)
 
         hfp = HostFilterPolicy(
             child_policy=child_policy,
-            predicate=lambda host: host.address != "127.0.0.1" and host.address != "127.0.0.4"
+            predicate=lambda host: (
+                host.address != "127.0.0.1" and host.address != "127.0.0.4"
+            ),
         )
         hfp.populate(cluster, hosts)
 
         # We don't allow randomness for ordering the replicas in RoundRobin
         hfp._child_policy._child_policy._position = 0
 
-
         mocked_query = Mock()
         query_plan = hfp.make_query_plan("keyspace", mocked_query)
         # First the not filtered replica, and then the rest of the allowed hosts ordered
         query_plan = list(query_plan)
-        assert query_plan[0] == Host(DefaultEndPoint("127.0.0.2"), SimpleConvictionPolicy, host_id=uuid.uuid4())
-        assert set(query_plan[1:]) == {Host(DefaultEndPoint("127.0.0.3"), SimpleConvictionPolicy, host_id=uuid.uuid4()),
-                                              Host(DefaultEndPoint("127.0.0.5"), SimpleConvictionPolicy, host_id=uuid.uuid4())}
+        assert query_plan[0] == Host(
+            DefaultEndPoint("127.0.0.2"), SimpleConvictionPolicy, host_id=uuid.uuid4()
+        )
+        assert set(query_plan[1:]) == {
+            Host(
+                DefaultEndPoint("127.0.0.3"),
+                SimpleConvictionPolicy,
+                host_id=uuid.uuid4(),
+            ),
+            Host(
+                DefaultEndPoint("127.0.0.5"),
+                SimpleConvictionPolicy,
+                host_id=uuid.uuid4(),
+            ),
+        }
 
     def test_create_whitelist(self):
         cluster = Mock(spec=Cluster)
-        hosts = [Host(DefaultEndPoint("127.0.0.{}".format(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(1, 6)]
+        hosts = [
+            Host(
+                DefaultEndPoint("127.0.0.{}".format(i)),
+                SimpleConvictionPolicy,
+                host_id=uuid.uuid4(),
+            )
+            for i in range(1, 6)
+        ]
         for host in hosts:
             host.set_up()
 
@@ -1661,7 +2482,9 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
 
         hfp = HostFilterPolicy(
             child_policy=child_policy,
-            predicate=lambda host: host.address == "127.0.0.1" or host.address == "127.0.0.4"
+            predicate=lambda host: (
+                host.address == "127.0.0.1" or host.address == "127.0.0.4"
+            ),
         )
         hfp.populate(cluster, hosts)
 
@@ -1671,5 +2494,15 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
         mocked_query = Mock()
         query_plan = hfp.make_query_plan("keyspace", mocked_query)
         # Only the filtered replicas should be allowed
-        assert set(query_plan) == {Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy, host_id=uuid.uuid4()),
-                                           Host(DefaultEndPoint("127.0.0.4"), SimpleConvictionPolicy, host_id=uuid.uuid4())}
+        assert set(query_plan) == {
+            Host(
+                DefaultEndPoint("127.0.0.1"),
+                SimpleConvictionPolicy,
+                host_id=uuid.uuid4(),
+            ),
+            Host(
+                DefaultEndPoint("127.0.0.4"),
+                SimpleConvictionPolicy,
+                host_id=uuid.uuid4(),
+            ),
+        }
