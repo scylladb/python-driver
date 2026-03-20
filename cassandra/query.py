@@ -33,7 +33,15 @@ from cassandra.policies import ColDesc
 from cassandra.protocol import _UNSET_VALUE
 from cassandra.util import OrderedDict, _sanitize_identifiers
 
+try:
+    from cassandra.serializers import make_serializers as _cython_make_serializers
+
+    _HAVE_CYTHON_SERIALIZERS = True
+except ImportError:
+    _HAVE_CYTHON_SERIALIZERS = False
+
 import logging
+
 log = logging.getLogger(__name__)
 
 UNSET_VALUE = _UNSET_VALUE
@@ -49,9 +57,9 @@ See https://issues.apache.org/jira/browse/CASSANDRA-7304 for further details on 
 Only valid when using native protocol v4+
 """
 
-NON_ALPHA_REGEX = re.compile('[^a-zA-Z0-9]')
-START_BADCHAR_REGEX = re.compile('^[^a-zA-Z0-9]*')
-END_BADCHAR_REGEX = re.compile('[^a-zA-Z0-9_]*$')
+NON_ALPHA_REGEX = re.compile("[^a-zA-Z0-9]")
+START_BADCHAR_REGEX = re.compile("^[^a-zA-Z0-9]*")
+END_BADCHAR_REGEX = re.compile("[^a-zA-Z0-9_]*$")
 
 _clean_name_cache = {}
 
@@ -60,7 +68,9 @@ def _clean_column_name(name):
     try:
         return _clean_name_cache[name]
     except KeyError:
-        clean = NON_ALPHA_REGEX.sub("_", START_BADCHAR_REGEX.sub("", END_BADCHAR_REGEX.sub("", name)))
+        clean = NON_ALPHA_REGEX.sub(
+            "_", START_BADCHAR_REGEX.sub("", END_BADCHAR_REGEX.sub("", name))
+        )
         _clean_name_cache[name] = clean
         return clean
 
@@ -83,6 +93,7 @@ def tuple_factory(colnames, rows):
     """
     return rows
 
+
 class PseudoNamedTupleRow(object):
     """
     Helper class for pseudo_named_tuple_factory. These objects provide an
@@ -90,6 +101,7 @@ class PseudoNamedTupleRow(object):
     but otherwise do not attempt to implement the full namedtuple or iterable
     interface.
     """
+
     def __init__(self, ordered_dict):
         self._dict = ordered_dict
         self._tuple = tuple(ordered_dict.values())
@@ -104,8 +116,7 @@ class PseudoNamedTupleRow(object):
         return iter(self._tuple)
 
     def __repr__(self):
-        return '{t}({od})'.format(t=self.__class__.__name__,
-                                  od=self._dict)
+        return "{t}({od})".format(t=self.__class__.__name__, od=self._dict)
 
 
 def pseudo_namedtuple_factory(colnames, rows):
@@ -113,8 +124,7 @@ def pseudo_namedtuple_factory(colnames, rows):
     Returns each row as a :class:`.PseudoNamedTupleRow`. This is the fallback
     factory for cases where :meth:`.named_tuple_factory` fails to create rows.
     """
-    return [PseudoNamedTupleRow(od)
-            for od in ordered_dict_factory(colnames, rows)]
+    return [PseudoNamedTupleRow(od) for od in ordered_dict_factory(colnames, rows)]
 
 
 def named_tuple_factory(colnames, rows):
@@ -148,7 +158,7 @@ def named_tuple_factory(colnames, rows):
     """
     clean_column_names = map(_clean_column_name, colnames)
     try:
-        Row = namedtuple('Row', clean_column_names)
+        Row = namedtuple("Row", clean_column_names)
     except SyntaxError:
         warnings.warn(
             "Failed creating namedtuple for a result because there were too "
@@ -159,19 +169,23 @@ def named_tuple_factory(colnames, rows):
             "values on row objects, Upgrade to Python 3.7, or use a different "
             "row factory. (column names: {colnames})".format(
                 substitute_factory_name=pseudo_namedtuple_factory.__name__,
-                colnames=colnames
+                colnames=colnames,
             )
         )
         return pseudo_namedtuple_factory(colnames, rows)
     except Exception:
-        clean_column_names = list(map(_clean_column_name, colnames))  # create list because py3 map object will be consumed by first attempt
-        log.warning("Failed creating named tuple for results with column names %s (cleaned: %s) "
-                    "(see Python 'namedtuple' documentation for details on name rules). "
-                    "Results will be returned with positional names. "
-                    "Avoid this by choosing different names, using SELECT \"<col name>\" AS aliases, "
-                    "or specifying a different row_factory on your Session" %
-                    (colnames, clean_column_names))
-        Row = namedtuple('Row', _sanitize_identifiers(clean_column_names))
+        clean_column_names = list(
+            map(_clean_column_name, colnames)
+        )  # create list because py3 map object will be consumed by first attempt
+        log.warning(
+            "Failed creating named tuple for results with column names %s (cleaned: %s) "
+            "(see Python 'namedtuple' documentation for details on name rules). "
+            "Results will be returned with positional names. "
+            'Avoid this by choosing different names, using SELECT "<col name>" AS aliases, '
+            "or specifying a different row_factory on your Session"
+            % (colnames, clean_column_names)
+        )
+        Row = namedtuple("Row", _sanitize_identifiers(clean_column_names))
 
     return [Row(*row) for row in rows]
 
@@ -276,11 +290,24 @@ class Statement(object):
     _serial_consistency_level = None
     _routing_key = None
 
-    def __init__(self, retry_policy=None, consistency_level=None, routing_key=None,
-                 serial_consistency_level=None, fetch_size=FETCH_SIZE_UNSET, keyspace=None, custom_payload=None,
-                 is_idempotent=False, table=None):
-        if retry_policy and not hasattr(retry_policy, 'on_read_timeout'):  # just checking one method to detect positional parameter errors
-            raise ValueError('retry_policy should implement cassandra.policies.RetryPolicy')
+    def __init__(
+        self,
+        retry_policy=None,
+        consistency_level=None,
+        routing_key=None,
+        serial_consistency_level=None,
+        fetch_size=FETCH_SIZE_UNSET,
+        keyspace=None,
+        custom_payload=None,
+        is_idempotent=False,
+        table=None,
+    ):
+        if retry_policy and not hasattr(
+            retry_policy, "on_read_timeout"
+        ):  # just checking one method to detect positional parameter errors
+            raise ValueError(
+                "retry_policy should implement cassandra.policies.RetryPolicy"
+            )
         if retry_policy is not None:
             self.retry_policy = retry_policy
         if consistency_level is not None:
@@ -329,17 +356,20 @@ class Statement(object):
         If the partition key is a composite, a list or tuple must be passed in.
         Each key component should be in its packed (binary) format, so all
         components should be strings.
-        """)
+        """,
+    )
 
     def _get_serial_consistency_level(self):
         return self._serial_consistency_level
 
     def _set_serial_consistency_level(self, serial_consistency_level):
-        if (serial_consistency_level is not None and
-                not ConsistencyLevel.is_serial(serial_consistency_level)):
+        if serial_consistency_level is not None and not ConsistencyLevel.is_serial(
+            serial_consistency_level
+        ):
             raise ValueError(
                 "serial_consistency_level must be either ConsistencyLevel.SERIAL "
-                "or ConsistencyLevel.LOCAL_SERIAL")
+                "or ConsistencyLevel.LOCAL_SERIAL"
+            )
         self._serial_consistency_level = serial_consistency_level
 
     def _del_serial_consistency_level(self):
@@ -384,7 +414,8 @@ class Statement(object):
         conditional statements.
 
         .. versionadded:: 2.0.0
-        """)
+        """,
+    )
 
 
 class SimpleStatement(Statement):
@@ -392,9 +423,18 @@ class SimpleStatement(Statement):
     A simple, un-prepared query.
     """
 
-    def __init__(self, query_string, retry_policy=None, consistency_level=None, routing_key=None,
-                 serial_consistency_level=None, fetch_size=FETCH_SIZE_UNSET, keyspace=None,
-                 custom_payload=None, is_idempotent=False):
+    def __init__(
+        self,
+        query_string,
+        retry_policy=None,
+        consistency_level=None,
+        routing_key=None,
+        serial_consistency_level=None,
+        fetch_size=FETCH_SIZE_UNSET,
+        keyspace=None,
+        custom_payload=None,
+        is_idempotent=False,
+    ):
         """
         `query_string` should be a literal CQL statement with the exception
         of parameter placeholders that will be filled through the
@@ -402,8 +442,17 @@ class SimpleStatement(Statement):
 
         See :class:`Statement` attributes for a description of the other parameters.
         """
-        Statement.__init__(self, retry_policy, consistency_level, routing_key,
-                           serial_consistency_level, fetch_size, keyspace, custom_payload, is_idempotent)
+        Statement.__init__(
+            self,
+            retry_policy,
+            consistency_level,
+            routing_key,
+            serial_consistency_level,
+            fetch_size,
+            keyspace,
+            custom_payload,
+            is_idempotent,
+        )
         self._query_string = query_string
 
     @property
@@ -411,9 +460,14 @@ class SimpleStatement(Statement):
         return self._query_string
 
     def __str__(self):
-        consistency = ConsistencyLevel.value_to_name.get(self.consistency_level, 'Not Set')
-        return (u'<SimpleStatement query="%s", consistency=%s>' %
-                (self.query_string, consistency))
+        consistency = ConsistencyLevel.value_to_name.get(
+            self.consistency_level, "Not Set"
+        )
+        return '<SimpleStatement query="%s", consistency=%s>' % (
+            self.query_string,
+            consistency,
+        )
+
     __repr__ = __str__
 
 
@@ -442,7 +496,7 @@ class PreparedStatement(object):
        <b>A note about <code>*</code> in prepared statements</b>
     """
 
-    column_metadata = None  #TODO: make this bind_metadata in next major
+    column_metadata = None  # TODO: make this bind_metadata in next major
     retry_policy = None
     consistency_level = None
     custom_payload = None
@@ -459,9 +513,19 @@ class PreparedStatement(object):
     serial_consistency_level = None  # TODO never used?
     _is_lwt = False
 
-    def __init__(self, column_metadata, query_id, routing_key_indexes, query,
-                 keyspace, protocol_version, result_metadata, result_metadata_id,
-                 is_lwt=False, column_encryption_policy=None):
+    def __init__(
+        self,
+        column_metadata,
+        query_id,
+        routing_key_indexes,
+        query,
+        keyspace,
+        protocol_version,
+        result_metadata,
+        result_metadata_id,
+        is_lwt=False,
+        column_encryption_policy=None,
+    ):
         self.column_metadata = column_metadata
         self.query_id = query_id
         self.routing_key_indexes = routing_key_indexes
@@ -474,14 +538,61 @@ class PreparedStatement(object):
         self.is_idempotent = False
         self._is_lwt = is_lwt
 
+    @property
+    def _serializers(self):
+        """Lazily create and cache Cython serializers for column types.
+
+        Returns a list of Serializer objects if Cython serializers are available
+        and there is no column encryption policy, otherwise returns None.
+
+        The column_encryption_policy check is performed on every access (not
+        cached) so that serializers are correctly bypassed if a policy is set
+        after construction.  This means the cache never goes stale: once a CE
+        policy is present, we always return None and fall through to the
+        encryption-aware bind path.
+        """
+        if self.column_encryption_policy:
+            return None
+        try:
+            return self._cached_serializers
+        except AttributeError:
+            pass
+        if _HAVE_CYTHON_SERIALIZERS and self.column_metadata:
+            self._cached_serializers = _cython_make_serializers(
+                [col.type for col in self.column_metadata]
+            )
+        else:
+            self._cached_serializers = None
+        return self._cached_serializers
+
     @classmethod
-    def from_message(cls, query_id, column_metadata, pk_indexes, cluster_metadata,
-                     query, prepared_keyspace, protocol_version, result_metadata,
-                     result_metadata_id, is_lwt, column_encryption_policy=None):
+    def from_message(
+        cls,
+        query_id,
+        column_metadata,
+        pk_indexes,
+        cluster_metadata,
+        query,
+        prepared_keyspace,
+        protocol_version,
+        result_metadata,
+        result_metadata_id,
+        is_lwt,
+        column_encryption_policy=None,
+    ):
         if not column_metadata:
-            return PreparedStatement(column_metadata, query_id, None,
-                                     query, prepared_keyspace, protocol_version, result_metadata,
-                                     result_metadata_id, is_lwt, column_encryption_policy)
+            return PreparedStatement(
+                column_metadata,
+                query_id,
+                None,
+                query,
+                prepared_keyspace,
+                protocol_version,
+                result_metadata,
+                result_metadata_id,
+                is_lwt,
+                column_encryption_policy,
+            )
 
         if pk_indexes:
             routing_key_indexes = pk_indexes
@@ -496,18 +607,32 @@ class PreparedStatement(object):
                     partition_key_columns = table_meta.partition_key
 
                     # make a map of {column_name: index} for each column in the statement
-                    statement_indexes = dict((c.name, i) for i, c in enumerate(column_metadata))
+                    statement_indexes = dict(
+                        (c.name, i) for i, c in enumerate(column_metadata)
+                    )
 
                     # a list of which indexes in the statement correspond to partition key items
                     try:
-                        routing_key_indexes = [statement_indexes[c.name]
-                                               for c in partition_key_columns]
-                    except KeyError:  # we're missing a partition key component in the prepared
-                        pass          # statement; just leave routing_key_indexes as None
+                        routing_key_indexes = [
+                            statement_indexes[c.name] for c in partition_key_columns
+                        ]
+                    except (
+                        KeyError
+                    ):  # we're missing a partition key component in the prepared
+                        pass  # statement; just leave routing_key_indexes as None
 
-        return PreparedStatement(column_metadata, query_id, routing_key_indexes,
-                                 query, prepared_keyspace, protocol_version, result_metadata,
-                                 result_metadata_id, is_lwt, column_encryption_policy)
+        return PreparedStatement(
+            column_metadata,
+            query_id,
+            routing_key_indexes,
+            query,
+            prepared_keyspace,
+            protocol_version,
+            result_metadata,
+            result_metadata_id,
+            is_lwt,
+            column_encryption_policy,
+        )
 
     def bind(self, values):
         """
@@ -519,17 +644,52 @@ class PreparedStatement(object):
 
     def is_routing_key_index(self, i):
         if self._routing_key_index_set is None:
-            self._routing_key_index_set = set(self.routing_key_indexes) if self.routing_key_indexes else set()
+            self._routing_key_index_set = (
+                set(self.routing_key_indexes) if self.routing_key_indexes else set()
+            )
         return i in self._routing_key_index_set
 
     def is_lwt(self):
         return self._is_lwt
 
     def __str__(self):
-        consistency = ConsistencyLevel.value_to_name.get(self.consistency_level, 'Not Set')
-        return (u'<PreparedStatement query="%s", consistency=%s>' %
-                (self.query_string, consistency))
+        consistency = ConsistencyLevel.value_to_name.get(
+            self.consistency_level, "Not Set"
+        )
+        return '<PreparedStatement query="%s", consistency=%s>' % (
+            self.query_string,
+            consistency,
+        )
+
     __repr__ = __str__
+
+
+def _raise_bind_serialize_error(col_spec, value, exc):
+    """Wrap TypeError, struct.error, or OverflowError with column context.
+
+    Called from all three bind loop paths (CE, Cython, plain Python) to
+    provide a uniform error message that includes the column name and
+    expected type.  The message distinguishes between wrong-type and
+    out-of-range scenarios:
+
+    - TypeError           -> "invalid type"
+    - OverflowError       -> "value out of range"
+    - struct.error        -> "value out of range"
+
+    Other exception types (e.g. ValueError from VectorType dimension
+    mismatch) propagate without wrapping.
+    """
+    actual_type = type(value)
+    if isinstance(exc, (OverflowError, struct.error)):
+        reason = "value out of range"
+    else:
+        reason = "invalid type"
+    message = (
+        'Received an argument with %s for column "%s". '
+        "Expected: %s, Got: %s; (%s)"
+        % (reason, col_spec.name, col_spec.type, actual_type, exc)
+    )
+    raise TypeError(message) from exc
 
 
 class BoundStatement(Statement):
@@ -548,9 +708,17 @@ class BoundStatement(Statement):
     The sequence of values that were bound to the prepared statement.
     """
 
-    def __init__(self, prepared_statement, retry_policy=None, consistency_level=None, routing_key=None,
-                 serial_consistency_level=None, fetch_size=FETCH_SIZE_UNSET, keyspace=None,
-                 custom_payload=None):
+    def __init__(
+        self,
+        prepared_statement,
+        retry_policy=None,
+        consistency_level=None,
+        routing_key=None,
+        serial_consistency_level=None,
+        fetch_size=FETCH_SIZE_UNSET,
+        keyspace=None,
+        custom_payload=None,
+    ):
         """
         `prepared_statement` should be an instance of :class:`PreparedStatement`.
 
@@ -571,9 +739,17 @@ class BoundStatement(Statement):
             self.keyspace = meta[0].keyspace_name
             self.table = meta[0].table_name
 
-        Statement.__init__(self, retry_policy, consistency_level, routing_key,
-                           serial_consistency_level, fetch_size, keyspace, custom_payload,
-                           prepared_statement.is_idempotent)
+        Statement.__init__(
+            self,
+            retry_policy,
+            consistency_level,
+            routing_key,
+            serial_consistency_level,
+            fetch_size,
+            keyspace,
+            custom_payload,
+            prepared_statement.is_idempotent,
+        )
 
     def bind(self, values):
         """
@@ -615,64 +791,132 @@ class BoundStatement(Statement):
                         values.append(UNSET_VALUE)
                     else:
                         raise KeyError(
-                            'Column name `%s` not found in bound dict.' %
-                            (col.name))
+                            "Column name `%s` not found in bound dict." % (col.name)
+                        )
 
         value_len = len(values)
         col_meta_len = len(col_meta)
 
         if value_len > col_meta_len:
             raise ValueError(
-                "Too many arguments provided to bind() (got %d, expected %d)" %
-                (len(values), len(col_meta)))
+                "Too many arguments provided to bind() (got %d, expected %d)"
+                % (len(values), len(col_meta))
+            )
 
         # this is fail-fast for clarity pre-v4. When v4 can be assumed,
         # the error will be better reported when UNSET_VALUE is implicitly added.
-        if proto_version < 4 and self.prepared_statement.routing_key_indexes and \
-           value_len < len(self.prepared_statement.routing_key_indexes):
+        if (
+            proto_version < 4
+            and self.prepared_statement.routing_key_indexes
+            and value_len < len(self.prepared_statement.routing_key_indexes)
+        ):
             raise ValueError(
-                "Too few arguments provided to bind() (got %d, required %d for routing key)" %
-                (value_len, len(self.prepared_statement.routing_key_indexes)))
+                "Too few arguments provided to bind() (got %d, required %d for routing key)"
+                % (value_len, len(self.prepared_statement.routing_key_indexes))
+            )
 
         self.raw_values = values
-        self.values = []
-        for value, col_spec in zip(values, col_meta):
-            if value is None:
-                self.values.append(None)
-            elif value is UNSET_VALUE:
-                if proto_version >= 4:
-                    self._append_unset_value()
+        # Pre-allocate to avoid repeated list growth reallocations
+        self.values = [None] * col_meta_len
+        idx = 0
+        if ce_policy:
+            # Column encryption path: check each column for CE policy
+            for value, col_spec in zip(values, col_meta):
+                if value is None:
+                    self.values[idx] = None
+                elif value is UNSET_VALUE:
+                    if proto_version >= 4:
+                        idx = self._append_unset_value(idx)
+                        continue
+                    else:
+                        raise ValueError(
+                            "Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)"
+                            % proto_version
+                        )
                 else:
-                    raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
+                    try:
+                        col_desc = ColDesc(
+                            col_spec.keyspace_name, col_spec.table_name, col_spec.name
+                        )
+                        uses_ce = ce_policy.contains_column(col_desc)
+                        if uses_ce:
+                            col_type = ce_policy.column_type(col_desc)
+                            col_bytes = col_type.serialize(value, proto_version)
+                            col_bytes = ce_policy.encrypt(col_desc, col_bytes)
+                        else:
+                            col_bytes = col_spec.type.serialize(value, proto_version)
+                        self.values[idx] = col_bytes
+                    # struct.error: int32 out-of-range; OverflowError: float out-of-range
+                    except (TypeError, struct.error, OverflowError) as exc:
+                        _raise_bind_serialize_error(col_spec, value, exc)
+                idx += 1
+        else:
+            # Fast path: no column encryption, use Cython serializers if available
+            serializers = self.prepared_statement._serializers
+            if serializers is not None:
+                for ser, value, col_spec in zip(serializers, values, col_meta):
+                    if value is None:
+                        self.values[idx] = None
+                    elif value is UNSET_VALUE:
+                        if proto_version >= 4:
+                            idx = self._append_unset_value(idx)
+                            continue
+                        else:
+                            raise ValueError(
+                                "Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)"
+                                % proto_version
+                            )
+                    else:
+                        try:
+                            col_bytes = ser.serialize(value, proto_version)
+                            self.values[idx] = col_bytes
+                        # struct.error: int32 out-of-range; OverflowError: float out-of-range
+                        except (TypeError, struct.error, OverflowError) as exc:
+                            _raise_bind_serialize_error(col_spec, value, exc)
+                    idx += 1
             else:
-                try:
-                    col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
-                    uses_ce = ce_policy and ce_policy.contains_column(col_desc)
-                    col_type = ce_policy.column_type(col_desc) if uses_ce else col_spec.type
-                    col_bytes = col_type.serialize(value, proto_version)
-                    if uses_ce:
-                        col_bytes = ce_policy.encrypt(col_desc, col_bytes)
-                    self.values.append(col_bytes)
-                except (TypeError, struct.error) as exc:
-                    actual_type = type(value)
-                    message = ('Received an argument of invalid type for column "%s". '
-                               'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
-                    raise TypeError(message)
+                for value, col_spec in zip(values, col_meta):
+                    if value is None:
+                        self.values[idx] = None
+                    elif value is UNSET_VALUE:
+                        if proto_version >= 4:
+                            idx = self._append_unset_value(idx)
+                            continue
+                        else:
+                            raise ValueError(
+                                "Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)"
+                                % proto_version
+                            )
+                    else:
+                        try:
+                            col_bytes = col_spec.type.serialize(value, proto_version)
+                            self.values[idx] = col_bytes
+                        # struct.error: int32 out-of-range; OverflowError: float out-of-range
+                        except (TypeError, struct.error, OverflowError) as exc:
+                            _raise_bind_serialize_error(col_spec, value, exc)
+                    idx += 1
 
         if proto_version >= 4:
-            diff = col_meta_len - len(self.values)
-            if diff:
-                for _ in range(diff):
-                    self._append_unset_value()
+            # Fill remaining unbound columns with UNSET_VALUE (v4+ feature).
+            # The pre-allocated list already has slots for these, so index
+            # assignment works directly without trimming first.
+            while idx < col_meta_len:
+                idx = self._append_unset_value(idx)
+        elif idx < col_meta_len:
+            # Pre-v4: trim trailing unused slots (no UNSET_VALUE support)
+            self.values = self.values[:idx]
 
         return self
 
-    def _append_unset_value(self):
-        next_index = len(self.values)
-        if self.prepared_statement.is_routing_key_index(next_index):
-            col_meta = self.prepared_statement.column_metadata[next_index]
-            raise ValueError("Cannot bind UNSET_VALUE as a part of the routing key '%s'" % col_meta.name)
-        self.values.append(UNSET_VALUE)
+    def _append_unset_value(self, idx):
+        if self.prepared_statement.is_routing_key_index(idx):
+            col_meta = self.prepared_statement.column_metadata[idx]
+            raise ValueError(
+                "Cannot bind UNSET_VALUE as a part of the routing key '%s'"
+                % col_meta.name
+            )
+        self.values[idx] = UNSET_VALUE
+        return idx + 1
 
     @property
     def routing_key(self):
@@ -686,7 +930,9 @@ class BoundStatement(Statement):
         if len(routing_indexes) == 1:
             self._routing_key = self.values[routing_indexes[0]]
         else:
-            self._routing_key = b"".join(self._key_parts_packed(self.values[i] for i in routing_indexes))
+            self._routing_key = b"".join(
+                self._key_parts_packed(self.values[i] for i in routing_indexes)
+            )
 
         return self._routing_key
 
@@ -694,9 +940,15 @@ class BoundStatement(Statement):
         return self.prepared_statement.is_lwt()
 
     def __str__(self):
-        consistency = ConsistencyLevel.value_to_name.get(self.consistency_level, 'Not Set')
-        return (u'<BoundStatement query="%s", values=%s, consistency=%s>' %
-                (self.prepared_statement.query_string, self.raw_values, consistency))
+        consistency = ConsistencyLevel.value_to_name.get(
+            self.consistency_level, "Not Set"
+        )
+        return '<BoundStatement query="%s", values=%s, consistency=%s>' % (
+            self.prepared_statement.query_string,
+            self.raw_values,
+            consistency,
+        )
+
     __repr__ = __str__
 
 
@@ -731,7 +983,7 @@ class BatchType(object):
         return self.name
 
     def __repr__(self):
-        return "BatchType.%s" % (self.name, )
+        return "BatchType.%s" % (self.name,)
 
 
 BatchType.LOGGED = BatchType("LOGGED", 0)
@@ -763,9 +1015,15 @@ class BatchStatement(Statement):
     _session = None
     _is_lwt = False
 
-    def __init__(self, batch_type=BatchType.LOGGED, retry_policy=None,
-                 consistency_level=None, serial_consistency_level=None,
-                 session=None, custom_payload=None):
+    def __init__(
+        self,
+        batch_type=BatchType.LOGGED,
+        retry_policy=None,
+        consistency_level=None,
+        serial_consistency_level=None,
+        session=None,
+        custom_payload=None,
+    ):
         """
         `batch_type` specifies The :class:`.BatchType` for the batch operation.
         Defaults to :attr:`.BatchType.LOGGED`.
@@ -813,8 +1071,13 @@ class BatchStatement(Statement):
         self.batch_type = batch_type
         self._statements_and_parameters = []
         self._session = session
-        Statement.__init__(self, retry_policy=retry_policy, consistency_level=consistency_level,
-                           serial_consistency_level=serial_consistency_level, custom_payload=custom_payload)
+        Statement.__init__(
+            self,
+            retry_policy=retry_policy,
+            consistency_level=consistency_level,
+            serial_consistency_level=serial_consistency_level,
+            custom_payload=custom_payload,
+        )
 
     def clear(self):
         """
@@ -853,11 +1116,14 @@ class BatchStatement(Statement):
             if parameters:
                 raise ValueError(
                     "Parameters cannot be passed with a BoundStatement "
-                    "to BatchStatement.add()")
+                    "to BatchStatement.add()"
+                )
             self._update_state(statement)
             if statement.is_lwt():
                 self._is_lwt = True
-            self._add_statement_and_params(True, statement.prepared_statement.query_id, statement.values)
+            self._add_statement_and_params(
+                True, statement.prepared_statement.query_id, statement.values
+            )
         else:
             # it must be a SimpleStatement
             query_string = statement.query_string
@@ -881,7 +1147,9 @@ class BatchStatement(Statement):
 
     def _add_statement_and_params(self, is_prepared, statement, parameters):
         if len(self._statements_and_parameters) >= 0xFFFF:
-            raise ValueError("Batch statement cannot contain more than %d statements." % 0xFFFF)
+            raise ValueError(
+                "Batch statement cannot contain more than %d statements." % 0xFFFF
+            )
         self._statements_and_parameters.append((is_prepared, statement, parameters))
 
     def _maybe_set_routing_attributes(self, statement):
@@ -907,9 +1175,15 @@ class BatchStatement(Statement):
         return len(self._statements_and_parameters)
 
     def __str__(self):
-        consistency = ConsistencyLevel.value_to_name.get(self.consistency_level, 'Not Set')
-        return (u'<BatchStatement type=%s, statements=%d, consistency=%s>' %
-                (self.batch_type, len(self), consistency))
+        consistency = ConsistencyLevel.value_to_name.get(
+            self.consistency_level, "Not Set"
+        )
+        return "<BatchStatement type=%s, statements=%d, consistency=%s>" % (
+            self.batch_type,
+            len(self),
+            consistency,
+        )
+
     __repr__ = __str__
 
 
@@ -931,7 +1205,9 @@ For example::
 
 def bind_params(query, params, encoder):
     if isinstance(params, dict):
-        return query % dict((k, encoder.cql_encode_all_types(v)) for k, v in params.items())
+        return query % dict(
+            (k, encoder.cql_encode_all_types(v)) for k, v in params.items()
+        )
     else:
         return query % tuple(encoder.cql_encode_all_types(v) for v in params)
 
@@ -940,6 +1216,7 @@ class TraceUnavailable(Exception):
     """
     Raised when complete trace details cannot be fetched from Cassandra.
     """
+
     pass
 
 
@@ -1000,7 +1277,9 @@ class QueryTrace(object):
 
     _session = None
 
-    _SELECT_SESSIONS_FORMAT = "SELECT * FROM system_traces.sessions WHERE session_id = %s"
+    _SELECT_SESSIONS_FORMAT = (
+        "SELECT * FROM system_traces.sessions WHERE session_id = %s"
+    )
     _SELECT_EVENTS_FORMAT = "SELECT * FROM system_traces.events WHERE session_id = %s"
     _BASE_RETRY_SLEEP = 0.003
 
@@ -1029,18 +1308,36 @@ class QueryTrace(object):
             time_spent = time.time() - start
             if max_wait is not None and time_spent >= max_wait:
                 raise TraceUnavailable(
-                    "Trace information was not available within %f seconds. Consider raising Session.max_trace_wait." % (max_wait,))
+                    "Trace information was not available within %f seconds. Consider raising Session.max_trace_wait."
+                    % (max_wait,)
+                )
 
             log.debug("Attempting to fetch trace info for trace ID: %s", self.trace_id)
-            metadata_request_timeout = self._session.cluster.control_connection and self._session.cluster.control_connection._metadata_request_timeout
+            metadata_request_timeout = (
+                self._session.cluster.control_connection
+                and self._session.cluster.control_connection._metadata_request_timeout
+            )
             session_results = self._execute(
-                SimpleStatement(maybe_add_timeout_to_query(self._SELECT_SESSIONS_FORMAT, metadata_request_timeout), consistency_level=query_cl), (self.trace_id,), time_spent, max_wait)
+                SimpleStatement(
+                    maybe_add_timeout_to_query(
+                        self._SELECT_SESSIONS_FORMAT, metadata_request_timeout
+                    ),
+                    consistency_level=query_cl,
+                ),
+                (self.trace_id,),
+                time_spent,
+                max_wait,
+            )
 
             # PYTHON-730: There is race condition that the duration mutation is written before started_at the for fast queries
             session_row = session_results.one() if session_results else None
-            is_complete = session_row is not None and session_row.duration is not None and session_row.started_at is not None
+            is_complete = (
+                session_row is not None
+                and session_row.duration is not None
+                and session_row.started_at is not None
+            )
             if not session_results or (wait_for_complete and not is_complete):
-                time.sleep(self._BASE_RETRY_SLEEP * (2 ** attempt))
+                time.sleep(self._BASE_RETRY_SLEEP * (2**attempt))
                 attempt += 1
                 continue
             if is_complete:
@@ -1049,29 +1346,42 @@ class QueryTrace(object):
                 log.debug("Fetching parital trace info for trace ID: %s", self.trace_id)
 
             self.request_type = session_row.request
-            self.duration = timedelta(microseconds=session_row.duration) if is_complete else None
+            self.duration = (
+                timedelta(microseconds=session_row.duration) if is_complete else None
+            )
             self.started_at = session_row.started_at
             self.coordinator = session_row.coordinator
             self.parameters = session_row.parameters
             # since C* 2.2
-            self.client = getattr(session_row, 'client', None)
+            self.client = getattr(session_row, "client", None)
 
-            log.debug("Attempting to fetch trace events for trace ID: %s", self.trace_id)
+            log.debug(
+                "Attempting to fetch trace events for trace ID: %s", self.trace_id
+            )
             time_spent = time.time() - start
             event_results = self._execute(
-                SimpleStatement(maybe_add_timeout_to_query(self._SELECT_EVENTS_FORMAT, metadata_request_timeout),
-                                consistency_level=query_cl),
+                SimpleStatement(
+                    maybe_add_timeout_to_query(
+                        self._SELECT_EVENTS_FORMAT, metadata_request_timeout
+                    ),
+                    consistency_level=query_cl,
+                ),
                 (self.trace_id,),
                 time_spent,
-                max_wait)
+                max_wait,
+            )
             log.debug("Fetched trace events for trace ID: %s", self.trace_id)
-            self.events = tuple(TraceEvent(r.activity, r.event_id, r.source, r.source_elapsed, r.thread)
-                                for r in event_results)
+            self.events = tuple(
+                TraceEvent(r.activity, r.event_id, r.source, r.source_elapsed, r.thread)
+                for r in event_results
+            )
             break
 
     def _execute(self, query, parameters, time_spent, max_wait):
         timeout = (max_wait - time_spent) if max_wait is not None else None
-        future = self._session._create_response_future(query, parameters, trace=False, custom_payload=None, timeout=timeout)
+        future = self._session._create_response_future(
+            query, parameters, trace=False, custom_payload=None, timeout=timeout
+        )
         # in case the user switched the row factory, set it to namedtuple for this query
         future.row_factory = named_tuple_factory
         future.send_request()
@@ -1079,12 +1389,22 @@ class QueryTrace(object):
         try:
             return future.result()
         except OperationTimedOut:
-            raise TraceUnavailable("Trace information was not available within %f seconds" % (max_wait,))
+            raise TraceUnavailable(
+                "Trace information was not available within %f seconds" % (max_wait,)
+            )
 
     def __str__(self):
-        return "%s [%s] coordinator: %s, started at: %s, duration: %s, parameters: %s" \
-               % (self.request_type, self.trace_id, self.coordinator, self.started_at,
-                  self.duration, self.parameters)
+        return (
+            "%s [%s] coordinator: %s, started at: %s, duration: %s, parameters: %s"
+            % (
+                self.request_type,
+                self.trace_id,
+                self.coordinator,
+                self.started_at,
+                self.duration,
+                self.parameters,
+            )
+        )
 
 
 class TraceEvent(object):
@@ -1121,7 +1441,9 @@ class TraceEvent(object):
 
     def __init__(self, description, timeuuid, source, source_elapsed, thread_name):
         self.description = description
-        self.datetime = datetime.fromtimestamp(unix_time_from_uuid1(timeuuid), tz=timezone.utc)
+        self.datetime = datetime.fromtimestamp(
+            unix_time_from_uuid1(timeuuid), tz=timezone.utc
+        )
         self.source = source
         if source_elapsed is not None:
             self.source_elapsed = timedelta(microseconds=source_elapsed)
@@ -1130,7 +1452,12 @@ class TraceEvent(object):
         self.thread_name = thread_name
 
     def __str__(self):
-        return "%s on %s[%s] at %s" % (self.description, self.source, self.thread_name, self.datetime)
+        return "%s on %s[%s] at %s" % (
+            self.description,
+            self.source,
+            self.thread_name,
+            self.datetime,
+        )
 
 
 # TODO remove next major since we can target using the `host` attribute of session.execute
@@ -1139,9 +1466,12 @@ class HostTargetingStatement(object):
     Wraps any query statement and attaches a target host, making
     it usable in a targeted LBP without modifying the user's statement.
     """
+
     def __init__(self, inner_statement, target_host):
-            self.__class__ = type(inner_statement.__class__.__name__,
-                                  (self.__class__, inner_statement.__class__),
-                                  {})
-            self.__dict__ = inner_statement.__dict__
-            self.target_host = target_host
+        self.__class__ = type(
+            inner_statement.__class__.__name__,
+            (self.__class__, inner_statement.__class__),
+            {},
+        )
+        self.__dict__ = inner_statement.__dict__
+        self.target_host = target_host
