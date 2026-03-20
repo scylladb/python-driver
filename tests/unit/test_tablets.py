@@ -86,3 +86,41 @@ class TabletsTest(unittest.TestCase):
 
         self.compare_ranges(tablets_list, [(-8611686018427387905, -7917529027641081857),
                                            (-5011686018427387905, -2987529027641081857)])
+
+
+class GetTabletForKeyTest(unittest.TestCase):
+    """Tests for Tablets.get_tablet_for_key."""
+
+    def test_found(self):
+        t1 = Tablet(0, 100, [("host1", 0)])
+        t2 = Tablet(100, 200, [("host2", 0)])
+        t3 = Tablet(200, 300, [("host3", 0)])
+        tablets = Tablets({("ks", "tb"): [t1, t2, t3]})
+
+        class Token:
+            def __init__(self, v):
+                self.value = v
+
+        result = tablets.get_tablet_for_key("ks", "tb", Token(150))
+        self.assertIs(result, t2)
+
+    def test_not_found_empty(self):
+        tablets = Tablets({})
+
+        class Token:
+            def __init__(self, v):
+                self.value = v
+
+        self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))
+
+    def test_not_found_outside_range(self):
+        t1 = Tablet(100, 200, [("host1", 0)])
+        tablets = Tablets({("ks", "tb"): [t1]})
+
+        class Token:
+            def __init__(self, v):
+                self.value = v
+
+        # Token value 50 is not > first_token (100) of the tablet whose
+        # last_token (200) is >= 50, so no match.
+        self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))

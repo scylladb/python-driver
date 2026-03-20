@@ -1,6 +1,12 @@
+from bisect import bisect_left
+from operator import attrgetter
 from threading import Lock
 from typing import Optional
 from uuid import UUID
+
+# C-accelerated attrgetter avoids per-call lambda allocation overhead
+_get_first_token = attrgetter("first_token")
+_get_last_token = attrgetter("last_token")
 
 
 class Tablet(object):
@@ -57,7 +63,7 @@ class Tablets(object):
         if not tablet:
             return None
 
-        id = bisect_left(tablet, t.value, key=lambda tablet: tablet.last_token)
+        id = bisect_left(tablet, t.value, key=_get_last_token)
         if id < len(tablet) and t.value > tablet[id].first_token:
             return tablet[id]
         return None
@@ -94,12 +100,12 @@ class Tablets(object):
             tablets_for_table = self._tablets.setdefault((keyspace, table), [])
 
             # find first overlapping range
-            start = bisect_left(tablets_for_table, tablet.first_token, key=lambda t: t.first_token)
+            start = bisect_left(tablets_for_table, tablet.first_token, key=_get_first_token)
             if start > 0 and tablets_for_table[start - 1].last_token > tablet.first_token:
                 start = start - 1
 
             # find last overlapping range
-            end = bisect_left(tablets_for_table, tablet.last_token, key=lambda t: t.last_token)
+            end = bisect_left(tablets_for_table, tablet.last_token, key=_get_last_token)
             if end < len(tablets_for_table) and tablets_for_table[end].first_token >= tablet.last_token:
                 end = end - 1
 
@@ -108,39 +114,3 @@ class Tablets(object):
 
             tablets_for_table.insert(start, tablet)
 
-
-# bisect.bisect_left implementation from Python 3.11, needed untill support for
-# Python < 3.10 is dropped, it is needed to use `key` to extract last_token from
-# Tablet list - better solution performance-wise than materialize list of last_tokens
-def bisect_left(a, x, lo=0, hi=None, *, key=None):
-    """Return the index where to insert item x in list a, assuming a is sorted.
-
-    The return value i is such that all e in a[:i] have e < x, and all e in
-    a[i:] have e >= x.  So if x already appears in the list, a.insert(i, x) will
-    insert just before the leftmost x already there.
-
-    Optional args lo (default 0) and hi (default len(a)) bound the
-    slice of a to be searched.
-    """
-
-    if lo < 0:
-        raise ValueError('lo must be non-negative')
-    if hi is None:
-        hi = len(a)
-    # Note, the comparison uses "<" to match the
-    # __lt__() logic in list.sort() and in heapq.
-    if key is None:
-        while lo < hi:
-            mid = (lo + hi) // 2
-            if a[mid] < x:
-                lo = mid + 1
-            else:
-                hi = mid
-        return
-    while lo < hi:
-        mid = (lo + hi) // 2
-        if key(a[mid]) < x:
-            lo = mid + 1
-        else:
-            hi = mid
-    return lo
