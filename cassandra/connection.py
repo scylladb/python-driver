@@ -1658,7 +1658,8 @@ class Connection(object):
         if not keyspace or keyspace == self.keyspace:
             return
 
-        query = QueryMessage(query='USE "%s"' % (keyspace,),
+        from cassandra.metadata import escape_name
+        query = QueryMessage(query='USE %s' % (escape_name(keyspace),),
                              consistency_level=ConsistencyLevel.ONE)
         try:
             result = self.wait_for_response(query)
@@ -1712,7 +1713,8 @@ class Connection(object):
             callback(self, None)
             return
 
-        query = QueryMessage(query='USE "%s"' % (keyspace,),
+        from cassandra.metadata import escape_name
+        query = QueryMessage(query='USE %s' % (escape_name(keyspace),),
                              consistency_level=ConsistencyLevel.ONE)
 
         def process_result(result):
