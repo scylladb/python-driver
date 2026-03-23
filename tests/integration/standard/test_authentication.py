@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 from packaging.version import Version
 import logging
 import time
@@ -34,6 +36,7 @@ log = logging.getLogger(__name__)
 
 
 def setup_module():
+    os.environ['SCYLLA_EXT_OPTS'] = '--auth-superuser-name=cassandra --auth-superuser-salted-password=$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/'
     if CASSANDRA_IP.startswith("127.0.0.") and not USE_CASS_EXTERNAL:
         use_singledc(start=False)
         ccm_cluster = get_cluster()
