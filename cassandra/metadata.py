@@ -2741,7 +2741,7 @@ class SchemaParserV3(SchemaParserV22):
                 meta.clustering_key.append(meta.columns[r.get('column_name')])
 
         for col_row in (r for r in col_rows
-                        if r.get('kind', None) not in ('partition_key', 'clustering_key')):
+                        if r.get('kind', None) not in ('partition_key', 'clustering')):
             column_meta = self._build_column_metadata(meta, col_row)
             if is_dense and column_meta.cql_type == types.cql_empty_type:
                 continue
