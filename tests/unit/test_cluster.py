@@ -251,6 +251,33 @@ class SessionTest(unittest.TestCase):
                 assert f.message.serial_consistency_level == cl_override
 
 
+
+    @mock_session_pools
+    def test_set_keyspace_escapes_quotes(self, *_):
+        """
+        Test that Session.set_keyspace properly escapes double quotes in
+        keyspace names to prevent CQL injection.
+        Requested in review of PR #758.
+        """
+        c = Cluster(protocol_version=4)
+        s = Session(c, [Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
+        c.connection_class.initialize_reactor()
+
+        s.execute = Mock()
+
+        s.set_keyspace('my"ks')
+        query = s.execute.call_args[0][0]
+        assert query == 'USE "my""ks"', (
+            "Double quotes in keyspace name must be escaped as double-double quotes, "
+            "got: %r" % query)
+
+        # Also verify a simple keyspace name doesn't get unnecessarily quoted
+        s.execute.reset_mock()
+        s.set_keyspace('simple_ks')
+        query = s.execute.call_args[0][0]
+        assert query == 'USE simple_ks', (
+            "Simple keyspace names should not be quoted, got: %r" % query)
+
 class ProtocolVersionTests(unittest.TestCase):
 
     def test_protocol_downgrade_test(self):
