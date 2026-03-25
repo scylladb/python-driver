@@ -440,7 +440,9 @@ class DecimalType(_CassandraType):
                 sign, digits, exponent = Decimal(dec).as_tuple()
             except Exception:
                 raise TypeError("Invalid type for Decimal value: %r", dec)
-        unscaled = int(''.join([str(digit) for digit in digits]))
+        unscaled = 0
+        for digit in digits:
+            unscaled = unscaled * 10 + digit
         if sign:
             unscaled *= -1
         scale = int32_pack(-exponent)
