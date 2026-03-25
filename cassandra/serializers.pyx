@@ -31,6 +31,7 @@ from libc.string cimport memcpy
 from libc.math cimport isinf, isnan
 from libc.float cimport FLT_MAX
 from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AS_STRING
+from cython.view cimport array as cython_array
 
 from cassandra import cqltypes
 
@@ -229,13 +230,15 @@ cdef class SerVectorType(Serializer):
 
         cdef object result = PyBytes_FromStringAndSize(NULL, buf_size)
         cdef char *buf = PyBytes_AS_STRING(result)
+        cdef double dval
         cdef float val
         cdef char *src
         cdef char *dst
 
         for i in range(self.vector_size):
-            _check_float_range(<double>values[i])
-            val = <float>values[i]
+            dval = <double>values[i]
+            _check_float_range(dval)
+            val = <float>dval
             src = <char *>&val
             dst = buf + i * 4
 
@@ -361,9 +364,12 @@ cdef dict _ser_classes = {}
 cpdef Serializer find_serializer(cqltype):
     """Find a serializer for a cqltype."""
 
-    # For VectorType, always use SerVectorType (it handles generic subtypes internally)
+    # For VectorType, use SerVectorType only if parameterized (has a valid subtype).
+    # Un-parameterized VectorType (base class) would crash _is_float_type() etc.
     if issubclass(cqltype, cqltypes.VectorType):
-        return SerVectorType(cqltype)
+        if getattr(cqltype, 'subtype', None) is not None:
+            return SerVectorType(cqltype)
+        return GenericSerializer(cqltype)
 
     # For scalar types with dedicated serializers, look up by name
     name = 'Ser' + cqltype.__name__
@@ -376,8 +382,29 @@ cpdef Serializer find_serializer(cqltype):
 
 
 def make_serializers(cqltypes_list):
-    """Create a list of Serializer objects for each given cqltype."""
-    return [find_serializer(ct) for ct in cqltypes_list]
+    """Create a Cython typed array of Serializer objects for each given cqltype.
+
+    Returns an ``obj_array`` (Cython typed memoryview) matching the
+    ``make_deserializers()`` convention for O(1) C-level indexed access.
+    """
+    return obj_array([find_serializer(ct) for ct in cqltypes_list])
+
+
+def obj_array(list objs):
+    """Create a (Cython) array of objects given a list of objects.
+
+    Mirrors ``deserializers.obj_array()`` so both sides share the same
+    typed-memoryview convention.  Returns the plain list for empty input
+    since ``cython_array`` does not support zero-length shapes.
+    """
+    if not objs:
+        return objs
+    cdef object[:] arr
+    cdef Py_ssize_t i
+    arr = cython_array(shape=(len(objs),), itemsize=sizeof(void *), format="O")
+    for i, obj in enumerate(objs):
+        arr[i] = obj
+    return arr
 
 
 # Build the lookup dict for scalar serializers at module load time
