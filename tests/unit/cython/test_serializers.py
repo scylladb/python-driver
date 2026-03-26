@@ -23,6 +23,8 @@ import math
 import struct
 import unittest
 
+import numpy as np
+
 from tests.unit.cython.utils import cythontest
 
 from cassandra.cython_deps import HAVE_CYTHON
@@ -532,6 +534,70 @@ class TestSerVectorTypeIterableInput(unittest.TestCase):
         ser = SerVectorType(vec_type)
         cython_bytes = ser.serialize((1, 2, 3), PROTO)
         python_bytes = vec_type.serialize([1, 2, 3], PROTO)
+        self.assertEqual(cython_bytes, python_bytes)
+
+    def test_indexable_sequence_input(self):
+        """Indexable non-list sequences should avoid tuple normalization."""
+
+        class IndexableSequence:
+            def __init__(self, data):
+                self._data = list(data)
+
+            def __len__(self):
+                return len(self._data)
+
+            def __getitem__(self, index):
+                return self._data[index]
+
+            def __iter__(self):
+                return iter(self._data)
+
+        vec_type = _make_vector_type(FloatType, 3)
+        ser = SerVectorType(vec_type)
+        values = IndexableSequence([1.0, 2.0, 3.0])
+        cython_bytes = ser.serialize(values, PROTO)
+        python_bytes = vec_type.serialize([1.0, 2.0, 3.0], PROTO)
+        self.assertEqual(cython_bytes, python_bytes)
+
+    def test_numpy_float32_array_input(self):
+        """NumPy float32 arrays should hit the float buffer fast path."""
+        vec_type = _make_vector_type(FloatType, 4)
+        ser = SerVectorType(vec_type)
+        values = np.asarray([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+        cython_bytes = ser.serialize(values, PROTO)
+        python_bytes = vec_type.serialize(values, PROTO)
+        self.assertEqual(cython_bytes, python_bytes)
+
+    def test_numpy_float64_array_input(self):
+        """NumPy float64 arrays should hit the double buffer fast path."""
+        vec_type = _make_vector_type(DoubleType, 3)
+        ser = SerVectorType(vec_type)
+        values = np.asarray([1.0, -2.5, 3.14], dtype=np.float64)
+        cython_bytes = ser.serialize(values, PROTO)
+        python_bytes = vec_type.serialize(values, PROTO)
+        self.assertEqual(cython_bytes, python_bytes)
+
+    def test_numpy_int32_array_input(self):
+        """NumPy int32 arrays should hit the int32 buffer fast path."""
+        vec_type = _make_vector_type(Int32Type, 3)
+        ser = SerVectorType(vec_type)
+        values = np.asarray([2147483647, -2147483648, 0], dtype=np.int32)
+        cython_bytes = ser.serialize(values, PROTO)
+        python_bytes = vec_type.serialize(values, PROTO)
+        self.assertEqual(cython_bytes, python_bytes)
+
+    def test_numpy_dtype_mismatch_fallthrough(self):
+        """dtype mismatch should fall through to element-wise path correctly.
+
+        A float64 array passed to a FloatType vector cannot bind to
+        float[::1], so the serializer must fall through to the
+        element-wise path and still produce correct bytes.
+        """
+        vec_type = _make_vector_type(FloatType, 3)
+        ser = SerVectorType(vec_type)
+        values = np.asarray([1.0, 2.0, 3.0], dtype=np.float64)
+        cython_bytes = ser.serialize(values, PROTO)
+        python_bytes = vec_type.serialize(values, PROTO)
         self.assertEqual(cython_bytes, python_bytes)
 
 
