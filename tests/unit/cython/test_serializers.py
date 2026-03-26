@@ -23,6 +23,8 @@ import math
 import struct
 import unittest
 
+from tests.unit.cython.utils import cythontest
+
 from cassandra.cython_deps import HAVE_CYTHON
 
 try:
@@ -40,27 +42,20 @@ from cassandra.cqltypes import (
     BooleanType,
 )
 
-# Import serializers only if Cython is available (compiled .so present)
+# Import serializers only if Cython is available (compiled .so present).
+# When VERIFY_CYTHON is set (CI mode), let ImportError propagate so build
+# failures are not silently swallowed.
 if HAVE_CYTHON or VERIFY_CYTHON:
-    try:
-        from cassandra.serializers import (
-            Serializer,
-            SerFloatType,
-            SerDoubleType,
-            SerInt32Type,
-            SerVectorType,
-            GenericSerializer,
-            find_serializer,
-            make_serializers,
-        )
-    except ImportError:
-        # .so not built — fall back so @cythontest skips gracefully
-        HAVE_CYTHON = False
-        VERIFY_CYTHON = False
-
-cythontest = unittest.skipUnless(
-    HAVE_CYTHON or VERIFY_CYTHON, "Cython is not available"
-)
+    from cassandra.serializers import (
+        Serializer,
+        SerFloatType,
+        SerDoubleType,
+        SerInt32Type,
+        SerVectorType,
+        GenericSerializer,
+        find_serializer,
+        make_serializers,
+    )
 
 # Protocol version used in tests (value doesn't affect scalar serialization)
 PROTO = 4
@@ -254,6 +249,17 @@ class TestSerInt32TypeEquivalence(unittest.TestCase):
         with self.assertRaises(TypeError):
             self.ser.serialize(None, PROTO)
 
+    def test_index_protocol(self):
+        """Objects implementing __index__ should be accepted, like struct.pack."""
+
+        class MyInt:
+            def __index__(self):
+                return 42
+
+        cython_bytes = self.ser.serialize(MyInt(), PROTO)
+        python_bytes = Int32Type.serialize(42, PROTO)
+        self.assertEqual(cython_bytes, python_bytes)
+
 
 # ---------------------------------------------------------------------------
 # VectorType serializer equivalence tests
@@ -363,6 +369,17 @@ class TestSerVectorTypeInt32(unittest.TestCase):
     def test_element_overflow_negative(self):
         with self.assertRaises((OverflowError, struct.error)):
             self.ser.serialize([1, -2147483649, 3], PROTO)
+
+    def test_vector_index_protocol(self):
+        """Objects implementing __index__ in vector elements should be accepted."""
+
+        class MyInt:
+            def __index__(self):
+                return 42
+
+        cython_bytes = self.ser.serialize([MyInt(), MyInt(), MyInt()], PROTO)
+        python_bytes = self.vec_type.serialize([42, 42, 42], PROTO)
+        self.assertEqual(cython_bytes, python_bytes)
 
 
 @cythontest

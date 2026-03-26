@@ -34,6 +34,7 @@ from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AS_STRING
 from cython.view cimport array as cython_array
 
 from cassandra import cqltypes
+from operator import index as _operator_index
 
 cdef bint is_little_endian
 from cassandra.util import is_little_endian
@@ -69,11 +70,24 @@ cdef inline void _check_int32_range(object value) except *:
     struct.pack('>i', ...): [-2147483648, 2147483647]. The check must
     be done on the Python int *before* the C-level <int32_t> cast,
     which would silently truncate.
+
+    The value should already have been coerced via ``_coerce_int()``
+    (i.e. the ``__index__`` protocol) before being passed here.
     """
     if value > 2147483647 or value < -2147483648:
         raise OverflowError(
             "Value %r out of range for int32 "
             "(must be between -2147483648 and 2147483647)" % (value,))
+
+
+cdef inline object _coerce_int(object value):
+    """Coerce *value* to a Python ``int`` via the ``__index__`` protocol.
+
+    This matches ``struct.pack('>i', value)`` semantics, which accepts any
+    object implementing ``__index__`` (e.g. numpy integer scalars).  Raises
+    ``TypeError`` for objects that do not support the protocol.
+    """
+    return _operator_index(value)
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +155,7 @@ cdef class SerInt32Type(Serializer):
     """Serialize a Python int to 4-byte big-endian signed int32."""
 
     cpdef bytes serialize(self, object value, int protocol_version):
+        value = _coerce_int(value)
         _check_int32_range(value)
         cdef int32_t val = <int32_t>value
         cdef char out[4]
@@ -204,10 +219,12 @@ cdef class SerVectorType(Serializer):
             self.type_code = 0
 
     cpdef bytes serialize(self, object value, int protocol_version):
-        # Normalize to tuple so indexing works for any iterable with __len__.
+        # Normalize to tuple/list so indexing works for any iterable.
         # The Python VectorType.serialize() only requires len() + iteration,
-        # so we must accept the same inputs.
-        value = tuple(value)
+        # so we must accept the same inputs.  Avoid a copy if value is
+        # already a list or tuple (common fast path for embeddings).
+        if not isinstance(value, (list, tuple)):
+            value = tuple(value)
         cdef Py_ssize_t v_length = len(value)
         if v_length != self.vector_size:
             raise ValueError(
@@ -315,7 +332,7 @@ cdef class SerVectorType(Serializer):
         cdef char *dst
 
         for i in range(self.vector_size):
-            item = values[i]
+            item = _coerce_int(values[i])
             _check_int32_range(item)
             val = <int32_t>item
             src = <char *>&val
@@ -403,7 +420,9 @@ def obj_array(list objs):
 
     Mirrors ``deserializers.obj_array()`` so both sides share the same
     typed-memoryview convention.  Returns the plain list for empty input
-    since ``cython_array`` does not support zero-length shapes.
+    since ``cython_array`` does not support zero-length shapes.  Callers
+    that use ``cdef Serializer[::1]`` typed memoryviews must guard
+    against empty input before assignment.
     """
     if not objs:
         return objs
