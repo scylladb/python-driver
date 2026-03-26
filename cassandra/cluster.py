@@ -4117,7 +4117,8 @@ class ControlConnection(object):
                 local_query = QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_SCHEMA_LOCAL, self._metadata_request_timeout),
                                            consistency_level=cl)
                 try:
-                    timeout = min(self._timeout, total_timeout - elapsed)
+                    remaining = total_timeout - elapsed
+                    timeout = min(self._timeout, remaining) if self._timeout is not None else remaining
                     peers_result, local_result = connection.wait_for_responses(
                         peers_query, local_query, timeout=timeout)
                 except OperationTimedOut as timeout:

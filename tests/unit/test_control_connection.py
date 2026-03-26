@@ -287,6 +287,20 @@ class ControlConnectionTest(unittest.TestCase):
         assert not self.control_connection.wait_for_schema_agreement()
         assert self.time.clock >= self.cluster.max_schema_agreement_wait
 
+
+    def test_wait_for_schema_agreement_none_timeout(self):
+        """
+        When control_connection_timeout is None, wait_for_schema_agreement
+        should not raise a TypeError on the min() call.
+        """
+        cc = ControlConnection(self.cluster, timeout=None,
+                               schema_event_refresh_window=0,
+                               topology_event_refresh_window=0,
+                               status_event_refresh_window=0)
+        cc._connection = self.connection
+        cc._time = self.time
+        assert cc.wait_for_schema_agreement()
+
     def test_refresh_nodes_and_tokens(self):
         self.control_connection.refresh_node_list_and_token_map()
         meta = self.cluster.metadata
