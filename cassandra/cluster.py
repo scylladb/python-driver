@@ -2998,9 +2998,7 @@ class Session(object):
             message = ExecuteMessage(
                 prepared_statement.query_id, query.values, cl,
                 serial_cl, fetch_size, paging_state, timestamp,
-                skip_meta=bool(prepared_statement.result_metadata),
-                continuous_paging_options=continuous_paging_options,
-                result_metadata_id=prepared_statement.result_metadata_id)
+                continuous_paging_options=continuous_paging_options)
         elif isinstance(query, BatchStatement):
             if self._protocol_version < 2:
                 raise UnsupportedOperation(
@@ -4627,6 +4625,16 @@ class ResponseFuture(object):
             self._connection = connection
             result_meta = self.prepared_statement.result_metadata if self.prepared_statement else []
 
+            if self.prepared_statement and isinstance(message, ExecuteMessage):
+                has_result_metadata_id = self.prepared_statement.result_metadata_id is not None
+                has_result_metadata = bool(self.prepared_statement.result_metadata)
+                use_metadata_id = has_result_metadata_id and has_result_metadata and (
+                    ProtocolVersion.uses_prepared_metadata(connection.protocol_version)
+                    or connection.features.use_metadata_id
+                )
+                message.skip_meta = use_metadata_id
+                message.result_metadata_id = self.prepared_statement.result_metadata_id if use_metadata_id else None
+
             if cb is None:
                 cb = partial(self._set_result, host, connection, pool)
 
@@ -4783,6 +4791,11 @@ class ResponseFuture(object):
                     self._paging_state = response.paging_state
                     self._col_names = response.column_names
                     self._col_types = response.column_types
+                    new_result_metadata_id = getattr(response, 'result_metadata_id', None)
+                    if self.prepared_statement and new_result_metadata_id is not None:
+                        if response.column_metadata:
+                            self.prepared_statement.result_metadata = response.column_metadata
+                        self.prepared_statement.result_metadata_id = new_result_metadata_id
                     if getattr(self.message, 'continuous_paging_options', None):
                         self._handle_continuous_paging_first_response(connection, response)
                     else:

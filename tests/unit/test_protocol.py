@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import io
+import struct
 import unittest
 
 from unittest.mock import Mock
@@ -21,8 +23,10 @@ from cassandra.protocol import (
     PrepareMessage, QueryMessage, ExecuteMessage, UnsupportedOperation,
     _PAGING_OPTIONS_FLAG, _WITH_SERIAL_CONSISTENCY_FLAG,
     _PAGE_SIZE_FLAG, _WITH_PAGING_STATE_FLAG,
-    BatchMessage
+    _SKIP_METADATA_FLAG,
+    BatchMessage, ResultMessage
 )
+from cassandra.protocol_features import ProtocolFeatures
 from cassandra.query import BatchType
 from cassandra.marshal import uint32_unpack
 from cassandra.cluster import ContinuousPagingOptions
@@ -67,6 +71,87 @@ class MessageTest(unittest.TestCase):
                                (b'\x00\x03',), (b'foo',),
                                (b'\x00\x04',),
                                (b'\x00\x00\x00\x01',), (b'\x00\x00',)])
+
+    def test_execute_message_skip_meta_flag(self):
+        """skip_meta=True must set _SKIP_METADATA_FLAG (0x02) in the flags byte."""
+        message = ExecuteMessage('1', [], 4, skip_meta=True)
+        mock_io = Mock()
+
+        message.send_body(mock_io, 4)
+        # flags byte should be VALUES_FLAG | SKIP_METADATA_FLAG = 0x01 | 0x02 = 0x03
+        self._check_calls(mock_io, [(b'\x00\x01',), (b'1',), (b'\x00\x04',), (b'\x03',), (b'\x00\x00',)])
+
+    def test_execute_message_scylla_metadata_id_v4(self):
+        """result_metadata_id should be written on protocol v4 when set (Scylla extension)."""
+        message = ExecuteMessage('1', [], 4)
+        message.result_metadata_id = b'foo'
+        mock_io = Mock()
+
+        message.send_body(mock_io, 4)
+        # metadata_id written before query params (same position as v5)
+        self._check_calls(mock_io, [(b'\x00\x01',), (b'1',),
+                                    (b'\x00\x03',), (b'foo',),
+                                    (b'\x00\x04',), (b'\x01',), (b'\x00\x00',)])
+
+    def test_recv_results_prepared_scylla_extension_reads_metadata_id(self):
+        """
+        When use_metadata_id is True (Scylla extension), result_metadata_id must be
+        read from the PREPARE response even for protocol v4.
+        """
+        # Build a minimal valid PREPARE response binary (no bind/result columns):
+        #   query_id:          short(2) + b'ab'
+        #   result_metadata_id: short(3) + b'xyz'  <-- only present when extension active
+        #   prepared flags:    int(1) = global_tables_spec
+        #   colcount:          int(0)
+        #   num_pk_indexes:    int(0)
+        #   ksname:            short(2) + b'ks'
+        #   cfname:            short(2) + b'tb'
+        #   result flags:      int(4) = no_metadata
+        #   result colcount:   int(0)
+        buf = io.BytesIO(
+            struct.pack('>H', 2) + b'ab'   # query_id
+            + struct.pack('>H', 3) + b'xyz'  # result_metadata_id
+            + struct.pack('>i', 1)           # prepared flags: global_tables_spec
+            + struct.pack('>i', 0)           # colcount = 0
+            + struct.pack('>i', 0)           # num_pk_indexes = 0
+            + struct.pack('>H', 2) + b'ks'  # ksname
+            + struct.pack('>H', 2) + b'tb'  # cfname
+            + struct.pack('>i', 4)           # result flags: no_metadata
+            + struct.pack('>i', 0)           # result colcount = 0
+        )
+
+        features_with_extension = ProtocolFeatures(use_metadata_id=True)
+        msg = ResultMessage(kind=4)  # RESULT_KIND_PREPARED = 4
+        msg.recv_results_prepared(buf, protocol_version=4,
+                                  protocol_features=features_with_extension,
+                                  user_type_map={})
+        assert msg.query_id == b'ab'
+        assert msg.result_metadata_id == b'xyz'
+
+    def test_recv_results_prepared_no_extension_skips_metadata_id(self):
+        """
+        Without use_metadata_id, result_metadata_id must NOT be read on protocol v4.
+        The buffer must NOT contain a metadata_id field.
+        """
+        buf = io.BytesIO(
+            struct.pack('>H', 2) + b'ab'   # query_id
+            # no result_metadata_id
+            + struct.pack('>i', 1)           # prepared flags: global_tables_spec
+            + struct.pack('>i', 0)           # colcount = 0
+            + struct.pack('>i', 0)           # num_pk_indexes = 0
+            + struct.pack('>H', 2) + b'ks'  # ksname
+            + struct.pack('>H', 2) + b'tb'  # cfname
+            + struct.pack('>i', 4)           # result flags: no_metadata
+            + struct.pack('>i', 0)           # result colcount = 0
+        )
+
+        features_without_extension = ProtocolFeatures(use_metadata_id=False)
+        msg = ResultMessage(kind=4)
+        msg.recv_results_prepared(buf, protocol_version=4,
+                                  protocol_features=features_without_extension,
+                                  user_type_map={})
+        assert msg.query_id == b'ab'
+        assert msg.result_metadata_id is None
 
     def test_query_message(self):
         """

@@ -573,6 +573,9 @@ class _QueryMessage(_MessageType):
         if self.timestamp is not None:
             flags |= _PROTOCOL_TIMESTAMP_FLAG
 
+        if self.skip_meta:
+            flags |= _SKIP_METADATA_FLAG
+
         if self.keyspace is not None:
             if ProtocolVersion.uses_keyspace_flag(protocol_version):
                 flags |= _WITH_KEYSPACE_FLAG
@@ -641,6 +644,8 @@ class ExecuteMessage(_QueryMessage):
     def send_body(self, f, protocol_version):
         write_string(f, self.query_id)
         if ProtocolVersion.uses_prepared_metadata(protocol_version):
+            write_string(f, self.result_metadata_id)
+        elif self.result_metadata_id is not None:
             write_string(f, self.result_metadata_id)
         self._write_query_params(f, protocol_version)
 
@@ -745,7 +750,7 @@ class ResultMessage(_MessageType):
 
     def recv_results_prepared(self, f, protocol_version, protocol_features, user_type_map):
         self.query_id = read_binary_string(f)
-        if ProtocolVersion.uses_prepared_metadata(protocol_version):
+        if ProtocolVersion.uses_prepared_metadata(protocol_version) or protocol_features.use_metadata_id:
             self.result_metadata_id = read_binary_string(f)
         else:
             self.result_metadata_id = None
