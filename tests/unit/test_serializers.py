@@ -107,6 +107,16 @@ class TestSerFloatTypeEquivalence(unittest.TestCase):
         self._assert_equiv(flt_max)
         self._assert_equiv(-flt_max)
 
+    def test_flt_max_rounding_boundary(self):
+        """Values slightly above FLT_MAX that round down should be accepted.
+
+        3.4028235e38 is above FLT_MAX (3.4028234663852886e38) but
+        struct.pack('>f', 3.4028235e38) rounds it down to FLT_MAX.
+        The Cython serializer must accept the same inputs.
+        """
+        self._assert_equiv(3.4028235e38)
+        self._assert_equiv(-3.4028235e38)
+
     def test_subnormal_values(self):
         """Subnormal (denormalized) floats should serialize correctly."""
         self._assert_equiv(1e-45)
@@ -449,6 +459,63 @@ class TestSerializerRoundTrip(unittest.TestCase):
         serialized = ser.serialize(values, PROTO)
         deserialized = vec_type.deserialize(serialized, PROTO)
         self.assertEqual(list(deserialized), values)
+
+
+@cythontest
+class TestSerVectorTypeIterableInput(unittest.TestCase):
+    """Verify vector serializer accepts non-subscriptable iterables.
+
+    The Python VectorType.serialize() only requires len() + iteration,
+    so the Cython path must accept the same inputs after normalization.
+    """
+
+    def test_iterable_with_len_no_getitem(self):
+        """A custom iterable with __len__ + __iter__ but no __getitem__."""
+
+        class IterableOnly:
+            def __init__(self, data):
+                self._data = list(data)
+
+            def __len__(self):
+                return len(self._data)
+
+            def __iter__(self):
+                return iter(self._data)
+
+        vec_type = _make_vector_type(FloatType, 3)
+        ser = SerVectorType(vec_type)
+        values = IterableOnly([1.0, 2.0, 3.0])
+        cython_bytes = ser.serialize(values, PROTO)
+        python_bytes = vec_type.serialize([1.0, 2.0, 3.0], PROTO)
+        self.assertEqual(cython_bytes, python_bytes)
+
+    def test_iterable_int32_vector(self):
+        """Non-subscriptable iterable with int32 fast-path."""
+
+        class IterableOnly:
+            def __init__(self, data):
+                self._data = list(data)
+
+            def __len__(self):
+                return len(self._data)
+
+            def __iter__(self):
+                return iter(self._data)
+
+        vec_type = _make_vector_type(Int32Type, 3)
+        ser = SerVectorType(vec_type)
+        values = IterableOnly([1, 2, 3])
+        cython_bytes = ser.serialize(values, PROTO)
+        python_bytes = vec_type.serialize([1, 2, 3], PROTO)
+        self.assertEqual(cython_bytes, python_bytes)
+
+    def test_tuple_input(self):
+        """Tuple input should work (already subscriptable, but verify)."""
+        vec_type = _make_vector_type(Int32Type, 3)
+        ser = SerVectorType(vec_type)
+        cython_bytes = ser.serialize((1, 2, 3), PROTO)
+        python_bytes = vec_type.serialize([1, 2, 3], PROTO)
+        self.assertEqual(cython_bytes, python_bytes)
 
 
 # ---------------------------------------------------------------------------

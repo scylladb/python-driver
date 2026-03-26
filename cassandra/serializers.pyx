@@ -44,14 +44,19 @@ from cassandra.util import is_little_endian
 # ---------------------------------------------------------------------------
 
 cdef inline void _check_float_range(double value) except *:
-    """Raise OverflowError for finite values outside float32 range.
+    """Raise OverflowError for finite values that overflow float32.
+
+    Uses the same semantics as ``struct.pack('>f', value)``: cast the
+    double to float and reject only if the result is ±inf while the
+    input was finite.  This correctly accepts values slightly above
+    ``FLT_MAX`` that round down (e.g. 3.4028235e38).
 
     Intentionally raises OverflowError (not struct.error) so callers
-    can catch a single exception type. The accepted range matches
-    struct.pack('>f', ...).  inf, -inf, and nan pass through unchanged.
+    can catch a single exception type.  inf, -inf, and nan pass
+    through unchanged.
     """
     if not isinf(value) and not isnan(value):
-        if value > <double>FLT_MAX or value < -<double>FLT_MAX:
+        if isinf(<float>value):
             raise OverflowError(
                 "Value %r too large for float32 (max %r)" % (value, FLT_MAX))
 
@@ -179,7 +184,7 @@ cdef class SerVectorType(Serializer):
     per-element Python serialization.
     """
 
-    cdef int vector_size
+    cdef Py_ssize_t vector_size
     cdef object subtype
     # 0 = generic, 1 = float, 2 = double, 3 = int32
     cdef int type_code
@@ -199,7 +204,11 @@ cdef class SerVectorType(Serializer):
             self.type_code = 0
 
     cpdef bytes serialize(self, object value, int protocol_version):
-        cdef int v_length = len(value)
+        # Normalize to tuple so indexing works for any iterable with __len__.
+        # The Python VectorType.serialize() only requires len() + iteration,
+        # so we must accept the same inputs.
+        value = tuple(value)
+        cdef Py_ssize_t v_length = len(value)
         if v_length != self.vector_size:
             raise ValueError(
                 "Expected sequence of size %d for vector of type %s and "
@@ -219,9 +228,8 @@ cdef class SerVectorType(Serializer):
     cdef inline bytes _serialize_float(self, object values):
         """Serialize a list of floats into a contiguous big-endian buffer.
 
-        Uses ``values[i]`` (``__getitem__``) intentionally rather than
-        iteration so Cython can emit a tight indexed loop with minimal
-        Python overhead.  Callers must pass a sequence (list, tuple, etc.).
+        ``values`` is already a tuple (normalized in ``serialize()``), so
+        indexing is always safe and fast.
         """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 4
@@ -255,9 +263,8 @@ cdef class SerVectorType(Serializer):
     cdef inline bytes _serialize_double(self, object values):
         """Serialize a list of doubles into a contiguous big-endian buffer.
 
-        Uses ``values[i]`` (``__getitem__``) intentionally rather than
-        iteration so Cython can emit a tight indexed loop with minimal
-        Python overhead.  Callers must pass a sequence (list, tuple, etc.).
+        ``values`` is already a tuple (normalized in ``serialize()``), so
+        indexing is always safe and fast.
         """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 8
@@ -292,9 +299,8 @@ cdef class SerVectorType(Serializer):
     cdef inline bytes _serialize_int32(self, object values):
         """Serialize a list of int32 values into a contiguous big-endian buffer.
 
-        Uses ``values[i]`` (``__getitem__``) intentionally rather than
-        iteration so Cython can emit a tight indexed loop with minimal
-        Python overhead.  Callers must pass a sequence (list, tuple, etc.).
+        ``values`` is already a tuple (normalized in ``serialize()``), so
+        indexing is always safe and fast.
         """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 4
@@ -304,12 +310,14 @@ cdef class SerVectorType(Serializer):
         cdef object result = PyBytes_FromStringAndSize(NULL, buf_size)
         cdef char *buf = PyBytes_AS_STRING(result)
         cdef int32_t val
+        cdef object item
         cdef char *src
         cdef char *dst
 
         for i in range(self.vector_size):
-            _check_int32_range(values[i])
-            val = <int32_t>values[i]
+            item = values[i]
+            _check_int32_range(item)
+            val = <int32_t>item
             src = <char *>&val
             dst = buf + i * 4
 
