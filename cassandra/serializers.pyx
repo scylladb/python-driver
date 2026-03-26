@@ -219,12 +219,7 @@ cdef class SerVectorType(Serializer):
             self.type_code = 0
 
     cpdef bytes serialize(self, object value, int protocol_version):
-        # Normalize to tuple/list so indexing works for any iterable.
-        # The Python VectorType.serialize() only requires len() + iteration,
-        # so we must accept the same inputs.  Avoid a copy if value is
-        # already a list or tuple (common fast path for embeddings).
-        if not isinstance(value, (list, tuple)):
-            value = tuple(value)
+        cdef object result
         cdef Py_ssize_t v_length = len(value)
         if v_length != self.vector_size:
             raise ValueError(
@@ -232,6 +227,28 @@ cdef class SerVectorType(Serializer):
                 "dimension %d, observed sequence of length %d" % (
                     self.vector_size, self.subtype.typename,
                     self.vector_size, v_length))
+
+        if self.type_code == 1:
+            result = self._serialize_float_buffer(value)
+            if result is not None:
+                return result
+        elif self.type_code == 2:
+            result = self._serialize_double_buffer(value)
+            if result is not None:
+                return result
+        elif self.type_code == 3:
+            result = self._serialize_int32_buffer(value)
+            if result is not None:
+                return result
+
+        # Keep indexable sequences on the fast path. Fall back to tuple()
+        # only for iterable-only inputs so the Cython path still matches
+        # Python VectorType.serialize() input semantics.
+        if v_length != 0 and not isinstance(value, (list, tuple)):
+            try:
+                value[0]
+            except (TypeError, KeyError, IndexError):
+                value = tuple(value)
 
         if self.type_code == 1:
             return self._serialize_float(value)
@@ -245,8 +262,8 @@ cdef class SerVectorType(Serializer):
     cdef inline bytes _serialize_float(self, object values):
         """Serialize a list of floats into a contiguous big-endian buffer.
 
-        ``values`` is already a tuple (normalized in ``serialize()``), so
-        indexing is always safe and fast.
+        ``values`` is already an indexable sequence (normalized in
+        ``serialize()``), so integer indexing is safe and fast.
         """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 4
@@ -277,11 +294,54 @@ cdef class SerVectorType(Serializer):
 
         return result
 
+    cdef inline object _serialize_float_buffer(self, object values):
+        """Fast path for contiguous float32 buffers (e.g. numpy float32 arrays).
+
+        No ``_check_float_range`` is needed: the typed memoryview
+        ``float[::1]`` constrains values to C float (IEEE 754 float32),
+        so overflow is impossible by definition.  Returns ``None`` when
+        *values* does not support the buffer protocol with the required
+        format, letting the caller fall through to the element-wise path.
+        """
+        cdef float[::1] view
+        cdef Py_ssize_t buf_size = self.vector_size * 4
+        cdef Py_ssize_t i
+        cdef object result
+        cdef char *buf
+        cdef char *dst
+        cdef char *src
+        cdef float val
+
+        try:
+            view = values
+        except (TypeError, ValueError):
+            return None
+
+        if buf_size == 0:
+            return b""
+
+        result = PyBytes_FromStringAndSize(NULL, buf_size)
+        buf = PyBytes_AS_STRING(result)
+
+        if is_little_endian:
+            for i in range(self.vector_size):
+                val = view[i]
+                src = <char *>&val
+                dst = buf + i * 4
+                dst[0] = src[3]
+                dst[1] = src[2]
+                dst[2] = src[1]
+                dst[3] = src[0]
+        else:
+            memcpy(buf, &view[0], buf_size)
+
+        return result
+
     cdef inline bytes _serialize_double(self, object values):
         """Serialize a list of doubles into a contiguous big-endian buffer.
 
-        ``values`` is already a tuple (normalized in ``serialize()``), so
-        indexing is always safe and fast.
+        ``values`` is already an indexable sequence (normalized in
+        ``serialize()``), so integer indexing is safe and fast.
         """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 8
@@ -313,11 +373,55 @@ cdef class SerVectorType(Serializer):
 
         return result
 
+    cdef inline object _serialize_double_buffer(self, object values):
+        """Fast path for contiguous float64 buffers (e.g. numpy float64 arrays).
+
+        Returns ``None`` when *values* does not expose a compatible
+        buffer, letting the caller fall through to the element-wise path.
+        """
+        cdef double[::1] view
+        cdef Py_ssize_t buf_size = self.vector_size * 8
+        cdef Py_ssize_t i
+        cdef object result
+        cdef char *buf
+        cdef char *dst
+        cdef char *src
+        cdef double val
+
+        try:
+            view = values
+        except (TypeError, ValueError):
+            return None
+
+        if buf_size == 0:
+            return b""
+
+        result = PyBytes_FromStringAndSize(NULL, buf_size)
+        buf = PyBytes_AS_STRING(result)
+
+        if is_little_endian:
+            for i in range(self.vector_size):
+                val = view[i]
+                src = <char *>&val
+                dst = buf + i * 8
+                dst[0] = src[7]
+                dst[1] = src[6]
+                dst[2] = src[5]
+                dst[3] = src[4]
+                dst[4] = src[3]
+                dst[5] = src[2]
+                dst[6] = src[1]
+                dst[7] = src[0]
+        else:
+            memcpy(buf, &view[0], buf_size)
+
+        return result
+
     cdef inline bytes _serialize_int32(self, object values):
         """Serialize a list of int32 values into a contiguous big-endian buffer.
 
-        ``values`` is already a tuple (normalized in ``serialize()``), so
-        indexing is always safe and fast.
+        ``values`` is already an indexable sequence (normalized in
+        ``serialize()``), so integer indexing is safe and fast.
         """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 4
@@ -345,6 +449,47 @@ cdef class SerVectorType(Serializer):
                 dst[3] = src[0]
             else:
                 memcpy(dst, src, 4)
+
+        return result
+
+    cdef inline object _serialize_int32_buffer(self, object values):
+        """Fast path for contiguous int32 buffers (e.g. numpy int32 arrays).
+
+        No ``_coerce_int`` / ``_check_int32_range`` is needed: the typed
+        memoryview ``int[::1]`` enforces 32-bit signed integer range at
+        the buffer-protocol level.  Returns ``None`` when *values* does
+        not expose a compatible buffer, letting the caller fall through
+        to the element-wise path.
+        """
+        cdef int[::1] view
+        cdef Py_ssize_t buf_size = self.vector_size * 4
+        cdef Py_ssize_t i
+        cdef object result
+        cdef char *buf
+        cdef char *dst
+        cdef char *src
+
+        try:
+            view = values
+        except (TypeError, ValueError):
+            return None
+
+        if buf_size == 0:
+            return b""
+
+        result = PyBytes_FromStringAndSize(NULL, buf_size)
+        buf = PyBytes_AS_STRING(result)
+
+        if is_little_endian:
+            for i in range(self.vector_size):
+                src = <char *>&view[i]
+                dst = buf + i * 4
+                dst[0] = src[3]
+                dst[1] = src[2]
+                dst[2] = src[1]
+                dst[3] = src[0]
+        else:
+            memcpy(buf, &view[0], buf_size)
 
         return result
 
