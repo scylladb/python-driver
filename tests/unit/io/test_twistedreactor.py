@@ -99,14 +99,23 @@ class TestTwistedConnection(unittest.TestCase):
         self.reactor_cft_patcher = patch(
             'twisted.internet.reactor.callFromThread')
         self.reactor_run_patcher = patch('twisted.internet.reactor.run')
+        # Patch reactor.running to False so maybe_start() always enters
+        # the branch that spawns the reactor thread. Without this, leaked
+        # reactor state from prior tests can cause reactor.running to be
+        # True, making maybe_start() a no-op and the reactor.run mock
+        # never called — leading to a flaky test_connection_initialization.
+        self.reactor_running_patcher = patch(
+            'twisted.internet.reactor.running', new=False)
         self.mock_reactor_cft = self.reactor_cft_patcher.start()
         self.mock_reactor_run = self.reactor_run_patcher.start()
+        self.reactor_running_patcher.start()
         self.obj_ut = twistedreactor.TwistedConnection(DefaultEndPoint('1.2.3.4'),
                                                        cql_version='3.0.1')
 
     def tearDown(self):
         self.reactor_cft_patcher.stop()
         self.reactor_run_patcher.stop()
+        self.reactor_running_patcher.stop()
 
     def test_connection_initialization(self):
         """
