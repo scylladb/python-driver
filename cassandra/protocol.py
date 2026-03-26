@@ -722,17 +722,10 @@ class ResultMessage(_MessageType):
 
         if not column_encryption_policy:
             # Fast path: no column encryption — decode inline, skip ColDesc creation
-            col_types = self.column_types
-            colcount = len(col_types)
-            try:
-                self.parsed_rows = [
-                    _decode_row_inline(f, colcount, col_types, protocol_version)
-                    for _ in range(rowcount)
-                ]
-            except Exception:
-                # Re-read is not possible since we consumed the buffer.
-                # This path should be extremely rare (type mismatch in server response).
-                raise
+            self.parsed_rows = [
+                _decode_row_inline(f, column_metadata, protocol_version)
+                for _ in range(rowcount)
+            ]
         else:
             # Slow path: column encryption enabled — need ColDesc and per-column CE check
             rows = [self.recv_row(f, len(column_metadata)) for _ in range(rowcount)]
@@ -1436,16 +1429,21 @@ def read_error_code_map(f):
 
 
 
-def _decode_row_inline(f, colcount, col_types, protocol_version):
+def _decode_row_inline(f, column_metadata, protocol_version):
     """Decode a single row directly from the buffer (no column encryption)."""
     row = []
-    for i in range(colcount):
+    for col_md in column_metadata:
         size = read_int(f)
         if size < 0:
             row.append(None)
         else:
             val = f.read(size)
-            row.append(col_types[i].from_binary(val, protocol_version))
+            try:
+                row.append(col_md[3].from_binary(val, protocol_version))
+            except Exception as e:
+                raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
+                                                                                             col_md[3].cql_parameterized_type(),
+                                                                                             str(e)))
     return tuple(row)
 
 
