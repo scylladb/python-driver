@@ -608,13 +608,23 @@ class BoundStatement(Statement):
         if isinstance(values, dict):
             values_dict = values
             values = []
+            plain_dict = type(values_dict) is dict
 
             # sort values accordingly
             for col in col_meta:
-                val = values_dict.get(col.name, _BIND_SENTINEL)
-                if val is not _BIND_SENTINEL:
-                    values.append(val)
-                elif proto_version >= 4:
+                if plain_dict:
+                    val = values_dict.get(col.name, _BIND_SENTINEL)
+                    if val is not _BIND_SENTINEL:
+                        values.append(val)
+                        continue
+                else:
+                    try:
+                        values.append(values_dict[col.name])
+                        continue
+                    except KeyError:
+                        pass
+
+                if proto_version >= 4:
                     values.append(UNSET_VALUE)
                 else:
                     raise KeyError(
