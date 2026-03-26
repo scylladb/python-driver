@@ -184,6 +184,14 @@ class BoundStatementTestV3(unittest.TestCase):
         with pytest.raises(ValueError):
             self.bound.bind((0, 0, 0, UNSET_VALUE))
 
+    def test_dict_subclass_missing_value(self):
+        class MissingDict(dict):
+            def __missing__(self, key):
+                return 0
+
+        self.bound.bind(MissingDict({'rk0': 0, 'rk1': 0, 'ck0': 0}))
+        assert self.bound.values == [b'\x00' * 4] * 4
+
 
 class BoundStatementTestV4(BoundStatementTestV3):
     protocol_version = 4
@@ -212,6 +220,14 @@ class BoundStatementTestV4(BoundStatementTestV3):
 
         self.bound.bind((0, 0, 0, UNSET_VALUE))
         assert self.bound.values[-1] == UNSET_VALUE
+
+    def test_dict_subclass_missing_value(self):
+        class MissingDict(dict):
+            def __missing__(self, key):
+                return 0
+
+        self.bound.bind(MissingDict({'rk0': 0, 'rk1': 0, 'ck0': 0}))
+        assert self.bound.values == [b'\x00' * 4] * 4
 
 
 class BoundStatementTestV5(BoundStatementTestV4):
