@@ -442,7 +442,7 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
             else:
                 log.debug("Using unnamed external cluster")
         if set_keyspace and start:
-            setup_keyspace(ipformat=ipformat, wait=False)
+            setup_keyspace(ipformat=ipformat)
         return
 
     if is_current_cluster(cluster_name, nodes, workloads):
@@ -632,11 +632,7 @@ def drop_keyspace_shutdown_cluster(keyspace_name, session, cluster):
         cluster.shutdown()
 
 
-def setup_keyspace(ipformat=None, wait=True, protocol_version=None, port=9042):
-    # wait for nodes to startup
-    if wait:
-        time.sleep(10)
-
+def setup_keyspace(ipformat=None, protocol_version=None, port=9042):
     if protocol_version:
         _protocol_version = protocol_version
     else:
