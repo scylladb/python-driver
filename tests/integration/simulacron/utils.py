@@ -89,8 +89,13 @@ def start_simulacron():
 
     SERVER_SIMULACRON.start()
 
-    # TODO improve this sleep, maybe check the logs like ccm
-    time.sleep(5)
+    # Poll the admin endpoint until simulacron is ready
+    def _check_simulacron_ready():
+        opener = build_opener(HTTPHandler)
+        request = Request("http://127.0.0.1:8187/cluster")
+        opener.open(request, timeout=2)
+
+    wait_until_not_raised(_check_simulacron_ready, delay=0.5, max_attempts=30)
 
 
 def stop_simulacron():

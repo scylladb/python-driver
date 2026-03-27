@@ -19,9 +19,20 @@ from cassandra.auth import PlainTextAuthProvider, SaslAuthProvider
 from cassandra.cluster import ConsistencyLevel, Cluster, DriverException, ExecutionProfile
 from cassandra.policies import ConstantSpeculativeExecutionPolicy
 from tests.integration.upgrade import UpgradeBase, UpgradeBaseAuth, UpgradePath, upgrade_paths
+from tests.util import wait_until
 
 import unittest
 import pytest
+
+
+def _wait_for_control_connection(cluster_driver, timeout=60):
+    """Wait for the driver's control connection to be established."""
+    wait_until(
+        lambda: cluster_driver.control_connection._connection is not None
+                and not cluster_driver.control_connection._connection.is_closed,
+        delay=1,
+        max_attempts=timeout,
+    )
 
 
 # Previous Cassandra upgrade
@@ -142,14 +153,14 @@ class UpgradeTestsMetadata(UpgradeBase):
         for node in nodes[1:]:
             self.upgrade_node(node)
             # Wait for the control connection to reconnect
-            time.sleep(20)
+            _wait_for_control_connection(self.cluster_driver)
 
             with pytest.raises(DriverException):
                 self.cluster_driver.refresh_schema_metadata(max_schema_agreement_wait=10)
 
         self.upgrade_node(nodes[0])
         # Wait for the control connection to reconnect
-        time.sleep(20)
+        _wait_for_control_connection(self.cluster_driver)
         self.cluster_driver.refresh_schema_metadata(max_schema_agreement_wait=40)
         assert original_meta != self.cluster_driver.metadata.keyspaces
 
@@ -171,7 +182,7 @@ class UpgradeTestsMetadata(UpgradeBase):
             token_map = self.cluster_driver.metadata.token_map
             self.upgrade_node(node)
             # Wait for the control connection to reconnect
-            time.sleep(20)
+            _wait_for_control_connection(self.cluster_driver)
 
             self.cluster_driver.refresh_nodes(force_token_rebuild=True)
             self._assert_same_token_map(token_map, self.cluster_driver.metadata.token_map)
