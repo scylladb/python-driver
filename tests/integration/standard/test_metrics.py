@@ -25,6 +25,7 @@ from cassandra.protocol import SyntaxException
 
 from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from tests.integration import get_cluster, get_node, use_singledc, execute_until_pass, TestCluster
+from tests.util import wait_until, wait_until_not_raised
 from cassandra import metrics
 from tests.integration import BasicSharedKeyspaceUnitTestCaseRF3WM, BasicExistingKeyspaceUnitTestCase, local
 
@@ -75,8 +76,10 @@ class MetricsTests(unittest.TestCase):
                 self.session.execute(query)
         finally:
             get_cluster().start(wait_for_binary_proto=True, wait_other_notice=True)
-            # Give some time for the cluster to come back up, for the next test
-            time.sleep(5)
+            # Wait for the cluster to come back up for the next test
+            wait_until_not_raised(
+                lambda: self.session.execute("SELECT key FROM system.local WHERE key='local'"),
+                delay=0.5, max_attempts=30)
 
         assert self.cluster.metrics.stats.connection_errors > 0
 
@@ -156,7 +159,10 @@ class MetricsTests(unittest.TestCase):
         # Sometimes this commands continues with the other nodes having not noticed
         # 1 is down, and a Timeout error is returned instead of an Unavailable
         get_node(1).stop(wait=True, wait_other_notice=True)
-        time.sleep(5)
+        wait_until(
+            lambda: not self.cluster.metadata.get_host('127.0.0.1') or
+                    not self.cluster.metadata.get_host('127.0.0.1').is_up,
+            delay=0.5, max_attempts=30)
         try:
             # Test write
             query = SimpleStatement("INSERT INTO test (k, v) VALUES (2, 2)", consistency_level=ConsistencyLevel.ALL)
@@ -171,8 +177,10 @@ class MetricsTests(unittest.TestCase):
             assert self.cluster.metrics.stats.unavailables == 2
         finally:
             get_node(1).start(wait_other_notice=True, wait_for_binary_proto=True)
-            # Give some time for the cluster to come back up, for the next test
-            time.sleep(5)
+            # Wait for the cluster to come back up for the next test
+            wait_until_not_raised(
+                lambda: self.session.execute("SELECT key FROM system.local WHERE key='local'"),
+                delay=0.5, max_attempts=30)
 
         self.cluster.shutdown()
 

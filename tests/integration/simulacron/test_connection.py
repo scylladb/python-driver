@@ -23,7 +23,7 @@ from cassandra.cluster import (EXEC_PROFILE_DEFAULT, Cluster, ExecutionProfile,
 from cassandra.policies import HostStateListener, RoundRobinPolicy, WhiteListRoundRobinPolicy
 
 from tests import connection_class, thread_pool_executor_class
-from tests.util import late
+from tests.util import late, wait_until_not_raised
 from tests.integration import requiressimulacron, libevtest
 from tests.integration.util import assert_quiescent_pool_state
 # important to import the patch PROTOCOL_VERSION from the simulacron module
@@ -356,13 +356,15 @@ class ConnectionTests(SimulacronBase):
         for _ in range(10):
             session.execute(query_to_prime)
 
-        # Might take some time to close the previous connections and reconnect
-        time.sleep(10)
-        assert_quiescent_pool_state(cluster)
+        # Wait for previous connections to close and pool to stabilize
+        wait_until_not_raised(
+            lambda: assert_quiescent_pool_state(cluster),
+            delay=1, max_attempts=30)
         clear_queries()
 
-        time.sleep(10)
-        assert_quiescent_pool_state(cluster)
+        wait_until_not_raised(
+            lambda: assert_quiescent_pool_state(cluster),
+            delay=1, max_attempts=30)
 
     def test_idle_connection_is_not_closed(self):
         """
