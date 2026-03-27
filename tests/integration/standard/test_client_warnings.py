@@ -17,13 +17,13 @@ import unittest
 
 from cassandra.query import BatchStatement
 
-from tests.integration import (use_singledc, PROTOCOL_VERSION, local, TestCluster,
+from tests.integration import (use_single_node, PROTOCOL_VERSION, local, TestCluster,
                                requires_custom_payload, xfail_scylla)
 from tests.util import assertRegex, assertDictEqual
 
 
 def setup_module():
-    use_singledc()
+    use_single_node()
 
 @xfail_scylla('scylladb/scylladb#10196 - scylla does not report warnings')
 class ClientWarningTests(unittest.TestCase):

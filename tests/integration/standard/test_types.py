@@ -38,7 +38,7 @@ from cassandra.util import sortedset, Duration, OrderedMap
 from tests.unit.cython.utils import cythontest
 from tests.util import assertEqual
 
-from tests.integration import use_singledc, execute_until_pass, notprotocolv1, \
+from tests.integration import use_single_node, execute_until_pass, notprotocolv1, \
     BasicSharedKeyspaceUnitTestCase, greaterthancass21, lessthancass30, \
     greaterthanorequalcass3_10, TestCluster, requires_composite_type, \
     requires_vector_type
@@ -48,7 +48,7 @@ import pytest
 
 
 def setup_module():
-    use_singledc()
+    use_single_node()
     update_datatypes()
 
 
