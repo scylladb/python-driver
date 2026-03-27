@@ -182,9 +182,21 @@ class UpgradeBaseAuth(UpgradeBase):
 
     def _upgrade_step_setup(self):
         """
-        We sleep here for the same reason as we do in test_authentication.py:
-        there seems to be some race, with some versions of C* taking longer to
-        get the auth (and default user) setup. Sleep here to give it a chance
+        Wait for PasswordAuthenticator to finish initializing (creating the
+        default superuser). Poll by attempting to authenticate rather than
+        using a fixed sleep.
         """
         super(UpgradeBaseAuth, self)._upgrade_step_setup()
-        time.sleep(10)
+
+        from cassandra.auth import PlainTextAuthProvider
+        from tests.util import wait_until_not_raised
+
+        def _check_auth_ready():
+            c = Cluster(auth_provider=PlainTextAuthProvider('cassandra', 'cassandra'))
+            try:
+                s = c.connect()
+                s.execute("SELECT * FROM system.local WHERE key='local'")
+            finally:
+                c.shutdown()
+
+        wait_until_not_raised(_check_auth_ready, delay=1, max_attempts=30)

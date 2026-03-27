@@ -49,10 +49,22 @@ def setup_module():
 
     # PYTHON-1328
     #
-    # Give the cluster enough time to startup (and perform necessary initialization)
-    # before executing the test.
+    # Wait for PasswordAuthenticator to finish initializing (creating the
+    # default superuser). Poll by attempting to authenticate rather than
+    # using a fixed sleep.
     if CASSANDRA_VERSION > Version('4.0-a'):
-        time.sleep(10)
+        from tests.util import wait_until_not_raised
+
+        def _check_auth_ready():
+            cluster = TestCluster(protocol_version=PROTOCOL_VERSION,
+                                  auth_provider=PlainTextAuthProvider('cassandra', 'cassandra'))
+            try:
+                session = cluster.connect()
+                session.execute("SELECT * FROM system.local WHERE key='local'")
+            finally:
+                cluster.shutdown()
+
+        wait_until_not_raised(_check_auth_ready, delay=1, max_attempts=30)
 
 def teardown_module():
     remove_cluster()  # this test messes with config
