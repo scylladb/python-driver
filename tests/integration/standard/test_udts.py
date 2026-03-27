@@ -21,7 +21,7 @@ from cassandra.cluster import UserTypeDoesNotExist, ExecutionProfile, EXEC_PROFI
 from cassandra.query import dict_factory
 from cassandra.util import OrderedMap
 
-from tests.integration import use_singledc, execute_until_pass, \
+from tests.integration import use_single_node, execute_until_pass, \
     BasicSegregatedKeyspaceUnitTestCase, greaterthancass20, lessthancass30, greaterthanorequalcass36, TestCluster
 from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES, PRIMITIVE_DATATYPES_KEYS, \
     COLLECTION_TYPES, get_sample, get_collection_sample
@@ -32,7 +32,7 @@ nested_collection_udt_nested = namedtuple('nested_collection_udt_nested', ['m', 
 
 
 def setup_module():
-    use_singledc()
+    use_single_node()
     update_datatypes()
 
 
