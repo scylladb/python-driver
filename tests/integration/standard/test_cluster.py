@@ -52,7 +52,7 @@ log = logging.getLogger(__name__)
 
 
 def setup_module():
-    os.environ['SCYLLA_EXT_OPTS'] = "--smp 1"
+    os.environ['SCYLLA_EXT_OPTS'] = "--smp 2"
     use_cluster("cluster_tests", [3], start=True, workloads=None)
     warnings.simplefilter("always")
 
