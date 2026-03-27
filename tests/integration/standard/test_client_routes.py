@@ -521,7 +521,7 @@ def assert_routes_direct(test, cluster, expected_node_ids, direct_port=9042):
 
 def setup_module():
     os.environ['SCYLLA_EXT_OPTS'] = "--smp 2 --memory 2048M"
-    use_cluster('test_client_routes', [3], start=True)
+    use_cluster('shared_aware', [3], start=True)
 
 @skip_scylla_version_lt(reason='scylladb/scylladb#26992 - system.client_routes is not yet supported',
                         scylla_version="2026.1.0")
