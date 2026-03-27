@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
-import time
 import random
 from subprocess import run
 import logging
@@ -27,6 +26,7 @@ from cassandra.policies import TokenAwarePolicy, RoundRobinPolicy, ConstantRecon
 from cassandra import OperationTimedOut, ConsistencyLevel
 
 from tests.integration import use_cluster, get_node, PROTOCOL_VERSION
+from tests.util import wait_until_not_raised
 
 LOGGER = logging.getLogger(__name__)
 
@@ -131,6 +131,31 @@ class TestShardAwareIntegration(unittest.TestCase):
         if verify_in_tracing:
             self.verify_same_shard_in_tracing(results, "shard 0")
 
+    def _assert_blocked_node_disconnected(self, node_ip_address, node_port):
+        control_connection = self.cluster.control_connection
+        active_control_connection = control_connection._connection if control_connection else None
+        if active_control_connection and \
+                active_control_connection.endpoint.address == node_ip_address and \
+                active_control_connection.endpoint.port == node_port:
+            assert active_control_connection.is_closed or active_control_connection.is_defunct
+
+        pools = getattr(self.session, '_pools', None) or {}
+        for host, pool in pools.items():
+            if host.endpoint.address != node_ip_address or host.endpoint.port != node_port:
+                continue
+
+            open_connections = [
+                connection for connection in pool._connections.values()
+                if not (connection.is_closed or connection.is_defunct)
+            ]
+            assert not open_connections
+
+            pending_connections = [
+                connection for connection in pool._pending_connections
+                if not (connection.is_closed or connection.is_defunct)
+            ]
+            assert not pending_connections
+
     def test_all_tracing_coming_one_shard(self):
         """
         Testing that shard aware driver is sending the requests to the correct shards
@@ -178,11 +203,13 @@ class TestShardAwareIntegration(unittest.TestCase):
                 continue
             shard_id = random.choice(list(pool._connections.keys()))
             pool._connections.get(shard_id).close()
-            time.sleep(5)
-            self.query_data(self.session, verify_in_tracing=False)
+            wait_until_not_raised(
+                lambda: self.query_data(self.session, verify_in_tracing=False),
+                delay=0.5, max_attempts=30)
 
-        time.sleep(10)
-        self.query_data(self.session)
+        wait_until_not_raised(
+            lambda: self.query_data(self.session),
+            delay=0.5, max_attempts=60)
 
     @pytest.mark.skip
     def test_blocking_connections(self):
@@ -212,13 +239,18 @@ class TestShardAwareIntegration(unittest.TestCase):
                  '--destination {node1_ip_address}/32 -j REJECT --reject-with icmp-port-unreachable'
                  ).format(node1_ip_address=node1_ip_address, node1_port=node1_port).split(' ')
                 )
-            time.sleep(5)
+
+            wait_until_not_raised(
+                lambda: self._assert_blocked_node_disconnected(node1_ip_address, node1_port),
+                delay=0.1,
+                max_attempts=50)
             try:
                 self.query_data(self.session, verify_in_tracing=False)
             except OperationTimedOut:
                 pass
             remove_iptables()
-            time.sleep(5)
-            self.query_data(self.session, verify_in_tracing=False)
+            wait_until_not_raised(
+                lambda: self.query_data(self.session, verify_in_tracing=False),
+                delay=0.5, max_attempts=30)
 
         self.query_data(self.session)

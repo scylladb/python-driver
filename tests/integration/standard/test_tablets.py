@@ -6,6 +6,7 @@ from cassandra.cluster import Cluster, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.policies import ConstantReconnectionPolicy, RoundRobinPolicy, TokenAwarePolicy
 
 from tests.integration import PROTOCOL_VERSION, use_cluster, get_cluster
+from tests.util import wait_until
 from tests.unit.test_host_connection_pool import LOGGER
 
 
@@ -212,7 +213,10 @@ class TestTabletsIntegration:
         def drop_ks(_):
             # Drop and recreate ks and table to trigger tablets invalidation
             self.create_ks_and_cf(self.cluster.connect())
-            time.sleep(3)
+            # Wait for tablet metadata to be refreshed
+            wait_until(
+                lambda: 'test1' in self.cluster.metadata.keyspaces,
+                delay=0.5, max_attempts=20)
 
         self.run_tablets_invalidation_test(drop_ks)
 
@@ -233,7 +237,12 @@ class TestTabletsIntegration:
                 break
             else:
                 assert False, "failed to find node to decommission"
-            time.sleep(10)
+            # Wait for decommission to complete and metadata to update
+            wait_until(
+                lambda: len([h for h in self.cluster.metadata.all_hosts() if h.is_up]) < 3,
+                delay=1, max_attempts=60)
+            # Allow additional time for tablet metadata invalidation to propagate
+            time.sleep(2)
 
         self.run_tablets_invalidation_test(decommission_non_cc_node)
 
