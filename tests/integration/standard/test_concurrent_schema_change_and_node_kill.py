@@ -8,7 +8,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def setup_module():
-    use_cluster('test_concurrent_schema_change_and_node_kill', [3], start=True)
+    use_cluster('test_schema_kill', [3], start=True)
 
 @local
 class TestConcurrentSchemaChangeAndNodeKill(unittest.TestCase):
