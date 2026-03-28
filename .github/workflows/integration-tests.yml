@@ -77,6 +77,12 @@ jobs:
     - name: Build driver
       run: uv sync
 
+    - name: Cache Scylla download
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccm/repository
+        key: scylla-${{ env.SCYLLA_VERSION }}-${{ runner.os }}
+
     # This is to get honest accounting of test time vs download time vs build time.
     # Not strictly necessary for running tests.
     - name: Download Scylla
