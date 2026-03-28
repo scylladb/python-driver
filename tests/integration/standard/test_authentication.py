@@ -34,8 +34,12 @@ log = logging.getLogger(__name__)
 #This can be tested for remote hosts, but the cluster has to be configured accordingly
 #@local
 
+_saved_scylla_ext_opts = None
+
 
 def setup_module():
+    global _saved_scylla_ext_opts
+    _saved_scylla_ext_opts = os.environ.get('SCYLLA_EXT_OPTS')
     if CASSANDRA_IP.startswith("127.0.0.") and not USE_CASS_EXTERNAL:
         use_singledc(start=False)
         ccm_cluster = get_cluster()
@@ -71,6 +75,10 @@ def setup_module():
 
 def teardown_module():
     remove_cluster()  # this test messes with config
+    if _saved_scylla_ext_opts is None:
+        os.environ.pop('SCYLLA_EXT_OPTS', None)
+    else:
+        os.environ['SCYLLA_EXT_OPTS'] = _saved_scylla_ext_opts
 
 
 class AuthenticationTests(unittest.TestCase):
