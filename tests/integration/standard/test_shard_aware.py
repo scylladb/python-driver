@@ -31,9 +31,21 @@ from tests.util import wait_until_not_raised
 LOGGER = logging.getLogger(__name__)
 
 
+_saved_scylla_ext_opts = None
+
+
 def setup_module():
+    global _saved_scylla_ext_opts
+    _saved_scylla_ext_opts = os.environ.get('SCYLLA_EXT_OPTS')
     os.environ['SCYLLA_EXT_OPTS'] = "--smp 2"
     use_cluster('cluster_tests', [3], start=True)
+
+
+def teardown_module():
+    if _saved_scylla_ext_opts is None:
+        os.environ.pop('SCYLLA_EXT_OPTS', None)
+    else:
+        os.environ['SCYLLA_EXT_OPTS'] = _saved_scylla_ext_opts
 
 
 class TestShardAwareIntegration(unittest.TestCase):
