@@ -32,6 +32,7 @@ from cassandra.policies import HostFilterPolicy, RoundRobinPolicy, HostStateList
 from tests import is_monkey_patched
 from tests.integration import use_singledc, get_node, CASSANDRA_IP, local, \
     requiresmallclockgranularity, greaterthancass20, TestCluster
+from tests.util import wait_until
 
 try:
     import cassandra.io.asyncorereactor
@@ -140,9 +141,10 @@ class HeartbeatTest(unittest.TestCase):
             # Wait for connections associated with this host go away
             self.wait_for_no_connections(host, self.cluster)
 
-            # Wait to seconds for the driver to be notified
-            time.sleep(2)
-            assert test_listener.host_down
+            # Wait for the driver to detect the host is down
+            wait_until(
+                lambda: test_listener.host_down,
+                delay=0.5, max_attempts=20)
             # Resume paused node
         finally:
             node.resume()

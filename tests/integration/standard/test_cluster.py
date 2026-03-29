@@ -1121,8 +1121,7 @@ class ClusterTests(unittest.TestCase):
         """
         for _ in range(10):
             with TestCluster(protocol_version=3) as cluster:
-                cluster.connect().execute("SELECT * FROM system_schema.keyspaces")
-                time.sleep(1)
+                cluster.connect(wait_for_all_pools=True).execute("SELECT * FROM system_schema.keyspaces")
 
             with TestCluster(protocol_version=3) as cluster:
                 session = cluster.connect()
