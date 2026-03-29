@@ -29,7 +29,7 @@ from tests.integration import use_singledc, PROTOCOL_VERSION, BasicSharedKeyspac
     USE_CASS_EXTERNAL, greaterthanorequalcass40, TestCluster, xfail_scylla
 from tests import notwindows
 from tests.integration import greaterthanorequalcass30, get_node
-from tests.util import assertListEqual
+from tests.util import assertListEqual, wait_until
 
 import time
 import random
@@ -1571,9 +1571,10 @@ class PreparedWithKeyspaceTests(BaseKeyspaceTests, unittest.TestCase):
 
             get_node(1).start(wait_for_binary_proto=True, wait_other_notice=True)
 
-            # We wait for cluster._prepare_all_queries to be called
-            time.sleep(5)
-            assert 1 == mock_handler.get_message_count('debug', 'Preparing all known prepared statements')
+            # Wait for cluster._prepare_all_queries to be called
+            wait_until(
+                lambda: mock_handler.get_message_count('debug', 'Preparing all known prepared statements') >= 1,
+                delay=0.5, max_attempts=20)
 
             results = self.session.execute(prepared_statement, (1,), execution_profile="only_first")
             assert results.one() == (1, )
