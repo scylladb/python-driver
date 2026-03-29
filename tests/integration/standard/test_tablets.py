@@ -1,5 +1,3 @@
-import time
-
 import pytest
 
 from cassandra.cluster import Cluster, EXEC_PROFILE_DEFAULT, ExecutionProfile
@@ -29,7 +27,7 @@ class TestTabletsIntegration:
         cls.cluster.shutdown()
 
     def verify_hosts_in_tracing(self, results, expected):
-        traces = results.get_query_trace()
+        traces = results.get_query_trace(max_wait_sec=10)
         events = traces.events
         host_set = set()
         for event in events:
@@ -55,7 +53,7 @@ class TestTabletsIntegration:
         return metadata._tablets.get_tablet_for_key(query.keyspace, query.table, metadata.token_map.token_class.from_key(query.routing_key))
 
     def verify_same_shard_in_tracing(self, results):
-        traces = results.get_query_trace()
+        traces = results.get_query_trace(max_wait_sec=10)
         events = traces.events
         shard_set = set()
         for event in events:
@@ -241,8 +239,8 @@ class TestTabletsIntegration:
             wait_until(
                 lambda: len([h for h in self.cluster.metadata.all_hosts() if h.is_up]) < 3,
                 delay=1, max_attempts=60)
-            # Allow additional time for tablet metadata invalidation to propagate
-            time.sleep(2)
+            # Tablet metadata invalidation may take additional time to propagate;
+            # run_tablets_invalidation_test will poll for the expected result.
 
         self.run_tablets_invalidation_test(decommission_non_cc_node)
 
@@ -266,5 +264,7 @@ class TestTabletsIntegration:
 
         invalidate(rec)
 
-        # Check if tablets information was purged
-        assert self.get_tablet_record(bound) is None, "tablet was not deleted, invalidation did not work"
+        # Wait for tablets information to be purged (invalidation is async)
+        wait_until(
+            lambda: self.get_tablet_record(bound) is None,
+            delay=0.5, max_attempts=20)
