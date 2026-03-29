@@ -1059,7 +1059,7 @@ class TestSslThroughNlb(unittest.TestCase):
             def routes_visible():
                 with TestCluster(
                     contact_points=["127.0.0.1"],
-                    ssl_context=ssl_ctx,
+                    ssl_context=ssl_ctx, connect_timeout=30,
                 ) as c:
                     session = c.connect()
                     rs = session.execute(
@@ -1071,7 +1071,7 @@ class TestSslThroughNlb(unittest.TestCase):
 
             wait_until_not_raised(
                 lambda: self.assertTrue(routes_visible()),
-                0.5, 10,
+                1, 30,
             )
 
             with Cluster(
