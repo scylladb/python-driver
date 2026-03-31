@@ -36,13 +36,16 @@ log = logging.getLogger(__name__)
 
 
 def setup_module():
-    os.environ['SCYLLA_EXT_OPTS'] = '--auth-superuser-name=cassandra --auth-superuser-salted-password=$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/'
     if CASSANDRA_IP.startswith("127.0.0.") and not USE_CASS_EXTERNAL:
         use_singledc(start=False)
         ccm_cluster = get_cluster()
         ccm_cluster.stop()
-        config_options = {'authenticator': 'PasswordAuthenticator',
-                          'authorizer': 'CassandraAuthorizer'}
+        config_options = {
+            'authenticator': 'PasswordAuthenticator',
+            'authorizer': 'CassandraAuthorizer',
+            'auth_superuser_name': 'cassandra',
+            'auth_superuser_salted_password': '$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/'
+        }
         ccm_cluster.set_configuration_options(config_options)
         log.debug("Starting ccm test cluster with %s", config_options)
         start_cluster_wait_for_up(ccm_cluster)
