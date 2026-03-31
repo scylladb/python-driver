@@ -521,8 +521,9 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self._query(session, keyspace)
 
         self.coordinator_stats.assert_query_count_equals(1, 0)
-        self.coordinator_stats.assert_query_count_equals(2, 12)
-        self.coordinator_stats.assert_query_count_equals(3, 0)
+        # Scylla may distribute queries across both replicas with shard-aware routing
+        queried = self.coordinator_stats.get_query_count(2) + self.coordinator_stats.get_query_count(3)
+        assert queried == 12, "Expected 12 queries to replicas, got %d" % queried
 
         self.coordinator_stats.reset_counts()
         stop(2)
