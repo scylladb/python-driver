@@ -215,10 +215,10 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(2, 6)
         self.coordinator_stats.assert_query_count_equals(3, 0)
 
-        decommission(1)
-        start(3)
-        self._wait_for_nodes_down([1], cluster)
+        start(3)  # Restart before decommission (Raft rejects ops with dead nodes)
         self._wait_for_nodes_up([3], cluster)
+        decommission(1)
+        self._wait_for_nodes_down([1], cluster)
 
         self.coordinator_stats.reset_counts()
         self._query(session, keyspace)
