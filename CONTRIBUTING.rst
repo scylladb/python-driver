@@ -42,9 +42,12 @@ down to about 2-3 seconds.
 
 **Important:** After modifying any ``.py`` file under ``cassandra/`` that is
 Cython-compiled (such as ``query.py``, ``protocol.py``, ``cluster.py``, etc.),
-you **must** rebuild extensions before running tests::
+extensions must be rebuilt before running tests. If you always use ``uv run``
+(e.g. ``uv run pytest``), this is handled automatically via the ``cache-keys``
+configuration in ``pyproject.toml``. If you invoke ``pytest`` directly, you can
+rebuild with::
 
-    python setup.py build_ext --inplace
+    uv sync --reinstall-package scylla-driver
 
 Without rebuilding, Python will load the stale compiled extension (``.so`` / ``.pyd``)
 instead of your modified ``.py`` source, and your changes will not actually be tested.

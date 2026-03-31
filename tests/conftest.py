@@ -25,7 +25,7 @@ def pytest_configure(config):
 
     Python's import system prefers compiled extensions (.so / .pyd) over pure
     Python (.py) files.  If a developer edits a .py file without rebuilding
-    the Cython extensions (``python setup.py build_ext --inplace``), the tests
+    the Cython extensions, the tests
     will silently run the *old* compiled code, masking any regressions in the
     Python source.
 
@@ -61,6 +61,7 @@ def pytest_configure(config):
             f"Stale Cython extension(s) detected: {names}. "
             f"The .py source is newer than the compiled extension — tests "
             f"will run the OLD compiled code, not your latest changes. "
-            f"Rebuild with:  python setup.py build_ext --inplace",
+            f"Rebuild with:  uv sync --reinstall-package scylla-driver\n"
+            f"Or use 'uv run pytest' which handles rebuilds automatically.",
             stacklevel=1,
         )
