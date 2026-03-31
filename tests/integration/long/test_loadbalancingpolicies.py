@@ -243,13 +243,12 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(3, 3)
         self.coordinator_stats.assert_query_count_equals(4, 3)
 
+        bootstrap(5, 'dc3')  # Bootstrap before force_stop (Raft rejects ops with dead nodes)
+        self._wait_for_nodes_up([5], cluster)
         force_stop(1)
-        bootstrap(5, 'dc3')
 
         # reset control connection
         self._insert(session, keyspace, count=1000)
-
-        self._wait_for_nodes_up([5], cluster)
 
         self.coordinator_stats.reset_counts()
         self._query(session, keyspace)
