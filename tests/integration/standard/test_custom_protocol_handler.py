@@ -20,7 +20,7 @@ from cassandra.cluster import (ResponseFuture, ExecutionProfile, EXEC_PROFILE_DE
     ContinuousPagingOptions, NoHostAvailable)
 from cassandra import ProtocolVersion, ConsistencyLevel
 
-from tests.integration import use_singledc, drop_keyspace_shutdown_cluster, \
+from tests.integration import use_single_node, drop_keyspace_shutdown_cluster, \
     greaterthanorequalcass30, execute_with_long_wait_retry, greaterthanorequalcass3_10, \
     TestCluster, greaterthanorequalcass40
 from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES
@@ -32,7 +32,7 @@ import pytest
 
 
 def setup_module():
-    use_singledc()
+    use_single_node()
     update_datatypes()
 
 

@@ -45,7 +45,6 @@ log = logging.getLogger(__name__)
 class LoadBalancingPolicyTests(unittest.TestCase):
 
     def setUp(self):
-        remove_cluster()  # clear ahead of test so it doesn't use one left in unknown state
         self.coordinator_stats = CoordinatorStats()
         self.prepared = None
         self.probe_cluster = None
@@ -191,6 +190,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
             assert isinstance(cluster.profile_manager.default.load_balancing_policy, DCAwareRoundRobinPolicy)
 
     def test_roundrobin(self):
+        remove_cluster()
         use_singledc()
         keyspace = 'test_roundrobin'
         cluster, session = self._cluster_session_with_lbp(RoundRobinPolicy())
@@ -228,6 +228,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(3, 6)
 
     def test_roundrobin_two_dcs(self):
+        remove_cluster()
         use_multidc([2, 2])
         keyspace = 'test_roundrobin_two_dcs'
         cluster, session = self._cluster_session_with_lbp(RoundRobinPolicy())
@@ -261,6 +262,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(5, 3)
 
     def test_roundrobin_two_dcs_2(self):
+        remove_cluster()
         use_multidc([2, 2])
         keyspace = 'test_roundrobin_two_dcs_2'
         cluster, session = self._cluster_session_with_lbp(RoundRobinPolicy())
@@ -294,6 +296,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(5, 3)
 
     def test_dc_aware_roundrobin_two_dcs(self):
+        remove_cluster()
         use_multidc([3, 2])
         keyspace = 'test_dc_aware_roundrobin_two_dcs'
         cluster, session = self._cluster_session_with_lbp(DCAwareRoundRobinPolicy('dc1'))
@@ -311,6 +314,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(5, 0)
 
     def test_dc_aware_roundrobin_two_dcs_2(self):
+        remove_cluster()
         use_multidc([3, 2])
         keyspace = 'test_dc_aware_roundrobin_two_dcs_2'
         cluster, session = self._cluster_session_with_lbp(DCAwareRoundRobinPolicy('dc2'))
@@ -328,6 +332,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(5, 6)
 
     def test_dc_aware_roundrobin_one_remote_host(self):
+        remove_cluster()
         use_multidc([2, 2])
         keyspace = 'test_dc_aware_roundrobin_one_remote_host'
         cluster, session = self._cluster_session_with_lbp(DCAwareRoundRobinPolicy('dc2', used_hosts_per_remote_dc=1))
@@ -410,6 +415,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.token_aware(keyspace, True)
 
     def token_aware(self, keyspace, use_prepared=False):
+        remove_cluster()
         use_singledc()
         cluster, session = self._cluster_session_with_lbp(TokenAwarePolicy(RoundRobinPolicy()))
         self.addCleanup(cluster.shutdown)
@@ -505,6 +511,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         assert results[0].i
 
     def test_token_aware_with_rf_2(self, use_prepared=False):
+        remove_cluster()
         use_singledc()
         keyspace = 'test_token_aware_with_rf_2'
         cluster, session = self._cluster_session_with_lbp(TokenAwarePolicy(RoundRobinPolicy()))
@@ -617,6 +624,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
 
         @test_category policy
         """
+        remove_cluster()
         # We can test this with a single dc when CASSANDRA-15670 is fixed
         use_multidc([3, 3])
 
@@ -647,6 +655,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
 
 
     def _set_up_shuffle_test(self, keyspace, replication_factor):
+        remove_cluster()
         use_singledc()
         cluster, session = self._cluster_session_with_lbp(
             TokenAwarePolicy(RoundRobinPolicy(), shuffle_replicas=True)
@@ -678,6 +687,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
             self.coordinator_stats.reset_counts()
 
     def test_white_list(self):
+        remove_cluster()
         use_singledc()
         keyspace = 'test_white_list'
 
@@ -723,6 +733,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
 
         @test_category policy
         """
+        remove_cluster()
         use_singledc()
         keyspace = 'test_black_list_with_hfp'
         ignored_address = (IP_FORMAT % 2)

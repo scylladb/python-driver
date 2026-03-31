@@ -600,7 +600,7 @@ def execute_with_long_wait_retry(session, query, timeout=30):
             del tb
             tries += 1
 
-    raise RuntimeError("Failed to execute query after 100 attempts: {0}".format(query))
+    raise RuntimeError("Failed to execute query after 10 attempts: {0}".format(query))
 
 
 def execute_with_retry_tolerant(session, query, retry_exceptions, escape_exception):

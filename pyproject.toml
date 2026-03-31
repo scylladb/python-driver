@@ -121,6 +121,9 @@ log_level = "DEBUG"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 xfail_strict = true
 addopts = "-rf"
+markers = [
+    "last: mark test to run last within its module group",
+]
 
 [tool.setuptools_scm]
 version_file = "cassandra/_version.py"

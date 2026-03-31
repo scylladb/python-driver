@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from tests.integration import get_server_versions, use_singledc, \
+from tests.integration import get_server_versions, use_single_node, \
     BasicSharedKeyspaceUnitTestCaseWFunctionTable, BasicSharedKeyspaceUnitTestCase, execute_until_pass, TestCluster
 
 import unittest
@@ -24,7 +24,7 @@ from cassandra.util import OrderedDict
 
 
 def setup_module():
-    use_singledc()
+    use_single_node()
 
 
 class NameTupleFactory(BasicSharedKeyspaceUnitTestCase):
