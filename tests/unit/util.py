@@ -32,6 +32,24 @@ def _check_order_consistency(smaller, bigger, equal=False):
 
 
 class HashableMock(NonCallableMagicMock):
+    """A Mock subclass that is safely hashable and usable in sets/dicts.
 
-    def __hash__(self):
+    NonCallableMagicMock's __init__ (via MagicMixin) replaces __hash__
+    on the *type* with a MagicMock object.  That MagicMock is not
+    thread-safe, so concurrent hash() calls on the same instance —
+    e.g. ``connection in self._trash`` in pool.py — can raise
+    ``TypeError: __hash__ method should return an integer`` on Windows.
+
+    We fix this by restoring a plain function as the class-level
+    __hash__ after super().__init__ runs, so hash() always resolves to
+    a real function (id-based) instead of a MagicMock callable.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Restore a real __hash__ after MagicMixin overwrites it.
+        type(self).__hash__ = HashableMock._id_hash
+
+    @staticmethod
+    def _id_hash(self):
         return id(self)
