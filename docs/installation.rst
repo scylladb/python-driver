@@ -62,9 +62,6 @@ threads used to build the driver and any C extensions:
 
 .. code-block:: bash
 
-    $ # installing from source
-    $ CASS_DRIVER_BUILD_CONCURRENCY=8 python setup.py install
-    $ # installing from pip
     $ CASS_DRIVER_BUILD_CONCURRENCY=8 pip install scylla-driver
 
 Note that by default (when CASS_DRIVER_BUILD_CONCURRENCY is not specified), concurrency will be equal to the number of
@@ -108,7 +105,7 @@ installed. You can find the list of dependencies in
 
 Once the dependencies are installed, simply run::
 
-    python setup.py install
+    pip install .
 
 
 (*Optional*) Non-python Dependencies
@@ -122,9 +119,9 @@ for token-aware routing with the ``Murmur3Partitioner``,
 `libev <http://software.schmorp.de/pkg/libev.html>`_ event loop integration,
 and Cython optimized extensions.
 
-When installing manually through setup.py, you can disable both with
-the ``--no-extensions`` option, or selectively disable them with
-with ``--no-murmur3``, ``--no-libev``, or ``--no-cython``.
+Extensions can be selectively disabled using environment variables:
+``CASS_DRIVER_NO_EXTENSIONS=1`` (disable all), ``CASS_DRIVER_NO_CYTHON=1``,
+or ``CASS_DRIVER_NO_LIBEV=1``.
 
 To compile the extensions, ensure that GCC and the Python headers are available.
 
@@ -149,31 +146,25 @@ This is not a hard requirement, but is engaged by default to build extensions of
 pure Python implementation.
 
 This is a costly build phase, especially in clean environments where the Cython compiler must be built
-This build phase can be avoided using the build switch, or an environment variable::
+This build phase can be avoided using an environment variable::
 
-    python setup.py install --no-cython
+    CASS_DRIVER_NO_CYTHON=1 pip install scylla-driver
 
-Alternatively, an environment variable can be used to switch this option regardless of
+Alternatively, the environment variable can be used to switch this option regardless of
 context::
 
     CASS_DRIVER_NO_CYTHON=1 <your script here>
     - or, to disable all extensions:
     CASS_DRIVER_NO_EXTENSIONS=1 <your script here>
 
-This method is required when using pip, which provides no other way of injecting user options in a single command::
-
-    CASS_DRIVER_NO_CYTHON=1 pip install scylla-driver
-    CASS_DRIVER_NO_CYTHON=1 sudo -E pip install ~/python-driver
-
-The environment variable is the preferred option because it spans all invocations of setup.py, and will
+These environment variables are the preferred option, and will
 prevent Cython from being materialized as a setup requirement.
 
-If your sudo configuration does not allow SETENV, you must push the option flag down via pip. However, pip
-applies these options to all dependencies (which break on the custom flag). Therefore, you must first install
-dependencies, then use install-option::
+If your sudo configuration does not allow SETENV, you must first install
+dependencies, then install the driver::
 
     sudo pip install futures
-    sudo pip install --install-option="--no-cython"
+    sudo CASS_DRIVER_NO_CYTHON=1 pip install scylla-driver
 
 
 Supported Event Loops
@@ -205,7 +196,7 @@ install libev using any Windows package manager.  For example, to install using 
     $ vcpkg install libev
 
 If successful, you should be able to build and install the extension
-(just using ``setup.py build`` or ``setup.py install``) and then use
+(just using ``pip install .``) and then use
 the libev event loop by doing the following:
 
 .. code-block:: python
