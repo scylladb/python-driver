@@ -571,3 +571,41 @@ class TestShardawarePortGenerator(unittest.TestCase):
         second_run = list(itertools.islice(gen.generate(0, 2), 5))
 
         assert first_run == second_run
+
+
+class FactoryCloseRaceTest(unittest.TestCase):
+    """Tests for Connection.factory() handling connections closed during setup."""
+
+    def _make_fake_connection_class(self, is_closed=False, is_defunct=False, last_error=None):
+        """Create a fake connection class whose __init__ sets up minimal state
+        needed by factory() without actually connecting to anything."""
+        from threading import Event
+
+        class FakeConnection(Connection):
+            def __init__(self, endpoint, *args, **kwargs):  # noqa - intentionally skips super().__init__
+                self.connected_event = Event()
+                self.connected_event.set()
+                self.is_closed = is_closed
+                self.is_defunct = is_defunct
+                self.is_unsupported_proto_version = False
+                self.last_error = last_error
+                self.endpoint = endpoint
+
+        return FakeConnection
+
+    def test_factory_raises_on_closed_during_setup(self):
+        FakeConn = self._make_fake_connection_class(is_closed=True)
+        with pytest.raises(ConnectionShutdown, match="closed during setup"):
+            FakeConn.factory(DefaultEndPoint('1.2.3.4'), timeout=5)
+
+    def test_factory_raises_on_defunct_during_setup(self):
+        FakeConn = self._make_fake_connection_class(is_defunct=True)
+        with pytest.raises(ConnectionShutdown, match="closed during setup"):
+            FakeConn.factory(DefaultEndPoint('1.2.3.4'), timeout=5)
+
+    def test_factory_returns_conn_when_connected_normally(self):
+        FakeConn = self._make_fake_connection_class(is_closed=False, is_defunct=False)
+        result = FakeConn.factory(DefaultEndPoint('1.2.3.4'), timeout=5)
+        assert result is not None
+        assert not result.is_closed
+        assert not result.is_defunct
