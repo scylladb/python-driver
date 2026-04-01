@@ -34,7 +34,7 @@ from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessag
                                 RESULT_KIND_ROWS, RESULT_KIND_SET_KEYSPACE,
                                 RESULT_KIND_SCHEMA_CHANGE, RESULT_KIND_PREPARED,
                                 ProtocolHandler)
-from cassandra.policies import RetryPolicy, ExponentialBackoffRetryPolicy, SimpleConvictionPolicy
+from cassandra.policies import RetryPolicy, ExponentialBackoffRetryPolicy, SimpleConvictionPolicy, WriteType, NeverRetryPolicy, FallthroughRetryPolicy
 from cassandra.pool import Host, NoConnectionsAvailable
 from cassandra.query import SimpleStatement, PreparedStatement, BoundStatement
 from tests.util import assertEqual, assertIsInstance
@@ -326,6 +326,92 @@ class ResponseFutureTests(unittest.TestCase):
         rf.session._pools.get.assert_called_with(host)
         pool.borrow_connection.assert_called_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
         connection.send_msg.assert_called_with(rf.message, 2, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
+
+    def test_cas_write_timeout_retries_same_host_regardless_of_retry_policy(self):
+        """
+        CAS write timeouts must retry on the same host even with a plain
+        RetryPolicy() configured, which on its own always RETHROWs CAS write
+        timeouts. This override is applied unconditionally in
+        ResponseFuture._set_result, not opt-in via LWTRetryPolicy.
+        """
+        session = self.make_session()
+        pool = session._pools.get.return_value
+
+        query = SimpleStatement("UPDATE foo SET a = 1 WHERE k = 1 IF a = 0")
+        message = QueryMessage(query=query, consistency_level=ConsistencyLevel.QUORUM)
+
+        connection = Mock(spec=Connection)
+        pool.borrow_connection.return_value = (connection, 1)
+
+        rf = ResponseFuture(session, message, query, 1, retry_policy=RetryPolicy())
+        rf.send_request()
+
+        result = Mock(spec=WriteTimeoutErrorMessage, info={
+            'consistency': ConsistencyLevel.QUORUM,
+            'write_type': WriteType.CAS,
+            'required_responses': 1,
+            'received_responses': 0,
+        })
+        host = Mock()
+        rf._set_result(host, None, None, result)
+
+        # reuse_connection=True means retry on the SAME host
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
+            ANY, ANY, rf._retry_task, True, host)
+        assert 1 == rf._query_retries
+
+    def test_cas_write_timeout_retry_keeps_original_consistency(self):
+        """
+        Scylla reports SERIAL in a CAS WriteTimeout; the retry must keep the
+        statement's CL, as SERIAL is invalid as a commit consistency.
+        """
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        query = SimpleStatement("UPDATE foo SET a = 1 WHERE k = 1 IF a = 0")
+        message = QueryMessage(query=query, consistency_level=ConsistencyLevel.QUORUM)
+        pool.borrow_connection.return_value = (Mock(spec=Connection), 1)
+
+        rf = ResponseFuture(session, message, query, 1, retry_policy=RetryPolicy())
+        rf.send_request()
+
+        result = Mock(spec=WriteTimeoutErrorMessage, info={
+            'consistency': ConsistencyLevel.SERIAL,
+            'write_type': WriteType.CAS,
+            'required_responses': 1,
+            'received_responses': 0,
+        })
+        rf._set_result(Mock(), None, None, result)
+
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once()
+        assert rf.message.consistency_level == ConsistencyLevel.QUORUM
+
+    def _assert_cas_write_timeout_not_retried(self, policy):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        query = SimpleStatement("UPDATE foo SET a = 1 WHERE k = 1 IF a = 0")
+        message = QueryMessage(query=query, consistency_level=ConsistencyLevel.QUORUM)
+        pool.borrow_connection.return_value = (Mock(spec=Connection), 1)
+
+        rf = ResponseFuture(session, message, query, 1, retry_policy=policy)
+        rf.send_request()
+
+        result = Mock(spec=WriteTimeoutErrorMessage, info={
+            'consistency': ConsistencyLevel.QUORUM,
+            'write_type': WriteType.CAS,
+            'required_responses': 1,
+            'received_responses': 0,
+        })
+        rf._set_result(Mock(), None, None, result)
+
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_not_called()
+        assert 0 == rf._query_retries
+        assert rf._final_exception is not None
+
+    def test_cas_write_timeout_not_retried_with_never_retry_policy(self):
+        self._assert_cas_write_timeout_not_retried(NeverRetryPolicy())
+
+    def test_cas_write_timeout_not_retried_with_fallthrough_retry_policy(self):
+        self._assert_cas_write_timeout_not_retried(FallthroughRetryPolicy())
 
     def test_retry_with_different_host(self):
         session = self.make_session()

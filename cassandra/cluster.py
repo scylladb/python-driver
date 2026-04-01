@@ -81,7 +81,9 @@ from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, Simpl
                                 ExponentialReconnectionPolicy, HostDistance,
                                 RetryPolicy, IdentityTranslator, NoSpeculativeExecutionPlan,
                                 NoSpeculativeExecutionPolicy, DefaultLoadBalancingPolicy,
-                                NeverRetryPolicy)
+                                NeverRetryPolicy, FallthroughRetryPolicy, LWTRetryPolicy,
+                                cas_write_timeout_override, serial_read_timeout_override,
+                                serial_unavailable_override)
 from cassandra.pool import (Host, _ReconnectionHandler, _HostReconnectionHandler,
                             HostConnection,
                             NoConnectionsAvailable)
@@ -6803,22 +6805,37 @@ class ResponseFuture(object):
                     self._set_final_result(response)
             elif isinstance(response, ErrorMessage):
                 retry_policy = self._retry_policy
+                # LWT overrides apply to all policies except explicit no-retry ones
+                # (Never/Fallthrough); LWTRetryPolicy only tunes the backoff.
+                no_override = isinstance(retry_policy, (NeverRetryPolicy, FallthroughRetryPolicy))
+                if isinstance(retry_policy, LWTRetryPolicy):
+                    lwt_kwargs = dict(max_num_retries=retry_policy.max_num_retries,
+                                       min_interval=retry_policy.min_interval,
+                                       max_interval=retry_policy.max_interval)
+                else:
+                    lwt_kwargs = {}
 
                 if isinstance(response, ReadTimeoutErrorMessage):
                     if self._metrics is not None:
                         self._metrics.on_read_timeout()
-                    retry = retry_policy.on_read_timeout(
-                        self.query, retry_num=self._query_retries, **response.info)
+                    retry = (None if no_override else serial_read_timeout_override(
+                        retry_num=self._query_retries, **lwt_kwargs, **response.info)) \
+                        or retry_policy.on_read_timeout(
+                            self.query, retry_num=self._query_retries, **response.info)
                 elif isinstance(response, WriteTimeoutErrorMessage):
                     if self._metrics is not None:
                         self._metrics.on_write_timeout()
-                    retry = retry_policy.on_write_timeout(
-                        self.query, retry_num=self._query_retries, **response.info)
+                    retry = (None if no_override else cas_write_timeout_override(
+                        retry_num=self._query_retries, **lwt_kwargs, **response.info)) \
+                        or retry_policy.on_write_timeout(
+                            self.query, retry_num=self._query_retries, **response.info)
                 elif isinstance(response, UnavailableErrorMessage):
                     if self._metrics is not None:
                         self._metrics.on_unavailable()
-                    retry = retry_policy.on_unavailable(
-                        self.query, retry_num=self._query_retries, **response.info)
+                    retry = (None if no_override else serial_unavailable_override(
+                        retry_num=self._query_retries, **lwt_kwargs, **response.info)) \
+                        or retry_policy.on_unavailable(
+                            self.query, retry_num=self._query_retries, **response.info)
                 elif isinstance(response, (OverloadedErrorMessage,
                                            IsBootstrappingErrorMessage,
                                            TruncateError, ServerError)):
