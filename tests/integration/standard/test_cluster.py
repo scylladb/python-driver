@@ -768,15 +768,24 @@ class ClusterTests(unittest.TestCase):
 
         connections = [c for holders in cluster.get_connection_holders() for c in holders.get_connections()]
 
-        # make sure requests were sent on all connections
-        for c in connections:
+        # In shard-aware environments, connections can be replaced between the
+        # initial snapshot and now. Filter to only connections we can validate.
+        known_connections = [c for c in connections if id(c) in connection_request_ids]
+        assert len(known_connections) > 0, (
+            "All connections were replaced during the test; "
+            "no heartbeats could be validated"
+        )
+
+        # make sure heartbeat requests were sent on all known connections
+        for c in known_connections:
             expected_ids = connection_request_ids[id(c)]
             expected_ids.rotate(-1)
             with c.lock:
                 assertListEqual(list(c.request_ids), list(expected_ids))
 
-        # assert idle status
-        assert all(c.is_idle for c in connections)
+        # assert idle status on known connections only (replaced connections
+        # may not have had their idle state set yet)
+        assert all(c.is_idle for c in known_connections)
 
         # send enough messages to ensure all connections are used
         # (with shard-aware routing, each query only hits one shard per host,
