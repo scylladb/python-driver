@@ -100,13 +100,13 @@ class BisectLeftFallbackTest(unittest.TestCase):
 
     def _get_fallback(self):
         """Import the module and grab the fallback even on Python >= 3.10."""
-        import importlib, types, sys as _sys
+        import inspect, types, sys as _sys
+        import cassandra.tablets
 
         # Re-execute the module body with a fake sys.version_info < 3.10
         # so the else-branch is taken and the fallback is defined.
-        source_path = "cassandra/tablets.py"
-        with open(source_path) as f:
-            source = f.read()
+        source = inspect.getsource(cassandra.tablets)
+        source_path = inspect.getfile(cassandra.tablets)
 
         fake_mod = types.ModuleType("_tablets_fallback")
         fake_mod.__file__ = source_path
