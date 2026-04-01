@@ -1178,7 +1178,7 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
                 ccm_cluster = get_cluster()
 
                 for node_id in new_node_ids:
-                    self._bootstrap_node(ccm_cluster, node_id)
+                    self._bootstrap_node(ccm_cluster, node_id, data_center='dc1')
 
                 expected_total = len(original_node_ids) + len(new_node_ids)
                 self._wait_for_condition(
@@ -1283,7 +1283,7 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
         except Exception:
             return False
 
-    def _bootstrap_node(self, ccm_cluster, node_id):
+    def _bootstrap_node(self, ccm_cluster, node_id, data_center=None, rack=None):
         node_type = type(next(iter(ccm_cluster.nodes.values())))
         ip = "127.0.0.%d" % node_id
         node_instance = node_type(
@@ -1297,7 +1297,12 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
             remote_debug_port=0,
             initial_token=None,
         )
-        ccm_cluster.add(node_instance, is_seed=False)
+        # CCM requires explicit data_center/rack when adding a node so that
+        # cassandra-rackdc.properties is written correctly.  Without this the
+        # snitch fails to parse the empty properties file and the node crashes
+        # on startup.
+        ccm_cluster.add(node_instance, is_seed=False,
+                        data_center=data_center, rack=rack)
         node_instance.start(wait_for_binary_proto=True, wait_other_notice=True)
         wait_for_node_socket(node_instance, 120)
         log.info("Node %d bootstrapped successfully", node_id)
