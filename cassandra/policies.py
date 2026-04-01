@@ -1194,6 +1194,120 @@ class ExponentialBackoffRetryPolicy(RetryPolicy):
             return self.RETHROW, None, None
 
 
+class LWTRetryPolicy(ExponentialBackoffRetryPolicy):
+    """
+    A retry policy tailored for Lightweight Transaction (LWT) queries.
+
+    LWT queries use Paxos consensus, where the first replica in the token ring
+    acts as the Paxos coordinator (leader). Retrying LWT queries on a *different*
+    host causes Paxos contention — the new coordinator must compete with the
+    original one, potentially causing cascading timeouts.
+
+    This policy addresses that by:
+
+    - **CAS write timeouts**: Retrying on the **same host** (the Paxos coordinator)
+      with exponential backoff, giving the coordinator time to complete the Paxos round.
+    - **CAS read timeouts** (serial consistency): Retrying on the same host.
+    - **Unavailable at serial consistency**: Retrying on the **next host**, since the
+      Paxos phase failed on this node (not enough replicas alive to form quorum).
+    - **Non-CAS operations**: Delegating to the standard :class:`ExponentialBackoffRetryPolicy`
+      behavior.
+
+    This is modeled after gocql's ``LWTRetryPolicy`` interface, which retries LWT
+    queries on the same host to avoid Paxos contention.
+
+    Example usage::
+
+        from cassandra.cluster import Cluster
+        from cassandra.policies import LWTRetryPolicy
+
+        # Use as the default retry policy for the cluster
+        cluster = Cluster(
+            default_retry_policy=LWTRetryPolicy(max_num_retries=3)
+        )
+
+        # Or assign to a specific statement
+        statement.retry_policy = LWTRetryPolicy(max_num_retries=5)
+
+    :param max_num_retries: Maximum number of retry attempts (default: 3).
+    :param min_interval: Initial backoff delay in seconds (default: 0.1).
+    :param max_interval: Maximum backoff delay in seconds (default: 10.0).
+    """
+
+    def __init__(self, max_num_retries=3, min_interval=0.1, max_interval=10.0,
+                 *args, **kwargs):
+        super(LWTRetryPolicy, self).__init__(
+            max_num_retries=max_num_retries,
+            min_interval=min_interval,
+            max_interval=max_interval,
+            *args, **kwargs)
+
+    def on_write_timeout(self, query, consistency, write_type,
+                         required_responses, received_responses, retry_num):
+        """
+        For CAS (LWT) write timeouts, retry on the **same host** with exponential
+        backoff. Retrying on a different host would cause Paxos contention.
+
+        For non-CAS writes, delegates to the base ExponentialBackoffRetryPolicy
+        behavior (retry BATCH_LOG only, RETHROW otherwise).
+        """
+        if retry_num >= self.max_num_retries:
+            return self.RETHROW, None, None
+
+        if write_type == WriteType.CAS:
+            # Retry on the SAME host — this is the Paxos coordinator.
+            # Moving to another host causes contention in the Paxos protocol.
+            return self.RETRY, consistency, self._calculate_backoff(retry_num)
+
+        # Non-CAS: delegate to parent (retries BATCH_LOG, rethrows others)
+        return super(LWTRetryPolicy, self).on_write_timeout(
+            query, consistency, write_type,
+            required_responses, received_responses, retry_num)
+
+    def on_read_timeout(self, query, consistency, required_responses,
+                        received_responses, data_retrieved, retry_num):
+        """
+        For reads at serial consistency (CAS reads), retry on the **same host**
+        with backoff.
+
+        For non-serial reads, delegates to the base ExponentialBackoffRetryPolicy
+        behavior.
+        """
+        if retry_num >= self.max_num_retries:
+            return self.RETHROW, None, None
+
+        if ConsistencyLevel.is_serial(consistency):
+            # Serial read = CAS/Paxos read. Retry on same host.
+            return self.RETRY, consistency, self._calculate_backoff(retry_num)
+
+        # Non-serial: delegate to parent
+        return super(LWTRetryPolicy, self).on_read_timeout(
+            query, consistency, required_responses,
+            received_responses, data_retrieved, retry_num)
+
+    def on_unavailable(self, query, consistency, required_replicas,
+                       alive_replicas, retry_num):
+        """
+        For serial consistency (CAS/Paxos phase), retry on the **next host** —
+        this node couldn't form a Paxos quorum, so a different coordinator
+        might see a different set of available replicas.
+
+        For non-serial consistency, delegates to the base ExponentialBackoffRetryPolicy
+        behavior.
+        """
+        if retry_num >= self.max_num_retries:
+            return self.RETHROW, None, None
+
+        if ConsistencyLevel.is_serial(consistency):
+            # Paxos phase failed — not enough replicas for serial quorum.
+            # Try a different coordinator; it might have better connectivity.
+            return self.RETRY_NEXT_HOST, consistency, self._calculate_backoff(retry_num)
+
+        # Non-serial: delegate to parent
+        return super(LWTRetryPolicy, self).on_unavailable(
+            query, consistency, required_replicas, alive_replicas, retry_num)
+
+
 class AddressTranslator(object):
     """
     Interface for translating cluster-defined endpoints.

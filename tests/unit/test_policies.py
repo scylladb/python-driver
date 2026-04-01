@@ -33,7 +33,8 @@ from cassandra.policies import (RackAwareRoundRobinPolicy, RoundRobinPolicy, Whi
                                 RetryPolicy, WriteType,
                                 DowngradingConsistencyRetryPolicy, ConstantReconnectionPolicy,
                                 LoadBalancingPolicy, ConvictionPolicy, ReconnectionPolicy, FallthroughRetryPolicy,
-                                IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy, ExponentialBackoffRetryPolicy)
+                                IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy, ExponentialBackoffRetryPolicy,
+                                LWTRetryPolicy)
 from cassandra.connection import DefaultEndPoint, UnixSocketEndPoint
 from cassandra.pool import Host
 from cassandra.query import Statement
@@ -1406,6 +1407,259 @@ class ExponentialRetryPolicyTest(unittest.TestCase):
                 d = policy._calculate_backoff(attempts)
                 assert d > delay - (0.1 / 2), f"d={d} attempts={attempts}, delay={delay}"
                 assert d < delay + (0.1 / 2), f"d={d} attempts={attempts}, delay={delay}"
+
+
+class LWTRetryPolicyTest(unittest.TestCase):
+    """Tests for LWTRetryPolicy — LWT-aware retry with same-host preference."""
+
+    def _make_policy(self, max_retries=3):
+        return LWTRetryPolicy(max_num_retries=max_retries)
+
+    # --- CAS write timeout: retry on SAME host ---
+
+    def test_cas_write_timeout_retries_same_host(self):
+        """CAS write timeout on first attempt should retry on SAME host."""
+        policy = self._make_policy()
+        retry, consistency, delay = policy.on_write_timeout(
+            query=None, consistency=ConsistencyLevel.QUORUM,
+            write_type=WriteType.CAS,
+            required_responses=3, received_responses=1, retry_num=0)
+        assert retry == RetryPolicy.RETRY
+        assert consistency == ConsistencyLevel.QUORUM
+        assert delay is not None and delay > 0
+
+    def test_cas_write_timeout_retries_with_backoff(self):
+        """CAS write timeout backoff delay should increase with retry_num."""
+        policy = self._make_policy(max_retries=5)
+        delays = []
+        for attempt in range(3):
+            _, _, delay = policy.on_write_timeout(
+                query=None, consistency=ConsistencyLevel.QUORUM,
+                write_type=WriteType.CAS,
+                required_responses=3, received_responses=1, retry_num=attempt)
+            delays.append(delay)
+        # Delays should generally increase (with some jitter tolerance)
+        # delay_0 ~ 0.1s, delay_1 ~ 0.2s, delay_2 ~ 0.4s
+        assert delays[0] < delays[2], (
+            f"Backoff should increase: delays={delays}")
+
+    def test_cas_write_timeout_max_retries_exceeded(self):
+        """CAS write timeout should RETHROW when max retries exceeded."""
+        policy = self._make_policy(max_retries=2)
+        retry, consistency, delay = policy.on_write_timeout(
+            query=None, consistency=ConsistencyLevel.QUORUM,
+            write_type=WriteType.CAS,
+            required_responses=3, received_responses=1, retry_num=2)
+        assert retry == RetryPolicy.RETHROW
+
+    def test_cas_write_timeout_preserves_consistency(self):
+        """CAS retry should preserve the original consistency level."""
+        policy = self._make_policy()
+        for cl in [ConsistencyLevel.QUORUM, ConsistencyLevel.LOCAL_QUORUM,
+                   ConsistencyLevel.ONE, ConsistencyLevel.ALL]:
+            retry, consistency, _ = policy.on_write_timeout(
+                query=None, consistency=cl,
+                write_type=WriteType.CAS,
+                required_responses=3, received_responses=1, retry_num=0)
+            assert retry == RetryPolicy.RETRY
+            assert consistency == cl, f"Expected {cl}, got {consistency}"
+
+    # --- Non-CAS write timeout: delegate to parent ---
+
+    def test_simple_write_timeout_rethrows(self):
+        """SIMPLE write timeout should RETHROW (same as base policy)."""
+        policy = self._make_policy()
+        retry, consistency, delay = policy.on_write_timeout(
+            query=None, consistency=ConsistencyLevel.QUORUM,
+            write_type=WriteType.SIMPLE,
+            required_responses=3, received_responses=1, retry_num=0)
+        assert retry == RetryPolicy.RETHROW
+
+    def test_batch_log_write_timeout_retries(self):
+        """BATCH_LOG write timeout should retry (inherited from base)."""
+        policy = self._make_policy()
+        retry, consistency, delay = policy.on_write_timeout(
+            query=None, consistency=ConsistencyLevel.QUORUM,
+            write_type=WriteType.BATCH_LOG,
+            required_responses=3, received_responses=1, retry_num=0)
+        assert retry == RetryPolicy.RETRY
+        assert consistency == ConsistencyLevel.QUORUM
+
+    def test_counter_write_timeout_rethrows(self):
+        """COUNTER write timeout should RETHROW (same as base policy)."""
+        policy = self._make_policy()
+        retry, consistency, delay = policy.on_write_timeout(
+            query=None, consistency=ConsistencyLevel.QUORUM,
+            write_type=WriteType.COUNTER,
+            required_responses=3, received_responses=1, retry_num=0)
+        assert retry == RetryPolicy.RETHROW
+
+    # --- Serial (CAS) read timeout: retry on SAME host ---
+
+    def test_serial_read_timeout_retries_same_host(self):
+        """Read timeout at SERIAL consistency should retry on SAME host."""
+        policy = self._make_policy()
+        retry, consistency, delay = policy.on_read_timeout(
+            query=None, consistency=ConsistencyLevel.SERIAL,
+            required_responses=3, received_responses=1,
+            data_retrieved=False, retry_num=0)
+        assert retry == RetryPolicy.RETRY
+        assert consistency == ConsistencyLevel.SERIAL
+        assert delay is not None and delay > 0
+
+    def test_local_serial_read_timeout_retries_same_host(self):
+        """Read timeout at LOCAL_SERIAL should retry on SAME host."""
+        policy = self._make_policy()
+        retry, consistency, delay = policy.on_read_timeout(
+            query=None, consistency=ConsistencyLevel.LOCAL_SERIAL,
+            required_responses=3, received_responses=1,
+            data_retrieved=False, retry_num=0)
+        assert retry == RetryPolicy.RETRY
+        assert consistency == ConsistencyLevel.LOCAL_SERIAL
+        assert delay is not None and delay > 0
+
+    def test_serial_read_timeout_max_retries_exceeded(self):
+        """Serial read timeout should RETHROW when max retries exceeded."""
+        policy = self._make_policy(max_retries=1)
+        retry, consistency, delay = policy.on_read_timeout(
+            query=None, consistency=ConsistencyLevel.SERIAL,
+            required_responses=3, received_responses=1,
+            data_retrieved=False, retry_num=1)
+        assert retry == RetryPolicy.RETHROW
+
+    # --- Non-serial read timeout: delegate to parent ---
+
+    def test_non_serial_read_timeout_delegates_to_parent(self):
+        """Non-serial read timeout should use base policy behavior."""
+        policy = self._make_policy()
+        # Base: retry if enough responses but no data
+        retry, consistency, delay = policy.on_read_timeout(
+            query=None, consistency=ConsistencyLevel.QUORUM,
+            required_responses=2, received_responses=2,
+            data_retrieved=False, retry_num=0)
+        assert retry == RetryPolicy.RETRY
+        assert consistency == ConsistencyLevel.QUORUM
+
+        # Base: rethrow if we got data
+        retry, consistency, delay = policy.on_read_timeout(
+            query=None, consistency=ConsistencyLevel.QUORUM,
+            required_responses=2, received_responses=2,
+            data_retrieved=True, retry_num=0)
+        assert retry == RetryPolicy.RETHROW
+
+    # --- Serial unavailable: retry on NEXT host ---
+
+    def test_serial_unavailable_retries_next_host(self):
+        """Unavailable at SERIAL should retry on NEXT host."""
+        policy = self._make_policy()
+        retry, consistency, delay = policy.on_unavailable(
+            query=None, consistency=ConsistencyLevel.SERIAL,
+            required_replicas=3, alive_replicas=1, retry_num=0)
+        assert retry == RetryPolicy.RETRY_NEXT_HOST
+        assert consistency == ConsistencyLevel.SERIAL
+        assert delay is not None and delay > 0
+
+    def test_local_serial_unavailable_retries_next_host(self):
+        """Unavailable at LOCAL_SERIAL should retry on NEXT host."""
+        policy = self._make_policy()
+        retry, consistency, delay = policy.on_unavailable(
+            query=None, consistency=ConsistencyLevel.LOCAL_SERIAL,
+            required_replicas=3, alive_replicas=1, retry_num=0)
+        assert retry == RetryPolicy.RETRY_NEXT_HOST
+        assert consistency == ConsistencyLevel.LOCAL_SERIAL
+        assert delay is not None and delay > 0
+
+    def test_serial_unavailable_max_retries_exceeded(self):
+        """Serial unavailable should RETHROW when max retries exceeded."""
+        policy = self._make_policy(max_retries=1)
+        retry, consistency, delay = policy.on_unavailable(
+            query=None, consistency=ConsistencyLevel.SERIAL,
+            required_replicas=3, alive_replicas=1, retry_num=1)
+        assert retry == RetryPolicy.RETHROW
+
+    # --- Non-serial unavailable: delegate to parent ---
+
+    def test_non_serial_unavailable_delegates_to_parent(self):
+        """Non-serial unavailable should use base policy behavior."""
+        policy = self._make_policy()
+        # Base: RETRY_NEXT_HOST on first attempt
+        retry, consistency, delay = policy.on_unavailable(
+            query=None, consistency=ConsistencyLevel.QUORUM,
+            required_replicas=3, alive_replicas=1, retry_num=0)
+        assert retry == RetryPolicy.RETRY_NEXT_HOST
+
+    # --- on_request_error: inherited from parent ---
+
+    def test_request_error_retries_next_host(self):
+        """Request errors should retry on next host (inherited behavior)."""
+        policy = self._make_policy()
+        retry, consistency, delay = policy.on_request_error(
+            query=None, consistency=ConsistencyLevel.QUORUM,
+            error=Exception("overloaded"), retry_num=0)
+        assert retry == RetryPolicy.RETRY_NEXT_HOST
+
+    def test_request_error_max_retries_exceeded(self):
+        """Request errors should RETHROW when max retries exceeded."""
+        policy = self._make_policy(max_retries=1)
+        retry, consistency, delay = policy.on_request_error(
+            query=None, consistency=ConsistencyLevel.QUORUM,
+            error=Exception("overloaded"), retry_num=1)
+        assert retry == RetryPolicy.RETHROW
+
+    # --- Constructor defaults ---
+
+    def test_default_constructor(self):
+        """LWTRetryPolicy should have sensible defaults."""
+        policy = LWTRetryPolicy()
+        assert policy.max_num_retries == 3
+        assert policy.min_interval == 0.1
+        assert policy.max_interval == 10.0
+
+    def test_custom_constructor(self):
+        """LWTRetryPolicy should accept custom parameters."""
+        policy = LWTRetryPolicy(max_num_retries=5, min_interval=0.5, max_interval=30.0)
+        assert policy.max_num_retries == 5
+        assert policy.min_interval == 0.5
+        assert policy.max_interval == 30.0
+
+    def test_inherits_exponential_backoff(self):
+        """LWTRetryPolicy should inherit from ExponentialBackoffRetryPolicy."""
+        policy = LWTRetryPolicy()
+        assert isinstance(policy, ExponentialBackoffRetryPolicy)
+        assert isinstance(policy, RetryPolicy)
+
+    # --- Verify 3-tuple return format for all methods ---
+
+    def test_all_methods_return_3_tuples(self):
+        """All retry decisions should return 3-tuples (decision, cl, delay)."""
+        policy = self._make_policy()
+
+        # CAS write timeout
+        result = policy.on_write_timeout(
+            query=None, consistency=ConsistencyLevel.QUORUM,
+            write_type=WriteType.CAS,
+            required_responses=3, received_responses=1, retry_num=0)
+        assert len(result) == 3, f"Expected 3-tuple, got {result}"
+
+        # Serial read timeout
+        result = policy.on_read_timeout(
+            query=None, consistency=ConsistencyLevel.SERIAL,
+            required_responses=3, received_responses=1,
+            data_retrieved=False, retry_num=0)
+        assert len(result) == 3, f"Expected 3-tuple, got {result}"
+
+        # Serial unavailable
+        result = policy.on_unavailable(
+            query=None, consistency=ConsistencyLevel.SERIAL,
+            required_replicas=3, alive_replicas=1, retry_num=0)
+        assert len(result) == 3, f"Expected 3-tuple, got {result}"
+
+        # RETHROW cases
+        result = policy.on_write_timeout(
+            query=None, consistency=ConsistencyLevel.QUORUM,
+            write_type=WriteType.SIMPLE,
+            required_responses=3, received_responses=1, retry_num=0)
+        assert len(result) == 3, f"Expected 3-tuple, got {result}"
 
 
 class WhiteListRoundRobinPolicyTest(unittest.TestCase):
