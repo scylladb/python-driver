@@ -23,6 +23,53 @@ from datetime import datetime, timedelta, timezone
 import re
 import struct
 import time
+
+# Regex to strip out the parts of a CQL string that must not be inspected for
+# LWT syntax: single-quoted string literals (CQL escapes an embedded quote as
+# ''), double-quoted identifiers (escaped as ""), and CQL comments (--, //,
+# and /* ... */). Without this, literal values or comments containing text
+# like "IF EXISTS" would produce false positives, and a leading comment would
+# hide the real first keyword and produce a false negative.
+_LWT_NOISE_RE = re.compile(
+    r"'(?:[^']|'')*'"      # single-quoted string literal
+    r'|"(?:[^"]|"")*"'     # double-quoted identifier
+    r"|--[^\n]*"           # -- line comment
+    r"|//[^\n]*"           # // line comment
+    r"|/\*.*?\*/",         # /* block comment */
+    re.DOTALL
+)
+
+
+def _lwt_strip_noise(match):
+    text = match.group(0)
+    if text[0] in ('"', "'"):
+        # Keep the surrounding quote characters (so an explicit
+        # IF "col" clause is still recognizable afterwards) but blank the
+        # interior so literal/identifier content can't be mistaken for
+        # CQL syntax.
+        return text[0] + (' ' * (len(text) - 2)) + text[0]
+    # Comments contribute nothing syntactically; collapse to a single space
+    # so tokens on either side of the comment don't get glued together.
+    return ' '
+
+
+# Regex to detect LWT (Lightweight Transaction) queries in CQL strings.
+# Matches: INSERT ... IF NOT EXISTS, UPDATE/DELETE ... IF EXISTS,
+# and conditional updates/deletes (e.g. UPDATE ... IF col = ...,
+# UPDATE ... IF "col" = ...).
+# Uses word boundaries and case-insensitive matching.
+# This is a best-effort heuristic for SimpleStatement; PreparedStatement
+# gets the authoritative is_lwt flag from the server.
+_LWT_PATTERN = re.compile(
+    r'\bIF\s+(?:NOT\s+)?EXISTS\b'   # IF [NOT] EXISTS
+    r'|\bIF\s+[a-zA-Z_"]',            # IF <column_name> or IF "<column_name>" (conditional)
+    re.IGNORECASE
+)
+
+# DML verbs that can be LWT queries. Only these statement types can contain
+# Paxos/LWT clauses. DDL statements (CREATE/ALTER/DROP) also use IF [NOT] EXISTS
+# but those are not LWT operations.
+_LWT_DML_VERBS = frozenset({'INSERT', 'UPDATE', 'DELETE', 'BEGIN'})
 import warnings
 
 from cassandra import ConsistencyLevel, OperationTimedOut
@@ -415,6 +462,37 @@ class SimpleStatement(Statement):
         return (u'<SimpleStatement query="%s", consistency=%s>' %
                 (self.query_string, consistency))
     __repr__ = __str__
+
+    def is_lwt(self):
+        """
+        Detect whether this query is a Lightweight Transaction (LWT) by
+        inspecting the query string for ``IF [NOT] EXISTS`` or ``IF <condition>``
+        clauses in DML statements (INSERT, UPDATE, DELETE, BEGIN BATCH).
+
+        DDL statements like ``CREATE TABLE IF NOT EXISTS`` are excluded.
+        String literals, quoted identifiers, and comments (``--``, ``//``,
+        ``/* ... */``) are ignored so that incidental ``IF``/``EXISTS`` text
+        in query data or comments doesn't cause a false match, and so a
+        leading comment doesn't hide the real statement keyword.
+
+        This is a best-effort heuristic. For authoritative LWT detection,
+        use :class:`.PreparedStatement` which gets the ``is_lwt`` flag from
+        the server during PREPARE.
+
+        The result is cached after the first call.
+        """
+        try:
+            return self._cached_is_lwt
+        except AttributeError:
+            # Strip string/identifier literals and comments before looking
+            # at the query, then check that only DML statements can be LWT.
+            query = _LWT_NOISE_RE.sub(_lwt_strip_noise, self._query_string).lstrip()
+            first_word = query.split(None, 1)[0].upper() if query else ''
+            if first_word not in _LWT_DML_VERBS:
+                self._cached_is_lwt = False
+            else:
+                self._cached_is_lwt = bool(_LWT_PATTERN.search(query))
+            return self._cached_is_lwt
 
 
 class PreparedStatement(object):
