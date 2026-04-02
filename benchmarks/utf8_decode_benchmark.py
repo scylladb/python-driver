@@ -30,6 +30,9 @@ Correctness tests live in tests/unit/cython/test_deserializers.py.
 import struct
 import pytest
 
+pytest.importorskip("pytest_benchmark")
+pytest.importorskip("cassandra.obj_parser")
+
 from cassandra.obj_parser import ListParser
 from cassandra.bytesio import BytesIOReader
 from cassandra.parsing import ParseDesc
