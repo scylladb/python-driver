@@ -1,4 +1,4 @@
-# Copyright DataStax, Inc.
+# Copyright 2025 ScyllaDB, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,10 +14,6 @@
 
 """
 Unit tests for cassandra.cqlengine.management module.
-
-Focuses on verifying that _get_table_metadata gracefully handles missing
-table metadata by forcing a targeted refresh and retrying, and that
-_sync_table delegates to _get_table_metadata for post-DDL metadata lookup.
 """
 
 import unittest
@@ -114,14 +110,24 @@ class TestSyncTableMetadataLookup(unittest.TestCase):
         return model
 
     @patch("cassandra.cqlengine.management._get_table_metadata")
-    @patch("cassandra.cqlengine.management._get_create_table", return_value="CREATE TABLE test")
+    @patch(
+        "cassandra.cqlengine.management._get_create_table",
+        return_value="CREATE TABLE test",
+    )
     @patch("cassandra.cqlengine.management.execute")
     @patch("cassandra.cqlengine.management.get_cluster")
-    @patch("cassandra.cqlengine.management._allow_schema_modification", return_value=True)
+    @patch(
+        "cassandra.cqlengine.management._allow_schema_modification", return_value=True
+    )
     @patch("cassandra.cqlengine.management.issubclass", return_value=True)
     def test_calls_get_table_metadata_after_create(
-        self, mock_issubclass, mock_allow, mock_get_cluster,
-        mock_execute, mock_create, mock_get_meta
+        self,
+        mock_issubclass,
+        mock_allow,
+        mock_get_cluster,
+        mock_execute,
+        mock_create,
+        mock_get_meta,
     ):
         """After creating a new table, _sync_table calls _get_table_metadata."""
         table_meta = MockTableMeta()
@@ -139,14 +145,24 @@ class TestSyncTableMetadataLookup(unittest.TestCase):
         mock_get_meta.assert_called_once_with(model, None)
 
     @patch("cassandra.cqlengine.management._get_table_metadata")
-    @patch("cassandra.cqlengine.management._get_create_table", return_value="CREATE TABLE test")
+    @patch(
+        "cassandra.cqlengine.management._get_create_table",
+        return_value="CREATE TABLE test",
+    )
     @patch("cassandra.cqlengine.management.execute")
     @patch("cassandra.cqlengine.management.get_cluster")
-    @patch("cassandra.cqlengine.management._allow_schema_modification", return_value=True)
+    @patch(
+        "cassandra.cqlengine.management._allow_schema_modification", return_value=True
+    )
     @patch("cassandra.cqlengine.management.issubclass", return_value=True)
     def test_propagates_exception_from_get_table_metadata(
-        self, mock_issubclass, mock_allow, mock_get_cluster,
-        mock_execute, mock_create, mock_get_meta
+        self,
+        mock_issubclass,
+        mock_allow,
+        mock_get_cluster,
+        mock_execute,
+        mock_create,
+        mock_get_meta,
     ):
         """CQLEngineException from _get_table_metadata propagates out of _sync_table."""
         mock_get_meta.side_effect = CQLEngineException("Table metadata not available")
