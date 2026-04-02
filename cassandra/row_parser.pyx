@@ -38,13 +38,23 @@ def make_recv_results_rows(ColumnParser colparser):
         reader = BytesIOReader(f.read())
         try:
             self.parsed_rows = colparser.parse_rows(reader, desc)
+        except NotImplementedError:
+            # e.g. NumpyParser does not support column encryption. This
+            # signals an unsupported configuration, not a decoding failure,
+            # so it must propagate to the caller instead of being silently
+            # swallowed by the TupleRowParser fallback below.
+            raise
         except Exception as e:
             # Use explicitly the TupleRowParser to display better error messages for column decoding failures
             rowparser = TupleRowParser()
             reader.buf_ptr = reader.buf
             reader.pos = 0
             rowcount = read_int(reader)
-            for i in range(rowcount):
-                rowparser.unpack_row(reader, desc)
+            if desc.column_encryption_policy:
+                for i in range(rowcount):
+                    rowparser.unpack_col_encrypted_row(reader, desc)
+            else:
+                for i in range(rowcount):
+                    rowparser.unpack_plain_row(reader, desc)
 
     return recv_results_rows
