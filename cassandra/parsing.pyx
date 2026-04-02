@@ -39,8 +39,14 @@ cdef class ColumnParser:
 cdef class RowParser:
     """Parser for a single row"""
 
-    cpdef unpack_row(self, BytesIOReader reader, ParseDesc desc):
+    cpdef unpack_plain_row(self, BytesIOReader reader, ParseDesc desc):
         """
         Unpack a single row of data in a ResultMessage.
+        """
+        raise NotImplementedError
+
+    cpdef unpack_col_encrypted_row(self, BytesIOReader reader, ParseDesc desc):
+        """
+        Unpack a single row of data in a ResultMessage, with column encryption support.
         """
         raise NotImplementedError
