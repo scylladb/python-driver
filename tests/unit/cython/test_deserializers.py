@@ -22,7 +22,11 @@ in cassandra/deserializers.pyx produces correct results for edge cases.
 import struct
 import unittest
 
-try:
+from tests.unit.cython.utils import cythontest
+
+from cassandra.cython_deps import HAVE_CYTHON
+
+if HAVE_CYTHON:
     from cassandra.obj_parser import ListParser
     from cassandra.bytesio import BytesIOReader
     from cassandra.parsing import ParseDesc
@@ -30,9 +34,7 @@ try:
     from cassandra.cqltypes import UTF8Type, AsciiType
     from cassandra.policies import ColDesc
 
-    HAS_CYTHON = True
-except ImportError:
-    HAS_CYTHON = False
+from cassandra import DriverException
 
 
 def _build_text_rows_buffer(num_rows, num_cols, text_data):
@@ -67,10 +69,10 @@ def _make_ascii_desc(num_cols, protocol_version=4):
     return ParseDesc(colnames, coltypes, None, coldescs, desers, protocol_version)
 
 
-@unittest.skipUnless(HAS_CYTHON, "Cython extensions not available")
 class TestCythonDeserializerCorrectness(unittest.TestCase):
     """Verify that the optimized Cython decode produces correct results."""
 
+    @cythontest
     def test_utf8_empty_string(self):
         """Empty string should return empty string."""
         buf = _build_text_rows_buffer(1, 1, b"")
@@ -80,6 +82,7 @@ class TestCythonDeserializerCorrectness(unittest.TestCase):
         rows = parser.parse_rows(reader, desc)
         self.assertEqual(rows[0][0], "")
 
+    @cythontest
     def test_utf8_ascii_only(self):
         """Pure ASCII content."""
         text = b"Hello, World! 12345"
@@ -90,6 +93,7 @@ class TestCythonDeserializerCorrectness(unittest.TestCase):
         rows = parser.parse_rows(reader, desc)
         self.assertEqual(rows[0][0], "Hello, World! 12345")
 
+    @cythontest
     def test_utf8_multibyte(self):
         """Multibyte UTF-8 characters."""
         text = "Héllo wörld! こんにちは 🌍".encode("utf-8")
@@ -100,6 +104,7 @@ class TestCythonDeserializerCorrectness(unittest.TestCase):
         rows = parser.parse_rows(reader, desc)
         self.assertEqual(rows[0][0], "Héllo wörld! こんにちは 🌍")
 
+    @cythontest
     def test_utf8_long_string(self):
         """Long string (10KB)."""
         text = ("x" * 10000).encode("utf-8")
@@ -110,6 +115,7 @@ class TestCythonDeserializerCorrectness(unittest.TestCase):
         rows = parser.parse_rows(reader, desc)
         self.assertEqual(rows[0][0], "x" * 10000)
 
+    @cythontest
     def test_ascii_basic(self):
         """Basic ASCII decode."""
         text = b"Simple ASCII text 12345 !@#"
@@ -120,6 +126,7 @@ class TestCythonDeserializerCorrectness(unittest.TestCase):
         rows = parser.parse_rows(reader, desc)
         self.assertEqual(rows[0][0], "Simple ASCII text 12345 !@#")
 
+    @cythontest
     def test_utf8_null_value(self):
         """NULL value (negative length) should return None."""
         # Build buffer: 1 row, 1 column with length = -1 (NULL)
@@ -130,6 +137,7 @@ class TestCythonDeserializerCorrectness(unittest.TestCase):
         rows = parser.parse_rows(reader, desc)
         self.assertIsNone(rows[0][0])
 
+    @cythontest
     def test_utf8_multiple_rows_columns(self):
         """Multiple rows and columns."""
         texts = [b"alpha", b"beta", b"gamma"]
@@ -143,3 +151,26 @@ class TestCythonDeserializerCorrectness(unittest.TestCase):
         reader = BytesIOReader(buf)
         rows = parser.parse_rows(reader, desc)
         self.assertEqual([r[0] for r in rows], ["alpha", "beta", "gamma"])
+
+    @cythontest
+    def test_utf8_invalid_bytes(self):
+        """Invalid UTF-8 bytes should raise an error (DriverException wrapping UnicodeDecodeError)."""
+        # 0xFF 0xFE is not valid UTF-8
+        buf = _build_text_rows_buffer(1, 1, b"\xff\xfe\x80\x81")
+        desc = _make_text_desc(1)
+        parser = ListParser()
+        reader = BytesIOReader(buf)
+        with self.assertRaises(DriverException) as ctx:
+            parser.parse_rows(reader, desc)
+        self.assertIn("utf-8", str(ctx.exception).lower())
+
+    @cythontest
+    def test_ascii_invalid_bytes(self):
+        """Non-ASCII bytes in an ASCII column should raise an error (DriverException wrapping UnicodeDecodeError)."""
+        buf = _build_text_rows_buffer(1, 1, b"\x80\x81\x82")
+        desc = _make_ascii_desc(1)
+        parser = ListParser()
+        reader = BytesIOReader(buf)
+        with self.assertRaises(DriverException) as ctx:
+            parser.parse_rows(reader, desc)
+        self.assertIn("ascii", str(ctx.exception).lower())
