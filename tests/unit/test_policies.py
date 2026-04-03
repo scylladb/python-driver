@@ -710,6 +710,64 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
             assert 8 == len(qplan)
 
+    def test_wrap_child_ignored_distance_host_not_dropped(self):
+        """
+        Regression test: in the re-sort branch of make_query_plan (used for
+        child policies other than DCAwareRoundRobinPolicy/RackAwareRoundRobinPolicy),
+        a host yielded by the child's query plan whose distance is not one of
+        LOCAL_RACK/LOCAL/REMOTE (e.g. IGNORED, or a distance that flipped
+        concurrently) must still end up in the final plan, appended in a
+        trailing bucket after LOCAL_RACK/LOCAL/REMOTE -- not silently dropped.
+        """
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata._tablets.table_has_tablets.return_value = False
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for host in hosts:
+            host.set_up()
+        local_replica, local_rack_remaining, remote_remaining, ignored_remaining = hosts
+
+        # Only one replica is returned for this routing key -- with LOCAL
+        # distance -- so the initial replica pass yields a non-empty bucket
+        # and the re-sort ("else") branch below is exercised for the rest of
+        # the cluster.
+        cluster.metadata.get_replicas.return_value = [local_replica]
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
+
+        # A plain (non-DCAware/RackAware) child policy: yields the three
+        # remaining hosts -- one of which (ignored_remaining) it currently
+        # considers IGNORED, e.g. because its distance flipped mid-plan due
+        # to a concurrent topology refresh, or because the child policy
+        # intentionally yields ignored hosts.
+        distance_map = {
+            local_replica: HostDistance.LOCAL,
+            local_rack_remaining: HostDistance.LOCAL_RACK,
+            remote_remaining: HostDistance.REMOTE,
+            ignored_remaining: HostDistance.IGNORED,
+        }
+        remaining_plan = [ignored_remaining, local_rack_remaining, remote_remaining]
+
+        child_policy = Mock()
+        child_policy.distance.side_effect = lambda h: distance_map[h]
+        child_policy.make_query_plan_with_exclusion.side_effect = \
+            lambda k, q, e: [h for h in remaining_plan if h not in e]
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=struct.pack('>i', 0), keyspace='keyspace_name')
+        qplan = list(policy.make_query_plan(None, query))
+
+        # The ignored host must still be present in the plan (in the
+        # trailing position, after LOCAL_RACK/LOCAL/REMOTE), not dropped.
+        assert ignored_remaining in qplan
+        assert qplan == [local_replica, local_rack_remaining, remote_remaining, ignored_remaining]
+
     class FakeCluster:
         def __init__(self):
             self.metadata = Mock(spec=Metadata)

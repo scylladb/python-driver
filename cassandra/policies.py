@@ -623,6 +623,14 @@ class TokenAwarePolicy(LoadBalancingPolicy):
     would contact it at all -- so the request reaches it directly instead of being
     forwarded there by another coordinator. The private
     ``_prefer_tablet_leader`` option turns that off.
+
+    An LRU cache of size :attr:`cache_replicas_size` (default 1024) avoids
+    repeated token-to-replica lookups for the same (keyspace, routing_key)
+    pair.  Set to 0 to disable caching.  The cache is automatically
+    invalidated when the cluster topology changes. It is only consulted for
+    non-tablet keyspaces; tablet replicas are always resolved fresh since
+    they carry leader information that can change independently of the
+    token map.
     """
 
     _child_policy = None
@@ -663,10 +671,25 @@ class TokenAwarePolicy(LoadBalancingPolicy):
     and the default may change before it is part of the public API.
     """
 
-    def __init__(self, child_policy, shuffle_replicas=True, _prefer_tablet_leader=True):
+    def __init__(self, child_policy, shuffle_replicas=True, _prefer_tablet_leader=True, cache_replicas_size=1024):
+        super().__init__()
         self._child_policy = child_policy
         self.shuffle_replicas = shuffle_replicas
         self._prefer_tablet_leader = _prefer_tablet_leader
+        self._cluster_metadata = None
+        self._cache_replicas_size = max(0, cache_replicas_size)
+        self._replica_cache = OrderedDict()
+        self._replica_cache_token_map_ref = None
+        self._cache_lock = Lock()
+
+    @property
+    def cache_replicas_size(self):
+        """
+        The configured size of the replica LRU cache, as passed to the
+        `cache_replicas_size` constructor argument (default 1024).  A value
+        of 0 means caching is disabled.  Read-only.
+        """
+        return self._cache_replicas_size
 
     def populate(self, cluster, hosts):
         self._cluster_metadata = cluster.metadata
@@ -684,13 +707,49 @@ class TokenAwarePolicy(LoadBalancingPolicy):
     def distance(self, *args, **kwargs):
         return self._child_policy.distance(*args, **kwargs)
 
+    def _get_cached_replicas(self, keyspace, routing_key_bytes, token_map):
+        """
+        Return cached (token, replicas) for the given keyspace and routing key,
+        or None on cache miss.  The cache is invalidated whenever the token_map
+        object identity changes (i.e. after a topology rebuild).
+        """
+        if not self._cache_replicas_size:
+            return None
+        with self._cache_lock:
+            if token_map is not self._replica_cache_token_map_ref:
+                # Token map was rebuilt -- entire cache is stale.
+                self._replica_cache = OrderedDict()
+                self._replica_cache_token_map_ref = token_map
+            cache_key = (keyspace, routing_key_bytes)
+            entry = self._replica_cache.get(cache_key)
+            if entry is not None:
+                # Promote to most-recently-used.
+                self._replica_cache.move_to_end(cache_key)
+            return entry
+
+    def _put_cached_replicas(self, keyspace, routing_key_bytes, token, replicas, token_map):
+        """
+        Store (token, replicas) in the LRU cache, evicting the oldest
+        entry if the cache exceeds its configured size.
+        """
+        if not self._cache_replicas_size:
+            return
+        with self._cache_lock:
+            if token_map is not self._replica_cache_token_map_ref:
+                self._replica_cache = OrderedDict()
+                self._replica_cache_token_map_ref = token_map
+            cache_key = (keyspace, routing_key_bytes)
+            self._replica_cache[cache_key] = (token, replicas)
+            self._replica_cache.move_to_end(cache_key)
+            if len(self._replica_cache) > self._cache_replicas_size:
+                self._replica_cache.popitem(last=False)
+
     def make_query_plan(self, working_keyspace=None, query=None):
         keyspace = query.keyspace if query and query.keyspace else working_keyspace
 
         child = self._child_policy
         if query is None or query.routing_key is None or keyspace is None:
-            for host in child.make_query_plan(keyspace, query):
-                yield host
+            yield from child.make_query_plan(keyspace, query)
             return
 
         # Deferred: cassandra.metadata reaches this module through
@@ -699,80 +758,162 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         # its functions.
         from cassandra.metadata import _ConsistencyMode
 
+        cluster_metadata = self._cluster_metadata
+        token_map = cluster_metadata.token_map
         replicas = []
         leader_host = None
-        token = self._cluster_metadata.token_map.token_class.from_key(query.routing_key)
-        tablet = self._cluster_metadata._tablets.get_tablet_for_key(keyspace, query.table, token)
+        if token_map:
+            token = token_map.token_class.from_key(query.routing_key)
+            tablet = cluster_metadata._tablets.get_tablet_for_key(keyspace, query.table, token)
 
-        if tablet is not None:
-            replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
-            child_plan = child.make_query_plan(keyspace, query)
+            if tablet is not None:
+                replicas_mapped = {r[0] for r in tablet.replicas}
+                child_plan = child.make_query_plan(keyspace, query)
+                replicas = [host for host in child_plan if host.host_id in replicas_mapped]
 
-            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
-
-            # The leader concept only exists for strongly-consistent keyspaces,
-            # which today means exactly the keyspaces whose consistency mode is
-            # GLOBAL: it is the only mode ScyllaDB implements so far, so LOCAL
-            # (reserved, unimplemented) and EVENTUAL both have no leader. This
-            # comparison has to widen once 'local' consistency exists.
-            # TABLETS_ROUTING_V2 assigns a tablet_version to *every* tablet table
-            # (eventually- and strongly-consistent alike), so the version alone
-            # must not be used to infer a leader. Conversely, replicas[0] is only
-            # leader-ordered for a tablet that came from a V2 payload, so a
-            # versionless tablet (V1-sourced, or stale across a consistency flip)
-            # must not be treated as a leader hint either. Require both a
-            # strongly-consistent keyspace and a versioned tablet; otherwise keep
-            # normal token-aware/shuffled ordering.
-            ks_meta = self._cluster_metadata.keyspaces.get(keyspace)
-            if (self._prefer_tablet_leader
-                    and ks_meta is not None and ks_meta._consistency_mode == _ConsistencyMode.GLOBAL
-                    and tablet.tablet_version is not None):
-                # Even for a leader-eligible tablet, a request at consistency
-                # level ONE or LOCAL_ONE is satisfied by any single replica, so
-                # preferring the leader would only concentrate load into a
-                # hotspot without buying any consistency; spread those instead.
-                # TODO: This reads the level off the statement, so a request that
-                #       inherits its consistency level from an execution profile
-                #       looks unset here and is routed to the leader anyway. See
-                #       https://github.com/scylladb/python-driver/issues/953
-                effective_cl = query.consistency_level
-                prefer_leader = effective_cl not in (ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE)
-                if prefer_leader:
-                    leader_host_id = tablet.leader
-                    # A tablet with no replicas reports no leader; guard against
-                    # matching a host whose own host_id is still unknown.
-                    if leader_host_id is not None:
-                        for host in replicas:
-                            if host.host_id == leader_host_id:
-                                leader_host = host
-                                break
+                # The leader concept only exists for strongly-consistent keyspaces,
+                # which today means exactly the keyspaces whose consistency mode is
+                # GLOBAL: it is the only mode ScyllaDB implements so far, so LOCAL
+                # (reserved, unimplemented) and EVENTUAL both have no leader. This
+                # comparison has to widen once 'local' consistency exists.
+                # TABLETS_ROUTING_V2 assigns a tablet_version to *every* tablet table
+                # (eventually- and strongly-consistent alike), so the version alone
+                # must not be used to infer a leader. Conversely, replicas[0] is only
+                # leader-ordered for a tablet that came from a V2 payload, so a
+                # versionless tablet (V1-sourced, or stale across a consistency flip)
+                # must not be treated as a leader hint either. Require both a
+                # strongly-consistent keyspace and a versioned tablet; otherwise keep
+                # normal token-aware/shuffled ordering.
+                ks_meta = cluster_metadata.keyspaces.get(keyspace)
+                if (self._prefer_tablet_leader
+                        and ks_meta is not None and ks_meta._consistency_mode == _ConsistencyMode.GLOBAL
+                        and tablet.tablet_version is not None):
+                    # Even for a leader-eligible tablet, a request at consistency
+                    # level ONE or LOCAL_ONE is satisfied by any single replica, so
+                    # preferring the leader would only concentrate load into a
+                    # hotspot without buying any consistency; spread those instead.
+                    # TODO: This reads the level off the statement, so a request that
+                    #       inherits its consistency level from an execution profile
+                    #       looks unset here and is routed to the leader anyway. See
+                    #       https://github.com/scylladb/python-driver/issues/953
+                    effective_cl = query.consistency_level
+                    prefer_leader = effective_cl not in (ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE)
+                    if prefer_leader:
+                        leader_host_id = tablet.leader
+                        # A tablet with no replicas reports no leader; guard against
+                        # matching a host whose own host_id is still unknown.
+                        if leader_host_id is not None:
+                            for host in replicas:
+                                if host.host_id == leader_host_id:
+                                    leader_host = host
+                                    break
+            else:
+                cached = self._get_cached_replicas(keyspace, query.routing_key, token_map)
+                if cached is not None:
+                    _, replicas = cached
+                else:
+                    try:
+                        replicas = token_map.get_replicas(keyspace, token)
+                    except Exception:
+                        log.debug(
+                            "Failed to get replicas from token_map, "
+                            "falling back to cluster metadata"
+                        )
+                        replicas = cluster_metadata.get_replicas(keyspace, query.routing_key)
+                    self._put_cached_replicas(
+                        keyspace, query.routing_key, token, replicas, token_map
+                    )
         else:
-            replicas = self._cluster_metadata.get_replicas(keyspace, query.routing_key)
+            replicas = cluster_metadata.get_replicas(keyspace, query.routing_key)
 
         if self.shuffle_replicas and not query.is_lwt() and not ConsistencyLevel.is_serial(query.consistency_level):
+            replicas = list(replicas)
             shuffle(replicas)
 
-        def yield_in_order(hosts):
-            for distance in [HostDistance.LOCAL_RACK, HostDistance.LOCAL, HostDistance.REMOTE]:
-                for replica in hosts:
-                    if replica.is_up and child.distance(replica) == distance:
-                        yield replica
+        local_rack = []
+        local = []
+        remote = []
 
-        # If we have a leader hint, yield it first -- but respect the child
-        # policy's own filter: never front-run a host the child policy would
-        # exclude (e.g. one a custom policy reports as IGNORED).
-        if (leader_host is not None and leader_host.is_up
-                and child.distance(leader_host) != HostDistance.IGNORED):
-            yield leader_host
+        child_distance = child.distance
 
-        # yield replicas: local_rack, local, remote (skipping leader already yielded)
-        for host in yield_in_order(replicas):
-            if host is not leader_host:
-                yield host
+        # Leader is yielded separately (below), so it's excluded here even
+        # if the child policy would otherwise contact it -- matching the
+        # pre-existing behavior of never yielding the leader twice.
+        for replica in replicas:
+            if replica is leader_host:
+                continue
+            if replica.is_up:
+                d = child_distance(replica)
+                if d == HostDistance.LOCAL_RACK:
+                    local_rack.append(replica)
+                elif d == HostDistance.LOCAL:
+                    local.append(replica)
+                elif d == HostDistance.REMOTE:
+                    remote.append(replica)
 
-        # yield rest of the cluster: local_rack, local, remote
-        # Note: The leader is always a replica, so we don't need to filter it out here.
-        yield from yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas])
+        leader_yieldable = (leader_host is not None and leader_host.is_up
+                             and child_distance(leader_host) != HostDistance.IGNORED)
+
+        if local_rack or local or remote or leader_yieldable:
+            yielded = set()
+
+            # If we have a leader hint, yield it first -- but respect the child
+            # policy's own filter: never front-run a host the child policy
+            # would exclude (e.g. one a custom policy reports as IGNORED).
+            if leader_yieldable:
+                yielded.add(leader_host)
+                yield leader_host
+            elif leader_host is not None:
+                # Leader exists but isn't yieldable (down or ignored); it was
+                # already excluded from replicas above and stays excluded.
+                yielded.add(leader_host)
+
+            for replica in local_rack:
+                yielded.add(replica)
+                yield replica
+
+            for replica in local:
+                yielded.add(replica)
+                yield replica
+
+            for replica in remote:
+                yielded.add(replica)
+                yield replica
+
+            # Yield the rest of the cluster (non-replica hosts).
+            # DCAware and RackAware already yield in distance order
+            # (local_rack -> local -> remote), so we can stream directly.
+            # For other child policies we must re-sort by distance.
+            if isinstance(child, (DCAwareRoundRobinPolicy, RackAwareRoundRobinPolicy)):
+                yield from child.make_query_plan_with_exclusion(keyspace, query, yielded)
+            else:
+                remaining_local_rack = []
+                remaining_local = []
+                remaining_remote = []
+                # Hosts whose distance is neither LOCAL_RACK/LOCAL/REMOTE
+                # (e.g. IGNORED, or a distance that flipped mid-plan due to
+                # a concurrent topology refresh) are collected here rather
+                # than dropped, and yielded last -- preserving their
+                # relative order from the child plan, matching the
+                # pre-existing (non-optimized) behavior of never shrinking
+                # the plan compared to what the child policy yielded.
+                remaining_other = []
+                for host in child.make_query_plan_with_exclusion(keyspace, query, yielded):
+                    d = child_distance(host)
+                    if d == HostDistance.LOCAL_RACK:
+                        remaining_local_rack.append(host)
+                    elif d == HostDistance.LOCAL:
+                        remaining_local.append(host)
+                    elif d == HostDistance.REMOTE:
+                        remaining_remote.append(host)
+                    else:
+                        remaining_other.append(host)
+                yield from remaining_local_rack
+                yield from remaining_local
+                yield from remaining_remote
+                yield from remaining_other
+        else:
+            yield from child.make_query_plan(keyspace, query)
 
     def on_up(self, *args, **kwargs):
         return self._child_policy.on_up(*args, **kwargs)
