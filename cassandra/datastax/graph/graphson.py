@@ -969,7 +969,7 @@ class GraphSON2Serializer(_BaseGraphSONSerializer):
         """
         serializer = self.get_serializer(value)
         if not serializer:
-            raise ValueError("Unable to find a serializer for value of type: ".format(type(value)))
+            raise ValueError("Unable to find a serializer for value of type: {}".format(type(value)))
 
         val = serializer.serialize(value, writer or self)
         if serializer is TypeWrapperTypeIO:
