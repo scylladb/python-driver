@@ -2792,31 +2792,40 @@ class SchemaParserV3(SchemaParserV22):
         return dict((o, row.get(o)) for o in self.recognized_table_options if o in row)
 
     def _build_table_columns(self, meta, col_rows, compact_static=False, is_dense=False, virtual=False):
-        # partition key
-        partition_rows = [r for r in col_rows
-                          if r.get('kind', None) == "partition_key"]
+        # Single-pass classification of column rows by kind
+        partition_rows = []
+        clustering_rows = []
+        other_rows = []
+        for r in col_rows:
+            kind = r.get('kind', None)
+            if kind == "partition_key":
+                partition_rows.append(r)
+            elif kind == "clustering":
+                if not compact_static:
+                    clustering_rows.append(r)
+                # else: skip clustering rows entirely for compact_static tables
+            else:
+                other_rows.append(r)
+
+        # partition key - must be inserted first into meta.columns for CQL export ordering
         if len(partition_rows) > 1:
-            partition_rows = sorted(partition_rows, key=lambda row: row.get('position'))
+            partition_rows.sort(key=lambda row: row.get('position'))
         for r in partition_rows:
-            # we have to add meta here (and not in the later loop) because TableMetadata.columns is an
-            # dict (ordered since Python 3.7), and it assumes keys are inserted first, in order, when exporting CQL
             column_meta = self._build_column_metadata(meta, r)
             meta.columns[column_meta.name] = column_meta
-            meta.partition_key.append(meta.columns[r.get('column_name')])
+            meta.partition_key.append(column_meta)
 
         # clustering key
-        if not compact_static:
-            clustering_rows = [r for r in col_rows
-                               if r.get('kind', None) == "clustering"]
+        if clustering_rows:
             if len(clustering_rows) > 1:
-                clustering_rows = sorted(clustering_rows, key=lambda row: row.get('position'))
+                clustering_rows.sort(key=lambda row: row.get('position'))
             for r in clustering_rows:
                 column_meta = self._build_column_metadata(meta, r)
                 meta.columns[column_meta.name] = column_meta
-                meta.clustering_key.append(meta.columns[r.get('column_name')])
+                meta.clustering_key.append(column_meta)
 
-        for col_row in (r for r in col_rows
-                        if r.get('kind', None) not in ('partition_key', 'clustering')):
+        # remaining columns (static, regular, etc.)
+        for col_row in other_rows:
             column_meta = self._build_column_metadata(meta, col_row)
             if is_dense and column_meta.cql_type == types.cql_empty_type:
                 continue
