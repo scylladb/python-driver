@@ -95,10 +95,7 @@ from cassandra.datastax import cloud as dscloud
 from cassandra.application_info import ApplicationInfoBase
 from cassandra.driver_config import DriverConfigReporter
 
-try:
-    from weakref import WeakSet
-except ImportError:
-    from cassandra.util import WeakSet  # NOQA
+from weakref import WeakSet
 
 def _try_libev_import():
     try:
