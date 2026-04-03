@@ -19,7 +19,7 @@ import time
 from warnings import warn
 
 from cassandra.query import SimpleStatement, BatchType as CBatchType, BatchStatement
-from cassandra.cqlengine import columns, CQLEngineException, ValidationError, UnicodeMixin
+from cassandra.cqlengine import columns, CQLEngineException, ValidationError
 from cassandra.cqlengine import connection as conn
 from cassandra.cqlengine.functions import Token, BaseQueryFunction, QueryValue
 from cassandra.cqlengine.operators import (InOperator, EqualsOperator, GreaterThanOperator,
@@ -78,7 +78,7 @@ def check_applied(result):
         raise LWTException(result.one())
 
 
-class AbstractQueryableColumn(UnicodeMixin):
+class AbstractQueryableColumn:
     """
     exposes cql query operators through pythons
     builtin comparator symbols

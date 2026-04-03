@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from cassandra.cqlengine import UnicodeMixin
 
 
 class QueryOperatorException(Exception):
     pass
 
 
-class BaseQueryOperator(UnicodeMixin):
+class BaseQueryOperator:
     # The symbol that identifies this operator in kwargs
     # ie: colname__<symbol>
     symbol = None
