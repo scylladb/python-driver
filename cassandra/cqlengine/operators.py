@@ -26,7 +26,7 @@ class BaseQueryOperator:
     # The comparator symbol this operator uses in cql
     cql_symbol = None
 
-    def __unicode__(self):
+    def __str__(self):
         if self.cql_symbol is None:
             raise QueryOperatorException("cql symbol is None")
         return self.cql_symbol
