@@ -2270,7 +2270,7 @@ class SchemaParserV22(_SchemaParser):
 
                     # Some thrift tables define names in composite types (see PYTHON-192)
                     if not column_aliases and hasattr(comparator, 'fieldnames'):
-                        column_aliases = filter(None, comparator.fieldnames)
+                        column_aliases = list(filter(None, comparator.fieldnames))
             else:
                 is_compact = True
                 if column_aliases or not col_rows or is_dct_comparator:
