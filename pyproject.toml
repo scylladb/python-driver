@@ -44,7 +44,6 @@ auth-kerberos = [
 dev = [
     "pytest~=8.0",
     "PyYAML",
-    "pure-sasl",
     "twisted[tls]",
     "gevent",
     "eventlet>=0.33.3",
