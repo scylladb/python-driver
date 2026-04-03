@@ -179,12 +179,6 @@ if not conn_class:
     raise DependencyException("Exception loading connection class dependencies", excs)
 DefaultConnection = conn_class
 
-# Forces load of utf8 encoding module to avoid deadlock that occurs
-# if code that is being imported tries to import the module in a seperate
-# thread.
-# See http://bugs.python.org/issue10923
-"".encode('utf8')
-
 log = logging.getLogger(__name__)
 
 
