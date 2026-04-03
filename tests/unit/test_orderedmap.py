@@ -175,12 +175,12 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
         protocol_version = 3
         om = OrderedMapSerializedKey(key_type, protocol_version)
         key_ascii = {'one': 1}
-        key_unicode = {u'two': 2}
+        key_unicode = {'two': 2}
         om._insert_unchecked(key_ascii, key_type.serialize(key_ascii, protocol_version), object())
         om._insert_unchecked(key_unicode, key_type.serialize(key_unicode, protocol_version), object())
 
         # type lookup is normalized by key_type
         # PYTHON-231
-        assert om[{'one': 1}] is om[{u'one': 1}]
-        assert om[{'two': 2}] is om[{u'two': 2}]
+        assert om[{'one': 1}] is om[{'one': 1}]
+        assert om[{'two': 2}] is om[{'two': 2}]
         assert om[{'one': 1}] is not om[{'two': 2}]

@@ -25,10 +25,7 @@ import copy
 import uuid
 from threading import Lock, RLock, Condition
 import weakref
-try:
-    from weakref import WeakSet
-except ImportError:
-    from cassandra.util import WeakSet  # NOQA
+from weakref import WeakSet
 
 from cassandra import AuthenticationFailed
 from cassandra.connection import ConnectionException, EndPoint, DefaultEndPoint

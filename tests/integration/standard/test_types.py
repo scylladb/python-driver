@@ -765,8 +765,8 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         Test to ensure unicode strings can be used in a query
         """
         s = self.session
-        s.execute(u"SELECT * FROM system.local WHERE key = 'ef\u2052ef'")
-        s.execute(u"SELECT * FROM system.local WHERE key = %s", (u"fe\u2051fe",))
+        s.execute("SELECT * FROM system.local WHERE key = 'ef\u2052ef'")
+        s.execute("SELECT * FROM system.local WHERE key = %s", ("fe\u2051fe",))
 
     @requires_composite_type
     def test_can_read_composite_type(self):
@@ -955,7 +955,7 @@ class TypeTestsProtocol(BasicSharedKeyspaceUnitTestCase):
             results = session.execute('select * from t').one()
             assert "[SortedSet([1, 2]), SortedSet([3, 5])]" == str(results.v)
 
-            results = session.execute('select * from u').one()
+            results = session.execute('select * from ').one()
             assert "SortedSet([[1, 2], [3, 5]])" == str(results.v)
 
             results = session.execute('select * from v').one()

@@ -102,9 +102,15 @@ class Encoder(object):
 
     def cql_encode_unicode(self, val):
         """
-        Converts :class:`unicode` objects to UTF-8 encoded strings with quote escaping.
+        Encodes a string value with quote escaping.
+
+        .. deprecated::
+            This method is unused internally since Python 2 support was
+            removed (``str`` is always unicode on Python 3).  It is kept
+            for backward compatibility with user subclasses of
+            :class:`Encoder`.
         """
-        return cql_quote(val.encode('utf-8'))
+        return cql_quote(val)
 
     def cql_encode_str(self, val):
         """
