@@ -46,6 +46,56 @@ from cassandra.connection import EndPoint
 from cassandra.tablets import Tablets
 from cassandra.util import maybe_add_timeout_to_query
 
+
+class _RowView(Mapping):
+    """
+    Lightweight read-only view over a row tuple, supporting dict-like access.
+    Shares a single index map across all rows from the same result set,
+    avoiding per-row dict allocation overhead.
+
+    Implements the :class:`collections.abc.Mapping` protocol, providing
+    ``__getitem__``, ``__iter__``, ``__len__``, ``get``, ``keys``,
+    ``values``, ``items``, and ``__contains__`` for free.
+    """
+
+    __slots__ = ("_row", "_index_map")
+
+    def __init__(self, row, index_map):
+        self._row = row
+        self._index_map = index_map
+
+    def __getitem__(self, key):
+        return self._row[self._index_map[key]]
+
+    def __iter__(self):
+        return iter(self._index_map)
+
+    def __len__(self):
+        return len(self._index_map)
+
+    def get(self, key, default=None):
+        idx = self._index_map.get(key)
+        if idx is not None:
+            return self._row[idx]
+        return default
+
+    def __contains__(self, key):
+        return key in self._index_map
+
+    def __repr__(self):
+        return repr({k: self._row[i] for k, i in self._index_map.items()})
+
+
+def _row_factory(colnames, rows):
+    """
+    Lightweight replacement for dict_factory used internally by schema parsers.
+    Returns a list of _RowView objects that support row["key"] and row.get("key")
+    but store data as tuples with a shared column-name-to-index map.
+    """
+    index_map = {name: i for i, name in enumerate(colnames)}
+    return [_RowView(row, index_map) for row in rows]
+
+
 log = logging.getLogger(__name__)
 
 cql_keywords = set((
