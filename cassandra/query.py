@@ -494,15 +494,15 @@ class PreparedStatement(object):
         if self.column_encryption_policy:
             return None
         try:
-            return self.__serializers
+            return self._cached_serializers
         except AttributeError:
             pass
         if _HAVE_CYTHON_SERIALIZERS and self.column_metadata:
-            self.__serializers = _cython_make_serializers(
+            self._cached_serializers = _cython_make_serializers(
                 [col.type for col in self.column_metadata])
         else:
-            self.__serializers = None
-        return self.__serializers
+            self._cached_serializers = None
+        return self._cached_serializers
 
     @classmethod
     def from_message(cls, query_id, column_metadata, pk_indexes, cluster_metadata,
@@ -563,11 +563,19 @@ class PreparedStatement(object):
 
 
 def _raise_bind_serialize_error(col_spec, value, exc):
-    """Wrap serialization errors with column context for all bind loop paths."""
+    """Wrap TypeError, struct.error, or OverflowError with column context.
+
+    Called from all three bind loop paths (CE, Cython, plain Python) to
+    provide a uniform error message that includes the column name and
+    expected type.  struct.error arises from int32 out-of-range values;
+    OverflowError from float out-of-range values.  Other exception types
+    (e.g. ValueError from VectorType dimension mismatch) propagate
+    without wrapping.
+    """
     actual_type = type(value)
     message = ('Received an argument of invalid type for column "%s". '
                'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
-    raise TypeError(message)
+    raise TypeError(message) from exc
 
 
 class BoundStatement(Statement):
@@ -698,7 +706,7 @@ class BoundStatement(Statement):
                         else:
                             col_bytes = col_spec.type.serialize(value, proto_version)
                         self.values[idx] = col_bytes
-                    # OverflowError: Cython int32/float casts may raise on out-of-range values
+                    # struct.error: int32 out-of-range; OverflowError: float out-of-range
                     except (TypeError, struct.error, OverflowError) as exc:
                         _raise_bind_serialize_error(col_spec, value, exc)
                 idx += 1
@@ -719,7 +727,7 @@ class BoundStatement(Statement):
                         try:
                             col_bytes = ser.serialize(value, proto_version)
                             self.values[idx] = col_bytes
-                        # OverflowError: Cython int32/float casts may raise on out-of-range values
+                        # struct.error: int32 out-of-range; OverflowError: float out-of-range
                         except (TypeError, struct.error, OverflowError) as exc:
                             _raise_bind_serialize_error(col_spec, value, exc)
                     idx += 1
@@ -737,7 +745,7 @@ class BoundStatement(Statement):
                         try:
                             col_bytes = col_spec.type.serialize(value, proto_version)
                             self.values[idx] = col_bytes
-                        # OverflowError: Cython int32/float casts may raise on out-of-range values
+                        # struct.error: int32 out-of-range; OverflowError: float out-of-range
                         except (TypeError, struct.error, OverflowError) as exc:
                             _raise_bind_serialize_error(col_spec, value, exc)
                     idx += 1

@@ -34,6 +34,9 @@ from libc.math cimport isinf, isnan
 from cpython.bytes cimport PyBytes_FromStringAndSize
 
 from cassandra import cqltypes
+import io
+import struct
+from cassandra.marshal import uvint_pack
 
 cdef bint is_little_endian
 from cassandra.util import is_little_endian
@@ -60,9 +63,9 @@ cdef class Serializer:
 cdef inline void _check_float_range(double value) except *:
     """Raise OverflowError for finite values outside float32 range.
 
-    This matches the behavior of struct.pack('>f', value), which raises
-    OverflowError (via struct.error) for values that cannot be represented
-    as a 32-bit IEEE 754 float. inf, -inf, and nan pass through unchanged.
+    Matches the behaviour of struct.pack('>f', value), which raises
+    OverflowError for values that cannot be represented as a 32-bit
+    IEEE 754 float. inf, -inf, and nan pass through unchanged.
     """
     if not isinf(value) and not isnan(value):
         if value > <double>FLT_MAX or value < -<double>FLT_MAX:
@@ -76,17 +79,16 @@ cdef inline void _check_float_range(double value) except *:
 # ---------------------------------------------------------------------------
 
 cdef inline void _check_int32_range(object value) except *:
-    """Raise OverflowError for values outside the signed int32 range.
+    """Raise struct.error for values outside the signed int32 range.
 
-    This matches the behavior of struct.pack('>i', value), which raises
-    struct.error for values outside [-2147483648, 2147483647]. The check
-    must be done on the Python int *before* the C-level <int32_t> cast,
-    which would silently truncate.
+    Matches the behaviour of struct.pack('>i', value), which raises
+    struct.error for out-of-range values. The check must be done on the
+    Python int *before* the C-level <int32_t> cast, which would silently
+    truncate.
     """
     if value > 2147483647 or value < -2147483648:
-        raise OverflowError(
-            "Value %r out of range for int32 "
-            "(must be between -2147483648 and 2147483647)" % (value,)
+        raise struct.error(
+            "'i' format requires -2147483648 <= number <= 2147483647"
         )
 
 
@@ -222,7 +224,11 @@ cdef class SerVectorType(Serializer):
             return self._serialize_generic(value, protocol_version)
 
     cdef inline bytes _serialize_float(self, object values):
-        """Serialize a list of floats into a contiguous big-endian buffer."""
+        """Serialize a sequence of floats into a contiguous big-endian buffer.
+
+        Note: uses index-based access (values[i]) rather than iteration, so
+        the input must support __getitem__ (e.g. list or tuple).
+        """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 4
         if buf_size == 0:
@@ -255,7 +261,11 @@ cdef class SerVectorType(Serializer):
             free(buf)
 
     cdef inline bytes _serialize_double(self, object values):
-        """Serialize a list of doubles into a contiguous big-endian buffer."""
+        """Serialize a sequence of doubles into a contiguous big-endian buffer.
+
+        Note: uses index-based access (values[i]) rather than iteration, so
+        the input must support __getitem__ (e.g. list or tuple).
+        """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 8
         if buf_size == 0:
@@ -291,7 +301,11 @@ cdef class SerVectorType(Serializer):
             free(buf)
 
     cdef inline bytes _serialize_int32(self, object values):
-        """Serialize a list of int32 values into a contiguous big-endian buffer."""
+        """Serialize a sequence of int32 values into a contiguous big-endian buffer.
+
+        Note: uses index-based access (values[i]) rather than iteration, so
+        the input must support __getitem__ (e.g. list or tuple).
+        """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 4
         if buf_size == 0:
@@ -325,9 +339,6 @@ cdef class SerVectorType(Serializer):
 
     cdef inline bytes _serialize_generic(self, object values, int protocol_version):
         """Fallback: element-by-element Python serialization for non-optimized types."""
-        import io
-        from cassandra.marshal import uvint_pack
-
         serialized_size = self.subtype.serial_size()
         buf = io.BytesIO()
         for item in values:
