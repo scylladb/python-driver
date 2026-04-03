@@ -502,10 +502,9 @@ class AsciiType(_CassandraType):
 
     @staticmethod
     def serialize(var, protocol_version):
-        try:
-            return var.encode('ascii')
-        except UnicodeDecodeError:
+        if isinstance(var, bytes):
             return var
+        return var.encode('ascii')
 
 
 class FloatType(_CassandraType):
@@ -780,11 +779,9 @@ class UTF8Type(_CassandraType):
 
     @staticmethod
     def serialize(ustr, protocol_version):
-        try:
-            return ustr.encode('utf-8')
-        except UnicodeDecodeError:
-            # already utf-8
+        if isinstance(ustr, bytes):
             return ustr
+        return ustr.encode('utf-8')
 
 
 class VarcharType(UTF8Type):
