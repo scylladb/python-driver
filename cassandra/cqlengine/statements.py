@@ -17,7 +17,6 @@ import time
 
 from cassandra.query import FETCH_SIZE_UNSET
 from cassandra.cqlengine import columns
-from cassandra.cqlengine import UnicodeMixin
 from cassandra.cqlengine.functions import QueryValue
 from cassandra.cqlengine.operators import BaseWhereOperator, InOperator, EqualsOperator, IsNotNullOperator
 
@@ -26,7 +25,7 @@ class StatementException(Exception):
     pass
 
 
-class ValueQuoter(UnicodeMixin):
+class ValueQuoter:
 
     def __init__(self, value):
         self.value = value
@@ -54,7 +53,7 @@ class InQuoter(ValueQuoter):
         return '(' + ', '.join([cql_quote(v) for v in self.value]) + ')'
 
 
-class BaseClause(UnicodeMixin):
+class BaseClause:
 
     def __init__(self, field, value):
         self.field = field
@@ -500,7 +499,7 @@ class MapDeleteClause(BaseDeleteClause):
         return ', '.join(['"{0}"[%({1})s]'.format(self.field, self.context_id + i) for i in range(len(self._removals))])
 
 
-class BaseCQLStatement(UnicodeMixin):
+class BaseCQLStatement:
     """ The base cql statement class """
 
     def __init__(self, table, timestamp=None, where=None, fetch_size=None, conditionals=None):

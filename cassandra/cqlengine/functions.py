@@ -14,12 +14,12 @@
 
 from datetime import datetime
 
-from cassandra.cqlengine import UnicodeMixin, ValidationError
+from cassandra.cqlengine import ValidationError
 
 def get_total_seconds(td):
     return td.total_seconds()
 
-class QueryValue(UnicodeMixin):
+class QueryValue:
     """
     Base class for query filter values. Subclasses of these classes can
     be passed into .filter() keyword args
