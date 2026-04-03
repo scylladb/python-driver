@@ -272,7 +272,7 @@ class ColumnQueryEvaluator(query.AbstractQueryableColumn):
     def __init__(self, column):
         self.column = column
 
-    def __unicode__(self):
+    def __str__(self):
         return self.column.db_field_name
 
     def _get_column(self):
