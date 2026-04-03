@@ -810,7 +810,8 @@ inet_pton = socket.inet_pton
 inet_ntop = socket.inet_ntop
 
 
-# similar to collections.namedtuple, reproduced here because Python 2.6 did not have the rename logic
+# similar to collections.namedtuple, reproduced here to handle invalid identifiers
+# by renaming them to positional names
 def _positional_rename_invalid_identifiers(field_names):
     names_out = list(field_names)
     for index, name in enumerate(field_names):
@@ -1498,7 +1499,7 @@ class Version(object):
     Internal minimalist class to compare versions.
     A valid version is: <int>.<int>.<int>.<int or str>.
 
-    TODO: when python2 support is removed, use packaging.version.
+    TODO: consider using packaging.version instead.
     """
 
     _version = None
