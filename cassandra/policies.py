@@ -157,6 +157,18 @@ class LoadBalancingPolicy(HostStateListener):
         """
         raise NotImplementedError()
 
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        """
+        Same as :meth:`make_query_plan`, but with an additional `excluded` parameter.
+        `excluded` should be a container (set, list, etc.) of hosts to skip.
+
+        The default implementation simply delegates to `make_query_plan` and filters the result.
+        Subclasses may override this for performance.
+        """
+        for host in self.make_query_plan(working_keyspace, query):
+            if host not in excluded:
+                yield host
+
     def check_supported(self):
         """
         This will be called after the cluster Metadata has been initialized.
@@ -197,6 +209,20 @@ class RoundRobinPolicy(LoadBalancingPolicy):
             return islice(cycle(hosts), pos, pos + length)
         else:
             return []
+
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        pos = self._position
+        self._position += 1
+
+        hosts = self._live_hosts
+        length = len(hosts)
+        if length:
+            pos %= length
+            for host in islice(cycle(hosts), pos, pos + length):
+                if host not in excluded:
+                    yield host
+        else:
+            return
 
     def on_up(self, host):
         with self._hosts_lock:
@@ -295,6 +321,40 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
 
         remote_hosts = self._remote_hosts
         for host in remote_hosts:
+            yield host
+
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        # not thread-safe, but we don't care much about lost increments
+        # for the purposes of load balancing
+        pos = self._position
+        self._position += 1
+
+        local_live = self._dc_live_hosts.get(self.local_dc, ())
+        length = len(local_live)
+        remote_hosts = self._remote_hosts
+        if not excluded:
+            if length:
+                pos %= length
+                for i in range(length):
+                    yield local_live[(pos + i) % length]
+            for host in remote_hosts:
+                yield host
+            return
+
+        if not isinstance(excluded, set):
+            excluded = set(excluded)
+
+        if length:
+            pos %= length
+            for i in range(length):
+                host = local_live[(pos + i) % length]
+                if host in excluded:
+                    continue
+                yield host
+
+        for host in remote_hosts:
+            if host in excluded:
+                continue
             yield host
 
     def on_up(self, host):
