@@ -69,6 +69,10 @@ _message_types_by_opcode = {}
 
 _UNSET_VALUE = object()
 
+# Pre-computed packed constants for write_value fast paths
+_INT32_NEG1 = int32_pack(-1)   # "null" marker
+_INT32_NEG2 = int32_pack(-2)   # "unset" marker
+
 
 def register_class(cls):
     _message_types_by_opcode[cls.opcode] = cls
@@ -588,8 +592,17 @@ class _QueryMessage(_MessageType):
 
         if self.query_params is not None:
             write_short(f, len(self.query_params))
+            # Inline write_value to eliminate per-param function call overhead
+            _fw = f.write
+            _i32 = int32_pack
             for param in self.query_params:
-                write_value(f, param)
+                if param is None:
+                    _fw(_INT32_NEG1)
+                elif param is _UNSET_VALUE:
+                    _fw(_INT32_NEG2)
+                else:
+                    _fw(_i32(len(param)))
+                    _fw(param)
         if self.fetch_size:
             write_int(f, self.fetch_size)
         if self.paging_state:
@@ -912,6 +925,8 @@ class BatchMessage(_MessageType):
         self.keyspace = keyspace
 
     def send_body(self, f, protocol_version):
+        _fw = f.write
+        _i32 = int32_pack
         write_byte(f, self.batch_type.value)
         write_short(f, len(self.queries))
         for prepared, string_or_query_id, params in self.queries:
@@ -921,10 +936,17 @@ class BatchMessage(_MessageType):
             else:
                 write_byte(f, 1)
                 write_short(f, len(string_or_query_id))
-                f.write(string_or_query_id)
+                _fw(string_or_query_id)
             write_short(f, len(params))
+            # Inline write_value to eliminate per-param function call overhead
             for param in params:
-                write_value(f, param)
+                if param is None:
+                    _fw(_INT32_NEG1)
+                elif param is _UNSET_VALUE:
+                    _fw(_INT32_NEG2)
+                else:
+                    _fw(_i32(len(param)))
+                    _fw(param)
 
         write_consistency_level(f, self.consistency_level)
         flags = 0
