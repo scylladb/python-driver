@@ -111,7 +111,7 @@ class WhereClause(BaseClause):
 
     def __str__(self):
         field = ('"{0}"' if self.quote_field else '{0}').format(self.field)
-        return u'{0} {1} {2}'.format(field, self.operator, str(self.query_value))
+        return '{0} {1} {2}'.format(field, self.operator, str(self.query_value))
 
     def __hash__(self):
         return super(WhereClause, self).__hash__() ^ hash(self.operator)
@@ -141,7 +141,7 @@ class IsNotNullClause(WhereClause):
 
     def __str__(self):
         field = ('"{0}"' if self.quote_field else '{0}').format(self.field)
-        return u'{0} {1}'.format(field, self.operator)
+        return '{0} {1}'.format(field, self.operator)
 
     def update_context(self, ctx):
         pass
@@ -157,7 +157,7 @@ class AssignmentClause(BaseClause):
     """ a single variable st statement """
 
     def __str__(self):
-        return u'"{0}" = %({1})s'.format(self.field, self.context_id)
+        return '"{0}" = %({1})s'.format(self.field, self.context_id)
 
     def insert_tuple(self):
         return self.field, self.context_id
@@ -167,7 +167,7 @@ class ConditionalClause(BaseClause):
     """ A single variable iff statement """
 
     def __str__(self):
-        return u'"{0}" = %({1})s'.format(self.field, self.context_id)
+        return '"{0}" = %({1})s'.format(self.field, self.context_id)
 
     def insert_tuple(self):
         return self.field, self.context_id
