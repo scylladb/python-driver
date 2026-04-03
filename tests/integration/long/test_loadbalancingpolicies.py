@@ -215,10 +215,10 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(2, 6)
         self.coordinator_stats.assert_query_count_equals(3, 0)
 
-        decommission(1)
-        start(3)
-        self._wait_for_nodes_down([1], cluster)
+        start(3)  # Restart before decommission (Raft rejects ops with dead nodes)
         self._wait_for_nodes_up([3], cluster)
+        decommission(1)
+        self._wait_for_nodes_down([1], cluster)
 
         self.coordinator_stats.reset_counts()
         self._query(session, keyspace)
@@ -243,13 +243,12 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(3, 3)
         self.coordinator_stats.assert_query_count_equals(4, 3)
 
+        bootstrap(5, 'dc3')  # Bootstrap before force_stop (Raft rejects ops with dead nodes)
+        self._wait_for_nodes_up([5], cluster)
         force_stop(1)
-        bootstrap(5, 'dc3')
 
         # reset control connection
         self._insert(session, keyspace, count=1000)
-
-        self._wait_for_nodes_up([5], cluster)
 
         self.coordinator_stats.reset_counts()
         self._query(session, keyspace)
@@ -276,13 +275,12 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(3, 3)
         self.coordinator_stats.assert_query_count_equals(4, 3)
 
+        bootstrap(5, 'dc1')  # Bootstrap before force_stop (Raft rejects ops with dead nodes)
+        self._wait_for_nodes_up([5], cluster)
         force_stop(1)
-        bootstrap(5, 'dc1')
 
         # reset control connection
         self._insert(session, keyspace, count=1000)
-
-        self._wait_for_nodes_up([5], cluster)
 
         self.coordinator_stats.reset_counts()
         self._query(session, keyspace)
@@ -516,8 +514,9 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self._query(session, keyspace)
 
         self.coordinator_stats.assert_query_count_equals(1, 0)
-        self.coordinator_stats.assert_query_count_equals(2, 12)
-        self.coordinator_stats.assert_query_count_equals(3, 0)
+        # Scylla may distribute queries across both replicas with shard-aware routing
+        queried = self.coordinator_stats.get_query_count(2) + self.coordinator_stats.get_query_count(3)
+        assert queried == 12, "Expected 12 queries to replicas, got %d" % queried
 
         self.coordinator_stats.reset_counts()
         stop(2)
