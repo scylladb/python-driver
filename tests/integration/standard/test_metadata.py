@@ -238,9 +238,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         assert tablemeta.name == self.function_table_name
         assert tablemeta.name == self.function_table_name
 
-        assert [u'a'] == [c.name for c in tablemeta.partition_key]
+        assert ['a'] == [c.name for c in tablemeta.partition_key]
         assert [] == tablemeta.clustering_key
-        assert [u'a', u'b', u'c'] == sorted(tablemeta.columns.keys())
+        assert ['a', 'b', 'c'] == sorted(tablemeta.columns.keys())
 
         cc = self.cluster.control_connection._connection
         parser = get_schema_parser(
@@ -262,9 +262,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a'] == [c.name for c in tablemeta.partition_key]
-        assert [u'b'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'a', u'b', u'c'] == sorted(tablemeta.columns.keys())
+        assert ['a'] == [c.name for c in tablemeta.partition_key]
+        assert ['b'] == [c.name for c in tablemeta.clustering_key]
+        assert ['a', 'b', 'c'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -274,9 +274,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'Aa'] == [c.name for c in tablemeta.partition_key]
-        assert [u'Bb'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'Aa', u'Bb', u'Cc'] == sorted(tablemeta.columns.keys())
+        assert ['Aa'] == [c.name for c in tablemeta.partition_key]
+        assert ['Bb'] == [c.name for c in tablemeta.clustering_key]
+        assert ['Aa', 'Bb', 'Cc'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -286,9 +286,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a'] == [c.name for c in tablemeta.partition_key]
-        assert [u'b', u'c'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'a', u'b', u'c', u'd', u'e', u'f'] == sorted(tablemeta.columns.keys())
+        assert ['a'] == [c.name for c in tablemeta.partition_key]
+        assert ['b', 'c'] == [c.name for c in tablemeta.clustering_key]
+        assert ['a', 'b', 'c', 'd', 'e', 'f'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -297,9 +297,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a', u'b'] == [c.name for c in tablemeta.partition_key]
+        assert ['a', 'b'] == [c.name for c in tablemeta.partition_key]
         assert [] == tablemeta.clustering_key
-        assert [u'a', u'b', u'c'] == sorted(tablemeta.columns.keys())
+        assert ['a', 'b', 'c'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -309,9 +309,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a', u'b'] == [c.name for c in tablemeta.partition_key]
-        assert [u'c'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'a', u'b', u'c', u'd', u'e'] == sorted(tablemeta.columns.keys())
+        assert ['a', 'b'] == [c.name for c in tablemeta.partition_key]
+        assert ['c'] == [c.name for c in tablemeta.clustering_key]
+        assert ['a', 'b', 'c', 'd', 'e'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -321,9 +321,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a'] == [c.name for c in tablemeta.partition_key]
-        assert [u'b'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'a', u'b', u'c'] == sorted(tablemeta.columns.keys())
+        assert ['a'] == [c.name for c in tablemeta.partition_key]
+        assert ['b'] == [c.name for c in tablemeta.clustering_key]
+        assert ['a', 'b', 'c'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -355,9 +355,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a'] == [c.name for c in tablemeta.partition_key]
-        assert [u'b', u'c'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'a', u'b', u'c', u'd'] == sorted(tablemeta.columns.keys())
+        assert ['a'] == [c.name for c in tablemeta.partition_key]
+        assert ['b', 'c'] == [c.name for c in tablemeta.clustering_key]
+        assert ['a', 'b', 'c', 'd'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -366,9 +366,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a', u'b'] == [c.name for c in tablemeta.partition_key]
+        assert ['a', 'b'] == [c.name for c in tablemeta.partition_key]
         assert [] == tablemeta.clustering_key
-        assert [u'a', u'b', u'c'] == sorted(tablemeta.columns.keys())
+        assert ['a', 'b', 'c'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -378,9 +378,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a', u'b'] == [c.name for c in tablemeta.partition_key]
-        assert [u'c'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'a', u'b', u'c', u'd'] == sorted(tablemeta.columns.keys())
+        assert ['a', 'b'] == [c.name for c in tablemeta.partition_key]
+        assert ['c'] == [c.name for c in tablemeta.clustering_key]
+        assert ['a', 'b', 'c', 'd'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -393,9 +393,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a'] == [c.name for c in tablemeta.partition_key]
+        assert ['a'] == [c.name for c in tablemeta.partition_key]
         assert [] == tablemeta.clustering_key
-        assert [u'a', u'b', u'c', u'd'] == sorted(tablemeta.columns.keys())
+        assert ['a', 'b', 'c', 'd'] == sorted(tablemeta.columns.keys())
 
         assert tablemeta.is_cql_compatible
 
