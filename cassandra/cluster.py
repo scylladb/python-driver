@@ -4620,7 +4620,10 @@ class ResponseFuture(object):
             result_meta = self.prepared_statement.result_metadata if self.prepared_statement else []
 
             if cb is None:
-                cb = partial(self._set_result, host, connection, pool)
+                _set_result = self._set_result
+
+                def cb(response, _h=host, _c=connection, _p=pool, _sr=_set_result):
+                    _sr(_h, _c, _p, response)
 
             self.request_encoded_size = connection.send_msg(message, request_id, cb=cb,
                                                             encoder=self._protocol_handler.encode_message,
