@@ -25,7 +25,8 @@ from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, Protoc
                                   ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
-                                SupportedMessage, ProtocolHandler)
+                                SupportedMessage, ProtocolHandler, ResultMessage,
+                                RESULT_KIND_SET_KEYSPACE)
 
 from tests.util import wait_until, assertRegex
 import pytest
@@ -255,6 +256,40 @@ class ConnectionTest(unittest.TestCase):
         c.keyspace = 'ks'
         c.set_keyspace_blocking('ks')
         assert c.keyspace == 'ks'
+
+    def test_set_keyspace_blocking_escapes_quotes(self):
+        """
+        Test that set_keyspace_blocking properly escapes double quotes in
+        keyspace names to prevent CQL injection. This is the Python equivalent
+        of the vulnerability fixed in the Go driver:
+        https://github.com/scylladb/gocql/pull/783
+        """
+        c = self.make_connection()
+        c.wait_for_response = Mock(return_value=ResultMessage(kind=RESULT_KIND_SET_KEYSPACE))
+
+        c.set_keyspace_blocking('my"ks')
+        query_msg = c.wait_for_response.call_args[0][0]
+        assert query_msg.query == 'USE "my""ks"', (
+            "Double quotes in keyspace name must be escaped as double-double quotes")
+
+    def test_set_keyspace_async_escapes_quotes(self):
+        """
+        Test that set_keyspace_async properly escapes double quotes in
+        keyspace names to prevent CQL injection.
+        """
+        c = self.make_connection()
+        c.lock = Lock()
+        c.in_flight = 0
+        c.max_request_id = 100
+        c.get_request_id = Mock(return_value=1)
+        c.send_msg = Mock()
+
+        callback = Mock()
+        c.set_keyspace_async('my"ks', callback)
+
+        query_msg = c.send_msg.call_args[0][0]
+        assert query_msg.query == 'USE "my""ks"', (
+            "Double quotes in keyspace name must be escaped as double-double quotes")
 
     def test_set_connection_class(self):
         cluster = Cluster(connection_class='test')
