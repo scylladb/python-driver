@@ -24,10 +24,7 @@ import weakref
 import sys
 import ssl
 
-try:
-    from weakref import WeakSet
-except ImportError:
-    from cassandra.util import WeakSet  # noqa
+from weakref import WeakSet
 
 from cassandra import DependencyException
 try:
