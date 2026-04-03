@@ -22,11 +22,7 @@ from setuptools import Extension, Command, setup
 from setuptools.errors import (CCompilerError, PlatformError,
                               ExecError)
 
-try:
-    import subprocess
-    has_subprocess = True
-except ImportError:
-    has_subprocess = False
+import subprocess
 
 
 has_cqlengine = False
@@ -69,36 +65,35 @@ class DocCommand(Command):
             except:
                 pass
 
-        if has_subprocess:
-            # Prevent run with in-place extensions because cython-generated objects do not carry docstrings
-            # http://docs.cython.org/src/userguide/special_methods.html#docstrings
-            import glob
-            for f in glob.glob("cassandra/*.so"):
-                print("Removing '%s' to allow docs to run on pure python modules." %(f,))
-                os.unlink(f)
+        # Prevent run with in-place extensions because cython-generated objects do not carry docstrings
+        # http://docs.cython.org/src/userguide/special_methods.html#docstrings
+        import glob
+        for f in glob.glob("cassandra/*.so"):
+            print("Removing '%s' to allow docs to run on pure python modules." %(f,))
+            os.unlink(f)
 
-            # Build io extension to make import and docstrings work
-            try:
-                output = subprocess.check_output(
-                    ["python", "setup.py", "build_ext", "--inplace", "--force", "--no-murmur3", "--no-cython"],
-                    stderr=subprocess.STDOUT)
-            except subprocess.CalledProcessError as exc:
-                raise RuntimeError("Documentation step '%s' failed: %s: %s" % ("build_ext", exc, exc.output))
-            else:
-                print(output)
+        # Build io extension to make import and docstrings work
+        try:
+            output = subprocess.check_output(
+                [sys.executable, "setup.py", "build_ext", "--inplace", "--force", "--no-murmur3", "--no-cython"],
+                stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError("Documentation step '%s' failed: %s: %s" % ("build_ext", exc, exc.output))
+        else:
+            print(output)
 
-            try:
-                output = subprocess.check_output(
-                    ["sphinx-build", "-b", mode, "docs", path],
-                    stderr=subprocess.STDOUT)
-            except subprocess.CalledProcessError as exc:
-                raise RuntimeError("Documentation step '%s' failed: %s: %s" % (mode, exc, exc.output))
-            else:
-                print(output)
+        try:
+            output = subprocess.check_output(
+                [sys.executable, "-m", "sphinx", "-b", mode, "docs", path],
+                stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError("Documentation step '%s' failed: %s: %s" % (mode, exc, exc.output))
+        else:
+            print(output)
 
-            print("")
-            print("Documentation step '%s' performed, results here:" % mode)
-            print("   file://%s/%s/index.html" % (os.path.dirname(os.path.realpath(__file__)), path))
+        print("")
+        print("Documentation step '%s' performed, results here:" % mode)
+        print("   file://%s/%s/index.html" % (os.path.dirname(os.path.realpath(__file__)), path))
 
 
 class BuildFailed(Exception):
@@ -112,7 +107,7 @@ is_macos = sys.platform.startswith('darwin')
 def get_subdriname(directory_path):
     try:
         # List only subdirectories in the given directory
-        subdirectories = [name for dir in directory_path for name in os.listdir(dir)
+        subdirectories = [name for name in os.listdir(directory_path)
                           if os.path.isdir(os.path.join(directory_path, name))]
         return subdirectories
     except Exception:
@@ -136,8 +131,6 @@ def get_libev_headers_path():
 
 murmur3_ext = Extension('cassandra.cmurmur3',
                         sources=['cassandra/cmurmur3.c'])
-
-is_macos = sys.platform.startswith('darwin')
 
 def eval_env_var_as_array(varname):
     val = os.environ.get(varname)
