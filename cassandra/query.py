@@ -187,7 +187,7 @@ def dict_factory(colnames, rows):
         >>> session.row_factory = dict_factory
         >>> rows = session.execute("SELECT name, age FROM users LIMIT 1")
         >>> print(rows[0])
-        {u'age': 42, u'name': u'Bob'}
+        {'age': 42, 'name': 'Bob'}
 
     .. versionchanged:: 2.0.0
         moved from ``cassandra.decoder`` to ``cassandra.query``
@@ -412,7 +412,7 @@ class SimpleStatement(Statement):
 
     def __str__(self):
         consistency = ConsistencyLevel.value_to_name.get(self.consistency_level, 'Not Set')
-        return (u'<SimpleStatement query="%s", consistency=%s>' %
+        return ('<SimpleStatement query="%s", consistency=%s>' %
                 (self.query_string, consistency))
     __repr__ = __str__
 
@@ -527,7 +527,7 @@ class PreparedStatement(object):
 
     def __str__(self):
         consistency = ConsistencyLevel.value_to_name.get(self.consistency_level, 'Not Set')
-        return (u'<PreparedStatement query="%s", consistency=%s>' %
+        return ('<PreparedStatement query="%s", consistency=%s>' %
                 (self.query_string, consistency))
     __repr__ = __str__
 
@@ -695,7 +695,7 @@ class BoundStatement(Statement):
 
     def __str__(self):
         consistency = ConsistencyLevel.value_to_name.get(self.consistency_level, 'Not Set')
-        return (u'<BoundStatement query="%s", values=%s, consistency=%s>' %
+        return ('<BoundStatement query="%s", values=%s, consistency=%s>' %
                 (self.prepared_statement.query_string, self.raw_values, consistency))
     __repr__ = __str__
 
@@ -908,7 +908,7 @@ class BatchStatement(Statement):
 
     def __str__(self):
         consistency = ConsistencyLevel.value_to_name.get(self.consistency_level, 'Not Set')
-        return (u'<BatchStatement type=%s, statements=%d, consistency=%s>' %
+        return ('<BatchStatement type=%s, statements=%d, consistency=%s>' %
                 (self.batch_type, len(self), consistency))
     __repr__ = __str__
 
