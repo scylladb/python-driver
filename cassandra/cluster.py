@@ -2751,8 +2751,9 @@ class Session(object):
             ...     log.exception("Operation failed:")
 
         """
-        custom_payload = custom_payload if custom_payload else {}
         if execute_as:
+            if not custom_payload:
+                custom_payload = {}
             custom_payload[_proxy_execute_key] = execute_as.encode()
 
         future = self._create_response_future(
