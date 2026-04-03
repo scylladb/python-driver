@@ -48,7 +48,7 @@ DSE Graph      GraphSON 2.0     GraphSON 3.0   |  Python Driver
 ------------ | -------------- | -------------- | ------------
 text         | string         | string         | str
 boolean      |                |                | bool
-bigint       | g:Int64        | g:Int64        | long
+bigint       | g:Int64        | g:Int64        | int
 int          | g:Int32        | g:Int32        | int
 double       | g:Double       | g:Double       | float
 float        | g:Float        | g:Float        | float
@@ -56,18 +56,18 @@ uuid         | g:UUID         | g:UUID         | UUID
 bigdecimal   | gx:BigDecimal  | gx:BigDecimal  | Decimal
 duration     | gx:Duration    | N/A            | timedelta              (Classic graph only)
 DSE Duration | N/A            | dse:Duration   | Duration               (Core graph only)
-inet         | gx:InetAddress | gx:InetAddress | str (unicode), IPV4Address/IPV6Address (PY3)
+inet         | gx:InetAddress | gx:InetAddress | str, IPV4Address/IPV6Address
 timestamp    | gx:Instant     | gx:Instant     | datetime.datetime
 date         | gx:LocalDate   | gx:LocalDate   | datetime.date
 time         | gx:LocalTime   | gx:LocalTime   | datetime.time
 smallint     | gx:Int16       | gx:Int16       | int
-varint       | gx:BigInteger  | gx:BigInteger  | long
+varint       | gx:BigInteger  | gx:BigInteger  | int
 date         | gx:LocalDate   | gx:LocalDate   | Date
 polygon      | dse:Polygon    | dse:Polygon    | Polygon
 point        | dse:Point      | dse:Point      | Point
 linestring   | dse:Linestring | dse:LineString | LineString
-blob         | dse:Blob       | dse:Blob       | bytearray, buffer (PY2), memoryview (PY3), bytes (PY3)
-blob         | gx:ByteBuffer  | gx:ByteBuffer  | bytearray, buffer (PY2), memoryview (PY3), bytes (PY3)
+blob         | dse:Blob       | dse:Blob       | bytearray, memoryview, bytes
+blob         | gx:ByteBuffer  | gx:ByteBuffer  | bytearray, memoryview, bytes
 list         | N/A            | g:List         | list                   (Core graph only)
 map          | N/A            | g:Map          | dict                   (Core graph only)
 set          | N/A            | g:Set          | set or list            (Core graph only)
