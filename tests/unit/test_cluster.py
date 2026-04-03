@@ -23,6 +23,7 @@ from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, R
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
 from cassandra.cluster import _Scheduler, Session, Cluster, default_lbp_factory, \
     ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
+from cassandra.connection import SSLSessionCache
 from cassandra.pool import Host
 from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
@@ -634,3 +635,95 @@ class ExecutionProfileTest(unittest.TestCase):
             )
 
         patched_logger.warning.assert_not_called()
+
+
+class TestSSLSessionCacheAutoCreation(unittest.TestCase):
+
+    def test_cache_created_when_ssl_context_set(self):
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        cluster = Cluster(contact_points=['127.0.0.1'], ssl_context=ctx)
+        assert isinstance(cluster.ssl_session_cache, SSLSessionCache)
+
+    def test_cache_created_when_ssl_options_set(self):
+        cluster = Cluster(contact_points=['127.0.0.1'], ssl_options={'ca_certs': '/dev/null'})
+        assert isinstance(cluster.ssl_session_cache, SSLSessionCache)
+
+    def test_no_cache_when_tls_not_enabled(self):
+        cluster = Cluster(contact_points=['127.0.0.1'])
+        assert cluster.ssl_session_cache is None
+
+    def test_explicit_none_disables_cache(self):
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        cluster = Cluster(contact_points=['127.0.0.1'], ssl_context=ctx,
+                          ssl_session_cache=None)
+        assert cluster.ssl_session_cache is None
+
+    def test_explicit_custom_cache_used(self):
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        custom = SSLSessionCache()
+        cluster = Cluster(contact_points=['127.0.0.1'], ssl_context=ctx,
+                          ssl_session_cache=custom)
+        assert cluster.ssl_session_cache is custom
+
+    def test_cache_passed_to_connection_factory(self):
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        endpoint = Mock(address='127.0.0.1')
+        with patch.object(Cluster.connection_class, 'factory', autospec=True, return_value='connection') as factory:
+            cluster = Cluster(contact_points=['127.0.0.1'], ssl_context=ctx)
+            cluster.connection_factory(endpoint)
+
+        assert factory.call_args.kwargs['ssl_session_cache'] is cluster.ssl_session_cache
+
+    def test_warning_for_eventlet_connection_class(self):
+        """A warning is logged when ssl_session_cache is set with EventletConnection."""
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        # Create a real class so issubclass() works throughout Cluster.__init__
+        from cassandra.connection import Connection as BaseConn
+        class FakeEventletConnection(BaseConn):
+            pass
+
+        with patch('cassandra.cluster.EventletConnection', FakeEventletConnection, create=True), \
+             patch('cassandra.cluster.log') as patched_logger:
+            Cluster(contact_points=['127.0.0.1'], ssl_context=ctx,
+                    connection_class=FakeEventletConnection)
+
+        # At least one warning about pyOpenSSL
+        warning_calls = [c for c in patched_logger.warning.call_args_list
+                         if 'pyOpenSSL' in str(c)]
+        assert len(warning_calls) == 1
+
+    def test_warning_for_twisted_connection_class(self):
+        """A warning is logged when ssl_session_cache is set with TwistedConnection."""
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        from cassandra.connection import Connection as BaseConn
+        class FakeTwistedConnection(BaseConn):
+            pass
+
+        with patch('cassandra.cluster.TwistedConnection', FakeTwistedConnection, create=True), \
+             patch('cassandra.cluster.log') as patched_logger:
+            Cluster(contact_points=['127.0.0.1'], ssl_context=ctx,
+                    connection_class=FakeTwistedConnection)
+
+        warning_calls = [c for c in patched_logger.warning.call_args_list
+                         if 'pyOpenSSL' in str(c)]
+        assert len(warning_calls) == 1
