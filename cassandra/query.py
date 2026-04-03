@@ -489,7 +489,9 @@ class PreparedStatement(object):
 
         The column_encryption_policy check is performed on every access (not
         cached) so that serializers are correctly bypassed if a policy is set
-        after construction.
+        after construction.  This means the cache never goes stale: once a CE
+        policy is present, we always return None and fall through to the
+        encryption-aware bind path.
         """
         if self.column_encryption_policy:
             return None
@@ -573,8 +575,12 @@ def _raise_bind_serialize_error(col_spec, value, exc):
     without wrapping.
     """
     actual_type = type(value)
-    message = ('Received an argument of invalid type for column "%s". '
-               'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
+    if isinstance(exc, (OverflowError, struct.error)):
+        reason = 'value out of range'
+    else:
+        reason = 'invalid type'
+    message = ('Received an argument with %s for column "%s". '
+               'Expected: %s, Got: %s; (%s)' % (reason, col_spec.name, col_spec.type, actual_type, exc))
     raise TypeError(message) from exc
 
 
@@ -752,7 +758,7 @@ class BoundStatement(Statement):
 
         if proto_version >= 4:
             # Fill remaining unbound columns with UNSET_VALUE (v4+ feature).
-            for i in range(idx, col_meta_len):
+            while idx < col_meta_len:
                 idx = self._append_unset_value(idx)
         elif idx < col_meta_len:
             # Pre-v4: trim trailing unused slots (no UNSET_VALUE support)

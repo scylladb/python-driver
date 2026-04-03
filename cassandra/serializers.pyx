@@ -28,14 +28,12 @@ cqltype.serialize() classmethod.
 
 from libc.stdint cimport int32_t
 from libc.string cimport memcpy
-from libc.stdlib cimport malloc, free
 from libc.float cimport FLT_MAX
 from libc.math cimport isinf, isnan
-from cpython.bytes cimport PyBytes_FromStringAndSize
+from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AS_STRING
 
 from cassandra import cqltypes
 import io
-import struct
 from cassandra.marshal import uvint_pack
 
 cdef bint is_little_endian
@@ -79,15 +77,15 @@ cdef inline void _check_float_range(double value) except *:
 # ---------------------------------------------------------------------------
 
 cdef inline void _check_int32_range(object value) except *:
-    """Raise struct.error for values outside the signed int32 range.
+    """Raise OverflowError for values outside the signed int32 range.
 
-    Matches the behaviour of struct.pack('>i', value), which raises
-    struct.error for out-of-range values. The check must be done on the
-    Python int *before* the C-level <int32_t> cast, which would silently
-    truncate.
+    Mirrors ``_check_float_range``: we intentionally raise OverflowError
+    (not struct.error) so callers only need to catch one exception type
+    for out-of-range values.  The check must be done on the Python int
+    *before* the C-level <int32_t> cast, which would silently truncate.
     """
     if value > 2147483647 or value < -2147483648:
-        raise struct.error(
+        raise OverflowError(
             "'i' format requires -2147483648 <= number <= 2147483647"
         )
 
@@ -226,116 +224,116 @@ cdef class SerVectorType(Serializer):
     cdef inline bytes _serialize_float(self, object values):
         """Serialize a sequence of floats into a contiguous big-endian buffer.
 
-        Note: uses index-based access (values[i]) rather than iteration, so
-        the input must support __getitem__ (e.g. list or tuple).
+        Uses index-based access (values[i]) rather than iteration for
+        performance — the input must support ``__getitem__`` (list, tuple,
+        etc.).  This is intentional: index access lets Cython emit a single
+        ``PyObject_GetItem`` call per element instead of iterator protocol
+        overhead.
         """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 4
         if buf_size == 0:
             return b""
-        cdef char *buf = <char *>malloc(buf_size)
-        if buf == NULL:
-            raise MemoryError("Failed to allocate %d bytes for vector serialization" % buf_size)
+
+        cdef object result = PyBytes_FromStringAndSize(NULL, buf_size)
+        cdef char *buf = PyBytes_AS_STRING(result)
 
         cdef float val
         cdef char *src
         cdef char *dst
 
-        try:
-            for i in range(self.vector_size):
-                _check_float_range(<double>values[i])
-                val = <float>values[i]
-                src = <char *>&val
-                dst = buf + i * 4
+        for i in range(self.vector_size):
+            _check_float_range(<double>values[i])
+            val = <float>values[i]
+            src = <char *>&val
+            dst = buf + i * 4
 
-                if is_little_endian:
-                    dst[0] = src[3]
-                    dst[1] = src[2]
-                    dst[2] = src[1]
-                    dst[3] = src[0]
-                else:
-                    memcpy(dst, src, 4)
+            if is_little_endian:
+                dst[0] = src[3]
+                dst[1] = src[2]
+                dst[2] = src[1]
+                dst[3] = src[0]
+            else:
+                memcpy(dst, src, 4)
 
-            return PyBytes_FromStringAndSize(buf, buf_size)
-        finally:
-            free(buf)
+        return result
 
     cdef inline bytes _serialize_double(self, object values):
         """Serialize a sequence of doubles into a contiguous big-endian buffer.
 
-        Note: uses index-based access (values[i]) rather than iteration, so
-        the input must support __getitem__ (e.g. list or tuple).
+        Uses index-based access (values[i]) rather than iteration for
+        performance — the input must support ``__getitem__`` (list, tuple,
+        etc.).  This is intentional: index access lets Cython emit a single
+        ``PyObject_GetItem`` call per element instead of iterator protocol
+        overhead.
         """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 8
         if buf_size == 0:
             return b""
-        cdef char *buf = <char *>malloc(buf_size)
-        if buf == NULL:
-            raise MemoryError("Failed to allocate %d bytes for vector serialization" % buf_size)
+
+        cdef object result = PyBytes_FromStringAndSize(NULL, buf_size)
+        cdef char *buf = PyBytes_AS_STRING(result)
 
         cdef double val
         cdef char *src
         cdef char *dst
 
-        try:
-            for i in range(self.vector_size):
-                val = <double>values[i]
-                src = <char *>&val
-                dst = buf + i * 8
+        for i in range(self.vector_size):
+            val = <double>values[i]
+            src = <char *>&val
+            dst = buf + i * 8
 
-                if is_little_endian:
-                    dst[0] = src[7]
-                    dst[1] = src[6]
-                    dst[2] = src[5]
-                    dst[3] = src[4]
-                    dst[4] = src[3]
-                    dst[5] = src[2]
-                    dst[6] = src[1]
-                    dst[7] = src[0]
-                else:
-                    memcpy(dst, src, 8)
+            if is_little_endian:
+                dst[0] = src[7]
+                dst[1] = src[6]
+                dst[2] = src[5]
+                dst[3] = src[4]
+                dst[4] = src[3]
+                dst[5] = src[2]
+                dst[6] = src[1]
+                dst[7] = src[0]
+            else:
+                memcpy(dst, src, 8)
 
-            return PyBytes_FromStringAndSize(buf, buf_size)
-        finally:
-            free(buf)
+        return result
 
     cdef inline bytes _serialize_int32(self, object values):
         """Serialize a sequence of int32 values into a contiguous big-endian buffer.
 
-        Note: uses index-based access (values[i]) rather than iteration, so
-        the input must support __getitem__ (e.g. list or tuple).
+        Uses index-based access (values[i]) rather than iteration for
+        performance — the input must support ``__getitem__`` (list, tuple,
+        etc.).  This is intentional: index access lets Cython emit a single
+        ``PyObject_GetItem`` call per element instead of iterator protocol
+        overhead.
         """
         cdef Py_ssize_t i
         cdef Py_ssize_t buf_size = self.vector_size * 4
         if buf_size == 0:
             return b""
-        cdef char *buf = <char *>malloc(buf_size)
-        if buf == NULL:
-            raise MemoryError("Failed to allocate %d bytes for vector serialization" % buf_size)
+
+        cdef object result = PyBytes_FromStringAndSize(NULL, buf_size)
+        cdef char *buf = PyBytes_AS_STRING(result)
 
         cdef int32_t val
         cdef char *src
         cdef char *dst
 
-        try:
-            for i in range(self.vector_size):
-                _check_int32_range(values[i])
-                val = <int32_t>values[i]
-                src = <char *>&val
-                dst = buf + i * 4
+        for i in range(self.vector_size):
+            _check_int32_range(values[i])
+            val = <int32_t>values[i]
+            src = <char *>&val
+            dst = buf + i * 4
 
-                if is_little_endian:
-                    dst[0] = src[3]
-                    dst[1] = src[2]
-                    dst[2] = src[1]
-                    dst[3] = src[0]
-                else:
-                    memcpy(dst, src, 4)
+            if is_little_endian:
+                dst[0] = src[3]
+                dst[1] = src[2]
+                dst[2] = src[1]
+                dst[3] = src[0]
+            else:
+                memcpy(dst, src, 4)
 
-            return PyBytes_FromStringAndSize(buf, buf_size)
-        finally:
-            free(buf)
+        return result
 
     cdef inline bytes _serialize_generic(self, object values, int protocol_version):
         """Fallback: element-by-element Python serialization for non-optimized types."""
