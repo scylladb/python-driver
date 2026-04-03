@@ -336,3 +336,151 @@ class CythonBindPathTest(unittest.TestCase):
         msg = str(exc.value)
         assert 'v0' in msg
         assert 'Int32Type' in msg
+
+
+class UnsetValueBindingTest(unittest.TestCase):
+    """Tests for UNSET_VALUE handling in all bind paths.
+
+    These specifically test UNSET_VALUE in non-trailing positions to catch
+    index-management bugs in the pre-allocated values list.
+    """
+
+    protocol_version = 4
+
+    def _make_prepared(self, column_metadata, serializers=None, routing_key_indexes=None):
+        prepared = PreparedStatement(column_metadata=column_metadata,
+                                     query_id=None,
+                                     routing_key_indexes=routing_key_indexes or [],
+                                     query=None,
+                                     keyspace='keyspace',
+                                     protocol_version=self.protocol_version,
+                                     result_metadata=None,
+                                     result_metadata_id=None)
+        prepared._PreparedStatement__serializers = serializers
+        return prepared
+
+    def _three_column_metadata(self):
+        return [ColumnMetadata('keyspace', 'cf', 'c0', Int32Type),
+                ColumnMetadata('keyspace', 'cf', 'c1', Int32Type),
+                ColumnMetadata('keyspace', 'cf', 'c2', Int32Type)]
+
+    # --- Plain Python path (no serializers) ---
+
+    def test_plain_unset_mid_list(self):
+        """UNSET_VALUE in the middle of a value list does not corrupt indices."""
+        col_meta = self._three_column_metadata()
+        prepared = self._make_prepared(col_meta, serializers=None)
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((0, UNSET_VALUE, 2))
+        assert bound.values == [
+            Int32Type.serialize(0, self.protocol_version),
+            UNSET_VALUE,
+            Int32Type.serialize(2, self.protocol_version),
+        ]
+
+    def test_plain_unset_first(self):
+        """UNSET_VALUE as the first value does not corrupt indices."""
+        col_meta = self._three_column_metadata()
+        prepared = self._make_prepared(col_meta, serializers=None)
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((UNSET_VALUE, 1, 2))
+        assert bound.values == [
+            UNSET_VALUE,
+            Int32Type.serialize(1, self.protocol_version),
+            Int32Type.serialize(2, self.protocol_version),
+        ]
+
+    def test_plain_all_unset(self):
+        """All values are UNSET_VALUE."""
+        col_meta = self._three_column_metadata()
+        prepared = self._make_prepared(col_meta, serializers=None)
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((UNSET_VALUE, UNSET_VALUE, UNSET_VALUE))
+        assert bound.values == [UNSET_VALUE, UNSET_VALUE, UNSET_VALUE]
+
+    def test_plain_unset_trailing(self):
+        """UNSET_VALUE as the last explicit value."""
+        col_meta = self._three_column_metadata()
+        prepared = self._make_prepared(col_meta, serializers=None)
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((0, 1, UNSET_VALUE))
+        assert bound.values == [
+            Int32Type.serialize(0, self.protocol_version),
+            Int32Type.serialize(1, self.protocol_version),
+            UNSET_VALUE,
+        ]
+
+    def test_plain_implicit_unset_fill(self):
+        """Fewer values than columns fills remaining with implicit UNSET_VALUE."""
+        col_meta = self._three_column_metadata()
+        prepared = self._make_prepared(col_meta, serializers=None)
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((0,))
+        assert bound.values == [
+            Int32Type.serialize(0, self.protocol_version),
+            UNSET_VALUE,
+            UNSET_VALUE,
+        ]
+
+    def test_plain_mixed_none_and_unset(self):
+        """Mix of None and UNSET_VALUE in the same bind."""
+        col_meta = self._three_column_metadata()
+        prepared = self._make_prepared(col_meta, serializers=None)
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((None, UNSET_VALUE, 2))
+        assert bound.values == [
+            None,
+            UNSET_VALUE,
+            Int32Type.serialize(2, self.protocol_version),
+        ]
+
+    # --- Cython serializer path (with stub serializers) ---
+
+    def test_cython_unset_mid_list(self):
+        """UNSET_VALUE in the middle with Cython serializers does not corrupt indices."""
+        col_meta = self._three_column_metadata()
+        serializers = [StubSerializer(Int32Type)] * 3
+        prepared = self._make_prepared(col_meta, serializers=serializers)
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((0, UNSET_VALUE, 2))
+        assert bound.values == [
+            Int32Type.serialize(0, self.protocol_version),
+            UNSET_VALUE,
+            Int32Type.serialize(2, self.protocol_version),
+        ]
+
+    def test_cython_unset_first(self):
+        """UNSET_VALUE as the first value with Cython serializers."""
+        col_meta = self._three_column_metadata()
+        serializers = [StubSerializer(Int32Type)] * 3
+        prepared = self._make_prepared(col_meta, serializers=serializers)
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((UNSET_VALUE, 1, 2))
+        assert bound.values == [
+            UNSET_VALUE,
+            Int32Type.serialize(1, self.protocol_version),
+            Int32Type.serialize(2, self.protocol_version),
+        ]
+
+    def test_cython_all_unset(self):
+        """All values are UNSET_VALUE with Cython serializers."""
+        col_meta = self._three_column_metadata()
+        serializers = [StubSerializer(Int32Type)] * 3
+        prepared = self._make_prepared(col_meta, serializers=serializers)
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((UNSET_VALUE, UNSET_VALUE, UNSET_VALUE))
+        assert bound.values == [UNSET_VALUE, UNSET_VALUE, UNSET_VALUE]
+
+    def test_cython_mixed_none_and_unset(self):
+        """Mix of None and UNSET_VALUE with Cython serializers."""
+        col_meta = self._three_column_metadata()
+        serializers = [StubSerializer(Int32Type)] * 3
+        prepared = self._make_prepared(col_meta, serializers=serializers)
+        bound = BoundStatement(prepared_statement=prepared)
+        bound.bind((None, UNSET_VALUE, 2))
+        assert bound.values == [
+            None,
+            UNSET_VALUE,
+            Int32Type.serialize(2, self.protocol_version),
+        ]
+

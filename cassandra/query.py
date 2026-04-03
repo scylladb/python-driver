@@ -673,15 +673,18 @@ class BoundStatement(Statement):
                 (value_len, len(self.prepared_statement.routing_key_indexes)))
 
         self.raw_values = values
-        self.values = []
+        # Pre-allocate to avoid repeated list growth reallocations
+        self.values = [None] * col_meta_len
+        idx = 0
         if ce_policy:
             # Column encryption path: check each column for CE policy
             for value, col_spec in zip(values, col_meta):
                 if value is None:
-                    self.values.append(None)
+                    self.values[idx] = None
                 elif value is UNSET_VALUE:
                     if proto_version >= 4:
-                        self._append_unset_value()
+                        idx = self._append_unset_value(idx)
+                        continue
                     else:
                         raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
                 else:
@@ -694,60 +697,67 @@ class BoundStatement(Statement):
                             col_bytes = ce_policy.encrypt(col_desc, col_bytes)
                         else:
                             col_bytes = col_spec.type.serialize(value, proto_version)
-                        self.values.append(col_bytes)
+                        self.values[idx] = col_bytes
                     # OverflowError: Cython int32/float casts may raise on out-of-range values
                     except (TypeError, struct.error, OverflowError) as exc:
                         _raise_bind_serialize_error(col_spec, value, exc)
+                idx += 1
         else:
             # Fast path: no column encryption, use Cython serializers if available
             serializers = self.prepared_statement._serializers
             if serializers is not None:
                 for ser, value, col_spec in zip(serializers, values, col_meta):
                     if value is None:
-                        self.values.append(None)
+                        self.values[idx] = None
                     elif value is UNSET_VALUE:
                         if proto_version >= 4:
-                            self._append_unset_value()
+                            idx = self._append_unset_value(idx)
+                            continue
                         else:
                             raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
                     else:
                         try:
                             col_bytes = ser.serialize(value, proto_version)
-                            self.values.append(col_bytes)
+                            self.values[idx] = col_bytes
                         # OverflowError: Cython int32/float casts may raise on out-of-range values
                         except (TypeError, struct.error, OverflowError) as exc:
                             _raise_bind_serialize_error(col_spec, value, exc)
+                    idx += 1
             else:
                 for value, col_spec in zip(values, col_meta):
                     if value is None:
-                        self.values.append(None)
+                        self.values[idx] = None
                     elif value is UNSET_VALUE:
                         if proto_version >= 4:
-                            self._append_unset_value()
+                            idx = self._append_unset_value(idx)
+                            continue
                         else:
                             raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
                     else:
                         try:
                             col_bytes = col_spec.type.serialize(value, proto_version)
-                            self.values.append(col_bytes)
+                            self.values[idx] = col_bytes
                         # OverflowError: Cython int32/float casts may raise on out-of-range values
                         except (TypeError, struct.error, OverflowError) as exc:
                             _raise_bind_serialize_error(col_spec, value, exc)
+                    idx += 1
 
         if proto_version >= 4:
-            diff = col_meta_len - len(self.values)
-            if diff:
-                for _ in range(diff):
-                    self._append_unset_value()
+            # Fill remaining unbound columns with UNSET_VALUE (v4+ feature).
+            for i in range(idx, col_meta_len):
+                idx = self._append_unset_value(idx)
+        elif idx < col_meta_len:
+            # Pre-v4: trim trailing unused slots (no UNSET_VALUE support)
+            self.values = self.values[:idx]
 
         return self
 
-    def _append_unset_value(self):
-        next_index = len(self.values)
-        if self.prepared_statement.is_routing_key_index(next_index):
-            col_meta = self.prepared_statement.column_metadata[next_index]
+    def _append_unset_value(self, idx):
+        if self.prepared_statement.is_routing_key_index(idx):
+            col_meta = self.prepared_statement.column_metadata[idx]
             raise ValueError("Cannot bind UNSET_VALUE as a part of the routing key '%s'" % col_meta.name)
-        self.values.append(UNSET_VALUE)
+        self.values[idx] = UNSET_VALUE
+        return idx + 1
 
     @property
     def routing_key(self):
