@@ -58,7 +58,7 @@ class _RowView(Mapping):
     ``values``, ``items``, and ``__contains__`` for free.
     """
 
-    __slots__ = ("_row", "_index_map")
+    __slots__ = ("_index_map", "_row")
 
     def __init__(self, row, index_map):
         if len(row) < max(index_map.values(), default=-1) + 1:
@@ -77,12 +77,6 @@ class _RowView(Mapping):
 
     def __len__(self):
         return len(self._index_map)
-
-    def values(self):
-        return (self._row[i] for i in self._index_map.values())
-
-    def items(self):
-        return ((k, self._row[i]) for k, i in self._index_map.items())
 
     def get(self, key, default=None):
         idx = self._index_map.get(key)
