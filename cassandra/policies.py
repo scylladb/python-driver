@@ -616,6 +616,11 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
     If no :attr:`~.Statement.routing_key` is set on the query, the child
     policy's query plan will be used as is.
+
+    An LRU cache of size :attr:`cache_replicas_size` (default 1024) avoids
+    repeated token-to-replica lookups for the same (keyspace, routing_key)
+    pair.  Set to 0 to disable caching.  The cache is automatically
+    invalidated when the cluster topology changes.
     """
 
     _child_policy = None
@@ -625,9 +630,15 @@ class TokenAwarePolicy(LoadBalancingPolicy):
     Yield local replicas in a random order.
     """
 
-    def __init__(self, child_policy, shuffle_replicas=True):
+    def __init__(self, child_policy, shuffle_replicas=True, cache_replicas_size=1024):
+        super().__init__()
         self._child_policy = child_policy
         self.shuffle_replicas = shuffle_replicas
+        self._cluster_metadata = None
+        self._cache_replicas_size = max(0, cache_replicas_size)
+        self._replica_cache = OrderedDict()
+        self._replica_cache_token_map_ref = None
+        self._cache_lock = Lock()
 
     def populate(self, cluster, hosts):
         self._cluster_metadata = cluster.metadata
@@ -645,40 +656,147 @@ class TokenAwarePolicy(LoadBalancingPolicy):
     def distance(self, *args, **kwargs):
         return self._child_policy.distance(*args, **kwargs)
 
+    def _get_cached_replicas(self, keyspace, routing_key_bytes, token_map):
+        """
+        Return cached (token, replicas) for the given keyspace and routing key,
+        or None on cache miss.  The cache is invalidated whenever the token_map
+        object identity changes (i.e. after a topology rebuild).
+        """
+        if not self._cache_replicas_size:
+            return None
+        with self._cache_lock:
+            if token_map is not self._replica_cache_token_map_ref:
+                # Token map was rebuilt -- entire cache is stale.
+                self._replica_cache = OrderedDict()
+                self._replica_cache_token_map_ref = token_map
+            cache_key = (keyspace, routing_key_bytes)
+            entry = self._replica_cache.get(cache_key)
+            if entry is not None:
+                # Promote to most-recently-used.
+                self._replica_cache.move_to_end(cache_key)
+            return entry
+
+    def _put_cached_replicas(self, keyspace, routing_key_bytes, token, replicas, token_map):
+        """
+        Store (token, replicas) in the LRU cache, evicting the oldest
+        entry if the cache exceeds its configured size.
+        """
+        if not self._cache_replicas_size:
+            return
+        with self._cache_lock:
+            if token_map is not self._replica_cache_token_map_ref:
+                self._replica_cache = OrderedDict()
+                self._replica_cache_token_map_ref = token_map
+            cache_key = (keyspace, routing_key_bytes)
+            self._replica_cache[cache_key] = (token, replicas)
+            self._replica_cache.move_to_end(cache_key)
+            if len(self._replica_cache) > self._cache_replicas_size:
+                self._replica_cache.popitem(last=False)
+
     def make_query_plan(self, working_keyspace=None, query=None):
         keyspace = query.keyspace if query and query.keyspace else working_keyspace
 
         child = self._child_policy
         if query is None or query.routing_key is None or keyspace is None:
-            for host in child.make_query_plan(keyspace, query):
-                yield host
+            yield from child.make_query_plan(keyspace, query)
             return
 
+        cluster_metadata = self._cluster_metadata
+        token_map = cluster_metadata.token_map
         replicas = []
-        tablet = self._cluster_metadata._tablets.get_tablet_for_key(
-            keyspace, query.table, self._cluster_metadata.token_map.token_class.from_key(query.routing_key))
+        if token_map:
+            try:
+                token = token_map.token_class.from_key(query.routing_key)
+                tablet = cluster_metadata._tablets.get_tablet_for_key(
+                    keyspace, query.table, token
+                )
 
-        if tablet is not None:
-            replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
-            child_plan = child.make_query_plan(keyspace, query)
+                if tablet is not None:
+                    replicas_mapped = {r[0] for r in tablet.replicas}
+                    child_plan = child.make_query_plan(keyspace, query)
+                    replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+                else:
+                    cached = self._get_cached_replicas(keyspace, query.routing_key, token_map)
+                    if cached is not None:
+                        token, replicas = cached
+                    else:
+                        try:
+                            replicas = token_map.get_replicas(keyspace, token)
+                        except Exception:
+                            log.debug(
+                                "Failed to get replicas from token_map, "
+                                "falling back to cluster metadata"
+                            )
+                            replicas = cluster_metadata.get_replicas(keyspace, query.routing_key)
+                        self._put_cached_replicas(
+                            keyspace, query.routing_key, token, replicas, token_map
+                        )
+            except Exception:
+                log.debug(
+                    "Failed to resolve token or tablet for query plan, "
+                    "falling back to child policy",
+                    exc_info=True,
+                )
 
-            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+        if self.shuffle_replicas:
+            if not query.is_lwt():
+                replicas = list(replicas)
+                shuffle(replicas)
+
+        local_rack = []
+        local = []
+        remote = []
+
+        child_distance = child.distance
+
+        for replica in replicas:
+            if replica.is_up:
+                d = child_distance(replica)
+                if d == HostDistance.LOCAL_RACK:
+                    local_rack.append(replica)
+                elif d == HostDistance.LOCAL:
+                    local.append(replica)
+                elif d == HostDistance.REMOTE:
+                    remote.append(replica)
+
+        if local_rack or local or remote:
+            yielded = set()
+
+            for replica in local_rack:
+                yielded.add(replica)
+                yield replica
+
+            for replica in local:
+                yielded.add(replica)
+                yield replica
+
+            for replica in remote:
+                yielded.add(replica)
+                yield replica
+
+            # Yield the rest of the cluster (non-replica hosts).
+            # DCAware and RackAware already yield in distance order
+            # (local_rack -> local -> remote), so we can stream directly.
+            # For other child policies we must re-sort by distance.
+            if isinstance(child, (DCAwareRoundRobinPolicy, RackAwareRoundRobinPolicy)):
+                yield from child.make_query_plan_with_exclusion(keyspace, query, yielded)
+            else:
+                remaining_local_rack = []
+                remaining_local = []
+                remaining_remote = []
+                for host in child.make_query_plan_with_exclusion(keyspace, query, yielded):
+                    d = child_distance(host)
+                    if d == HostDistance.LOCAL_RACK:
+                        remaining_local_rack.append(host)
+                    elif d == HostDistance.LOCAL:
+                        remaining_local.append(host)
+                    elif d == HostDistance.REMOTE:
+                        remaining_remote.append(host)
+                yield from remaining_local_rack
+                yield from remaining_local
+                yield from remaining_remote
         else:
-            replicas = self._cluster_metadata.get_replicas(keyspace, query.routing_key)
-
-        if self.shuffle_replicas and not query.is_lwt():
-            shuffle(replicas)
-
-        def yield_in_order(hosts):
-            for distance in [HostDistance.LOCAL_RACK, HostDistance.LOCAL, HostDistance.REMOTE]:
-                for replica in hosts:
-                    if replica.is_up and child.distance(replica) == distance:
-                        yield replica
-
-        # yield replicas: local_rack, local, remote
-        yield from yield_in_order(replicas)
-        # yield rest of the cluster: local_rack, local, remote
-        yield from yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas])
+            yield from child.make_query_plan(keyspace, query)
 
     def on_up(self, *args, **kwargs):
         return self._child_policy.on_up(*args, **kwargs)
