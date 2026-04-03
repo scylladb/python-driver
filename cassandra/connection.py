@@ -22,7 +22,7 @@ import logging
 import socket
 import struct
 import sys
-from threading import Thread, Event, RLock, Condition
+from threading import Thread, Event, Lock, RLock, Condition
 import time
 import ssl
 import uuid
@@ -781,6 +781,45 @@ class ShardAwarePortGenerator:
 
 
 DefaultShardAwarePortGenerator = ShardAwarePortGenerator(DEFAULT_LOCAL_PORT_LOW, DEFAULT_LOCAL_PORT_HIGH)
+
+
+class SSLSessionCache(object):
+    """
+    A thread-safe cache of ``ssl.SSLSession`` objects, keyed by connection TLS
+    identity.
+
+    When TLS is enabled, the driver stores the negotiated session after each
+    successful handshake and reuses it for subsequent connections to the same
+    host, enabling TLS session resumption (tickets / PSK) without any extra
+    configuration.
+
+    This cache is created automatically by :class:`.Cluster` when
+    ``ssl_context`` or ``ssl_options`` are set.  Pass ``ssl_session_cache=None``
+    to :class:`.Cluster` to opt out.
+
+    Note: only the stdlib ``ssl`` module is supported.  Twisted and Eventlet
+    connections use pyOpenSSL, which has a different session API and is not
+    covered by this cache.
+    """
+
+    def __init__(self):
+        self._lock = Lock()
+        self._cache = {}
+
+    def get(self, key):
+        """
+        Return the cached ``ssl.SSLSession`` for ``key``, or ``None`` if none
+        is stored yet.
+        """
+        with self._lock:
+            return self._cache.get(key)
+
+    def set(self, key, session):
+        """
+        Store ``session`` for ``key``.
+        """
+        with self._lock:
+            self._cache[key] = session
 
 
 class Connection(object):
