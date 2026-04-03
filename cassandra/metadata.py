@@ -2619,7 +2619,10 @@ class SchemaParserV3(SchemaParserV22):
     """
     _SELECT_KEYSPACES = "SELECT * FROM system_schema.keyspaces"
     _SELECT_TABLES = "SELECT * FROM system_schema.tables"
-    _SELECT_COLUMNS = "SELECT * FROM system_schema.columns"
+    # Only fetch the columns used by _build_column_metadata / _build_table_columns.
+    # If _build_column_metadata or _build_table_columns needs more columns, this query
+    # should be updated accordingly.
+    _SELECT_COLUMNS = "SELECT keyspace_name, table_name, column_name, clustering_order, kind, position, type FROM system_schema.columns"
     _SELECT_INDEXES = "SELECT * FROM system_schema.indexes"
     _SELECT_TRIGGERS = "SELECT * FROM system_schema.triggers"
     _SELECT_TYPES = "SELECT * FROM system_schema.types"
