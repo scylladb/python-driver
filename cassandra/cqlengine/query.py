@@ -87,7 +87,7 @@ class AbstractQueryableColumn:
     def _get_column(self):
         raise NotImplementedError
 
-    def __unicode__(self):
+    def __str__(self):
         raise NotImplementedError
 
     def _to_database(self, val):
@@ -405,11 +405,8 @@ class AbstractQuerySet(object):
                 check_applied(result)
             return result
 
-    def __unicode__(self):
-        return str(self._select_query())
-
     def __str__(self):
-        return str(self.__unicode__())
+        return str(self._select_query())
 
     def __call__(self, *args, **kwargs):
         return self.filter(*args, **kwargs)

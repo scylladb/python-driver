@@ -30,7 +30,7 @@ class ValueQuoter:
     def __init__(self, value):
         self.value = value
 
-    def __unicode__(self):
+    def __str__(self):
         from cassandra.encoder import cql_quote
         if isinstance(self.value, (list, tuple)):
             return '[' + ', '.join([cql_quote(v) for v in self.value]) + ']'
@@ -48,7 +48,7 @@ class ValueQuoter:
 
 class InQuoter(ValueQuoter):
 
-    def __unicode__(self):
+    def __str__(self):
         from cassandra.encoder import cql_quote
         return '(' + ', '.join([cql_quote(v) for v in self.value]) + ')'
 
@@ -60,7 +60,7 @@ class BaseClause:
         self.value = value
         self.context_id = None
 
-    def __unicode__(self):
+    def __str__(self):
         raise NotImplementedError
 
     def __hash__(self):
@@ -109,7 +109,7 @@ class WhereClause(BaseClause):
         self.query_value = self.value if isinstance(self.value, QueryValue) else QueryValue(self.value)
         self.quote_field = quote_field
 
-    def __unicode__(self):
+    def __str__(self):
         field = ('"{0}"' if self.quote_field else '{0}').format(self.field)
         return u'{0} {1} {2}'.format(field, self.operator, str(self.query_value))
 
@@ -139,7 +139,7 @@ class IsNotNullClause(WhereClause):
     def __init__(self, field):
         super(IsNotNullClause, self).__init__(field, IsNotNullOperator(), '')
 
-    def __unicode__(self):
+    def __str__(self):
         field = ('"{0}"' if self.quote_field else '{0}').format(self.field)
         return u'{0} {1}'.format(field, self.operator)
 
@@ -156,7 +156,7 @@ IsNotNull = IsNotNullClause
 class AssignmentClause(BaseClause):
     """ a single variable st statement """
 
-    def __unicode__(self):
+    def __str__(self):
         return u'"{0}" = %({1})s'.format(self.field, self.context_id)
 
     def insert_tuple(self):
@@ -166,7 +166,7 @@ class AssignmentClause(BaseClause):
 class ConditionalClause(BaseClause):
     """ A single variable iff statement """
 
-    def __unicode__(self):
+    def __str__(self):
         return u'"{0}" = %({1})s'.format(self.field, self.context_id)
 
     def insert_tuple(self):
@@ -210,7 +210,7 @@ class SetUpdateClause(ContainerUpdateClause):
     _additions = None
     _removals = None
 
-    def __unicode__(self):
+    def __str__(self):
         qs = []
         ctx_id = self.context_id
         if (self.previous is None and
@@ -282,7 +282,7 @@ class ListUpdateClause(ContainerUpdateClause):
     _append = None
     _prepend = None
 
-    def __unicode__(self):
+    def __str__(self):
         if not self._analyzed:
             self._analyze()
         qs = []
@@ -411,7 +411,7 @@ class MapUpdateClause(ContainerUpdateClause):
             self._analyze()
         return self.previous is None and not self._updates and not self._removals
 
-    def __unicode__(self):
+    def __str__(self):
         qs = []
 
         ctx_id = self.context_id
@@ -442,7 +442,7 @@ class CounterUpdateClause(AssignmentClause):
     def update_context(self, ctx):
         ctx[str(self.context_id)] = abs(self.value - self.previous)
 
-    def __unicode__(self):
+    def __str__(self):
         delta = self.value - self.previous
         sign = '-' if delta < 0 else '+'
         return '"{0}" = "{0}" {1} %({2})s'.format(self.field, sign, self.context_id)
@@ -458,7 +458,7 @@ class FieldDeleteClause(BaseDeleteClause):
     def __init__(self, field):
         super(FieldDeleteClause, self).__init__(field, None)
 
-    def __unicode__(self):
+    def __str__(self):
         return '"{0}"'.format(self.field)
 
     def update_context(self, ctx):
@@ -493,7 +493,7 @@ class MapDeleteClause(BaseDeleteClause):
             self._analyze()
         return len(self._removals)
 
-    def __unicode__(self):
+    def __str__(self):
         if not self._analyzed:
             self._analyze()
         return ', '.join(['"{0}"[%({1})s]'.format(self.field, self.context_id + i) for i in range(len(self._removals))])
@@ -590,11 +590,11 @@ class BaseCQLStatement:
 
         return int(time.mktime(tmp.timetuple()) * 1e+6 + tmp.microsecond)
 
-    def __unicode__(self):
+    def __str__(self):
         raise NotImplementedError
 
     def __repr__(self):
-        return self.__unicode__()
+        return self.__str__()
 
     @property
     def _where(self):
@@ -632,7 +632,7 @@ class SelectStatement(BaseCQLStatement):
         self.limit = limit
         self.allow_filtering = allow_filtering
 
-    def __unicode__(self):
+    def __str__(self):
         qs = ['SELECT']
         if self.distinct_fields:
             if self.count:
@@ -733,7 +733,7 @@ class InsertStatement(AssignmentStatement):
 
         self.if_not_exists = if_not_exists
 
-    def __unicode__(self):
+    def __str__(self):
         qs = ['INSERT INTO {0}'.format(self.table)]
 
         # get column names and context placeholders
@@ -779,7 +779,7 @@ class UpdateStatement(AssignmentStatement):
 
         self.if_exists = if_exists
 
-    def __unicode__(self):
+    def __str__(self):
         qs = ['UPDATE', self.table]
 
         using_options = []
@@ -880,7 +880,7 @@ class DeleteStatement(BaseCQLStatement):
         self.context_counter += field.get_context_size()
         self.fields.append(field)
 
-    def __unicode__(self):
+    def __str__(self):
         qs = ['DELETE']
         if self.fields:
             qs += [', '.join(['{0}'.format(f) for f in self.fields])]
