@@ -541,6 +541,10 @@ _PREPARED_WITH_KEYSPACE_FLAG = 0x01
 _PAGE_SIZE_BYTES_FLAG = 0x40000000
 _PAGING_OPTIONS_FLAG = 0x80000000
 
+# cap accumulated param bytes before flushing, to bound peak memory
+# when writing query params (see _QueryMessage._write_query_params)
+_WRITE_QUERY_PARAMS_FLUSH_THRESHOLD = 64 * 1024
+
 
 class _QueryMessage(_MessageType):
 
@@ -600,9 +604,29 @@ class _QueryMessage(_MessageType):
             write_byte(f, flags)
 
         if self.query_params is not None:
-            write_short(f, len(self.query_params))
+            # Accumulate param bytes in a list and flush in bounded chunks
+            # instead of 2*N+1 separate f.write() calls via write_value(),
+            # capping peak memory for large param sets (e.g. vectors).
+            _int32_pack = int32_pack
+            parts = [uint16_pack(len(self.query_params))]
+            parts_size = 0
             for param in self.query_params:
-                write_value(f, param)
+                if param is None:
+                    parts.append(_int32_pack(-1))
+                    parts_size += 4
+                elif param is _UNSET_VALUE:
+                    parts.append(_int32_pack(-2))
+                    parts_size += 4
+                else:
+                    parts.append(_int32_pack(len(param)))
+                    parts.append(param)
+                    parts_size += 4 + len(param)
+                if parts_size >= _WRITE_QUERY_PARAMS_FLUSH_THRESHOLD:
+                    f.write(b"".join(parts))
+                    parts = []
+                    parts_size = 0
+            if parts:
+                f.write(b"".join(parts))
         if self.fetch_size:
             write_int(f, self.fetch_size)
         if self.paging_state:
@@ -678,8 +702,8 @@ class ExecuteMessage(_QueryMessage):
                 and protocol_features is not None
                 and protocol_features.use_metadata_id)
 
-    def _write_query_params(self, f, protocol_version, protocol_features=None):
-        super(ExecuteMessage, self)._write_query_params(f, protocol_version, protocol_features)
+    # _write_query_params inherited from _QueryMessage; removed redundant
+    # pass-through override to avoid extra MRO lookup per call.
 
     def send_body(self, f, protocol_version, protocol_features=None):
         write_string(f, self.query_id)
