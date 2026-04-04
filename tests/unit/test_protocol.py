@@ -170,7 +170,7 @@ class MessageTest(unittest.TestCase):
 
     def test_batch_message_with_keyspace(self):
         self.maxDiff = None
-        io = Mock(name='io')
+        buf = io.BytesIO()
         batch = BatchMessage(
             batch_type=BatchType.LOGGED,
             queries=((False, 'stmt a', ('param a',)),
@@ -180,18 +180,28 @@ class MessageTest(unittest.TestCase):
             consistency_level=3,
             keyspace='ks'
         )
-        batch.send_body(io, protocol_version=5)
-        self._check_calls(io,
-            ((b'\x00',), (b'\x00\x03',), (b'\x00',),
-             (b'\x00\x00\x00\x06',), (b'stmt a',),
-             (b'\x00\x01',), (b'\x00\x00\x00\x07',), ('param a',),
-             (b'\x00',), (b'\x00\x00\x00\x06',), (b'stmt b',),
-             (b'\x00\x01',), (b'\x00\x00\x00\x07',), ('param b',),
-             (b'\x00',), (b'\x00\x00\x00\x06',), (b'stmt c',),
-             (b'\x00\x01',), (b'\x00\x00\x00\x07',), ('param c',),
-             (b'\x00\x03',),
-             (b'\x00\x00\x00\x80',), (b'\x00\x02',), (b'ks',))
+        batch.send_body(buf, protocol_version=5)
+        expected = (
+            b'\x00'              # batch type LOGGED
+            b'\x00\x03'         # 3 queries
+            b'\x00'              # not prepared
+            b'\x00\x00\x00\x06' b'stmt a'  # longstring 'stmt a'
+            b'\x00\x01'         # 1 param
+            b'\x00\x00\x00\x07' b'param a'  # write_value 'param a'
+            b'\x00'              # not prepared
+            b'\x00\x00\x00\x06' b'stmt b'
+            b'\x00\x01'
+            b'\x00\x00\x00\x07' b'param b'
+            b'\x00'
+            b'\x00\x00\x00\x06' b'stmt c'
+            b'\x00\x01'
+            b'\x00\x00\x00\x07' b'param c'
+            b'\x00\x03'         # consistency level
+            b'\x00\x00\x00\x80'  # flags (keyspace)
+            b'\x00\x02' b'ks'   # keyspace
         )
+        self.assertEqual(buf.getvalue(), expected)
+
 
 class WriteQueryParamsBufferAccumulationTest(unittest.TestCase):
     """
@@ -372,4 +382,91 @@ class WriteQueryParamsBufferAccumulationTest(unittest.TestCase):
                              consistency_level=4)
         raw = self._execute_msg_bytes(msg, protocol_version=4)
         self.assertIn(expected, raw)
+
+    # -- BatchMessage buffer accumulation tests ---------------------------
+
+    @staticmethod
+    def _batch_msg_bytes(queries, protocol_version=4, **kwargs):
+        """Serialize a BatchMessage and return the raw bytes."""
+        msg = BatchMessage(batch_type=BatchType.LOGGED, queries=queries,
+                           consistency_level=1, **kwargs)
+        buf = io.BytesIO()
+        msg.send_body(buf, protocol_version)
+        return buf.getvalue()
+
+    def test_batch_prepared_queries_with_params(self):
+        """Batch of prepared queries with byte params serializes correctly."""
+        queries = [
+            (True, b'\x01\x02\x03\x04', [b'val1', b'val2']),
+            (True, b'\x01\x02\x03\x04', [b'val3', None]),
+        ]
+        raw = self._batch_msg_bytes(queries)
+        self.assertIn(b'val1', raw)
+        self.assertIn(b'val2', raw)
+        self.assertIn(b'val3', raw)
+        self.assertIn(int32_pack(-1), raw)  # NULL
+
+    def test_batch_unprepared_queries(self):
+        """Batch of unprepared (string) queries serializes correctly."""
+        queries = [
+            (False, 'INSERT INTO t (k) VALUES (?)', [b'\x01']),
+            (False, 'INSERT INTO t (k) VALUES (?)', [b'\x02']),
+        ]
+        raw = self._batch_msg_bytes(queries)
+        self.assertIn(b'INSERT INTO t (k) VALUES (?)', raw)
+
+    def test_batch_mixed_prepared_unprepared(self):
+        """Batch mixing prepared and unprepared queries."""
+        queries = [
+            (False, 'SELECT 1', []),
+            (True, b'\xab\xcd', [b'data']),
+        ]
+        raw = self._batch_msg_bytes(queries)
+        self.assertIn(b'SELECT 1', raw)
+        self.assertIn(b'data', raw)
+
+    def test_batch_empty_queries(self):
+        """Batch with zero queries."""
+        raw = self._batch_msg_bytes([])
+        self.assertIn(uint16_pack(0), raw)
+
+    def test_batch_many_queries(self):
+        """Batch with 50 queries to exercise accumulation at scale."""
+        queries = [
+            (True, b'\x01\x02', [b'param_%03d' % i])
+            for i in range(50)
+        ]
+        raw = self._batch_msg_bytes(queries)
+        self.assertIn(uint16_pack(50), raw)
+        for i in range(50):
+            self.assertIn(b'param_%03d' % i, raw)
+
+    def test_batch_null_and_unset_params(self):
+        """Batch params with NULL and UNSET values."""
+        queries = [
+            (True, b'\x01', [None, _UNSET_VALUE, b'ok']),
+        ]
+        raw = self._batch_msg_bytes(queries, protocol_version=4)
+        self.assertIn(int32_pack(-1), raw)   # NULL
+        self.assertIn(int32_pack(-2), raw)   # UNSET
+        self.assertIn(b'ok', raw)
+
+    def test_batch_vector_params(self):
+        """Batch with large vector params (simulating bulk vector INSERT)."""
+        vector = struct.pack('128f', *([0.5] * 128))
+        queries = [
+            (True, b'\x01\x02', [int32_pack(i), vector])
+            for i in range(10)
+        ]
+        raw = self._batch_msg_bytes(queries)
+        # 10 copies of the vector should appear
+        count = 0
+        start = 0
+        while True:
+            idx = raw.find(vector, start)
+            if idx == -1:
+                break
+            count += 1
+            start = idx + 1
+        self.assertEqual(count, 10)
 
