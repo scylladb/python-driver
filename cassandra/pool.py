@@ -476,12 +476,6 @@ class HostConnection(object):
         # optimistic try to connect to it
         if shard_id is not None:
             if conn:
-                log.debug(
-                    "Using connection to shard_id=%i on host %s for routing_key=%s",
-                    shard_id,
-                    self.host,
-                    routing_key
-                )
                 if conn.orphaned_threshold_reached and shard_id not in self._connecting:
                     # The connection has met its orphaned stream ID limit
                     # and needs to be replaced. Start opening a connection
