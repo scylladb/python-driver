@@ -43,3 +43,53 @@ objects should all be created after forking the process, not before.
 
 For further discussion and simple examples using the driver with ``multiprocessing``,
 see `this blog post <http://www.datastax.com/dev/blog/datastax-python-driver-multiprocessing-example-for-improved-bulk-data-throughput>`_.
+
+NumPy-accelerated Vector Serialization
+--------------------------------------
+When inserting high-dimensional vectors (e.g. ML embeddings), the default
+element-by-element serialization in
+:class:`~cassandra.cqltypes.VectorType` can become a bottleneck.  If
+`NumPy <https://numpy.org>`_ is installed, the driver provides three
+progressively faster paths:
+
+**Single-row ndarray fast path** – pass a 1-D ``numpy.ndarray`` directly
+as the bound value for a ``vector<float, N>`` column.  The driver
+byte-swaps the array to big-endian in a single C-level operation and
+calls ``tobytes()``, replacing *N* individual ``struct.pack`` calls::
+
+    import numpy as np
+    embedding = np.array([0.1, 0.2, ..., 0.768], dtype=np.float32)
+    session.execute(insert_stmt, [key, embedding])
+
+**Bulk serialization** – for batch inserts, convert an entire 2-D array
+(one row per vector) into a list of ``bytes`` objects with a single
+byte-swap::
+
+    from cassandra.cqltypes import VectorType
+
+    # Build the parameterized type (usually done once)
+    ctype = VectorType.apply_parameters(
+        [lookup_casstype('org.apache.cassandra.db.marshal.FloatType'), 768],
+        names=None,
+    )
+
+    vectors_2d = np.array(all_embeddings, dtype=np.float32)   # (N, 768)
+    blobs = ctype.serialize_numpy_bulk(vectors_2d)             # list[bytes]
+
+    for key, blob in zip(keys, blobs):
+        session.execute(insert_stmt, [key, blob])
+
+Each ``bytes`` object in the returned list is accepted directly by the
+driver's bytes-passthrough path, so ``BoundStatement.bind()`` performs no
+further conversion.
+
+**Supported subtypes** – the fast paths are available for ``float``
+(``>f4``), ``double`` (``>f8``), ``int`` (``>i4``), and ``bigint``
+(``>i8``).  Variable-length subtypes (``smallint``, ``tinyint``, text
+types, etc.) fall back to the original element-by-element serialization
+automatically.
+
+**Benchmarks** – on 768-dimension ``float32`` vectors (100-row batches),
+the bulk path is ~146× faster than the baseline, and the bytes
+passthrough path is ~298× faster.  See
+``benchmarks/bench_vector_numpy_serialize.py`` for reproducible numbers.
