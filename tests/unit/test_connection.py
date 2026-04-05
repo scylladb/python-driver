@@ -22,7 +22,8 @@ from cassandra import OperationTimedOut
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, _Frame, Timer, TimerManager,
-                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
+                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator,
+                                  _ConnectionIOBuffer)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 SupportedMessage, ProtocolHandler)
@@ -571,3 +572,42 @@ class TestShardawarePortGenerator(unittest.TestCase):
         second_run = list(itertools.islice(gen.generate(0, 2), 5))
 
         assert first_run == second_run
+
+
+class ResetBufferTest(unittest.TestCase):
+    """Tests for _ConnectionIOBuffer._reset_buffer static method."""
+
+    def test_preserves_remaining_data(self):
+        buf = BytesIO()
+        buf.write(b"already_consumed_new_data")
+        buf.seek(17)  # position after "already_consumed_"
+        result = _ConnectionIOBuffer._reset_buffer(buf)
+        self.assertEqual(result.getvalue(), b"new_data")
+        # Cursor is at SEEK_END, ready for further writes
+        self.assertEqual(result.tell(), len(b"new_data"))
+
+    def test_empty_remaining(self):
+        buf = BytesIO()
+        buf.write(b"all_consumed")
+        buf.seek(12)
+        result = _ConnectionIOBuffer._reset_buffer(buf)
+        self.assertEqual(result.getvalue(), b"")
+        self.assertEqual(result.tell(), 0)
+
+    def test_nothing_consumed(self):
+        buf = BytesIO()
+        buf.write(b"all_remaining")
+        buf.seek(0)
+        result = _ConnectionIOBuffer._reset_buffer(buf)
+        self.assertEqual(result.getvalue(), b"all_remaining")
+        # Cursor is at SEEK_END, ready for further writes
+        self.assertEqual(result.tell(), len(b"all_remaining"))
+
+    def test_new_buffer_is_writable(self):
+        buf = BytesIO()
+        buf.write(b"head_tail")
+        buf.seek(5)
+        result = _ConnectionIOBuffer._reset_buffer(buf)
+        result.seek(0, 2)  # seek to end
+        result.write(b"_more")
+        self.assertEqual(result.getvalue(), b"tail_more")
