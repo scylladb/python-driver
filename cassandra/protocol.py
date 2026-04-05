@@ -71,6 +71,10 @@ _message_types_by_opcode = {}
 
 _UNSET_VALUE = object()
 
+# Pre-computed packed constants for null/unset markers
+_INT32_NEG1 = int32_pack(-1)   # null value marker
+_INT32_NEG2 = int32_pack(-2)   # unset value marker
+
 
 def register_class(cls):
     _message_types_by_opcode[cls.opcode] = cls
@@ -611,9 +615,9 @@ class _QueryMessage(_MessageType):
             parts = [uint16_pack(len(self.query_params))]
             for param in self.query_params:
                 if param is None:
-                    parts.append(_int32_pack(-1))
+                    parts.append(_INT32_NEG1)
                 elif param is _UNSET_VALUE:
-                    parts.append(_int32_pack(-2))
+                    parts.append(_INT32_NEG2)
                 else:
                     n = len(param)
                     parts.append(_int32_pack(n))
@@ -1006,9 +1010,9 @@ class BatchMessage(_MessageType):
             _p(_u16(len(params)))
             for param in params:
                 if param is None:
-                    _p(_i32(-1))
+                    _p(_INT32_NEG1)
                 elif param is _UNSET_VALUE:
-                    _p(_i32(-2))
+                    _p(_INT32_NEG2)
                 else:
                     if isinstance(param, str):
                         param = param.encode('utf8')
