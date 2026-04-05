@@ -22,8 +22,8 @@ from binascii import unhexlify
 import cassandra
 from cassandra import util
 from cassandra.cqltypes import (
-    CassandraType, DateRangeType, DateType, DecimalType,
-    EmptyValue, LongType, SetType, UTF8Type,
+    ByteType, CassandraType, DateRangeType, DateType, DecimalType,
+    EmptyValue, LongType, SetType, ShortType, UTF8Type,
     cql_typename, int8_pack, int64_pack, int64_unpack, lookup_casstype,
     lookup_casstype_simple, parse_casstype_args,
     int32_pack, Int32Type, ListType, MapType, VectorType,
@@ -399,6 +399,32 @@ class VectorTests(unittest.TestCase):
         # Duration (containts varints)
         self._round_trip_test([util.Duration(1,1,1), util.Duration(2,2,2), util.Duration(3,3,3)], \
             "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.DurationType, 3)")
+
+    def test_short_and_byte_vectors_use_variable_length_wire_format(self):
+        # Regression test: smallint (ShortType) and tinyint (ByteType) have a
+        # fixed in-memory representation, but real Cassandra 5.0 does NOT treat
+        # them as fixed-width for vector (de)serialization -- AbstractType's
+        # valueLengthIfFixed() defaults to variable-length, and neither
+        # ShortType.java nor ByteType.java override it. So, like TimeType
+        # above, their vector elements must be vint-length-prefixed on the
+        # wire, not packed as a fixed number of bytes per element. This guards
+        # against ShortType/ByteType ever being (re-)added to a fixed-width
+        # struct/numpy fast-path map for VectorType, which would silently
+        # produce a wire format a real server can't parse.
+        for subtype, packed_value_size in ((ShortType, 2), (ByteType, 1)):
+            ctype = parse_casstype_args(
+                "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.%s, 4)"
+                % subtype.__name__)
+            assert ctype.subtype.serial_size() is None
+            assert ctype.serial_size() is None
+
+            data = [3, -2, 100, -100]
+            data_bytes = ctype.serialize(data, 0)
+            # 1 vint length byte + the packed value per element -- NOT a flat
+            # packed_value_size * len(data), which is what a fixed-width fast
+            # path would (incorrectly) produce.
+            assert len(data_bytes) == len(data) * (1 + packed_value_size)
+            assert ctype.deserialize(data_bytes, 0) == data
 
     def test_round_trip_collection_types(self):
         # List (subtype of fixed size)
