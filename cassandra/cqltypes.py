@@ -54,6 +54,12 @@ from cassandra import util
 _little_endian_flag = 1  # we always serialize LE
 import ipaddress
 
+
+try:
+    import numpy as _np
+    _HAVE_NUMPY = True
+except ImportError:
+    _HAVE_NUMPY = False
 apache_cassandra_type_prefix = 'org.apache.cassandra.db.marshal.'
 
 cassandra_empty_type = 'org.apache.cassandra.db.marshal.EmptyType'
@@ -1428,10 +1434,25 @@ class DateRangeType(CassandraType):
 
         return buf.getvalue()
 
+# Used by VectorType to enable fast serialization from NumPy arrays.
+# Only types with a fixed serial_size() are included, because the vector
+# wire format for variable-size subtypes uses uvint length prefixes per
+# element, which cannot be produced by raw numpy tobytes().
+_NUMPY_DTYPE_MAP = {}
+if _HAVE_NUMPY:
+    _NUMPY_DTYPE_MAP = {
+        'float': _np.dtype('>f4'),   # FloatType  - 4-byte big-endian float
+        'double': _np.dtype('>f8'),  # DoubleType - 8-byte big-endian double
+        'int': _np.dtype('>i4'),     # Int32Type  - 4-byte big-endian int32
+        'bigint': _np.dtype('>i8'),  # LongType   - 8-byte big-endian int64
+    }
+
+
 class VectorType(_CassandraType):
     typename = 'org.apache.cassandra.db.marshal.VectorType'
     vector_size = 0
     subtype = None
+    _numpy_dtype = None
 
     @classmethod
     def serial_size(cls):
@@ -1443,7 +1464,12 @@ class VectorType(_CassandraType):
         assert len(params) == 2
         subtype = lookup_casstype(params[0])
         vsize = params[1]
-        return type('%s(%s)' % (cls.cass_parameterized_type_with([]), vsize), (cls,), {'vector_size': vsize, 'subtype': subtype})
+        # Determine the NumPy dtype for fast serialization (only for
+        # fixed-size subtypes whose typename appears in _NUMPY_DTYPE_MAP).
+        np_dtype = None
+        if _HAVE_NUMPY and subtype.serial_size() is not None:
+            np_dtype = _NUMPY_DTYPE_MAP.get(subtype.typename)
+        return type('%s(%s)' % (cls.cass_parameterized_type_with([]), vsize), (cls,), {'vector_size': vsize, 'subtype': subtype, '_numpy_dtype': np_dtype})
 
     @classmethod
     def deserialize(cls, byts, protocol_version):
@@ -1476,6 +1502,36 @@ class VectorType(_CassandraType):
 
     @classmethod
     def serialize(cls, v, protocol_version):
+        # ---- bytes / bytearray passthrough ----
+        # If the caller already holds a correctly-sized blob (e.g. from
+        # serialize_numpy_bulk), skip all conversion work.
+        # Only enabled for subtypes with a known NumPy dtype (float, double,
+        # int32, bigint) - variable-size subtypes fall through to the
+        # element-by-element path.
+        if cls._numpy_dtype is not None and isinstance(v, (bytes, bytearray)):
+            expected = cls.serial_size()
+            if len(v) == expected:
+                return v if isinstance(v, bytes) else bytes(v)
+            raise ValueError(
+                'Pre-serialized bytes have wrong length %d (expected %d for vector<%s, %d>)'
+                % (len(v), expected, cls.subtype.typename, cls.vector_size))
+
+        # ---- NumPy ndarray fast path ----
+        if cls._numpy_dtype is not None and _HAVE_NUMPY and isinstance(v, _np.ndarray):
+            if v.shape != (cls.vector_size,):
+                raise ValueError(
+                    'Expected ndarray of shape ({0},) for vector of type {1}, got shape {2}'.format(
+                        cls.vector_size, cls.subtype.typename, v.shape))
+            if v.dtype != cls._numpy_dtype and not _np.can_cast(v.dtype, cls._numpy_dtype, casting='safe'):
+                raise TypeError(
+                    'Unsafe dtype conversion from %s to %s for vector<%s, %d>: '
+                    'values may overflow or lose precision. '
+                    'Cast explicitly with arr.astype(%r) if this is intentional.'
+                    % (v.dtype, cls._numpy_dtype, cls.subtype.typename, cls.vector_size, cls._numpy_dtype))
+            arr = _np.asarray(v, dtype=cls._numpy_dtype)
+            return arr.tobytes()
+
+        # ---- Original element-by-element path ----
         v_length = len(v)
         if cls.vector_size != v_length:
             raise ValueError(
@@ -1490,6 +1546,67 @@ class VectorType(_CassandraType):
                 buf.write(uvint_pack(len(item_bytes)))
             buf.write(item_bytes)
         return buf.getvalue()
+
+    @classmethod
+    def serialize_numpy_bulk(cls, vectors):
+        """Serialize a batch of vectors from a 2-D NumPy array.
+
+        Parameters
+        ----------
+        vectors : numpy.ndarray
+            A 2-D array of shape ``(N, cls.vector_size)`` whose values are
+            compatible with the CQL vector subtype.
+
+        Returns
+        -------
+        list[bytes]
+            One ``bytes`` object per row, ready to be bound to a CQL
+            ``vector<...>`` column.
+
+        Raises
+        ------
+        TypeError
+            If NumPy is not available or ``cls._numpy_dtype`` is ``None``
+            (subtype not supported for the fast path).
+        ValueError
+            If the second dimension of *vectors* does not match
+            ``cls.vector_size``.
+
+        Notes
+        -----
+        The entire array is byte-swapped to big-endian once, then each row
+        is sliced out of the raw buffer with zero per-element overhead.
+        The returned ``bytes`` objects are accepted directly by
+        ``VectorType.serialize()`` (bytes passthrough) so they flow through
+        ``BoundStatement.bind()`` without further conversion.
+        """
+        if not _HAVE_NUMPY:
+            raise TypeError('serialize_numpy_bulk() requires NumPy to be installed')
+        if cls._numpy_dtype is None:
+            raise TypeError(
+                'serialize_numpy_bulk() requires a subtype with a known '
+                'NumPy dtype; %s is not supported' % cls.subtype.typename)
+        if not isinstance(vectors, _np.ndarray):
+            raise ValueError(
+                'Expected a 2-D NumPy array, got %s' % type(vectors).__name__)
+        if vectors.ndim != 2:
+            raise ValueError(
+                'Expected a 2-D NumPy array, got %d-D array with shape %s'
+                % (vectors.ndim, vectors.shape))
+        if vectors.shape[1] != cls.vector_size:
+            raise ValueError(
+                'Expected array with %d columns, got shape %s'
+                % (cls.vector_size, vectors.shape))
+        if vectors.dtype != cls._numpy_dtype and not _np.can_cast(vectors.dtype, cls._numpy_dtype, casting='safe'):
+            raise TypeError(
+                'Unsafe dtype conversion from %s to %s for vector<%s, %d>: '
+                'values may overflow or lose precision. '
+                'Cast explicitly with arr.astype(%r) if this is intentional.'
+                % (vectors.dtype, cls._numpy_dtype, cls.subtype.typename, cls.vector_size, cls._numpy_dtype))
+        arr = _np.asarray(vectors, dtype=cls._numpy_dtype)
+        row_bytes = cls._numpy_dtype.itemsize * cls.vector_size
+        raw = arr.tobytes()
+        return [raw[i * row_bytes:(i + 1) * row_bytes] for i in range(arr.shape[0])]
 
     @classmethod
     def cql_parameterized_type(cls):
