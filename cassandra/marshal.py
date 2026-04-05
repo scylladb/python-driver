@@ -40,11 +40,9 @@ v3_header_unpack = v3_header_struct.unpack
 
 
 def varint_unpack(term):
-    val = int(''.join("%02x" % i for i in term), 16)
-    if (term[0] & 128) != 0:
-        len_term = len(term)  # pulling this out of the expression to avoid overflow in cython optimized code
-        val -= 1 << (len_term * 8)
-    return val
+    if not term:
+        raise ValueError('Cannot unpack an empty varint')
+    return int.from_bytes(term, byteorder='big', signed=True)
 
 
 def bit_length(n):
@@ -52,21 +50,13 @@ def bit_length(n):
 
 
 def varint_pack(big):
-    pos = True
     if big == 0:
         return b'\x00'
     if big < 0:
-        bytelength = bit_length(abs(big) - 1) // 8 + 1
-        big = (1 << bytelength * 8) + big
-        pos = False
-    revbytes = bytearray()
-    while big > 0:
-        revbytes.append(big & 0xff)
-        big >>= 8
-    if pos and revbytes[-1] & 0x80:
-        revbytes.append(0)
-    revbytes.reverse()
-    return bytes(revbytes)
+        byte_length = (-big - 1).bit_length() // 8 + 1
+    else:
+        byte_length = (big.bit_length() + 8) // 8
+    return big.to_bytes(byte_length, byteorder='big', signed=True)
 
 
 point_be = struct.Struct('>dd')
