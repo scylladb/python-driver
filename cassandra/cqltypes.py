@@ -275,6 +275,7 @@ class _CassandraType(object, metaclass=CassandraTypeType):
     subtypes = ()
     num_subtypes = 0
     empty_binary_ok = False
+    _apply_parameters_cache = {}
 
     support_empty_values = False
     """
@@ -373,8 +374,15 @@ class _CassandraType(object, metaclass=CassandraTypeType):
         if cls.num_subtypes != 'UNKNOWN' and len(subtypes) != cls.num_subtypes:
             raise ValueError("%s types require %d subtypes (%d given)"
                              % (cls.typename, cls.num_subtypes, len(subtypes)))
+        subtypes = tuple(subtypes)
+        cache_key = (cls, subtypes, tuple(names) if names else names)
+        cached = cls._apply_parameters_cache.get(cache_key)
+        if cached is not None:
+            return cached
         newname = cls.cass_parameterized_type_with(subtypes)
-        return type(newname, (cls,), {'subtypes': subtypes, 'cassname': cls.cassname, 'fieldnames': names})
+        result = type(newname, (cls,), {'subtypes': subtypes, 'cassname': cls.cassname, 'fieldnames': names})
+        cls._apply_parameters_cache[cache_key] = result
+        return result
 
     @classmethod
     def cql_parameterized_type(cls):
