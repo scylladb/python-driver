@@ -13,9 +13,11 @@
 # limitations under the License.
 import unittest
 
+import calendar
 import datetime
 import tempfile
 import time
+import types
 import uuid
 from binascii import unhexlify
 
@@ -29,7 +31,7 @@ from cassandra.cqltypes import (
     int32_pack, Int32Type, ListType, MapType, VectorType,
     FloatType
 )
-from cassandra.encoder import cql_quote
+from cassandra.encoder import Encoder, cql_quote
 from cassandra.pool import Host
 from cassandra.metadata import Token
 from cassandra.policies import ConvictionPolicy, SimpleConvictionPolicy
@@ -210,6 +212,91 @@ class TypeTests(unittest.TestCase):
 
     def test_empty_value(self):
         assert str(EmptyValue()) == 'EMPTY'
+
+    def test_datetype_serialize_matches_timegm(self):
+        # Reference: the calendar.timegm() formula serialize() replaced.
+        def reference_ms(v):
+            if isinstance(v, datetime.datetime):
+                return calendar.timegm(v.utctimetuple()) * 1000 + v.microsecond // 1000
+            return calendar.timegm(v.timetuple()) * 1000
+
+        plus2 = datetime.timezone(datetime.timedelta(hours=2))
+        minus530 = datetime.timezone(-datetime.timedelta(hours=5, minutes=30))
+        cases = [
+            (datetime.datetime(2015, 2, 24, 22, 34, 28, 274999), 1424817268274),
+            (datetime.datetime(2015, 2, 24, 22, 34, 28, 274999, tzinfo=plus2), 1424810068274),
+            (datetime.datetime(2015, 2, 24, 22, 34, 28, 274999, tzinfo=minus530), 1424837068274),
+            # pre-epoch: sub-millisecond fractions must still truncate like timegm
+            (datetime.datetime(1969, 12, 31, 23, 59, 59, 999500), -1),
+            (datetime.datetime(1969, 12, 31, 23, 59, 59, 500), -1000),
+            (datetime.datetime(1, 1, 1), -62135596800000),
+            (datetime.datetime(9999, 12, 31, 23, 59, 59, 999999), 253402300799999),
+            (datetime.date(1969, 12, 31), -86400000),
+            (datetime.date(2015, 2, 24), 1424736000000),
+        ]
+        encoder = Encoder()
+        for value, expected_ms in cases:
+            assert reference_ms(value) == expected_ms, value
+            assert DateType.serialize(value, 0) == int64_pack(expected_ms), value
+            if isinstance(value, datetime.datetime):
+                assert encoder.cql_encode_datetime(value) == str(expected_ms), value
+
+    def test_datetype_serialize_non_stdlib_datetimes(self):
+        from zoneinfo import ZoneInfo
+        berlin = ZoneInfo('Europe/Berlin')
+
+        class AbsoluteTimeDatetime(datetime.datetime):
+            # Subtracts in absolute time and re-attaches the zone, like pandas/pendulum.
+            def __sub__(self, other):
+                if self.tzinfo is not None and isinstance(other, datetime.timedelta):
+                    utc = datetime.datetime.fromtimestamp(self.timestamp(), datetime.timezone.utc) - other
+                    return AbsoluteTimeDatetime.fromtimestamp(utc.timestamp(), self.tzinfo)
+                return datetime.datetime.__sub__(self, other)
+
+        # 03:30 CEST right after the spring-forward change is 01:30 UTC.
+        v = AbsoluteTimeDatetime(2024, 3, 31, 3, 30, tzinfo=berlin)
+        assert DateType.serialize(v, 0) == int64_pack(1711848600000)
+        assert Encoder().cql_encode_datetime(v) == '1711848600000'
+
+        class ArrowLike(object):
+            # Not a datetime subclass; replace(tzinfo=None) keeps the zone, like Arrow.
+            def __init__(self, dt):
+                self._dt = dt
+                self.microsecond = dt.microsecond
+
+            def utcoffset(self):
+                return self._dt.utcoffset()
+
+            def replace(self, **kwargs):
+                return self._dt
+
+            def utctimetuple(self):
+                return self._dt.utctimetuple()
+
+        aware = datetime.datetime(2015, 2, 24, 22, 34, 28, 274999, tzinfo=datetime.timezone.utc)
+        assert DateType.serialize(ArrowLike(aware), 0) == int64_pack(1424817268274)
+        assert Encoder().cql_encode_datetime(ArrowLike(aware)) == '1424817268274'
+
+        # Only timetuple(), no utctimetuple(): serialized as on master.
+        import xmlrpc.client
+        assert DateType.serialize(xmlrpc.client.DateTime('20240101T10:00:00'), 0) == int64_pack(1704103200000)
+
+        class SignedDurationDatetime(datetime.datetime):
+            # Like pendulum: subtracting a datetime yields a duration whose
+            # microseconds carry the sign of the total, unlike timedelta.
+            def __sub__(self, other):
+                td = datetime.datetime.__sub__(self, other)
+                if isinstance(other, datetime.datetime):
+                    return types.SimpleNamespace(days=td.days, seconds=td.seconds,
+                                                 microseconds=-td.microseconds if td < datetime.timedelta(0) else td.microseconds)
+                return td
+
+        pre_epoch = SignedDurationDatetime(1969, 12, 31, 23, 59, 59, 500000)
+        assert DateType.serialize(pre_epoch, 0) == int64_pack(-500)
+        assert Encoder().cql_encode_datetime(pre_epoch) == '-500'
+
+        with pytest.raises(TypeError, match='DateType arguments must be a datetime, date, or timestamp'):
+            DateType.serialize(datetime.time(1, 2), 0)
 
     def test_datetype(self):
         # Use explicit values: converting floating-point seconds to a

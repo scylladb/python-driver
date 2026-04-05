@@ -31,6 +31,7 @@ import ast
 from binascii import unhexlify
 import calendar
 from collections import namedtuple
+import datetime as _datetime_mod
 from decimal import Decimal
 import io
 from itertools import chain
@@ -62,6 +63,13 @@ cql_empty_type = 'empty'
 log = logging.getLogger(__name__)
 
 _number_types = frozenset((int, float))
+
+_EPOCH_NAIVE = _datetime_mod.datetime(1970, 1, 1)
+_EPOCH_DATE = _datetime_mod.date(1970, 1, 1)
+# Stdlib subtraction always yields a plain timedelta; subclasses (pendulum) may not.
+_datetime_sub = _datetime_mod.datetime.__sub__
+_timedelta = _datetime_mod.timedelta
+_date_sub = _datetime_mod.date.__sub__
 
 
 def _name_from_hex_string(encoded_name):
@@ -698,18 +706,36 @@ class DateType(_CassandraType):
 
     @staticmethod
     def serialize(v, protocol_version):
+        if type(v) in _number_types:
+            # Ints and floats are valid timestamps; test first, as exceptions are slow.
+            return int64_pack(int(v))
         try:
-            # v is datetime
-            timestamp_seconds = calendar.timegm(v.utctimetuple())
-            timestamp = timestamp_seconds * 1000 + getattr(v, 'microsecond', 0) // 1000
-        except AttributeError:
+            # Integer math avoids allocating a struct_time per call.
+            dt = v
+            utcoffset = dt.utcoffset()
+            if utcoffset is not None:
+                # Strip tzinfo first: aware arithmetic (pandas, pendulum) may cross DST.
+                dt = dt.replace(tzinfo=None) - utcoffset
+            td = dt - _EPOCH_NAIVE
+            if type(td) is not _timedelta:
+                td = _datetime_sub(dt, _EPOCH_NAIVE)
+            timestamp = (td.days * 86400 + td.seconds) * 1000 + td.microseconds // 1000
+        except (AttributeError, TypeError):
             try:
-                timestamp = calendar.timegm(v.timetuple()) * 1000
+                # Duck-typed datetimes that aren't datetime subclasses (e.g. Arrow).
+                timestamp = calendar.timegm(v.utctimetuple()) * 1000 + getattr(v, 'microsecond', 0) // 1000
             except AttributeError:
-                # Ints and floats are valid timestamps too
-                if type(v) not in _number_types:
-                    raise TypeError('DateType arguments must be a datetime, date, or timestamp')
-                timestamp = v
+                try:
+                    td = v - _EPOCH_DATE
+                    if type(td) is not _timedelta:
+                        td = _date_sub(v, _EPOCH_DATE)
+                    timestamp = td.days * 86400000
+                except TypeError:
+                    try:
+                        # Date-likes that only offer timetuple() (e.g. xmlrpc DateTime).
+                        timestamp = calendar.timegm(v.timetuple()) * 1000
+                    except AttributeError:
+                        raise TypeError('DateType arguments must be a datetime, date, or timestamp')
 
         return int64_pack(int(timestamp))
 
