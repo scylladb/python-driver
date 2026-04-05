@@ -5430,13 +5430,22 @@ class ResultSet(object):
         if self.response_future.row_factory not in (named_tuple_factory, dict_factory, tuple_factory):
             raise RuntimeError("Cannot determine LWT result with row factory %s" % (self.response_future.row_factory,))
 
-        is_batch_statement = isinstance(self.response_future.query, BatchStatement) \
-                            or (isinstance(self.response_future.query, SimpleStatement) and self.batch_regex.match(self.response_future.query.query_string))
-        if is_batch_statement and (not self.column_names or self.column_names[0] != "[applied]"):
-            raise RuntimeError("No LWT were present in the BatchStatement")
+        query = self.response_future.query
 
-        if not is_batch_statement and len(self.current_rows) != 1:
-            raise RuntimeError("LWT result should have exactly one row. This has %d." % (len(self.current_rows)))
+        # Fast path: BoundStatement/PreparedStatement with known LWT status
+        # from the server PREPARE response avoids batch detection entirely.
+        if query.is_lwt() and not isinstance(query, BatchStatement):
+            # Known single LWT statement - skip batch detection
+            if len(self.current_rows) != 1:
+                raise RuntimeError("LWT result should have exactly one row. This has %d." % (len(self.current_rows)))
+        else:
+            is_batch_statement = isinstance(query, BatchStatement) \
+                                or (isinstance(query, SimpleStatement) and self.batch_regex.match(query.query_string))
+            if is_batch_statement and (not self.column_names or self.column_names[0] != "[applied]"):
+                raise RuntimeError("No LWT were present in the BatchStatement")
+
+            if not is_batch_statement and len(self.current_rows) != 1:
+                raise RuntimeError("LWT result should have exactly one row. This has %d." % (len(self.current_rows)))
 
         row = self.current_rows[0]
         if isinstance(row, tuple):
