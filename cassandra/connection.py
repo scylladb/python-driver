@@ -22,7 +22,7 @@ import logging
 import socket
 import struct
 import sys
-from threading import Thread, Event, RLock, Condition
+from threading import Thread, Event, Lock, RLock, Condition
 import time
 import ssl
 import uuid
@@ -928,7 +928,7 @@ class Connection(object):
         self.request_ids = deque(range(initial_size))
         self.highest_request_id = initial_size - 1
 
-        self.lock = RLock()
+        self.lock = Lock()
         self.connected_event = Event()
         self.features = ProtocolFeatures(shard_id=shard_id)
         self.total_shards = total_shards

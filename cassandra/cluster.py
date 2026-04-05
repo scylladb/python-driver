@@ -1498,7 +1498,7 @@ class Cluster(object):
         self.executor = self._create_thread_pool_executor(max_workers=executor_threads)
         self.scheduler = _Scheduler(self.executor)
 
-        self._lock = RLock()
+        self._lock = Lock()
 
         if self.metrics_enabled:
             from cassandra.metrics import Metrics
@@ -3540,11 +3540,11 @@ class ControlConnection(object):
         self._token_meta_enabled = token_meta_enabled
         self._schema_meta_page_size = schema_meta_page_size
 
-        self._lock = RLock()
+        self._lock = Lock()
         self._schema_agreement_lock = Lock()
 
         self._reconnection_handler = None
-        self._reconnection_lock = RLock()
+        self._reconnection_lock = Lock()
 
         self._event_schedule_times = {}
 
