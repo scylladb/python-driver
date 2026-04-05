@@ -23,8 +23,8 @@ from binascii import unhexlify
 import cassandra
 from cassandra import util
 from cassandra.cqltypes import (
-    CassandraType, DateRangeType, DateType, DecimalType,
-    EmptyValue, LongType, SetType, UTF8Type,
+    ByteType, CassandraType, DateRangeType, DateType, DecimalType,
+    EmptyValue, LongType, SetType, ShortType, UTF8Type,
     _cqltypes, cql_typename, int8_pack, int64_pack, int64_unpack, lookup_casstype,
     lookup_casstype_simple, parse_casstype_args,
     int32_pack, Int32Type, ListType, MapType, VectorType,
@@ -407,6 +407,21 @@ class VectorTests(unittest.TestCase):
         self._round_trip_test([util.Duration(1,1,1), util.Duration(2,2,2), util.Duration(3,3,3)], \
             "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.DurationType, 3)")
 
+    def test_short_and_byte_vectors_use_variable_length_wire_format(self):
+        # Cassandra vint-frames smallint/tinyint vector elements; they must never go fixed-width.
+        for subtype, packed_value_size in ((ShortType, 2), (ByteType, 1)):
+            ctype = parse_casstype_args(
+                "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.%s, 4)"
+                % subtype.__name__)
+            assert ctype.subtype.serial_size() is None
+            assert ctype.serial_size() is None
+
+            data = [3, -2, 100, -100]
+            data_bytes = ctype.serialize(data, 0)
+            # 1 vint length byte + the packed value per element.
+            assert len(data_bytes) == len(data) * (1 + packed_value_size)
+            assert ctype.deserialize(data_bytes, 0) == data
+
     def test_round_trip_collection_types(self):
         # List (subtype of fixed size)
         self._round_trip_test([[1, 2, 3, 4], [5, 6], [7, 8, 9, 10], [11, 12]], \
@@ -556,6 +571,14 @@ class VectorTests(unittest.TestCase):
                 assert ctype.deserialize(data_bytes, 0) == expected
             if numpy_support.numpy_available():
                 assert ctype.deserialize(data_bytes, 0) == expected
+
+    def test_directly_declared_vector_subclass_is_fixed_size(self):
+        class Int3Vector(VectorType):
+            subtype = Int32Type
+            vector_size = 3
+        assert Int3Vector.serial_size() == 12
+        assert Int3Vector.serialize([1, 2, 3], 0) == b'\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03'
+        assert Int3Vector.deserialize(b'\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03', 0) == [1, 2, 3]
 
     def test_subclass_vectors_keep_element_overrides(self):
         # Bulk struct/NumPy codecs must not bypass a subclass's own codecs.
