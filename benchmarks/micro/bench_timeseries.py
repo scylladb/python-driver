@@ -1,3 +1,17 @@
+# Copyright 2026 ScyllaDB, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 #!/usr/bin/env python3
 """
 Microbenchmarks for time-series write and read hot paths.
@@ -76,6 +90,30 @@ packed_far = DateType.serialize(dt_far, 4)
     )
     bench("deserialize (2025)", "DateType.deserialize(packed_now, 4)", setup_deser)
     bench("deserialize (2300)", "DateType.deserialize(packed_far, 4)", setup_deser)
+
+    # Cython serializer (if available)
+    try:
+        from cassandra.serializers import SerDateType  # noqa: F401
+
+        print("\n=== SerDateType (Cython) ===")
+        setup_cy = """\
+from cassandra.serializers import SerDateType
+from cassandra.cqltypes import DateType
+import datetime
+ser = SerDateType(DateType)
+dt_now   = datetime.datetime(2025, 4, 5, 12, 0, 0, 123456)
+dt_epoch = datetime.datetime(1970, 1, 1, 0, 0, 1, 0)
+d_only   = datetime.date(2025, 4, 5)
+ts_int   = 1712318400000
+"""
+        bench("Cython serialize datetime (2025)", "ser.serialize(dt_now, 4)", setup_cy)
+        bench(
+            "Cython serialize datetime (epoch)", "ser.serialize(dt_epoch, 4)", setup_cy
+        )
+        bench("Cython serialize date object", "ser.serialize(d_only, 4)", setup_cy)
+        bench("Cython serialize raw int", "ser.serialize(ts_int, 4)", setup_cy)
+    except ImportError:
+        print("\n(serializers.pyx not compiled — skipping Cython benchmark)")
 
 
 # ---------------------------------------------------------------------------
