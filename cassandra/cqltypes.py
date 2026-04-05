@@ -1439,11 +1439,13 @@ class VectorType(_CassandraType):
     _vector_struct = None  # Cached struct.Struct for bulk deserialization
     _struct_format_map = {}  # Populated after FloatType etc. are defined
     _numpy_dtype = None  # Cached numpy dtype string for large vector deserialization
+    _subtype_serial_size = None  # Cached subtype.serial_size() (computed once in apply_parameters)
+    _serial_size = None  # Cached serial_size() for the full vector (subtype_serial_size * vector_size)
 
     @classmethod
     def serial_size(cls):
-        serialized_size = cls.subtype.serial_size()
-        return cls.vector_size * serialized_size if serialized_size is not None else None
+        return cls._serial_size
+
 
     @classmethod
     def apply_parameters(cls, params, names):
@@ -1458,12 +1460,17 @@ class VectorType(_CassandraType):
                 vector_struct = struct.Struct(f'>{vsize}{fmt_char}')
                 numpy_dtype = cls._numpy_dtype_map.get(fmt_char)
                 break
+        # Cache subtype serial_size and full vector serial_size to avoid
+        # repeated method dispatch in serialize/deserialize hot paths.
+        subtype_ss = subtype.serial_size()
+        vec_ss = vsize * subtype_ss if subtype_ss is not None else None
         return type('%s(%s)' % (cls.cass_parameterized_type_with([]), vsize), (cls,),
-                     {'vector_size': vsize, 'subtype': subtype, '_vector_struct': vector_struct, '_numpy_dtype': numpy_dtype})
+                     {'vector_size': vsize, 'subtype': subtype, '_vector_struct': vector_struct,
+                      '_numpy_dtype': numpy_dtype, '_subtype_serial_size': subtype_ss, '_serial_size': vec_ss})
 
     @classmethod
     def deserialize(cls, byts, protocol_version):
-        serialized_size = cls.subtype.serial_size()
+        serialized_size = cls._subtype_serial_size
         if serialized_size is not None:
             expected_byte_size = serialized_size * cls.vector_size
             if len(byts) != expected_byte_size:
@@ -1532,7 +1539,7 @@ class VectorType(_CassandraType):
                 "Expected sequence of size {0} for vector of type {1} and dimension {0}, observed sequence of length {2}"\
                 .format(cls.vector_size, cls.subtype.typename, v_length))
 
-        serialized_size = cls.subtype.serial_size()
+        serialized_size = cls._subtype_serial_size
         # Bulk serialization for known numeric types (symmetric with struct.unpack in deserialize)
         if cls._vector_struct is not None and serialized_size is not None:
             return cls._vector_struct.pack(*v)
