@@ -71,6 +71,10 @@ _message_types_by_opcode = {}
 
 _UNSET_VALUE = object()
 
+# Pre-computed packed constants for null/unset markers
+_INT32_NEG1 = int32_pack(-1)   # null value marker
+_INT32_NEG2 = int32_pack(-2)   # unset value marker
+
 
 def register_class(cls):
     _message_types_by_opcode[cls.opcode] = cls
@@ -604,16 +608,15 @@ class _QueryMessage(_MessageType):
             write_byte(f, flags)
 
         if self.query_params is not None:
-            # Batch small params into one f.write() instead of 2*N+1 calls via
-            # write_value(). Large values are written directly, so the
-            # transient buffer stays bounded (< 256 bytes per param).
+            # One f.write() for small params; large ones are written directly.
+            # Many small params still buffer together (not bounded in total).
             _int32_pack = int32_pack
             parts = [uint16_pack(len(self.query_params))]
             for param in self.query_params:
                 if param is None:
-                    parts.append(_int32_pack(-1))
+                    parts.append(_INT32_NEG1)
                 elif param is _UNSET_VALUE:
-                    parts.append(_int32_pack(-2))
+                    parts.append(_INT32_NEG2)
                 else:
                     n = len(param)
                     parts.append(_int32_pack(n))
@@ -699,9 +702,6 @@ class ExecuteMessage(_QueryMessage):
         return (self.skip_meta
                 and protocol_features is not None
                 and protocol_features.use_metadata_id)
-
-    # _write_query_params inherited from _QueryMessage; removed redundant
-    # pass-through override to avoid extra MRO lookup per call.
 
     def send_body(self, f, protocol_version, protocol_features=None):
         write_string(f, self.query_id)
@@ -1005,14 +1005,22 @@ class BatchMessage(_MessageType):
                 _p(string_or_query_id)
             _p(_u16(len(params)))
             for param in params:
-                if param is None:
-                    _p(_i32(-1))
-                elif param is _UNSET_VALUE:
-                    _p(_i32(-2))
+                # bytes first: one class check beats the None/UNSET/str tests per param
+                if param.__class__ is not bytes:
+                    if param is None:
+                        _p(_INT32_NEG1)
+                        continue
+                    if param is _UNSET_VALUE:
+                        _p(_INT32_NEG2)
+                        continue
+                n = len(param)
+                _p(_i32(n))
+                if n >= _WRITE_QUERY_PARAMS_DIRECT_THRESHOLD:
+                    # Flush and write directly so large values aren't copied into the join.
+                    f.write(b"".join(parts))
+                    f.write(param)
+                    parts.clear()
                 else:
-                    if isinstance(param, str):
-                        param = param.encode('utf8')
-                    _p(_i32(len(param)))
                     _p(param)
 
         _p(_u16(self.consistency_level))

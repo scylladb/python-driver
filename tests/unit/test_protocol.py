@@ -21,6 +21,7 @@ from unittest.mock import Mock
 
 from cassandra import ConsistencyLevel, ProtocolVersion, UnsupportedOperation
 from cassandra.protocol import (
+    _WRITE_QUERY_PARAMS_DIRECT_THRESHOLD,
     PrepareMessage, QueryMessage, ExecuteMessage,
     BatchMessage, StartupMessage, OptionsMessage, RegisterMessage,
     AuthResponseMessage, ProtocolHandler, _MessageType,
@@ -423,9 +424,9 @@ class MessageTest(unittest.TestCase):
         buf = io.BytesIO()
         batch = BatchMessage(
             batch_type=BatchType.LOGGED,
-            queries=((False, 'stmt a', ('param a',)),
-                     (False, 'stmt b', ('param b',)),
-                     (False, 'stmt c', ('param c',))
+            queries=((False, 'stmt a', (b'param a',)),
+                     (False, 'stmt b', (b'param b',)),
+                     (False, 'stmt c', (b'param c',))
                      ),
             consistency_level=3,
             keyspace='ks'
@@ -586,9 +587,10 @@ class WriteQueryParamsBufferAccumulationTest(unittest.TestCase):
     Tests for the buffer accumulation optimization in
     _QueryMessage._write_query_params().
 
-    The optimization replaces per-parameter write_value(f, param) calls with
-    list.append + b"".join + single f.write().  These tests verify the
-    serialized bytes are identical to the original write_value() behaviour.
+    Small parameters are batched via list.append + b"".join; values of
+    _WRITE_QUERY_PARAMS_DIRECT_THRESHOLD bytes or more are written directly
+    (extra write calls by design).  These tests verify the serialized bytes
+    are identical to the original write_value() behaviour.
     """
 
     # -- helpers ----------------------------------------------------------
@@ -966,13 +968,15 @@ class WriteQueryParamsBufferAccumulationTest(unittest.TestCase):
             write_string(f, msg.keyspace)
 
     def test_batch_send_body_matches_legacy_across_matrix(self):
-        """Byte-identical to the per-field implementation; one write() per body."""
+        """Byte-identical to the per-field implementation; small bodies use one write()."""
         query_sets = [
             [],
             [(False, 'SELECT 1', [])],
             [(True, b'\x01\x02', [b'a', None, _UNSET_VALUE, b''])],
             [(False, 'INSERT INTO t (k) VALUES (?)', [b'\x01']),
              (True, b'\xaa\xbb', [b'x' * 300, None])],
+            [(False, 'INSERT INTO t (k) VALUES (\u00e9\u4e2d\U0001f600)', ['\u00e9\u4e2d\U0001f600'.encode('utf8')])],
+            [(False, 'SELECT \u00e9', [])],
         ]
         trailers = [
             {},
@@ -995,4 +999,37 @@ class WriteQueryParamsBufferAccumulationTest(unittest.TestCase):
                     msg.send_body(new, pv)
                     msg.send_body(w, pv)
                     self.assertEqual(new.getvalue(), old.getvalue(), (pv, queries, kw))
-                    self.assertEqual(w.calls, 1, (pv, queries, kw))
+                    if not any(len(p) >= _WRITE_QUERY_PARAMS_DIRECT_THRESHOLD
+                               for _, _, ps in queries for p in ps if isinstance(p, bytes)):
+                        self.assertEqual(w.calls, 1, (pv, queries, kw))
+
+    def test_batch_multibyte_str_framing(self):
+        """Lengths must be byte counts, not character counts, for str statements and keyspace."""
+        stmt, ks = 'SELECT \u00e9\u4e2d\U0001f600', 'k\u00e9'
+        msg = BatchMessage(BatchType.LOGGED, [(False, stmt, [])], 1, keyspace=ks)
+        buf = io.BytesIO()
+        msg.send_body(buf, 5)
+        raw = buf.getvalue()
+        self.assertIn(int32_pack(len(stmt.encode('utf8'))) + stmt.encode('utf8'), raw)
+        self.assertTrue(raw.endswith(uint16_pack(len(ks.encode('utf8'))) + ks.encode('utf8')))
+
+    def test_batch_large_param_written_directly_and_bytes_match(self):
+        """Large params bypass the join buffer (extra write) without changing bytes."""
+        big = b'x' * (_WRITE_QUERY_PARAMS_DIRECT_THRESHOLD * 4)
+        msg = BatchMessage(BatchType.LOGGED, [(True, b'\x01', [b'a', big, b'b'])], 1)
+        w = _CountingWriter()
+        msg.send_body(w, 4)
+        self.assertEqual(w.calls, 3)
+        old, new = io.BytesIO(), io.BytesIO()
+        self._legacy_batch_send_body(msg, old, 4)
+        msg.send_body(new, 4)
+        self.assertEqual(new.getvalue(), old.getvalue())
+
+    def test_query_params_small_params_do_not_add_writes(self):
+        """Small params are batched: write count is independent of param count."""
+        def calls(n):
+            w = _CountingWriter()
+            ExecuteMessage(query_id=b'q', query_params=[b'v'] * n,
+                           consistency_level=1).send_body(w, 4)
+            return w.calls
+        self.assertEqual(calls(1), calls(50))
