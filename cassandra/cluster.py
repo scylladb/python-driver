@@ -4413,10 +4413,9 @@ class ResponseFuture(object):
     session = None
     row_factory = None
     message = None
-    default_timeout = None
+    prepared_statement = None
 
     _retry_policy = None
-    _profile_manager = None
 
     _req_id = None
     _final_result = _NOT_SET
@@ -4439,9 +4438,8 @@ class ResponseFuture(object):
     _spec_execution_plan = NoSpeculativeExecutionPlan()
     _continuous_paging_session = None
     _host = None
+    _continuous_paging_state = None
     _TABLET_ROUTING_CTYPE = None
-
-    _warned_timeout = False
 
     def __init__(self, session, message, query, timeout, metrics=None, prepared_statement=None,
                  retry_policy=RetryPolicy(), row_factory=None, load_balancer=None, start_time=None,
@@ -4454,11 +4452,14 @@ class ResponseFuture(object):
         self.query = query
         self.timeout = timeout
         self._retry_policy = retry_policy
-        self._metrics = metrics
-        self.prepared_statement = prepared_statement
+        if metrics is not None:
+            self._metrics = metrics
+        if prepared_statement is not None:
+            self.prepared_statement = prepared_statement
         self._callback_lock = Lock()
         self._start_time = start_time or time.time()
-        self._host = host
+        if host is not None:
+            self._host = host
         self._spec_execution_plan = speculative_execution_plan or self._spec_execution_plan
         self._make_query_plan()
         self._event = Event()
@@ -4467,7 +4468,8 @@ class ResponseFuture(object):
         self._errbacks = []
         self.attempted_hosts = []
         self._start_timer()
-        self._continuous_paging_state = continuous_paging_state
+        if continuous_paging_state is not None:
+            self._continuous_paging_state = continuous_paging_state
 
     @property
     def _time_remaining(self):
