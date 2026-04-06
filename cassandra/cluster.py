@@ -4462,12 +4462,18 @@ class ResponseFuture(object):
         self._spec_execution_plan = speculative_execution_plan or self._spec_execution_plan
         self._make_query_plan()
         self._event = Event()
-        self._errors = {}
+        self._errors = None
         self._callbacks = []
         self._errbacks = []
         self.attempted_hosts = []
         self._start_timer()
         self._continuous_paging_state = continuous_paging_state
+
+    def _add_error(self, host, error):
+        errors = self._errors
+        if errors is None:
+            self._errors = errors = {}
+        errors[host] = error
 
     @property
     def _time_remaining(self):
@@ -4592,7 +4598,7 @@ class ResponseFuture(object):
                 return True
         if error_no_hosts:
             self._set_final_exception(NoHostAvailable(
-                "Unable to complete the operation against any hosts", self._errors))
+                "Unable to complete the operation against any hosts", self._errors or {}))
         return False
 
     def _query(self, host, message=None, cb=None):
@@ -4601,10 +4607,10 @@ class ResponseFuture(object):
 
         pool = self.session._pools.get(host)
         if not pool:
-            self._errors[host] = ConnectionException("Host has been marked down or removed")
+            self._add_error(host, ConnectionException("Host has been marked down or removed"))
             return None
         elif pool.is_shutdown:
-            self._errors[host] = ConnectionException("Pool is shutdown")
+            self._add_error(host, ConnectionException("Pool is shutdown"))
             return None
 
         self._current_host = host
@@ -4630,13 +4636,13 @@ class ResponseFuture(object):
             return request_id
         except NoConnectionsAvailable as exc:
             log.debug("All connections for host %s are at capacity, moving to the next host", host)
-            self._errors[host] = exc
+            self._add_error(host, exc)
         except ConnectionBusy as exc:
             log.debug("Connection for host %s is busy, moving to the next host", host)
-            self._errors[host] = exc
+            self._add_error(host, exc)
         except Exception as exc:
             log.debug("Error querying host %s", host, exc_info=True)
-            self._errors[host] = exc
+            self._add_error(host, exc)
             if self._metrics is not None:
                 self._metrics.on_connection_error()
             if connection:
@@ -4949,7 +4955,7 @@ class ResponseFuture(object):
             log.debug("Connection error when preparing statement on host %s: %s",
                       host, response)
             # try again on a different host, preparing again if necessary
-            self._errors[host] = response
+            self._add_error(host, response)
             self.send_request()
         else:
             self._set_final_exception(ConnectionException(
@@ -5023,7 +5029,7 @@ class ResponseFuture(object):
                 self._metrics.on_ignore()
             self._set_final_result(None)
 
-        self._errors[host] = exception_from_response(response)
+        self._add_error(host, exception_from_response(response))
 
     def _retry(self, reuse_connection, consistency_level, host, delay):
         if self._final_exception:
