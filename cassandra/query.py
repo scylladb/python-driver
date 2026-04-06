@@ -23,6 +23,8 @@ from datetime import datetime, timedelta, timezone
 import re
 import struct
 import time
+
+from cassandra.marshal import uint16_pack
 import warnings
 
 from cassandra import ConsistencyLevel, OperationTimedOut
@@ -299,9 +301,9 @@ class Statement(object):
         self.is_idempotent = is_idempotent
 
     def _key_parts_packed(self, parts):
+        _pack = uint16_pack
         for p in parts:
-            l = len(p)
-            yield struct.pack(">H%dsB" % l, l, p, 0)
+            yield _pack(len(p)) + p + b'\x00'
 
     def _get_routing_key(self):
         return self._routing_key
