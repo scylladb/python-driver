@@ -1098,32 +1098,33 @@ class _ProtocolHandler(object):
             flags |= USE_BETA_FLAG
 
         buff = io.BytesIO()
-        buff.seek(9)
 
         # With checksumming, the compression is done at the segment frame encoding
         if (compressor and not ProtocolVersion.has_checksumming_support(protocol_version)):
-            body = io.BytesIO()
             if msg.custom_payload:
-                write_bytesmap(body, msg.custom_payload)
-            msg.send_body(body, protocol_version)
-            body = body.getvalue()
+                write_bytesmap(buff, msg.custom_payload)
+            msg.send_body(buff, protocol_version)
+            body = buff.getvalue()
 
             if len(body) > 0:
                 body = compressor(body)
                 flags |= COMPRESSED_FLAG
 
-            buff.write(body)
             length = len(body)
+            header = v3_header_pack(protocol_version, flags, stream_id, msg.opcode) + int32_pack(length)
+            return header + body
         else:
+            buff.seek(9)
+
             if msg.custom_payload:
                 write_bytesmap(buff, msg.custom_payload)
             msg.send_body(buff, protocol_version)
 
             length = buff.tell() - 9
 
-        buff.seek(0)
-        cls._write_header(buff, protocol_version, flags, stream_id, msg.opcode, length)
-        return buff.getvalue()
+            buff.seek(0)
+            cls._write_header(buff, protocol_version, flags, stream_id, msg.opcode, length)
+            return buff.getvalue()
 
     @staticmethod
     def _write_header(f, version, flags, stream_id, opcode, length):
