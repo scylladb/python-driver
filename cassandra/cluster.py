@@ -4764,6 +4764,11 @@ def refresh_schema_and_set_result(control_conn, response_future, connection, **k
         response_future._set_final_result(None)
 
 
+# Singleton default so ResponseFuture.__init__ doesn't instantiate a fresh
+# mutable RetryPolicy() per call (mutable-default-argument footgun).
+_DEFAULT_RETRY_POLICY = RetryPolicy()
+
+
 class ResponseFuture(object):
     """
     An asynchronous response delivery mechanism that is returned from calls
@@ -4807,10 +4812,9 @@ class ResponseFuture(object):
     session = None
     row_factory = None
     message = None
-    default_timeout = None
+    prepared_statement = None
 
     _retry_policy = None
-    _profile_manager = None
 
     _req_id = None
     _final_result = _NOT_SET
@@ -4833,15 +4837,15 @@ class ResponseFuture(object):
     _spec_execution_plan = NoSpeculativeExecutionPlan()
     _continuous_paging_session = None
     _host = None
+    _continuous_paging_state = None
+    _keyspace = None
     _control_connection_query_attempted = False
     _TABLET_ROUTING_CTYPE = None
     _TABLET_ROUTING_V2_CTYPE = None
     _bound_result_metadata = None
 
-    _warned_timeout = False
-
     def __init__(self, session, message, query, timeout, metrics=None, prepared_statement=None,
-                 retry_policy=RetryPolicy(), row_factory=None, load_balancer=None, start_time=None,
+                 retry_policy=None, row_factory=None, load_balancer=None, start_time=None,
                  speculative_execution_plan=None, continuous_paging_state=None, host=None,
                  bound_result_metadata=_NOT_SET, routing_token=None):
         self.session = session
@@ -4851,9 +4855,16 @@ class ResponseFuture(object):
         self.message = message
         self.query = query
         self.timeout = timeout
-        self._retry_policy = retry_policy
-        self._metrics = metrics
-        self.prepared_statement = prepared_statement
+        # Snapshotted now, not re-read from session.keyspace when the response
+        # arrives: the session's keyspace can change mid-flight, and the tablet
+        # cached from the response payload must land under the keyspace the
+        # request was actually sent under (see _cache_tablet_from_payload).
+        self._keyspace = (query.keyspace if query is not None else None) or session.keyspace
+        self._retry_policy = retry_policy if retry_policy is not None else _DEFAULT_RETRY_POLICY
+        if metrics is not None:
+            self._metrics = metrics
+        if prepared_statement is not None:
+            self.prepared_statement = prepared_statement
         # Metadata snapshotted alongside the message's result_metadata_id at construction
         # time (see Session._create_response_future). Decoding a skip_meta response uses
         # this so the metadata decoded-with always pairs with the id the message sent,
@@ -4862,7 +4873,8 @@ class ResponseFuture(object):
         self._bound_result_metadata = [] if bound_result_metadata is _NOT_SET else bound_result_metadata
         self._callback_lock = Lock()
         self._start_time = start_time or time.time()
-        self._host = host
+        if host is not None:
+            self._host = host
         self._routing_token = routing_token
         self._control_connection_query_attempted = False
         self._spec_execution_plan = speculative_execution_plan or self._spec_execution_plan
@@ -4873,7 +4885,8 @@ class ResponseFuture(object):
         self._errbacks = []
         self.attempted_hosts = []
         self._start_timer()
-        self._continuous_paging_state = continuous_paging_state
+        if continuous_paging_state is not None:
+            self._continuous_paging_state = continuous_paging_state
 
     @property
     def _time_remaining(self):
@@ -5258,15 +5271,18 @@ class ResponseFuture(object):
         layouts differ only by a trailing ``tablet_version`` field, and
         ``Tablet.from_row`` accepts that as an optional final argument, so
         unpacking the decoded tuple positionally serves both. The tablet is
-        cached under the effective keyspace (the statement's, else the
-        session's) so a prepared statement executed in a session keyspace lands
+        cached under the effective keyspace snapshotted at __init__ time (the
+        statement's, else the session's keyspace as of when the request was
+        sent) so a prepared statement executed in a session keyspace lands
         under the same key ``_compute_tablet_version_block`` looks it up by;
-        otherwise that lookup always misses.
+        otherwise that lookup always misses. Using the snapshot instead of
+        re-reading ``self.session.keyspace`` here avoids caching under the
+        wrong keyspace if it changed while the request was in flight.
         """
         info = self._custom_payload.get(payload_key)
         protocol = self.session.cluster.protocol_version
         tablet = Tablet.from_row(*ctype.from_binary(info, protocol))
-        keyspace = self.query.keyspace or self.session.keyspace
+        keyspace = self._keyspace
         table = self.query.table
         if tablet and keyspace and table:
             self.session.cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
