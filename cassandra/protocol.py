@@ -1150,40 +1150,52 @@ class _ProtocolHandler(object):
             flags |= USE_BETA_FLAG
 
         buff = io.BytesIO()
-        buff.seek(9)
 
         # With checksumming, the compression is done at the segment frame encoding
         if (compressor and not ProtocolVersion.has_checksumming_support(protocol_version)):
-            body = io.BytesIO()
             if msg.custom_payload:
-                write_bytesmap(body, msg.custom_payload)
-            msg.send_body(body, protocol_version, protocol_features)
-            body = body.getvalue()
+                write_bytesmap(buff, msg.custom_payload)
+            msg.send_body(buff, protocol_version, protocol_features)
+            body = buff.getvalue()
 
             if len(body) > 0:
                 body = compressor(body)
                 flags |= COMPRESSED_FLAG
 
-            buff.write(body)
             length = len(body)
+            # Same header layout as the non-compression path below: both go
+            # through _pack_header so the two can never silently diverge.
+            return cls._pack_header(protocol_version, flags, stream_id, msg.opcode, length) + body
         else:
+            buff.seek(9)
+
             if msg.custom_payload:
                 write_bytesmap(buff, msg.custom_payload)
             msg.send_body(buff, protocol_version, protocol_features)
 
             length = buff.tell() - 9
 
-        buff.seek(0)
-        cls._write_header(buff, protocol_version, flags, stream_id, msg.opcode, length)
-        return buff.getvalue()
+            buff.seek(0)
+            cls._write_header(buff, protocol_version, flags, stream_id, msg.opcode, length)
+            return buff.getvalue()
 
     @staticmethod
-    def _write_header(f, version, flags, stream_id, opcode, length):
+    def _pack_header(version, flags, stream_id, opcode, length):
+        """
+        Pack a CQL protocol frame header into bytes.
+
+        This is the single source of truth for the frame header layout;
+        ``_write_header`` and the compressed encode path both go through
+        this method so they cannot silently diverge.
+        """
+        return v3_header_pack(version, flags, stream_id, opcode) + int32_pack(length)
+
+    @classmethod
+    def _write_header(cls, f, version, flags, stream_id, opcode, length):
         """
         Write a CQL protocol frame header.
         """
-        f.write(v3_header_pack(version, flags, stream_id, opcode))
-        write_int(f, length)
+        f.write(cls._pack_header(version, flags, stream_id, opcode, length))
 
     @classmethod
     def decode_message(cls, protocol_version, protocol_features, user_type_map, stream_id, flags, opcode, body,

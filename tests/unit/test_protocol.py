@@ -17,14 +17,14 @@ import struct
 import unittest
 
 from typing import ClassVar
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from cassandra import ConsistencyLevel, ProtocolVersion, UnsupportedOperation
 from cassandra.protocol import (
     PrepareMessage, QueryMessage, ExecuteMessage,
     BatchMessage, StartupMessage, OptionsMessage, RegisterMessage,
-    AuthResponseMessage, ProtocolHandler, _MessageType,
-    ResultMessage, RESULT_KIND_ROWS
+    AuthResponseMessage, ProtocolHandler, _ProtocolHandler, _MessageType,
+    ResultMessage, RESULT_KIND_ROWS, COMPRESSED_FLAG,
 )
 from cassandra.protocol_features import ProtocolFeatures
 from cassandra.query import BatchType
@@ -555,3 +555,70 @@ class FrameByteIdentityTest(unittest.TestCase):
 
     def test_frames_with_default_features(self):
         self._assert_frames(ProtocolFeatures())
+
+
+class HeaderConsistencyTest(unittest.TestCase):
+    """
+    encode_message has two branches: the compression branch (which avoids a
+    second BytesIO allocation by building the header directly as bytes) and
+    the non-compression branch (which writes into a BytesIO via
+    _write_header). Both must produce byte-identical headers for the same
+    (version, flags, stream_id, opcode, length) -- if the two ever diverged
+    (e.g. because _write_header grew version-specific behavior that the
+    compression branch's header-building didn't replicate), messages would
+    be silently corrupted for whichever protocol version triggered the
+    difference.
+    """
+
+    def test_both_branches_use_the_shared_header_packer(self):
+        """
+        The compression branch must not rebuild the header inline; it must
+        go through the same _pack_header single source of truth that
+        _write_header uses.
+        """
+        with patch.object(_ProtocolHandler, '_pack_header',
+                          wraps=_ProtocolHandler._pack_header) as spy:
+            msg = RegisterMessage(["TOPOLOGY_CHANGE"])
+
+            # Compression branch (checksumming not active at V4).
+            ProtocolHandler.encode_message(
+                msg, stream_id=1, protocol_version=ProtocolVersion.V4, compressor=lambda b: b,
+                allow_beta_protocol_version=False, protocol_features=ProtocolFeatures())
+            assert spy.call_count == 1, (
+                "compression branch must build its header via _pack_header, "
+                "not by duplicating v3_header_pack(...) + int32_pack(...) inline"
+            )
+
+            # Non-compression branch, via _write_header.
+            ProtocolHandler.encode_message(
+                msg, stream_id=1, protocol_version=ProtocolVersion.V4, compressor=None,
+                allow_beta_protocol_version=False, protocol_features=ProtocolFeatures())
+            assert spy.call_count == 2, "non-compression branch must also go through _pack_header"
+
+    def test_compressed_and_uncompressed_headers_are_identical_modulo_compressed_flag(self):
+        """
+        With an identity compressor (output same length as input), the
+        compression and non-compression branches encode the same message at
+        the same version with only the COMPRESSED_FLAG bit differing in the
+        header -- version, stream_id, opcode and length must match exactly.
+        """
+        msg = RegisterMessage(["TOPOLOGY_CHANGE", "STATUS_CHANGE"])
+
+        compressed_frame = ProtocolHandler.encode_message(
+            msg, stream_id=42, protocol_version=ProtocolVersion.V4, compressor=lambda b: b,
+            allow_beta_protocol_version=False, protocol_features=ProtocolFeatures())
+        plain_frame = ProtocolHandler.encode_message(
+            msg, stream_id=42, protocol_version=ProtocolVersion.V4, compressor=None,
+            allow_beta_protocol_version=False, protocol_features=ProtocolFeatures())
+
+        # 9-byte v3 frame header: version, flags, stream_id (2 bytes), opcode, length (4 bytes)
+        compressed_header = bytearray(compressed_frame[:9])
+        plain_header = bytearray(plain_frame[:9])
+
+        assert compressed_header[1] & COMPRESSED_FLAG
+        assert not (plain_header[1] & COMPRESSED_FLAG)
+
+        # Mask out the COMPRESSED_FLAG bit and compare the rest byte-for-byte.
+        compressed_header[1] &= ~COMPRESSED_FLAG
+        plain_header[1] &= ~COMPRESSED_FLAG
+        assert bytes(compressed_header) == bytes(plain_header)
