@@ -1177,11 +1177,14 @@ class _ProtocolHandler(object):
         msg_class = cls.message_types_by_opcode[opcode]
         msg = msg_class.recv_body(body, protocol_version, protocol_features, user_type_map, result_metadata, cls.column_encryption_policy)
         msg.stream_id = stream_id
-        msg.trace_id = trace_id
-        msg.custom_payload = custom_payload
-        msg.warnings = warnings
+        if trace_id is not None:
+            msg.trace_id = trace_id
+        if custom_payload is not None:
+            msg.custom_payload = custom_payload
+        if warnings is not None:
+            msg.warnings = warnings
 
-        if msg.warnings:
+        if warnings:
             for w in msg.warnings:
                 log.warning("Server warning: %s", w)
 
