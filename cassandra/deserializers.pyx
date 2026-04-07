@@ -587,7 +587,6 @@ cdef class DesTupleType(_DesParameterizedType):
         protocol_version = max(3, protocol_version)
 
         p = 0
-        values = []
         for i in range(self.subtypes_len):
             item = None
             if p + 4 <= buf.size:
