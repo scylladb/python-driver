@@ -32,8 +32,9 @@ def make_recv_results_rows(ColumnParser colparser):
         self.column_names = [md[2] for md in column_metadata]
         self.column_types = [md[3] for md in column_metadata]
 
+        coldescs = [ColDesc(md[0], md[1], md[2]) for md in column_metadata] if column_encryption_policy else None
         desc = ParseDesc(self.column_names, self.column_types, column_encryption_policy,
-                        [ColDesc(md[0], md[1], md[2]) for md in column_metadata],
+                        coldescs,
                         make_deserializers(self.column_types), protocol_version)
         reader = BytesIOReader(f.read())
         try:

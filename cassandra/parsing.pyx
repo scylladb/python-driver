@@ -32,9 +32,18 @@ cdef class ParseDesc:
             raise ValueError(
                 "deserializers must have the same length as colnames "
                 "(got %d deserializers for %d columns)" % (len(deserializers), len(colnames)))
-        if len(coldescs) != len(colnames):
-            # Same rationale as the deserializers check above: unpack_col_encrypted_row
-            # indexes desc.coldescs[i] with boundscheck disabled.
+        # coldescs is only None when there's no column_encryption_policy, since
+        # unpack_plain_row never touches it. With a truthy policy,
+        # unpack_col_encrypted_row indexes desc.coldescs[i] with
+        # boundscheck(False), so a None or too-short coldescs must be
+        # rejected here rather than crashing (or reading out of bounds) later.
+        if column_encryption_policy:
+            if coldescs is None or len(coldescs) != len(colnames):
+                got = 0 if coldescs is None else len(coldescs)
+                raise ValueError(
+                    "coldescs must have the same length as colnames when a "
+                    "column_encryption_policy is set (got %d coldescs for %d columns)" % (got, len(colnames)))
+        elif coldescs is not None and len(coldescs) != len(colnames):
             raise ValueError(
                 "coldescs must have the same length as colnames "
                 "(got %d coldescs for %d columns)" % (len(coldescs), len(colnames)))
