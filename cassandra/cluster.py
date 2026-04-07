@@ -5076,9 +5076,12 @@ class ResponseFuture(object):
             ...     log.exception("Operation failed:")
 
         """
+        return ResultSet(self, self._wait_for_result())
+
+    def _wait_for_result(self):
         self._event.wait()
         if self._final_result is not _NOT_SET:
-            return ResultSet(self, self._final_result)
+            return self._final_result
         else:
             raise self._final_exception
 
@@ -5352,8 +5355,7 @@ class ResultSet(object):
         """
         if self.response_future.has_more_pages:
             self.response_future.start_fetching_next_page()
-            result = self.response_future.result()
-            self._current_rows = result._current_rows  # ResultSet has already _set_current_rows to the appropriate form
+            self._set_current_rows(self.response_future._wait_for_result())
         else:
             self._current_rows = []
 
