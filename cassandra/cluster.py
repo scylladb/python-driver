@@ -5264,6 +5264,9 @@ class ResultSet(object):
     like you might see on a normal call to ``session.execute()``.
     """
 
+    __slots__ = ('response_future', 'column_names', 'column_types',
+                 '_current_rows', '_page_iter', '_list_mode')
+
     def __init__(self, response_future, initial_response):
         self.response_future = response_future
         self.column_names = response_future._col_names
