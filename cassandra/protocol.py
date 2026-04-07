@@ -658,10 +658,6 @@ class ResultMessage(_MessageType):
     opcode = 0x08
     name = 'RESULT'
 
-    kind = None
-    results = None
-    paging_state = None
-
     # Names match type name in module scope. Most are imported from cassandra.cqltypes (except CUSTOM_TYPE)
     type_codes = _cqltypes_by_code = dict((v, globals()[k]) for k, v in type_codes.__dict__.items() if not k.startswith('_'))
 
@@ -672,9 +668,8 @@ class ResultMessage(_MessageType):
     _CONTINUOUS_PAGING_LAST_FLAG = 0x80000000
     _METADATA_ID_FLAG = 0x0008
 
-    kind = None
-
     # These are all the things a result message might contain. They are populated according to 'kind'
+    kind = None
     column_names = None
     column_types = None
     parsed_rows = None
