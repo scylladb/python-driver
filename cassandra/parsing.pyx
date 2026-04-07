@@ -21,23 +21,15 @@ cdef class ParseDesc:
 
     def __init__(self, colnames, coltypes, column_encryption_policy, coldescs, deserializers, protocol_version):
         if len(deserializers) != len(colnames):
-            # The row parsers (obj_parser.pyx TupleRowParser.unpack_plain_row /
-            # unpack_col_encrypted_row) index into `deserializers` with
-            # @cython.boundscheck(False), bounded by rowsize == len(colnames).
-            # A length mismatch here would turn into an out-of-bounds memory
-            # read at parse time instead of a clean, immediate error, so this
-            # invariant is validated once at construction time. Use a real
-            # exception (not `assert`) so the guard cannot be stripped by
-            # running Python with optimizations enabled (-O).
+            # Row parsers index deserializers with boundscheck(False); fail early, not out-of-bounds.
             raise ValueError(
                 "deserializers must have the same length as colnames "
                 "(got %d deserializers for %d columns)" % (len(deserializers), len(colnames)))
-        if len(coldescs) != len(colnames):
-            # Same rationale as the deserializers check above: unpack_col_encrypted_row
-            # indexes desc.coldescs[i] with boundscheck disabled.
+        # unpack_col_encrypted_row indexes coldescs with boundscheck(False); reject None/short here.
+        if column_encryption_policy and (coldescs is None or len(coldescs) != len(colnames)):
             raise ValueError(
-                "coldescs must have the same length as colnames "
-                "(got %d coldescs for %d columns)" % (len(coldescs), len(colnames)))
+                "coldescs must have the same length as colnames when a "
+                "column_encryption_policy is set")
         self.colnames = colnames
         self.coltypes = coltypes
         self.column_encryption_policy = column_encryption_policy
