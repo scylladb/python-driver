@@ -629,7 +629,6 @@ class ResponseFutureTests(unittest.TestCase):
         response = Mock(spec=ResultMessage,
                         kind=RESULT_KIND_PREPARED,
                         result_metadata_id='foo')
-        response.results = (None, None, None, None, None)
         response.query_id = query_id
 
         rf._query = Mock(return_value=True)
