@@ -1158,7 +1158,7 @@ class ExponentialBackoffRetryPolicy(RetryPolicy):
         self.min_interval = min_interval
         self.max_num_retries = max_num_retries
         self.max_interval = max_interval
-        super(ExponentialBackoffRetryPolicy).__init__(*args, **kwargs)
+        super(ExponentialBackoffRetryPolicy, self).__init__(*args, **kwargs)
 
     def _calculate_backoff(self, attempt: int):
         delay = min(self.max_interval, self.min_interval * 2 ** attempt)
