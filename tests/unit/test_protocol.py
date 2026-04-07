@@ -830,11 +830,11 @@ class CythonParserTest(unittest.TestCase):
         # Mismatched: only one coldesc for two columns.
         short_coldescs = [ColDesc('ks', 'tbl', 'col1')]
         with self.assertRaises(ValueError):
-            ParseDesc(colnames, coltypes, None, short_coldescs, deserializers, ProtocolVersion.V4)
+            ParseDesc(colnames, coltypes, object(), short_coldescs, deserializers, ProtocolVersion.V4)
 
         # Matching lengths must not raise.
         coldescs = [ColDesc('ks', 'tbl', 'col1'), ColDesc('ks', 'tbl', 'col2')]
-        desc = ParseDesc(colnames, coltypes, None, coldescs, deserializers, ProtocolVersion.V4)
+        desc = ParseDesc(colnames, coltypes, object(), coldescs, deserializers, ProtocolVersion.V4)
         self.assertEqual(desc.colnames, colnames)
 
     def test_list_parser_without_encryption(self):
