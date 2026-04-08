@@ -118,6 +118,12 @@ class AsyncioConnection(Connection):
     Supports SSL connections via asyncio's native TLS transport, which
     avoids the incompatibility between ``ssl.SSLSocket`` and asyncio's
     low-level socket methods (``sock_sendall``, ``sock_recv``).
+
+    Note: TLS session resumption (:attr:`.Cluster.ssl_session_cache`) is not
+    supported on this reactor.  TLS is established through
+    ``loop.create_connection(..., ssl=...)``, which exposes no hook to restore a
+    cached session before the handshake, so sessions are neither restored nor
+    stored here.
     """
 
     _loop = None
