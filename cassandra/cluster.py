@@ -52,7 +52,8 @@ from cassandra.client_routes import ClientRoutesChangeType, ClientRoutesConfig, 
 from cassandra.connection import (ClientRoutesEndPointFactory, ConnectionException, ConnectionShutdown,
                                   ConnectionHeartbeat, ProtocolVersionUnsupported,
                                   EndPoint, DefaultEndPoint, DefaultEndPointFactory,
-                                  SniEndPointFactory, ConnectionBusy, locally_supported_compressions)
+                                  SniEndPointFactory, ConnectionBusy, locally_supported_compressions,
+                                  SSLSessionCache)
 from cassandra.cqltypes import UserType
 import cassandra.cqltypes as types
 from cassandra.encoder import Encoder
@@ -876,6 +877,39 @@ class Cluster(object):
     .. versionadded:: 3.17.0
     """
 
+    ssl_session_cache = None
+    """
+    An optional :class:`~cassandra.connection.SSLSessionCache` instance used to
+    enable TLS session resumption (via session tickets or PSK) for all
+    connections managed by this cluster.
+
+    When :attr:`~Cluster.ssl_context` is set, a cache is created automatically
+    so that reconnections to the same host can skip the full TLS handshake.
+    Set this to :const:`None` explicitly to disable session caching.
+
+    Note: automatic caching is **not** enabled for the legacy
+    :attr:`~Cluster.ssl_options` path because each connection builds a fresh
+    ``SSLContext``, making session reuse impossible.  If you migrate to
+    ``ssl_context``, the cache will be created automatically.
+
+    You may also pass a custom :class:`~cassandra.connection.SSLSessionCache`
+    instance with specific ``max_size`` and ``ttl`` parameters::
+
+        from cassandra.connection import SSLSessionCache
+
+        cluster = Cluster(
+            ssl_context=ssl_context,
+            ssl_session_cache=SSLSessionCache(max_size=200, ttl=7200),
+        )
+
+    Note: TLS 1.2 sessions are cached immediately after connect.  TLS 1.3
+    sessions are cached after the CQL handshake completes (Ready / AuthSuccess),
+    because session tickets are sent asynchronously by the server.
+
+    Works with all connection classes: stdlib ``ssl`` (asyncore, libev, gevent,
+    asyncio) and PyOpenSSL (Twisted, Eventlet).
+    """
+
     sockopts = None
     """
     An optional list of tuples which will be used as arguments to
@@ -1217,7 +1251,8 @@ class Cluster(object):
                  metadata_request_timeout: Optional[float] = None,
                  column_encryption_policy=None,
                  application_info:Optional[ApplicationInfoBase]=None,
-                 client_routes_config:Optional[ClientRoutesConfig]=None
+                 client_routes_config:Optional[ClientRoutesConfig]=None,
+                 ssl_session_cache=_NOT_SET
                  ):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
@@ -1461,6 +1496,17 @@ class Cluster(object):
 
         self.ssl_options = ssl_options
         self.ssl_context = ssl_context
+
+        # Auto-create a session cache when TLS is enabled, unless the caller
+        # explicitly passed ssl_session_cache (including None to opt out).
+        if ssl_session_cache is _NOT_SET:
+            if ssl_context is not None:
+                self.ssl_session_cache = SSLSessionCache()
+            else:
+                self.ssl_session_cache = None
+        else:
+            self.ssl_session_cache = ssl_session_cache
+
         self.sockopts = sockopts
         self.cql_version = cql_version
         self.max_schema_agreement_wait = max_schema_agreement_wait
@@ -1706,6 +1752,7 @@ class Cluster(object):
         kwargs_dict.setdefault('sockopts', self.sockopts)
         kwargs_dict.setdefault('ssl_options', self.ssl_options)
         kwargs_dict.setdefault('ssl_context', self.ssl_context)
+        kwargs_dict.setdefault('ssl_session_cache', self.ssl_session_cache)
         kwargs_dict.setdefault('cql_version', self.cql_version)
         kwargs_dict.setdefault('protocol_version', self.protocol_version)
         kwargs_dict.setdefault('user_type_map', self._user_types)
