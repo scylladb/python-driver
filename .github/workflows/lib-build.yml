@@ -119,10 +119,10 @@ jobs:
           conan profile detect
           conan install conanfile.py
 
-      - name: Install libev for MacOS
+      - name: Install libev and lz4 for MacOS
         if: runner.os == 'MacOs'
         run: |
-          brew install libev
+          brew install libev lz4
 
       - name: Overwrite for MacOS
         if: runner.os == 'MacOS'

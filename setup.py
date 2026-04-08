@@ -340,8 +340,35 @@ On OSX, via homebrew:
 
                 self.extensions.extend(cythonize(
                     NoPatchExtension("*", ["cassandra/*.pyx"], extra_compile_args=compile_args),
+                    exclude=["cassandra/cython_lz4.pyx"],
                     nthreads=build_concurrency,
                     compiler_directives={'language_level': 3},
+                ))
+
+                # cython_lz4 needs to link against liblz4, so it gets its
+                # own Extension entry rather than riding the .pyx glob above.
+                # It also declares htonl/ntohl via winsock2.h on Windows (see
+                # cython_lz4.pyx), and those symbols live in ws2_32.lib, not
+                # in the lz4 import library — so on Windows it must link
+                # against both.
+                lz4_libraries = ['lz4', 'ws2_32'] if is_windows else ['lz4']
+                # liblz4 is typically installed via the system package manager
+                # on Linux (standard /usr/include, /usr/lib64 already on the
+                # default search path) but on macOS Homebrew/MacPorts installs
+                # (especially the Apple Silicon /opt/homebrew prefix) are not
+                # on the compiler's default search path. Reuse the same
+                # Homebrew/MacPorts search paths already used for libev above
+                # -- lz4 installs its headers/libs in the same locations.
+                self.extensions.extend(cythonize(
+                    Extension('cassandra.cython_lz4',
+                              ['cassandra/cython_lz4.pyx'],
+                              include_dirs=libev_includes,
+                              libraries=lz4_libraries,
+                              library_dirs=libev_libdirs,
+                              extra_compile_args=compile_args),
+                    nthreads=build_concurrency,
+                    compiler_directives={'language_level': 3},
+                    exclude_failures=not CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST,
                 ))
             except Exception:
                 sys.stderr.write("Failed to cythonize one or more modules. These will not be compiled as extensions (optional).\n")
