@@ -22,7 +22,9 @@ from cassandra import OperationTimedOut
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, _Frame, Timer, TimerManager,
-                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
+                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator,
+                                  SniEndPoint,
+                                  SSLSessionCache)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 SupportedMessage, ProtocolHandler)
@@ -571,3 +573,225 @@ class TestShardawarePortGenerator(unittest.TestCase):
         second_run = list(itertools.islice(gen.generate(0, 2), 5))
 
         assert first_run == second_run
+
+
+class TestSSLSessionCache(unittest.TestCase):
+
+    @staticmethod
+    def _key(address, port, server_hostname=None):
+        return (address, port, server_hostname)
+
+    def test_get_returns_none_when_empty(self):
+        cache = SSLSessionCache()
+        assert cache.get(self._key('127.0.0.1', 9042)) is None
+
+    def test_set_and_get(self):
+        cache = SSLSessionCache()
+        session = object()  # stand-in for ssl.SSLSession
+        cache.set(self._key('127.0.0.1', 9042), session)
+        assert cache.get(self._key('127.0.0.1', 9042)) is session
+
+    def test_different_keys_are_independent(self):
+        cache = SSLSessionCache()
+        s1 = object()
+        s2 = object()
+        cache.set(self._key('127.0.0.1', 9042), s1)
+        cache.set(self._key('127.0.0.2', 9042), s2)
+        assert cache.get(self._key('127.0.0.1', 9042)) is s1
+        assert cache.get(self._key('127.0.0.2', 9042)) is s2
+        assert cache.get(self._key('127.0.0.1', 9043)) is None
+
+    def test_sni_keys_are_independent_for_same_proxy(self):
+        cache = SSLSessionCache()
+        s1 = object()
+        s2 = object()
+
+        cache.set(self._key('proxy.example.com', 9042, 'node-a'), s1)
+        cache.set(self._key('proxy.example.com', 9042, 'node-b'), s2)
+
+        assert cache.get(self._key('proxy.example.com', 9042, 'node-a')) is s1
+        assert cache.get(self._key('proxy.example.com', 9042, 'node-b')) is s2
+
+    def test_overwrite_existing_entry(self):
+        cache = SSLSessionCache()
+        old = object()
+        new = object()
+        cache.set(self._key('127.0.0.1', 9042), old)
+        cache.set(self._key('127.0.0.1', 9042), new)
+        assert cache.get(self._key('127.0.0.1', 9042)) is new
+
+    def test_thread_safety(self):
+        """Concurrent set/get operations must not raise."""
+        import threading
+        cache = SSLSessionCache()
+        errors = []
+
+        def writer(addr_suffix):
+            try:
+                for i in range(200):
+                    cache.set(self._key('127.0.0.%d' % addr_suffix, 9042), object())
+            except Exception as e:
+                errors.append(e)
+
+        def reader(addr_suffix):
+            try:
+                for i in range(200):
+                    cache.get(self._key('127.0.0.%d' % addr_suffix, 9042))
+            except Exception as e:
+                errors.append(e)
+
+        threads = []
+        for n in range(5):
+            threads.append(threading.Thread(target=writer, args=(n,)))
+            threads.append(threading.Thread(target=reader, args=(n,)))
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+
+    def test_ttl_expiration(self):
+        """Sessions expire after TTL."""
+        cache = SSLSessionCache(max_size=10, ttl=1)
+        session = object()
+        cache.set(self._key('127.0.0.1', 9042), session)
+        assert cache.get(self._key('127.0.0.1', 9042)) is session
+
+        time.sleep(1.1)
+        assert cache.get(self._key('127.0.0.1', 9042)) is None
+
+    def test_lru_eviction(self):
+        """LRU eviction when cache reaches max_size."""
+        cache = SSLSessionCache(max_size=3, ttl=60)
+
+        s1, s2, s3, s4 = object(), object(), object(), object()
+        cache.set(self._key('host1', 9042), s1)
+        cache.set(self._key('host2', 9042), s2)
+        cache.set(self._key('host3', 9042), s3)
+        assert cache.size() == 3
+
+        # Access host2 to make it recently used
+        cache.get(self._key('host2', 9042))
+
+        # Adding host4 should evict host1 (LRU)
+        cache.set(self._key('host4', 9042), s4)
+        assert cache.size() == 3
+        assert cache.get(self._key('host1', 9042)) is None
+        assert cache.get(self._key('host2', 9042)) is s2
+        assert cache.get(self._key('host3', 9042)) is s3
+        assert cache.get(self._key('host4', 9042)) is s4
+
+    def test_none_session_not_cached(self):
+        """None sessions should be silently ignored."""
+        cache = SSLSessionCache()
+        cache.set(self._key('127.0.0.1', 9042), None)
+        assert cache.size() == 0
+
+    def test_clear(self):
+        """clear() removes all entries."""
+        cache = SSLSessionCache()
+        cache.set(self._key('host1', 9042), object())
+        cache.set(self._key('host2', 9042), object())
+        assert cache.size() == 2
+        cache.clear()
+        assert cache.size() == 0
+
+    def test_clear_expired(self):
+        """clear_expired() removes only expired entries."""
+        cache = SSLSessionCache(max_size=10, ttl=1)
+        cache.set(self._key('host1', 9042), object())
+        time.sleep(1.1)
+        cache.set(self._key('host2', 9042), object())
+        assert cache.size() == 2
+        cache.clear_expired()
+        assert cache.size() == 1
+        assert cache.get(self._key('host1', 9042)) is None
+        assert cache.get(self._key('host2', 9042)) is not None
+
+    def test_automatic_expired_cleanup(self):
+        """Expired sessions are cleaned during set() periodically."""
+        cache = SSLSessionCache(max_size=10, ttl=1)
+        cache._EXPIRY_CLEANUP_INTERVAL = 5
+
+        for i in range(3):
+            cache.set(self._key('host%d' % i, 9042), object())
+        assert cache.size() == 3
+
+        time.sleep(1.1)
+
+        # Add sessions until cleanup triggers (at 5 operations)
+        for i in range(5):
+            cache.set(self._key('new%d' % i, 9042), object())
+
+        # Expired sessions should have been cleaned
+        assert cache.size() == 5
+
+    def test_custom_max_size_and_ttl(self):
+        """Cache respects custom max_size and ttl parameters."""
+        cache = SSLSessionCache(max_size=50, ttl=7200)
+        assert cache.max_size == 50
+        assert cache.ttl == 7200
+
+    def test_max_size_zero_raises(self):
+        """max_size=0 must raise ValueError."""
+        with self.assertRaises(ValueError):
+            SSLSessionCache(max_size=0)
+
+    def test_max_size_negative_raises(self):
+        """Negative max_size must raise ValueError."""
+        with self.assertRaises(ValueError):
+            SSLSessionCache(max_size=-1)
+
+    def test_ttl_zero_raises(self):
+        """ttl=0 must raise ValueError."""
+        with self.assertRaises(ValueError):
+            SSLSessionCache(ttl=0)
+
+    def test_ttl_negative_raises(self):
+        """Negative ttl must raise ValueError."""
+        with self.assertRaises(ValueError):
+            SSLSessionCache(ttl=-10)
+
+    def test_max_size_one_works(self):
+        """max_size=1 is the smallest valid cache — ensure it works."""
+        cache = SSLSessionCache(max_size=1, ttl=60)
+        s1, s2 = object(), object()
+        cache.set(self._key('host1', 9042), s1)
+        assert cache.get(self._key('host1', 9042)) is s1
+        # Adding a second entry should evict the first
+        cache.set(self._key('host2', 9042), s2)
+        assert cache.size() == 1
+        assert cache.get(self._key('host1', 9042)) is None
+        assert cache.get(self._key('host2', 9042)) is s2
+
+
+class TestEndPointTLSSessionCacheKey(unittest.TestCase):
+    """Tests for tls_session_cache_key on endpoint classes."""
+
+    def test_default_endpoint_key(self):
+        endpoint = DefaultEndPoint('10.0.0.1', 9042)
+        assert endpoint.tls_session_cache_key == ('10.0.0.1', 9042)
+
+    def test_default_endpoint_different_ports(self):
+        ep1 = DefaultEndPoint('10.0.0.1', 9042)
+        ep2 = DefaultEndPoint('10.0.0.1', 9043)
+        assert ep1.tls_session_cache_key != ep2.tls_session_cache_key
+
+    def test_sni_endpoint_includes_server_name(self):
+        ep1 = SniEndPoint('proxy.example.com', 'server1', 9042)
+        ep2 = SniEndPoint('proxy.example.com', 'server2', 9042)
+        assert ep1.tls_session_cache_key == ('proxy.example.com', 9042, 'server1')
+        assert ep2.tls_session_cache_key == ('proxy.example.com', 9042, 'server2')
+        assert ep1.tls_session_cache_key != ep2.tls_session_cache_key
+
+    def test_unix_socket_endpoint_key(self):
+        from cassandra.connection import UnixSocketEndPoint
+        ep = UnixSocketEndPoint('/var/run/scylla.sock')
+        assert ep.tls_session_cache_key == ('/var/run/scylla.sock',)
+
+    def test_unix_socket_different_paths(self):
+        from cassandra.connection import UnixSocketEndPoint
+        ep1 = UnixSocketEndPoint('/var/run/scylla.sock')
+        ep2 = UnixSocketEndPoint('/tmp/scylla.sock')
+        assert ep1.tls_session_cache_key != ep2.tls_session_cache_key
