@@ -66,8 +66,7 @@ locally_supported_compressions = OrderedDict()
 try:
     import lz4
 except ImportError:
-    log.debug("lz4 package could not be imported. LZ4 Compression will not be available")
-    pass
+    lz4 = None
 else:
     # The compress and decompress functions we need were moved from the lz4 to
     # the lz4.block namespace, so we try both here.
@@ -101,6 +100,19 @@ else:
 
     locally_supported_compressions['lz4'] = (lz4_compress, lz4_decompress)
     segment_codec_lz4 = SegmentCodec(lz4_compress, lz4_decompress)
+
+# Prefer the Cython wrappers that call liblz4 directly (no Python object
+# allocation overhead for the byte-order conversion).  This also enables
+# LZ4 support when the Cython extension is available but the Python lz4
+# package is not installed.
+try:
+    from cassandra.cython_lz4 import lz4_compress, lz4_decompress
+    locally_supported_compressions['lz4'] = (lz4_compress, lz4_decompress)
+    segment_codec_lz4 = SegmentCodec(lz4_compress, lz4_decompress)
+except ImportError:
+    if lz4 is None:
+        log.debug("Neither the lz4 package nor the cython_lz4 extension could "
+                  "be imported. LZ4 Compression will not be available")
 
 try:
     import snappy
