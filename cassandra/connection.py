@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from __future__ import absolute_import  # to enable import io from stdlib
-from collections import defaultdict, deque
+from collections import defaultdict, deque, namedtuple, OrderedDict
 import errno
 from functools import wraps, partial, total_ordering
 from heapq import heappush, heappop
@@ -22,7 +22,7 @@ import logging
 import socket
 import struct
 import sys
-from threading import Thread, Event, RLock, Condition
+from threading import Thread, Event, Lock, RLock, Condition
 import time
 import ssl
 import uuid
@@ -163,6 +163,15 @@ class EndPoint(object):
         """
         return socket.AF_UNSPEC
 
+    @property
+    def tls_session_cache_key(self):
+        """
+        Returns the cache key components for TLS session caching.
+        This is a tuple that uniquely identifies this endpoint for TLS session purposes.
+        Subclasses may override this to include additional components (e.g., SNI server name).
+        """
+        return (self.address, self.port)
+
     def resolve(self):
         """
         Resolve the endpoint to an address/port. This is called
@@ -276,6 +285,14 @@ class SniEndPoint(EndPoint):
     @property
     def ssl_options(self):
         return self._ssl_options
+
+    @property
+    def tls_session_cache_key(self):
+        """
+        Returns the cache key including server_name for SNI endpoints.
+        This prevents cache collisions when multiple SNI endpoints use the same proxy.
+        """
+        return (self.address, self.port, self._server_name)
 
     def resolve(self):
         try:
@@ -395,6 +412,14 @@ class UnixSocketEndPoint(EndPoint):
     def socket_family(self):
         return socket.AF_UNIX
 
+    @property
+    def tls_session_cache_key(self):
+        """
+        Returns the cache key for Unix socket endpoints.
+        Since Unix sockets don't have a port, only the path is used.
+        """
+        return (self._unix_socket_path,)
+
     def resolve(self):
         return self.address, None
 
@@ -454,6 +479,14 @@ class ClientRoutesEndPoint(EndPoint):
     @property
     def host_id(self) -> uuid.UUID:
         return self._host_id
+
+    @property
+    def tls_session_cache_key(self):
+        """
+        Returns the cache key for Client Routes endpoints.
+        Uses host_id and original address for uniqueness.
+        """
+        return (str(self._host_id), self._original_address, self._original_port)
 
     def resolve(self) -> Tuple[str, int]:
         """
@@ -781,6 +814,202 @@ class ShardAwarePortGenerator:
 
 
 DefaultShardAwarePortGenerator = ShardAwarePortGenerator(DEFAULT_LOCAL_PORT_LOW, DEFAULT_LOCAL_PORT_HIGH)
+
+
+_SessionCacheEntry = namedtuple('_SessionCacheEntry', ['session', 'timestamp'])
+
+
+class SSLSessionCache(object):
+    """
+    A thread-safe cache of TLS session objects, keyed by connection TLS
+    identity, with LRU eviction and TTL expiration.
+
+    When TLS is enabled, the driver stores the negotiated session after each
+    successful handshake and reuses it for subsequent connections to the same
+    host, enabling TLS session resumption (tickets / PSK) without any extra
+    configuration.
+
+    This cache is created automatically by :class:`.Cluster` when
+    ``ssl_context`` is set (not for the legacy ``ssl_options`` path, where each
+    connection builds a fresh ``SSLContext``, making session reuse impossible).
+    Pass ``ssl_session_cache=None`` to :class:`.Cluster` to opt out.
+
+    Works with both the stdlib ``ssl`` module (asyncore, libev, gevent
+    reactors) and PyOpenSSL (Twisted and Eventlet reactors).  The asyncio
+    reactor is not supported: it establishes TLS via
+    ``loop.create_connection(..., ssl=...)`` with no hook to restore a cached
+    session before the handshake, so no cache is auto-created for it.
+
+    TLS session resumption works with both TLS 1.2 and TLS 1.3:
+
+    - TLS 1.2: Session IDs (RFC 5246) and optionally Session Tickets (RFC 5077)
+    - TLS 1.3: Session Tickets (RFC 8446)
+
+    Tickets are single-use.  RFC 8446 §4.6.1 says a client SHOULD NOT reuse a
+    ticket for multiple connections, and servers may enforce single-use
+    tickets.  The driver opens many connections at once (one per shard, see
+    ``HostConnection._open_connections_for_all_shards``); if they all reused a
+    single cached ticket, only the first would resume and the rest would fall
+    back to full handshakes on such servers.  To avoid that, the cache keeps a
+    *collection* of tickets per endpoint and :meth:`get` atomically checks one
+    out (removing it) so no two connections use the same ticket.  Each
+    handshake returns a fresh ticket via :meth:`set`, so the collection
+    replenishes and grows toward the number of concurrent connections.
+    """
+
+    # Cleanup expired sessions every N set() calls
+    _EXPIRY_CLEANUP_INTERVAL = 100
+
+    def __init__(self, max_size=100, ttl=3600, max_tickets_per_key=128):
+        """
+        Initialize the TLS session cache.
+
+        :param max_size: Maximum number of endpoints (keys) to cache.  Must be
+            at least ``1``.  When full, the least recently used endpoint is
+            evicted.  Default: ``100``.
+        :param ttl: Time-to-live for cached sessions in seconds.  Must be
+            greater than ``0``.  Expired entries are lazily removed on access
+            and periodically during :meth:`set`.  Default: ``3600`` (one hour).
+        :param max_tickets_per_key: Maximum number of tickets retained per
+            endpoint.  Must be at least ``1``.  When exceeded, the oldest
+            ticket for that endpoint is dropped.  Bounds memory for endpoints
+            with many concurrent (e.g. per-shard) connections.  Default:
+            ``128``.
+        """
+        if max_size < 1:
+            raise ValueError("max_size must be >= 1, got %r" % (max_size,))
+        if ttl <= 0:
+            raise ValueError("ttl must be > 0, got %r" % (ttl,))
+        if max_tickets_per_key < 1:
+            raise ValueError(
+                "max_tickets_per_key must be >= 1, got %r" % (max_tickets_per_key,))
+        # Maps key -> deque of _SessionCacheEntry, oldest at the left.  get()
+        # checks out (pops) from the left; set() appends fresh tickets on the
+        # right.
+        self._sessions = OrderedDict()
+        self._lock = Lock()
+        self._max_size = max_size
+        self._ttl = ttl
+        self._max_tickets_per_key = max_tickets_per_key
+        self._operation_count = 0
+
+    @property
+    def max_size(self):
+        return self._max_size
+
+    @property
+    def ttl(self):
+        return self._ttl
+
+    @property
+    def max_tickets_per_key(self):
+        return self._max_tickets_per_key
+
+    def get(self, key):
+        """
+        Atomically check out (remove and return) one cached TLS session for
+        *key*, or ``None`` if none is available or all have expired.
+
+        Because tickets are single-use (see the class docstring), each caller
+        receives a distinct ticket; concurrent connections to the same endpoint
+        therefore never share one.  Accessing an endpoint marks it as recently
+        used.
+        """
+        current_time = time.monotonic()
+        with self._lock:
+            entry = self._sessions.get(key)
+            if entry is None:
+                return None
+            # Discard expired tickets from the front (oldest first).
+            while entry and current_time - entry[0].timestamp > self._ttl:
+                entry.popleft()
+            if not entry:
+                del self._sessions[key]
+                return None
+            session = entry.popleft().session
+            if entry:
+                self._sessions.move_to_end(key)
+            else:
+                del self._sessions[key]
+            return session
+
+    def set(self, key, session):
+        """
+        Add *session* to the ticket collection for *key*.  ``None`` sessions
+        are silently ignored.
+        """
+        if session is None:
+            return
+
+        current_time = time.monotonic()
+        with self._lock:
+            self._operation_count += 1
+            if self._operation_count >= self._EXPIRY_CLEANUP_INTERVAL:
+                self._operation_count = 0
+                self._clear_expired_unlocked(current_time)
+
+            entry = self._sessions.get(key)
+            if entry is None:
+                if len(self._sessions) >= self._max_size:
+                    # Prefer reclaiming space by pruning fully-expired endpoints
+                    # over evicting a still-live LRU endpoint.
+                    self._clear_expired_unlocked(current_time)
+                    if len(self._sessions) >= self._max_size:
+                        self._sessions.popitem(last=False)
+                entry = deque()
+                self._sessions[key] = entry
+            entry.append(_SessionCacheEntry(session, current_time))
+            # Bound per-endpoint growth by dropping the oldest tickets.
+            while len(entry) > self._max_tickets_per_key:
+                entry.popleft()
+            self._sessions.move_to_end(key)
+
+    def clear(self):
+        """Clear all sessions from the cache."""
+        with self._lock:
+            self._sessions.clear()
+
+    def clear_expired(self):
+        """Remove all expired sessions from the cache."""
+        current_time = time.monotonic()
+        with self._lock:
+            self._clear_expired_unlocked(current_time)
+
+    def size(self):
+        """Return the current number of cached endpoints (keys)."""
+        with self._lock:
+            return len(self._sessions)
+
+    def _clear_expired_unlocked(self, current_time=None):
+        """Remove all expired tickets, and now-empty keys (lock held)."""
+        if current_time is None:
+            current_time = time.monotonic()
+        empty_keys = []
+        for key, entry in self._sessions.items():
+            while entry and current_time - entry[0].timestamp > self._ttl:
+                entry.popleft()
+            if not entry:
+                empty_keys.append(key)
+        for key in empty_keys:
+            del self._sessions[key]
+
+    def _snapshot_sessions(self):
+        """Return a list of all cached session objects (for testing only)."""
+        with self._lock:
+            return [
+                cache_entry.session
+                for entry in self._sessions.values()
+                for cache_entry in entry
+            ]
+
+    def __repr__(self):
+        with self._lock:
+            return "<%s max_size=%d ttl=%d size=%d>" % (
+                self.__class__.__name__,
+                self._max_size,
+                self._ttl,
+                len(self._sessions),
+            )
 
 
 class Connection(object):
