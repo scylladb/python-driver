@@ -108,6 +108,22 @@ class EventletConnection(Connection):
         if self.ssl_options and 'server_hostname' in self.ssl_options:
             # This is necessary for SNI
             self._socket.set_tlsext_host_name(self.ssl_options['server_hostname'].encode('ascii'))
+        # Apply cached TLS session for resumption (PyOpenSSL)
+        if self._ssl_session_cache is not None:
+            cached_session = self._ssl_session_cache.get(
+                self._ssl_session_cache_key())
+            if cached_session is not None:
+                try:
+                    self._socket.set_session(cached_session)
+                    log.debug("Using cached TLS session for %s", self.endpoint)
+                except Exception as e:
+                    log.debug("Could not restore TLS session for %s: %s", self.endpoint, e)
+
+        # Return the SSL.Connection so that the base-class _connect_socket() can
+        # store it in self._socket via:  self._socket = self._wrap_socket_from_context()
+        # Without this return the assignment would overwrite self._socket with None,
+        # breaking every subsequent call on the socket.
+        return self._socket
 
     def _initiate_connection(self, sockaddr):
         if self.uses_legacy_ssl_options:
@@ -116,15 +132,64 @@ class EventletConnection(Connection):
             self._socket.connect(sockaddr)
             if self.ssl_context or self.ssl_options:
                 self._socket.do_handshake()
+                # No early session caching here.  _cache_tls_session_if_needed() is
+                # called by the base class at ReadyMessage / AuthSuccessMessage time,
+                # which is the correct point for both TLS 1.2 and TLS 1.3 (for TLS 1.3
+                # the resumable session ticket is only available after the first
+                # application-data exchange).
 
     def _match_hostname(self):
         if self.uses_legacy_ssl_options:
             super(EventletConnection, self)._match_hostname()
         else:
-            cert_name = self._socket.get_peer_certificate().get_subject().commonName
-            if cert_name != self.endpoint.address:
+            cert = self._socket.get_peer_certificate()
+            cert_name = cert.get_subject().commonName if cert is not None else None
+            if cert is None or cert_name != self.endpoint.address:
                 raise Exception("Hostname verification failed! Certificate name '{}' "
-                                "doesn't endpoint '{}'".format(cert_name, self.endpoint.address))
+                                "doesn't match endpoint '{}'".format(cert_name, self.endpoint.address))
+
+    def _cache_tls_session_if_needed(self, initial=False):
+        """
+        PyOpenSSL override of :meth:`.Connection._cache_tls_session_if_needed`.
+
+        Uses ``SSL.Connection.get_session()`` instead of the stdlib
+        ``ssl.SSLSocket.session`` attribute.
+
+        The base ``_connect_socket()`` also invokes this immediately after
+        ``do_handshake()`` (with ``initial=True``).  pyOpenSSL exposes no way to
+        tell whether a TLS 1.3 ``NewSessionTicket`` has arrived yet
+        (``get_session()`` can return a non-``None`` but ticketless,
+        non-resumable session at that point), and caching then would set the
+        ``_tls_session_cached`` guard and block the later store of the real
+        resumable session.  The initial invocation is therefore skipped; the
+        session is stored only from the ReadyMessage / AuthSuccessMessage
+        handlers, after the first application-data exchange, which is the
+        earliest reliable moment for both TLS 1.2 and TLS 1.3.
+
+        Falls back to the base-class implementation for the legacy
+        ``ssl_options``-only path, which uses a stdlib ``ssl.SSLSocket``.
+        """
+        if self.uses_legacy_ssl_options:
+            super(EventletConnection, self)._cache_tls_session_if_needed(initial=initial)
+            return
+        if initial:
+            # Defer to the post-application-data call (see docstring).
+            return
+        if self._tls_session_cached:
+            return
+        if self._ssl_session_cache is None or not (self.ssl_context or self.ssl_options):
+            return
+        # Note: pyOpenSSL's SSL.Connection exposes no session_reused(), so we cannot
+        # skip resumed handshakes; the per-connection ``_tls_session_cached`` guard
+        # above still prevents storing twice for the same connection.
+        try:
+            session = self._socket.get_session()
+            if session is not None:
+                self._ssl_session_cache.set(
+                    self._ssl_session_cache_key(), session)
+                self._tls_session_cached = True
+        except Exception as e:
+            log.debug("Could not cache TLS session for %s: %s", self.endpoint, e)
 
     def close(self):
         with self.lock:
