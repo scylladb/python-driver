@@ -956,3 +956,278 @@ class TestEndPointTLSSessionCacheKey(unittest.TestCase):
         ep1 = UnixSocketEndPoint('/var/run/scylla.sock')
         ep2 = UnixSocketEndPoint('/tmp/scylla.sock')
         assert ep1.tls_session_cache_key != ep2.tls_session_cache_key
+
+
+class TestConnectionSSLSessionRestore(unittest.TestCase):
+
+    @patch.object(Connection, '_connect_socket')
+    @patch.object(Connection, '_send_options_message')
+    def test_wrap_socket_restores_cached_session(self, _send, _connect):
+        """_wrap_socket_from_context sets ssl_sock.session from cache."""
+        import ssl as _ssl
+
+        mock_ssl_sock = Mock()
+        mock_ctx = Mock(spec=_ssl.SSLContext)
+        mock_ctx.check_hostname = False
+        mock_ctx.wrap_socket.return_value = mock_ssl_sock
+
+        cached = Mock(name='cached_session')
+        cache = SSLSessionCache()
+        cache.set(('10.0.0.1', 9042), cached)
+
+        conn = Connection.__new__(Connection)
+        conn.endpoint = DefaultEndPoint('10.0.0.1', 9042)
+        conn.ssl_context = mock_ctx
+        conn.ssl_options = {}
+        conn._ssl_session_cache = cache
+
+        result = conn._wrap_socket_from_context()
+        assert result is mock_ssl_sock
+        assert mock_ssl_sock.session == cached
+
+    @patch.object(Connection, '_connect_socket')
+    @patch.object(Connection, '_send_options_message')
+    def test_wrap_socket_tolerates_missing_cache(self, _send, _connect):
+        """No error when _ssl_session_cache is None."""
+        import ssl as _ssl
+
+        mock_ssl_sock = Mock()
+        mock_ctx = Mock(spec=_ssl.SSLContext)
+        mock_ctx.check_hostname = False
+        mock_ctx.wrap_socket.return_value = mock_ssl_sock
+
+        conn = Connection.__new__(Connection)
+        conn.endpoint = DefaultEndPoint('10.0.0.1', 9042)
+        conn.ssl_context = mock_ctx
+        conn.ssl_options = {}
+        conn._ssl_session_cache = None
+
+        result = conn._wrap_socket_from_context()
+        assert result is mock_ssl_sock
+
+    @patch.object(Connection, '_connect_socket')
+    @patch.object(Connection, '_send_options_message')
+    def test_wrap_socket_handles_set_session_failure(self, _send, _connect):
+        """If setting session raises ssl.SSLError, it is silently ignored."""
+        import ssl as _ssl
+
+        mock_ssl_sock = Mock()
+        type(mock_ssl_sock).session = property(
+            fget=lambda self: None,
+            fset=Mock(side_effect=_ssl.SSLError("bad session")),
+        )
+        mock_ctx = Mock(spec=_ssl.SSLContext)
+        mock_ctx.check_hostname = False
+        mock_ctx.wrap_socket.return_value = mock_ssl_sock
+
+        cache = SSLSessionCache()
+        cache.set(('10.0.0.1', 9042), Mock(name='bad_cached'))
+
+        conn = Connection.__new__(Connection)
+        conn.endpoint = DefaultEndPoint('10.0.0.1', 9042)
+        conn.ssl_context = mock_ctx
+        conn.ssl_options = {}
+        conn._ssl_session_cache = cache
+
+        # Should NOT raise
+        result = conn._wrap_socket_from_context()
+        assert result is mock_ssl_sock
+
+    @patch.object(Connection, '_connect_socket')
+    @patch.object(Connection, '_send_options_message')
+    def test_wrap_socket_handles_value_error_on_different_context(self, _send, _connect):
+        """If setting session raises ValueError (different SSLContext), it is silently ignored."""
+        import ssl as _ssl
+
+        mock_ssl_sock = Mock()
+        type(mock_ssl_sock).session = property(
+            fget=lambda self: None,
+            fset=Mock(side_effect=ValueError("Session refers to a different SSLContext")),
+        )
+        mock_ctx = Mock(spec=_ssl.SSLContext)
+        mock_ctx.check_hostname = False
+        mock_ctx.wrap_socket.return_value = mock_ssl_sock
+
+        cache = SSLSessionCache()
+        cache.set(('10.0.0.1', 9042), Mock(name='stale_cached'))
+
+        conn = Connection.__new__(Connection)
+        conn.endpoint = DefaultEndPoint('10.0.0.1', 9042)
+        conn.ssl_context = mock_ctx
+        conn.ssl_options = {}
+        conn._ssl_session_cache = cache
+
+        # Should NOT raise — falls back to full handshake
+        result = conn._wrap_socket_from_context()
+        assert result is mock_ssl_sock
+
+    @patch.object(Connection, '_connect_socket')
+    @patch.object(Connection, '_send_options_message')
+    def test_wrap_socket_uses_sni_specific_cached_session(self, _send, _connect):
+        import ssl as _ssl
+
+        mock_ssl_sock = Mock()
+        mock_ctx = Mock(spec=_ssl.SSLContext)
+        mock_ctx.check_hostname = False
+        mock_ctx.wrap_socket.return_value = mock_ssl_sock
+
+        expected = Mock(name='node_b_session')
+        cache = SSLSessionCache()
+        cache.set(('proxy.example.com', 9042, 'node-a'), Mock(name='node_a_session'))
+        cache.set(('proxy.example.com', 9042, 'node-b'), expected)
+
+        conn = Connection.__new__(Connection)
+        conn.endpoint = SniEndPoint('proxy.example.com', 'node-b', 9042)
+        conn.ssl_context = mock_ctx
+        conn.ssl_options = {'server_hostname': 'node-b'}
+        conn._ssl_session_cache = cache
+
+        result = conn._wrap_socket_from_context()
+        assert result is mock_ssl_sock
+        assert mock_ssl_sock.session == expected
+
+
+class TestConnectionCacheTLSSession(unittest.TestCase):
+
+    def _make_conn(self):
+        conn = Connection.__new__(Connection)
+        conn.endpoint = DefaultEndPoint('10.0.0.1', 9042)
+        conn.ssl_context = Mock()
+        conn._ssl_session_cache = SSLSessionCache()
+        conn._socket = Mock()
+        conn._socket.session_reused = False
+        conn._socket.version = Mock(return_value='TLSv1.2')
+        return conn
+
+    def test_cache_tls_session_stores_session(self):
+        conn = self._make_conn()
+        fake_session = Mock(name='ssl_session')
+        conn._socket.session = fake_session
+
+        conn._cache_tls_session_if_needed()
+        assert conn._ssl_session_cache.get(('10.0.0.1', 9042)) is fake_session
+
+    def test_cache_tls_session_initial_call_caches_tls12(self):
+        # For the stdlib ssl path the initial (post-handshake) call caches a
+        # TLS 1.2 session immediately; the ``initial`` flag is only honoured by
+        # the PyOpenSSL subclasses.
+        conn = self._make_conn()
+        fake_session = Mock(name='ssl_session')
+        conn._socket.session = fake_session
+
+        conn._cache_tls_session_if_needed(initial=True)
+        assert conn._ssl_session_cache.get(('10.0.0.1', 9042)) is fake_session
+        assert conn._tls_session_cached is True
+
+    def test_cache_tls_session_is_idempotent(self):
+        # A second call for the same connection must not store the session
+        # again (guarded by _tls_session_cached).
+        conn = self._make_conn()
+        first_session = Mock(name='ssl_session_1')
+        conn._socket.session = first_session
+        conn._cache_tls_session_if_needed()
+        assert conn._tls_session_cached is True
+
+        # Even if the socket now reports a different session, the guard should
+        # prevent a second store.
+        conn._socket.session = Mock(name='ssl_session_2')
+        conn._cache_tls_session_if_needed()
+        assert conn._ssl_session_cache.get(('10.0.0.1', 9042)) is first_session
+
+    def test_cache_tls_session_no_op_when_session_none(self):
+        conn = self._make_conn()
+        conn._socket.session = None
+
+        conn._cache_tls_session_if_needed()
+        assert conn._ssl_session_cache.get(('10.0.0.1', 9042)) is None
+
+    def test_cache_tls_session_stores_resumed_session(self):
+        # A resumed handshake (session_reused True) may carry a replacement
+        # ticket, so the current session must still be (re-)stored rather than
+        # skipped.
+        conn = self._make_conn()
+        conn._socket.session_reused = True
+        fake_session = Mock(name='resumed_ssl_session')
+        conn._socket.session = fake_session
+
+        conn._cache_tls_session_if_needed()
+        assert conn._ssl_session_cache.get(('10.0.0.1', 9042)) is fake_session
+        assert conn._tls_session_cached is True
+
+    def test_cache_tls_session_defers_tls13_without_ticket(self):
+        # TLS 1.3 exposes the SSLSession before the ticket arrives; caching
+        # must be deferred (and the guard left unset) until has_ticket is True.
+        conn = self._make_conn()
+        conn._socket.version = Mock(return_value='TLSv1.3')
+        ticketless = Mock(name='ticketless_session')
+        ticketless.has_ticket = False
+        conn._socket.session = ticketless
+
+        conn._cache_tls_session_if_needed()
+        assert conn._ssl_session_cache.get(('10.0.0.1', 9042)) is None
+        assert conn._tls_session_cached is False
+
+        # Once the ticket arrives, a later call stores the resumable session.
+        with_ticket = Mock(name='ticketed_session')
+        with_ticket.has_ticket = True
+        conn._socket.session = with_ticket
+        conn._cache_tls_session_if_needed()
+        assert conn._ssl_session_cache.get(('10.0.0.1', 9042)) is with_ticket
+        assert conn._tls_session_cached is True
+
+    def test_cache_tls_session_defers_tls13_initial_with_ticket(self):
+        # On a resumed TLS 1.3 handshake the SSLSession already reports
+        # has_ticket=True, but that ticket is the (potentially single-use) one
+        # used for resumption and may be rotated by the server's replacement
+        # NewSessionTicket.  The immediate post-handshake call (initial=True)
+        # must NOT cache it or set the guard, so the deferred Ready/AuthSuccess
+        # store can capture the replacement ticket.
+        conn = self._make_conn()
+        conn._socket.version = Mock(return_value='TLSv1.3')
+        old_ticket = Mock(name='resumption_ticket_session')
+        old_ticket.has_ticket = True
+        conn._socket.session = old_ticket
+
+        conn._cache_tls_session_if_needed(initial=True)
+        assert conn._ssl_session_cache.get(('10.0.0.1', 9042)) is None
+        assert conn._tls_session_cached is False
+
+        # The deferred (non-initial) call then stores the replacement ticket.
+        replacement = Mock(name='replacement_ticket_session')
+        replacement.has_ticket = True
+        conn._socket.session = replacement
+        conn._cache_tls_session_if_needed()
+        assert conn._ssl_session_cache.get(('10.0.0.1', 9042)) is replacement
+        assert conn._tls_session_cached is True
+
+    def test_cache_tls_session_no_op_when_cache_none(self):
+        conn = self._make_conn()
+        conn._ssl_session_cache = None
+        conn._socket.session = Mock()
+
+        # Should not raise
+        conn._cache_tls_session_if_needed()
+
+    def test_cache_tls_session_no_op_when_no_ssl_context(self):
+        conn = self._make_conn()
+        conn.ssl_context = None
+        conn._socket.session = Mock()
+
+        conn._cache_tls_session_if_needed()
+        assert conn._ssl_session_cache.get(('10.0.0.1', 9042)) is None
+
+    def test_cache_tls_session_uses_sni_specific_key(self):
+        conn = Connection.__new__(Connection)
+        conn.endpoint = SniEndPoint('proxy.example.com', 'node-b', 9042)
+        conn.ssl_context = Mock()
+        conn.ssl_options = {'server_hostname': 'node-b'}
+        conn._ssl_session_cache = SSLSessionCache()
+        conn._socket = Mock()
+        conn._socket.session_reused = False
+        conn._socket.version = Mock(return_value='TLSv1.2')
+        fake_session = Mock(name='ssl_session')
+        conn._socket.session = fake_session
+
+        conn._cache_tls_session_if_needed()
+        assert conn._ssl_session_cache.get(('proxy.example.com', 9042, 'node-b')) is fake_session
+        assert conn._ssl_session_cache.get(('proxy.example.com', 9042, 'node-a')) is None

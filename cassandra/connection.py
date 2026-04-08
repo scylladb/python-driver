@@ -1032,6 +1032,11 @@ class Connection(object):
     endpoint = None
     ssl_options = None
     ssl_context = None
+    _ssl_session_cache = None
+    _tls_session_cached = False
+    # Set to True once the TLS session for this connection has been stored in
+    # the cache.  Safe to never reset because Connection objects are created
+    # per physical TCP connection and are never recycled across reconnections.
     last_error = None
 
     # The current number of operations that are in flight. More precisely,
@@ -1109,13 +1114,15 @@ class Connection(object):
                  cql_version=None, protocol_version=ProtocolVersion.MAX_SUPPORTED, is_control_connection=False,
                  user_type_map=None, connect_timeout=None, allow_beta_protocol_version=False, no_compact=False,
                  ssl_context=None, owning_pool=None, shard_id=None, total_shards=None,
-                 on_orphaned_stream_released=None, application_info: Optional[ApplicationInfoBase] = None):
+                 on_orphaned_stream_released=None, application_info: Optional[ApplicationInfoBase] = None,
+                 ssl_session_cache=None):
         # TODO next major rename host to endpoint and remove port kwarg.
         self.endpoint = host if isinstance(host, EndPoint) else DefaultEndPoint(host, port)
 
         self.authenticator = authenticator
         self.ssl_options = ssl_options.copy() if ssl_options else {}
         self.ssl_context = ssl_context
+        self._ssl_session_cache = ssl_session_cache
         self.sockopts = sockopts
         self.compression = compression
         self.cql_version = cql_version
@@ -1261,7 +1268,28 @@ class Connection(object):
             server_hostname = self.endpoint.address
             opts['server_hostname'] = server_hostname
 
-        return self.ssl_context.wrap_socket(self._socket, **opts)
+        ssl_sock = self.ssl_context.wrap_socket(self._socket, **opts)
+
+        # Restore a previously cached session to enable TLS session resumption
+        # (session tickets / PSK).  The session must be set *after*
+        # wrap_socket() (which only creates the SSLSocket) but *before*
+        # connect(), because connect() triggers the actual TLS handshake
+        # (via do_handshake_on_connect, which defaults to True).
+        # _initiate_connection, called after this method returns, performs
+        # the connect().
+        if self._ssl_session_cache is not None:
+            cache_key = self._ssl_session_cache_key()
+            cached_session = self._ssl_session_cache.get(cache_key)
+            if cached_session is not None:
+                try:
+                    ssl_sock.session = cached_session
+                    log.debug("TLS session restore attempted for %s key=%s", self.endpoint, cache_key)
+                except (AttributeError, ssl.SSLError, ValueError) as e:
+                    log.debug("Could not restore TLS session for %s: %s", self.endpoint, e)
+            else:
+                log.debug("No cached TLS session found for %s key=%s", self.endpoint, cache_key)
+
+        return ssl_sock
 
     def _initiate_connection(self, sockaddr):
         if self.features.shard_id is not None:
@@ -1274,6 +1302,80 @@ class Connection(object):
             log.debug('connection (%r) port=%d should be shard_id=%d', id(self), port, port % self.total_shards)
 
         self._socket.connect(sockaddr)
+
+    def _cache_tls_session_if_needed(self, initial=False):
+        """
+        Store the current TLS session in the cache (if any) so that future
+        connections to the same endpoint can resume it.
+
+        The current session is cached on every handshake, including resumed
+        ones: a resumed TLS 1.2 handshake may issue a *replacement* session
+        ticket, so re-storing keeps the freshest resumable session rather than
+        a consumed/older one.
+
+        TLS 1.3 delivers the session ticket asynchronously, after the handshake
+        completes.  Right after ``connect()`` the ``SSLSession`` may already be
+        present -- either still ticketless (``has_ticket`` is ``False``) or, on
+        a *resumed* handshake, carrying the old (potentially single-use) ticket
+        that was used for resumption.  Caching in either case is wrong: a
+        ticketless session is non-resumable, and the old resumption ticket may
+        be consumed and about to be rotated by the server's replacement
+        ``NewSessionTicket``.  Storing it now (and setting the
+        ``_tls_session_cached`` guard) would suppress the later store and let a
+        future reconnect retry a consumed ticket.  Every *initial* TLS 1.3 store
+        is therefore skipped; the write is deferred to the second attempt from
+        the Ready/AuthSuccess handlers once the CQL handshake has completed and
+        the replacement ticket has arrived (see _handle_startup_response and
+        _handle_auth_response).
+
+        ``initial`` is ``True`` when called from :meth:`_connect_socket`
+        immediately after the handshake, and ``False`` when called from the
+        Ready/AuthSuccess handlers after the first application-data exchange.
+        For TLS 1.3 the stdlib ``ssl`` path uses it to skip the premature
+        initial store (even when the resumed session already reports
+        ``has_ticket``); PyOpenSSL subclasses, which cannot inspect
+        ``has_ticket``, likewise use it to skip the premature initial attempt.
+        """
+        if self._tls_session_cached:
+            # Already stored for this connection (called from both
+            # _connect_socket and the Ready/AuthSuccess handlers).
+            return
+        if self._ssl_session_cache is not None and self.ssl_context is not None:
+            session = getattr(self._socket, 'session', None)
+            if session is None:
+                # No session available yet (e.g. TLS 1.3 before the ticket
+                # arrives); a later call will retry.
+                return
+            tls_version = getattr(self._socket, 'version', lambda: None)()
+            if tls_version == 'TLSv1.3' and (
+                    initial or not getattr(session, 'has_ticket', False)):
+                # TLS 1.3 exposes the SSLSession before the server's (possibly
+                # replacement) NewSessionTicket is delivered.  Skip every
+                # *initial* store: on a resumed handshake the session still
+                # carries the old, potentially single-use ticket that is about
+                # to be rotated, so caching it now (and setting the guard) could
+                # let a later reconnect retry a consumed ticket.  On non-initial
+                # calls, still defer while the session is ticketless.  Either way
+                # the write is deferred to the Ready/AuthSuccess retry once the
+                # replacement ticket has arrived.
+                return
+            cache_key = self._ssl_session_cache_key()
+            log.debug("TLS caching session for %s: tls_version=%s has_ticket=%s key=%s",
+                      self.endpoint, tls_version,
+                      getattr(session, 'has_ticket', None),
+                      cache_key)
+            self._ssl_session_cache.set(cache_key, session)
+            self._tls_session_cached = True
+
+    def _ssl_session_cache_key(self):
+        """
+        Return a cache key that matches the TLS peer identity.
+
+        Delegates to the endpoint's ``tls_session_cache_key`` property, which
+        returns appropriate components for each endpoint type (e.g., includes
+        ``server_name`` for SNI endpoints to prevent cache collisions).
+        """
+        return self.endpoint.tls_session_cache_key
 
     # PYTHON-1331
     #
@@ -1316,6 +1418,19 @@ class Connection(object):
                 # run that here.
                 if self._check_hostname:
                     self._validate_hostname()
+
+                # Cache the negotiated TLS session for future resumption, only
+                # after hostname validation has succeeded so that a rejected
+                # peer never leaves a usable session in the cache.
+                # For TLS 1.2 the session is available right after connect().
+                # For TLS 1.3 the server sends the session ticket
+                # asynchronously after the first application-data exchange,
+                # so socket.session may still be None here; a second
+                # attempt is made in _cache_tls_session_if_needed() after
+                # the CQL handshake completes (see _handle_startup_response
+                # and _handle_auth_response).
+                self._cache_tls_session_if_needed(initial=True)
+
                 sockerr = None
                 break
             except socket.error as err:
@@ -1812,6 +1927,9 @@ class Connection(object):
             if ProtocolVersion.has_checksumming_support(self.protocol_version):
                 self._enable_checksumming()
 
+            # TLS 1.3: the session ticket is sent after the first
+            # application-data exchange, so try caching it now.
+            self._cache_tls_session_if_needed()
             self.connected_event.set()
         elif isinstance(startup_response, AuthenticateMessage):
             log.debug("Got AuthenticateMessage on new connection (%s) from %s: %s",
@@ -1868,6 +1986,9 @@ class Connection(object):
             self.authenticator.on_authentication_success(auth_response.token)
             if self._compressor:
                 self.compressor = self._compressor
+            # TLS 1.3: the session ticket is sent after the first
+            # application-data exchange, so try caching it now.
+            self._cache_tls_session_if_needed()
             self.connected_event.set()
         elif isinstance(auth_response, AuthChallengeMessage):
             response = self.authenticator.evaluate_challenge(auth_response.challenge)
