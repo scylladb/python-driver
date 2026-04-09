@@ -4734,21 +4734,17 @@ class ResponseFuture(object):
             self._warnings = getattr(response, 'warnings', None)
             self._custom_payload = getattr(response, 'custom_payload', None)
 
-            if self._custom_payload and self.session.cluster.control_connection._tablets_routing_v1 and 'tablets-routing-v1' in self._custom_payload:
-                protocol = self.session.cluster.protocol_version
+            if self._custom_payload and self.session.cluster.control_connection._tablets_routing_v1:
                 info = self._custom_payload.get('tablets-routing-v1')
-                ctype = ResponseFuture._TABLET_ROUTING_CTYPE
-                if ctype is None:
-                    ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
-                    ResponseFuture._TABLET_ROUTING_CTYPE = ctype
-                tablet_routing_info = ctype.from_binary(info, protocol)
-                first_token = tablet_routing_info[0]
-                last_token = tablet_routing_info[1]
-                tablet_replicas = tablet_routing_info[2]
-                tablet = Tablet.from_row(first_token, last_token, tablet_replicas)
-                keyspace = self.query.keyspace
-                table = self.query.table
-                self.session.cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
+                if info is not None:
+                    ctype = ResponseFuture._TABLET_ROUTING_CTYPE
+                    if ctype is None:
+                        ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
+                        ResponseFuture._TABLET_ROUTING_CTYPE = ctype
+                    first_token, last_token, tablet_replicas = ctype.from_binary(info, self.session.cluster.protocol_version)
+                    tablet = Tablet.from_row(first_token, last_token, tablet_replicas)
+                    if tablet is not None:
+                        self.session.cluster.metadata._tablets.add_tablet(self.query.keyspace, self.query.table, tablet)
 
             if isinstance(response, ResultMessage):
                 if response.kind == RESULT_KIND_SET_KEYSPACE:
