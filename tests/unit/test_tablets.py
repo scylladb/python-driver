@@ -1,6 +1,6 @@
 import unittest
 from io import BytesIO
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from cassandra import ConsistencyLevel, ProtocolVersion
 from cassandra.protocol import ExecuteMessage
@@ -97,9 +97,9 @@ class GetTabletForKeyTest(unittest.TestCase):
     """Tests for Tablets.get_tablet_for_key."""
 
     def test_found(self):
-        t1 = Tablet(0, 100, [("host1", 0)])
-        t2 = Tablet(100, 200, [("host2", 0)])
-        t3 = Tablet(200, 300, [("host3", 0)])
+        t1 = Tablet(0, 100, [(uuid4(), 0)])
+        t2 = Tablet(100, 200, [(uuid4(), 0)])
+        t3 = Tablet(200, 300, [(uuid4(), 0)])
         tablets = Tablets({("ks", "tb"): [t1, t2, t3]})
 
         class Token:
@@ -119,7 +119,7 @@ class GetTabletForKeyTest(unittest.TestCase):
         self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))
 
     def test_not_found_outside_range(self):
-        t1 = Tablet(100, 200, [("host1", 0)])
+        t1 = Tablet(100, 200, [(uuid4(), 0)])
         tablets = Tablets({("ks", "tb"): [t1]})
 
         class Token:
@@ -283,7 +283,7 @@ class TabletVersionBlockTest(unittest.TestCase):
     def test_from_row_stores_tablet_version(self):
         """Tablet.from_row stores the tablet_version it is given (the V2 payload field)."""
         version = 0xDEADBEEFCAFEBABE
-        tablet = Tablet.from_row(-100, 100, [("host1", 0), ("host2", 1)], tablet_version=version)
+        tablet = Tablet.from_row(-100, 100, [(uuid4(), 0), (uuid4(), 1)], tablet_version=version)
         self.assertIsNotNone(tablet)
         self.assertEqual(tablet.tablet_version, version)
         self.assertEqual(tablet.first_token, -100)
@@ -348,3 +348,88 @@ class ExecuteMessageSerializationTest(unittest.TestCase):
         first_again = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=True))
         self.assertEqual(first, first_again)
         self.assertEqual(first, second_plain + bytes([0x3C]))
+
+class TabletFromRowTest(unittest.TestCase):
+    """Tests for Tablet.from_row, in particular that emptiness is detected
+    correctly regardless of whether `replicas` is a reusable sequence or a
+    one-shot iterator/generator."""
+
+    def test_empty_list_returns_none(self):
+        self.assertIsNone(Tablet.from_row(0, 100, []))
+
+    def test_empty_generator_returns_none(self):
+        # A generator is always truthy, even when empty, so a naive
+        # `if not replicas` check would fail to detect this case.
+        self.assertIsNone(Tablet.from_row(0, 100, (x for x in [])))
+
+    def test_none_returns_none(self):
+        self.assertIsNone(Tablet.from_row(0, 100, None))
+
+    def test_non_empty_list_builds_tablet(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        tablet = Tablet.from_row(0, 100, [(u1, 3), (u2, 7)])
+        self.assertIsNotNone(tablet)
+        self.assertEqual(tablet.replicas, ((u1, 3), (u2, 7)))
+        self.assertTrue(tablet.replica_contains_host_id(u1))
+        self.assertEqual(tablet.get_replica_shard_id(u2), 7)
+
+
+class TabletReplicaDictTest(unittest.TestCase):
+    """replica_contains_host_id / get_replica_shard_id lookups."""
+
+    def test_replica_contains_host_id(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        u3 = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertTrue(t.replica_contains_host_id(u1))
+        self.assertTrue(t.replica_contains_host_id(u2))
+        self.assertFalse(t.replica_contains_host_id(u3))
+
+    def test_replica_contains_host_id_false_when_no_replicas(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        t = Tablet(0, 100, None)
+        self.assertFalse(t.replica_contains_host_id(u1))
+
+    def test_get_replica_shard_id(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        u3 = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertEqual(t.get_replica_shard_id(u1), 3)
+        self.assertEqual(t.get_replica_shard_id(u2), 7)
+        self.assertIsNone(t.get_replica_shard_id(u3))
+
+    def test_none_host_id_is_not_a_replica(self):
+        # A host whose id is still unknown must be treated as a non-replica
+        # rather than raising (discovery/metadata transitions).
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        t = Tablet(0, 100, [(u1, 3)])
+        self.assertFalse(t.replica_contains_host_id(None))
+        self.assertIsNone(t.get_replica_shard_id(None))
+
+    def test_replica_lookup_from_iterator(self):
+        """Ensure replica lookups work correctly even when replicas is a
+        one-shot iterator (generator), not a reusable list."""
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+
+        def gen():
+            yield (u1, 3)
+            yield (u2, 7)
+
+        t = Tablet(0, 100, gen())
+        self.assertEqual(t.replicas, ((u1, 3), (u2, 7)))
+        self.assertEqual(t.get_replica_shard_id(u2), 7)
+
+
+class TabletHostIdInternTest(unittest.TestCase):
+    def test_equal_host_ids_share_one_object(self):
+        u = uuid4()
+        t1 = Tablet(0, 100, [(UUID(int=u.int), 0)])
+        t2 = Tablet(100, 200, [(UUID(int=u.int), 1)])
+        self.assertIs(t1.leader, t2.leader)
+        self.assertEqual(t1.leader, u)
+        self.assertIs(next(iter(t1._replica_dict)), next(iter(t2._replica_dict)))
+

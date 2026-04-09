@@ -1013,6 +1013,44 @@ class TokenAwarePolicyTest(unittest.TestCase):
             for _ in range(len(hosts)):
                 assert list(policy.make_query_plan(None, query))[:3] == order
 
+    def test_tablet_routing_skips_host_with_unknown_host_id(self):
+        """A host whose host_id is not yet known must be treated as a
+        non-replica during tablet routing, not raise AttributeError.
+
+        Host.__init__ rejects host_id=None, but Host.host_id carries a
+        class-level None default, and a child policy can yield a host whose id
+        is not populated yet."""
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4())
+                 for i in range(3)]
+        for h in hosts:
+            h.set_up()
+            h.set_location_info("dc1", "rack1")
+        unknown = Mock()
+        unknown.host_id = None
+        unknown.is_up = True
+        all_hosts = hosts + [unknown]
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata.all_hosts.return_value = all_hosts
+        cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(
+            replicas=[(h.host_id, 0) for h in hosts[:2]])
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = all_hosts
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, all_hosts)
+
+        query = Statement(routing_key=b"key", keyspace="ks")
+        plan = list(policy.make_query_plan(None, query))
+        # The two known replicas come first; the id-less host is skipped from
+        # replica selection and only surfaces later as a non-replica fallback.
+        assert hosts[:2] == plan[:2]
+        assert unknown in plan[2:]
+
     def test_leader_aware_routing_with_tablet_version(self):
         """
         For a strongly-consistent keyspace, the leader (first replica in the
