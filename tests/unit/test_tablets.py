@@ -1,4 +1,5 @@
 import unittest
+from uuid import UUID
 
 from cassandra.tablets import Tablets, Tablet
 
@@ -124,3 +125,68 @@ class GetTabletForKeyTest(unittest.TestCase):
         # Token value 50 is not > first_token (100) of the tablet whose
         # last_token (200) is >= 50, so no match.
         self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))
+
+
+class TabletReplicaDictTest(unittest.TestCase):
+    """Tests for Tablet's replica/shard lookup behavior, backed internally
+    by a cached _replica_dict for O(1) host/shard lookup.
+
+    Most of these tests go through the public API (replica_contains_host_id
+    and get_replica_shard_id) so they keep working across internal
+    refactors of the cache; see test_replica_dict_populated_as_expected
+    for the one targeted check of the internal structure itself.
+    """
+
+    def test_replica_contains_host_id(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        u3 = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertTrue(t.replica_contains_host_id(u1))
+        self.assertTrue(t.replica_contains_host_id(u2))
+        self.assertFalse(t.replica_contains_host_id(u3))
+
+    def test_replica_contains_host_id_false_when_no_replicas(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        t = Tablet(0, 100, None)
+        self.assertFalse(t.replica_contains_host_id(u1))
+
+    def test_get_replica_shard_id(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        u3 = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertEqual(t.get_replica_shard_id(u1), 3)
+        self.assertEqual(t.get_replica_shard_id(u2), 7)
+        self.assertIsNone(t.get_replica_shard_id(u3))
+
+    def test_replicas_stored_as_tuple(self):
+        t = Tablet(0, 100, [("host1", 0), ("host2", 1)])
+        self.assertIsInstance(t.replicas, tuple)
+
+    def test_replica_lookup_from_iterator(self):
+        """Ensure replica lookups work correctly even when replicas is a
+        one-shot iterator (generator), not a reusable list."""
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+
+        def gen():
+            yield (u1, 3)
+            yield (u2, 7)
+
+        t = Tablet(0, 100, gen())
+        self.assertEqual(t.replicas, ((u1, 3), (u2, 7)))
+        self.assertTrue(t.replica_contains_host_id(u1))
+        self.assertTrue(t.replica_contains_host_id(u2))
+        self.assertEqual(t.get_replica_shard_id(u1), 3)
+        self.assertEqual(t.get_replica_shard_id(u2), 7)
+
+    def test_replica_dict_populated_as_expected(self):
+        """Minimal targeted regression test for the internal _replica_dict
+        cache: confirms the O(1)-lookup structure this optimization relies
+        on is actually populated as {host_id: shard_id}, which the public
+        API alone does not prove."""
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertEqual(t._replica_dict, {u1: 3, u2: 7})
