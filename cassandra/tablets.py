@@ -15,12 +15,18 @@ class Tablet(object):
     It stores information about each replica, its host and shard,
     and the token interval in the format (first_token, last_token].
     """
-    __slots__ = ('first_token', 'last_token', 'replicas')
+    __slots__ = ('first_token', 'last_token', 'replicas', '_replica_dict')
 
     def __init__(self, first_token=0, last_token=0, replicas=None):
         self.first_token = first_token
         self.last_token = last_token
-        self.replicas = tuple(replicas) if replicas is not None else None
+        if replicas is not None:
+            replicas_tuple = tuple(replicas)
+            self.replicas = replicas_tuple
+            self._replica_dict = {r[0]: r[1] for r in replicas_tuple}
+        else:
+            self.replicas = None
+            self._replica_dict = {}
 
     def __str__(self):
         return "<Tablet: first_token=%s last_token=%s replicas=%s>" \
@@ -39,10 +45,7 @@ class Tablet(object):
         return None
 
     def replica_contains_host_id(self, uuid: UUID) -> bool:
-        for replica in self.replicas:
-            if replica[0] == uuid:
-                return True
-        return False
+        return uuid in self._replica_dict
 
 
 class Tablets(object):
