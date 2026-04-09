@@ -20,7 +20,7 @@ class TabletsTest(unittest.TestCase):
         
         tablets.add_tablet("test_ks", "test_tb", Tablet(-6917529027641081857, -4611686018427387905, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-6917529027641081857, -4611686018427387905)])
 
@@ -29,7 +29,7 @@ class TabletsTest(unittest.TestCase):
 
         tablets.add_tablet("test_ks", "test_tb", Tablet(-8611686018427387905, -7917529027641081857, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-8611686018427387905, -7917529027641081857),
                                            (-6917529027641081857, -4611686018427387905)])
@@ -39,7 +39,7 @@ class TabletsTest(unittest.TestCase):
 
         tablets.add_tablet("test_ks", "test_tb", Tablet(-1, 2305843009213693951, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-6917529027641081857, -4611686018427387905),
                                            (-1, 2305843009213693951)])
@@ -50,7 +50,7 @@ class TabletsTest(unittest.TestCase):
         
         tablets.add_tablet("test_ks", "test_tb", Tablet(-4611686018427387905, -2305843009213693953, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-6917529027641081857, -4611686018427387905),
                                            (-4611686018427387905, -2305843009213693953),
@@ -64,7 +64,7 @@ class TabletsTest(unittest.TestCase):
         
         tablets.add_tablet("test_ks", "test_tb", Tablet(-3611686018427387905, -6, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-6917529027641081857, -4611686018427387905),
                                            (-3611686018427387905, -6),
@@ -76,7 +76,7 @@ class TabletsTest(unittest.TestCase):
         
         tablets.add_tablet("test_ks", "test_tb", Tablet(-8011686018427387905, -7987529027641081857, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-8011686018427387905, -7987529027641081857),
                                            (-6917529027641081857, -4611686018427387905)])
@@ -87,7 +87,7 @@ class TabletsTest(unittest.TestCase):
         
         tablets.add_tablet("test_ks", "test_tb", Tablet(-5011686018427387905, -2987529027641081857, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-8611686018427387905, -7917529027641081857),
                                            (-5011686018427387905, -2987529027641081857)])
@@ -137,7 +137,7 @@ class _Token:
 
 
 class TabletsCopyOnWriteTest(unittest.TestCase):
-    """Writers must publish new lists, never mutate one a lock-free reader may hold (#1086)."""
+    """Writers must publish a new (tablets, last_tokens) snapshot, never mutate one a lock-free reader may hold (#1086)."""
 
     def _ranges(self, lst):
         return [(t.first_token, t.last_token) for t in lst]
@@ -148,13 +148,18 @@ class TabletsCopyOnWriteTest(unittest.TestCase):
                    Tablet(200, 300, [(h1, 0)]), Tablet(300, 400, [(h2, 0)])]
         return Tablets({("ks", "tb"): tablets}), h1, h2
 
+    def _assert_consistent(self, entry):
+        tablets, last_tokens = entry
+        self.assertEqual([t.last_token for t in tablets], last_tokens)
+
     def _assert_snapshot_unchanged(self, mutate, expected_after):
         tablets, h1, h2 = self._make()
         snapshot = tablets._tablets[("ks", "tb")]
-        before = list(snapshot)
+        before = (list(snapshot[0]), list(snapshot[1]))
         mutate(tablets, h1, h2)
         self.assertEqual(snapshot, before)
-        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")]), expected_after)
+        self._assert_consistent(tablets._tablets[("ks", "tb")])
+        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")][0]), expected_after)
 
     def test_add_overlapping_tablet_keeps_snapshot(self):
         self._assert_snapshot_unchanged(
@@ -173,31 +178,45 @@ class TabletsCopyOnWriteTest(unittest.TestCase):
 
     def test_drop_tablets_by_host_id(self):
         tablets, h1, h2 = self._make()
-        tablets._tablets[("ks", "other")] = [Tablet(0, 10, [(h2, 0)])]
+        tablets._tablets[("ks", "other")] = ([Tablet(0, 10, [(h2, 0)])], [10])
         tablets.drop_tablets_by_host_id(h2)
-        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")]), [(0, 100), (200, 300)])
-        self.assertEqual(tablets._tablets[("ks", "other")], [])
+        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")][0]), [(0, 100), (200, 300)])
+        self._assert_consistent(tablets._tablets[("ks", "tb")])
+        self.assertEqual(tablets._tablets[("ks", "other")], ([], []))
         self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", _Token(150)))
         self.assertEqual(tablets.get_tablet_for_key("ks", "tb", _Token(250)).first_token, 200)
 
-    def test_add_tablet_during_lookup(self):
-        tablets, h1, _ = self._make()
-        last = tablets._tablets[("ks", "tb")][3]
+    def _lookup_racing(self, write):
+        # The reader takes its snapshot, then reads t.value; the write lands in between.
+        tablets, h1, h2 = self._make()
+        snapshot = tablets._tablets[("ks", "tb")]
+        before = (list(snapshot[0]), list(snapshot[1]))
+        last = snapshot[0][3]
 
         class RacingToken:
             reads = 0
 
             @property
             def value(self):
-                # Second read happens after bisect and the bounds check, right before indexing.
                 RacingToken.reads += 1
-                if RacingToken.reads == 2:
-                    tablets.add_tablet("ks", "tb", Tablet(-1, 1000, [(h1, 0)]))
+                write(tablets, h1, h2)
                 return 350
 
         self.assertIs(tablets.get_tablet_for_key("ks", "tb", RacingToken()), last)
-        self.assertEqual(RacingToken.reads, 2)
-        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")]), [(-1, 1000)])
+        self.assertEqual(RacingToken.reads, 1)
+        self.assertEqual(snapshot, before)
+        self._assert_consistent(tablets._tablets[("ks", "tb")])
+        return tablets
+
+    def test_add_tablet_during_lookup(self):
+        tablets = self._lookup_racing(
+            lambda t, h1, h2: t.add_tablet("ks", "tb", Tablet(-1, 1000, [(h1, 0)])))
+        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")][0]), [(-1, 1000)])
+
+    def test_drop_tablets_by_host_id_during_lookup(self):
+        # Drops the tablet the reader is about to pick and shifts every later index.
+        tablets = self._lookup_racing(lambda t, h1, h2: t.drop_tablets_by_host_id(h2))
+        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")][0]), [(0, 100), (200, 300)])
 
 
 class TabletLeaderTest(unittest.TestCase):
