@@ -42,12 +42,16 @@ class Tablet(object):
     It stores information about each replica, its host and shard,
     and the token interval in the format (first_token, last_token].
     """
-    __slots__ = ('first_token', 'last_token', 'replicas', 'tablet_version')
+    __slots__ = ('first_token', 'last_token', 'replicas', 'tablet_version', '_replica_dict')
 
     def __init__(self, first_token=0, last_token=0, replicas=None, tablet_version=None):
         self.first_token = first_token
         self.last_token = last_token
+        # Materialize once: `replicas` may be a one-shot iterator, and both
+        # the tuple and the lookup dict must come from the same iteration.
         self.replicas = tuple(replicas) if replicas is not None else None
+        # Keyed by host_id.int: UUID.__hash__ is pure Python, int hashing is C (~2x faster).
+        self._replica_dict = {r[0].int: r[1] for r in self.replicas} if self.replicas else {}
         # uint64 hash; None = unknown (cold start, or learned over TABLETS_ROUTING_V1).
         self.tablet_version = tablet_version
 
@@ -99,11 +103,17 @@ class Tablet(object):
             return None
         return self.replicas[0][0]
 
-    def replica_contains_host_id(self, uuid: UUID) -> bool:
-        for replica in self.replicas:
-            if replica[0] == uuid:
-                return True
-        return False
+    def replica_contains_host_id(self, uuid: Optional[UUID]) -> bool:
+        # A host whose id is not yet known (discovery/metadata transitions) is
+        # not a replica; treat it as a non-match rather than raising.
+        if uuid is None:
+            return False
+        return uuid.int in self._replica_dict
+
+    def get_replica_shard_id(self, uuid: Optional[UUID]) -> Optional[int]:
+        if uuid is None:
+            return None
+        return self._replica_dict.get(uuid.int)
 
 
 class Tablets(object):
