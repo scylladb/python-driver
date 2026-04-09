@@ -49,7 +49,7 @@ class Tablet(object):
     def __init__(self, first_token=0, last_token=0, replicas=None, tablet_version=None):
         self.first_token = first_token
         self.last_token = last_token
-        self.replicas = replicas
+        self.replicas = tuple(replicas) if replicas is not None else None
         self.tablet_version = tablet_version
 
     def __str__(self):
