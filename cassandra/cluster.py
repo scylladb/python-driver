@@ -5256,34 +5256,38 @@ class ResponseFuture(object):
             if pool and not pool.is_shutdown:
                 pool.return_connection(connection)
 
-            trace_id = getattr(response, 'trace_id', None)
-            if trace_id:
-                if not self._query_traces:
-                    self._query_traces = []
-                self._query_traces.append(QueryTrace(trace_id, self.session))
-
-            self._warnings = getattr(response, 'warnings', None)
-            self._custom_payload = getattr(response, 'custom_payload', None)
-
-            if self._custom_payload and connection is not None:
-                # Parse the routing payload according to what the connection that
-                # *served this request* negotiated, not the control connection:
-                # different nodes may negotiate different extensions, and each
-                # payload key matches the extension its own connection negotiated.
-                if connection.features.tablets_routing_v2 and 'tablets-routing-v2' in self._custom_payload:
-                    ctype = ResponseFuture._TABLET_ROUTING_V2_CTYPE
-                    if ctype is None:
-                        ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)), LongType)')
-                        ResponseFuture._TABLET_ROUTING_V2_CTYPE = ctype
-                    self._cache_tablet_from_payload('tablets-routing-v2', ctype)
-                elif connection.features.tablets_routing_v1 and 'tablets-routing-v1' in self._custom_payload:
-                    ctype = ResponseFuture._TABLET_ROUTING_CTYPE
-                    if ctype is None:
-                        ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
-                        ResponseFuture._TABLET_ROUTING_CTYPE = ctype
-                    self._cache_tablet_from_payload('tablets-routing-v1', ctype)
-
             if isinstance(response, ResultMessage):
+                # Hot path: ResultMessage has trace_id, warnings, and
+                # custom_payload in __slots__, always initialised in __init__,
+                # so direct attribute access is safe and faster than getattr().
+                trace_id = response.trace_id
+                if trace_id:
+                    if not self._query_traces:
+                        self._query_traces = []
+                    self._query_traces.append(QueryTrace(trace_id, self.session))
+
+                self._warnings = response.warnings
+                custom_payload = response.custom_payload
+                self._custom_payload = custom_payload
+
+                if custom_payload and connection is not None:
+                    # Parse the routing payload according to what the connection that
+                    # *served this request* negotiated, not the control connection:
+                    # different nodes may negotiate different extensions, and each
+                    # payload key matches the extension its own connection negotiated.
+                    if connection.features.tablets_routing_v2 and 'tablets-routing-v2' in custom_payload:
+                        ctype = ResponseFuture._TABLET_ROUTING_V2_CTYPE
+                        if ctype is None:
+                            ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)), LongType)')
+                            ResponseFuture._TABLET_ROUTING_V2_CTYPE = ctype
+                        self._cache_tablet_from_payload('tablets-routing-v2', ctype)
+                    elif connection.features.tablets_routing_v1 and 'tablets-routing-v1' in custom_payload:
+                        ctype = ResponseFuture._TABLET_ROUTING_CTYPE
+                        if ctype is None:
+                            ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
+                            ResponseFuture._TABLET_ROUTING_CTYPE = ctype
+                        self._cache_tablet_from_payload('tablets-routing-v1', ctype)
+
                 if response.kind == RESULT_KIND_SET_KEYSPACE:
                     session = getattr(self, 'session', None)
                     if connection is not None:
@@ -5346,6 +5350,18 @@ class ResponseFuture(object):
                 else:
                     self._set_final_result(response)
             elif isinstance(response, ErrorMessage):
+                # Cold path: ErrorMessage inherits from _MessageType which
+                # defines warnings/custom_payload as class-level defaults but
+                # does NOT have trace_id -- getattr is required here.
+                trace_id = getattr(response, 'trace_id', None)
+                if trace_id:
+                    if not self._query_traces:
+                        self._query_traces = []
+                    self._query_traces.append(QueryTrace(trace_id, self.session))
+
+                self._warnings = getattr(response, 'warnings', None)
+                self._custom_payload = getattr(response, 'custom_payload', None)
+
                 retry_policy = self._retry_policy
 
                 if isinstance(response, ReadTimeoutErrorMessage):
@@ -5424,6 +5440,10 @@ class ResponseFuture(object):
 
                 self._handle_retry_decision(retry, response, host)
             elif isinstance(response, ConnectionException):
+                # ConnectionException has no trace_id/warnings/custom_payload;
+                # clear any stale values from a previous retry attempt.
+                self._warnings = None
+                self._custom_payload = None
                 if self._metrics is not None:
                     self._metrics.on_connection_error()
                 if not isinstance(response, ConnectionShutdown):
@@ -5433,6 +5453,8 @@ class ResponseFuture(object):
                     self.query, cl, error=response, retry_num=self._query_retries)
                 self._handle_retry_decision(retry, response, host)
             elif isinstance(response, Exception):
+                self._warnings = None
+                self._custom_payload = None
                 if hasattr(response, 'to_exception'):
                     self._set_final_exception(response.to_exception())
                 else:
