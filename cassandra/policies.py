@@ -507,10 +507,10 @@ class TokenAwarePolicy(LoadBalancingPolicy):
             keyspace, query.table, self._cluster_metadata.token_map.token_class.from_key(query.routing_key))
 
         if tablet is not None:
-            replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
+            replica_dict = tablet._replica_dict
             child_plan = child.make_query_plan(keyspace, query)
 
-            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+            replicas = [host for host in child_plan if host.host_id in replica_dict]
         else:
             replicas = self._cluster_metadata.get_replicas(keyspace, query.routing_key)
 

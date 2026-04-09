@@ -1,4 +1,5 @@
 import unittest
+from uuid import UUID
 
 from cassandra.tablets import Tablets, Tablet
 
@@ -124,3 +125,62 @@ class GetTabletForKeyTest(unittest.TestCase):
         # Token value 50 is not > first_token (100) of the tablet whose
         # last_token (200) is >= 50, so no match.
         self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))
+
+
+class TabletReplicaDictTest(unittest.TestCase):
+    """Tests for Tablet._replica_dict cached lookup."""
+
+    def test_replica_dict_built_from_replicas(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertEqual(t._replica_dict, {u1: 3, u2: 7})
+
+    def test_replica_dict_empty_when_no_replicas(self):
+        t = Tablet(0, 100, None)
+        self.assertEqual(t._replica_dict, {})
+
+    def test_replica_dict_contains_host(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        u3 = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertIn(u1, t._replica_dict)
+        self.assertIn(u2, t._replica_dict)
+        self.assertNotIn(u3, t._replica_dict)
+
+    def test_replica_dict_shard_lookup(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertEqual(t._replica_dict.get(u1), 3)
+        self.assertEqual(t._replica_dict.get(u2), 7)
+        self.assertIsNone(t._replica_dict.get(UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')))
+
+    def test_replica_contains_host_id_uses_dict(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertTrue(t.replica_contains_host_id(u1))
+        self.assertTrue(t.replica_contains_host_id(u2))
+        self.assertFalse(t.replica_contains_host_id(UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')))
+
+    def test_replicas_stored_as_tuple(self):
+        t = Tablet(0, 100, [("host1", 0), ("host2", 1)])
+        self.assertIsInstance(t.replicas, tuple)
+
+    def test_replica_dict_from_iterator(self):
+        """Ensure _replica_dict is correctly built even when replicas is a
+        one-shot iterator (generator), not a reusable list."""
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+
+        def gen():
+            yield (u1, 3)
+            yield (u2, 7)
+
+        t = Tablet(0, 100, gen())
+        self.assertEqual(t.replicas, ((u1, 3), (u2, 7)))
+        self.assertEqual(t._replica_dict, {u1: 3, u2: 7})
+        self.assertTrue(t.replica_contains_host_id(u1))
+        self.assertTrue(t.replica_contains_host_id(u2))

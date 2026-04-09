@@ -462,10 +462,7 @@ class HostConnection(object):
                 tablet = self._session.cluster.metadata._tablets.get_tablet_for_key(keyspace, table, t)
 
                 if tablet is not None:
-                    for replica in tablet.replicas:
-                        if replica[0] == self.host.host_id:
-                            shard_id = replica[1]
-                            break
+                    shard_id = tablet._replica_dict.get(self.host.host_id)
 
             if shard_id is None:
                 shard_id = self.host.sharding_info.shard_id_from_token(t.value)
