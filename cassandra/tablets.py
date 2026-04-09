@@ -61,20 +61,20 @@ class Tablet(object):
     __repr__ = __str__
 
     @staticmethod
-    def _is_valid_tablet(replicas):
-        return replicas is not None and len(replicas) != 0
-
-    @staticmethod
     def from_row(first_token, last_token, replicas, tablet_version=None):
-        if Tablet._is_valid_tablet(replicas):
-            if tablet_version is not None:
-                # tablet_version is an unsigned 64-bit value, but it is
-                # deserialized from the wire as a signed LongType; normalize it
-                # back to unsigned so it matches the server's representation.
-                tablet_version &= 0xFFFFFFFFFFFFFFFF
-            tablet = Tablet(first_token, last_token, replicas, tablet_version)
-            return tablet
-        return None
+        # Materialize once: `replicas` may be a one-shot iterator (e.g. a
+        # generator), and a plain `if not replicas` truthiness check would
+        # always be False for such an object even when it yields nothing,
+        # since iterators have no __len__/__bool__ and are always truthy.
+        replicas_tuple = tuple(replicas) if replicas is not None else ()
+        if not replicas_tuple:
+            return None
+        if tablet_version is not None:
+            # tablet_version is an unsigned 64-bit value, but it is
+            # deserialized from the wire as a signed LongType; normalize it
+            # back to unsigned so it matches the server's representation.
+            tablet_version &= 0xFFFFFFFFFFFFFFFF
+        return Tablet(first_token, last_token, replicas_tuple, tablet_version)
 
     @property
     def leader(self) -> Optional[UUID]:
