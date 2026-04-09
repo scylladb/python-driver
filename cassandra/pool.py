@@ -472,10 +472,7 @@ class HostConnection(object):
                 # the shard that this host owns for the tablet. Leader-aware host
                 # selection (V2) happens earlier, in the load balancing policy.
                 if tablet is not None:
-                    for replica in tablet.replicas:
-                        if replica[0] == self.host.host_id:
-                            shard_id = replica[1]
-                            break
+                    shard_id = tablet._replica_dict.get(self.host.host_id)
 
             if shard_id is None and t is not None:
                 shard_id = self.host.sharding_info.shard_id_from_token(t.value)
