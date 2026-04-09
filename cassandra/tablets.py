@@ -61,20 +61,15 @@ class Tablet(object):
     __repr__ = __str__
 
     @staticmethod
-    def _is_valid_tablet(replicas):
-        return replicas is not None and len(replicas) != 0
-
-    @staticmethod
     def from_row(first_token, last_token, replicas, tablet_version=None):
-        if Tablet._is_valid_tablet(replicas):
-            if tablet_version is not None:
-                # tablet_version is an unsigned 64-bit value, but it is
-                # deserialized from the wire as a signed LongType; normalize it
-                # back to unsigned so it matches the server's representation.
-                tablet_version &= 0xFFFFFFFFFFFFFFFF
-            tablet = Tablet(first_token, last_token, replicas, tablet_version)
-            return tablet
-        return None
+        if tablet_version is not None:
+            # tablet_version is an unsigned 64-bit value, but it is
+            # deserialized from the wire as a signed LongType; normalize it
+            # back to unsigned so it matches the server's representation.
+            tablet_version &= 0xFFFFFFFFFFFFFFFF
+        # __init__ materializes replicas, so empty generators are caught too.
+        tablet = Tablet(first_token, last_token, replicas, tablet_version)
+        return tablet if tablet.replicas else None
 
     @property
     def leader(self) -> Optional[UUID]:
