@@ -759,13 +759,22 @@ class BatchStatement(Statement):
     supported when using protocol version 3 or higher.
     """
 
+    timestamp = None
+    """
+    The optional timestamp for all operations in the batch, in microseconds
+    since the UNIX epoch. If not set, the client timestamp generator or
+    server time will be used.
+
+    .. versionadded:: 3.29.2
+    """
+
     _statements_and_parameters = None
     _session = None
     _is_lwt = False
 
     def __init__(self, batch_type=BatchType.LOGGED, retry_policy=None,
                  consistency_level=None, serial_consistency_level=None,
-                 session=None, custom_payload=None):
+                 session=None, custom_payload=None, timestamp=None):
         """
         `batch_type` specifies The :class:`.BatchType` for the batch operation.
         Defaults to :attr:`.BatchType.LOGGED`.
@@ -780,6 +789,10 @@ class BatchStatement(Statement):
         Note: as Statement objects are added to the batch, this map is
         updated with any values found in their custom payloads. These are
         only allowed when using protocol version 4 or higher.
+
+        `timestamp` is an optional timestamp for all operations in the batch,
+        in microseconds since the UNIX epoch. If set, this will override the
+        client timestamp generator.
 
         Example usage:
 
@@ -809,8 +822,12 @@ class BatchStatement(Statement):
 
         .. versionchanged:: 2.6.0
             Added `custom_payload` as a parameter
+
+        .. versionchanged:: 3.29.2
+            Added `timestamp` as a parameter
         """
         self.batch_type = batch_type
+        self.timestamp = timestamp
         self._statements_and_parameters = []
         self._session = session
         Statement.__init__(self, retry_policy=retry_policy, consistency_level=consistency_level,
