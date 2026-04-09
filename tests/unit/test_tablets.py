@@ -184,3 +184,38 @@ class TabletReplicaDictTest(unittest.TestCase):
         self.assertEqual(t._replica_dict, {u1: 3, u2: 7})
         self.assertTrue(t.replica_contains_host_id(u1))
         self.assertTrue(t.replica_contains_host_id(u2))
+
+
+class DropTabletsByHostIdTest(unittest.TestCase):
+    """Tests for Tablets.drop_tablets_by_host_id batch-filter path."""
+
+    def test_drop_removes_matching_tablets(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        t1 = Tablet(0, 100, [(u1, 0)])
+        t2 = Tablet(100, 200, [(u2, 0)])
+        t3 = Tablet(200, 300, [(u1, 1), (u2, 1)])
+        tablets = Tablets({("ks", "tb"): [t1, t2, t3]})
+
+        tablets.drop_tablets_by_host_id(u1)
+
+        remaining = tablets._tablets[("ks", "tb")]
+        self.assertEqual(len(remaining), 1)
+        self.assertIs(remaining[0], t2)
+        # Verify token index lists are in sync
+        self.assertEqual(tablets._first_tokens[("ks", "tb")], [100])
+        self.assertEqual(tablets._last_tokens[("ks", "tb")], [200])
+
+    def test_drop_none_host_id_is_noop(self):
+        t1 = Tablet(0, 100, [("host1", 0)])
+        tablets = Tablets({("ks", "tb"): [t1]})
+        tablets.drop_tablets_by_host_id(None)
+        self.assertEqual(len(tablets._tablets[("ks", "tb")]), 1)
+
+    def test_drop_nonexistent_host_id_is_noop(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u_missing = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t1 = Tablet(0, 100, [(u1, 0)])
+        tablets = Tablets({("ks", "tb"): [t1]})
+        tablets.drop_tablets_by_host_id(u_missing)
+        self.assertEqual(len(tablets._tablets[("ks", "tb")]), 1)
