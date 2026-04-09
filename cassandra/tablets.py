@@ -42,12 +42,9 @@ class Tablet(object):
     It stores information about each replica, its host and shard,
     and the token interval in the format (first_token, last_token].
     """
-    first_token = 0
-    last_token = 0
-    replicas = None
     # uint64 hash; None means unknown -- a cold start, or a tablet learned over
     # TABLETS_ROUTING_V1, which does not report a version.
-    tablet_version = None
+    __slots__ = ('first_token', 'last_token', 'replicas', 'tablet_version')
 
     def __init__(self, first_token=0, last_token=0, replicas=None, tablet_version=None):
         self.first_token = first_token
