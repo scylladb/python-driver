@@ -4725,28 +4725,32 @@ class ResponseFuture(object):
             if pool and not pool.is_shutdown:
                 pool.return_connection(connection)
 
-            trace_id = getattr(response, 'trace_id', None)
-            if trace_id:
-                if not self._query_traces:
-                    self._query_traces = []
-                self._query_traces.append(QueryTrace(trace_id, self.session))
-
-            self._warnings = getattr(response, 'warnings', None)
-            self._custom_payload = getattr(response, 'custom_payload', None)
-
-            if self._custom_payload and self.session.cluster.control_connection._tablets_routing_v1:
-                info = self._custom_payload.get('tablets-routing-v1')
-                if info is not None:
-                    ctype = ResponseFuture._TABLET_ROUTING_CTYPE
-                    if ctype is None:
-                        ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
-                        ResponseFuture._TABLET_ROUTING_CTYPE = ctype
-                    first_token, last_token, tablet_replicas = ctype.from_binary(info, self.session.cluster.protocol_version)
-                    tablet = Tablet.from_row(first_token, last_token, tablet_replicas)
-                    if tablet is not None:
-                        self.session.cluster.metadata._tablets.add_tablet(self.query.keyspace, self.query.table, tablet)
-
             if isinstance(response, ResultMessage):
+                # Hot path: ResultMessage has trace_id, warnings, and
+                # custom_payload in __slots__, always initialised in __init__,
+                # so direct attribute access is safe and faster than getattr().
+                trace_id = response.trace_id
+                if trace_id:
+                    if not self._query_traces:
+                        self._query_traces = []
+                    self._query_traces.append(QueryTrace(trace_id, self.session))
+
+                self._warnings = response.warnings
+                custom_payload = response.custom_payload
+                self._custom_payload = custom_payload
+
+                if custom_payload and self.session.cluster.control_connection._tablets_routing_v1:
+                    info = custom_payload.get('tablets-routing-v1')
+                    if info is not None:
+                        ctype = ResponseFuture._TABLET_ROUTING_CTYPE
+                        if ctype is None:
+                            ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
+                            ResponseFuture._TABLET_ROUTING_CTYPE = ctype
+                        first_token, last_token, tablet_replicas = ctype.from_binary(info, self.session.cluster.protocol_version)
+                        tablet = Tablet.from_row(first_token, last_token, tablet_replicas)
+                        if tablet is not None:
+                            self.session.cluster.metadata._tablets.add_tablet(self.query.keyspace, self.query.table, tablet)
+
                 if response.kind == RESULT_KIND_SET_KEYSPACE:
                     session = getattr(self, 'session', None)
                     # since we're running on the event loop thread, we need to
@@ -4780,6 +4784,18 @@ class ResponseFuture(object):
                 else:
                     self._set_final_result(response)
             elif isinstance(response, ErrorMessage):
+                # Cold path: ErrorMessage inherits from _MessageType which
+                # defines warnings/custom_payload as class-level defaults but
+                # does NOT have trace_id -- getattr is required here.
+                trace_id = getattr(response, 'trace_id', None)
+                if trace_id:
+                    if not self._query_traces:
+                        self._query_traces = []
+                    self._query_traces.append(QueryTrace(trace_id, self.session))
+
+                self._warnings = getattr(response, 'warnings', None)
+                self._custom_payload = getattr(response, 'custom_payload', None)
+
                 retry_policy = self._retry_policy
 
                 if isinstance(response, ReadTimeoutErrorMessage):
@@ -4858,6 +4874,10 @@ class ResponseFuture(object):
 
                 self._handle_retry_decision(retry, response, host)
             elif isinstance(response, ConnectionException):
+                # ConnectionException has no trace_id/warnings/custom_payload;
+                # clear any stale values from a previous retry attempt.
+                self._warnings = None
+                self._custom_payload = None
                 if self._metrics is not None:
                     self._metrics.on_connection_error()
                 if not isinstance(response, ConnectionShutdown):
@@ -4867,6 +4887,8 @@ class ResponseFuture(object):
                     self.query, cl, error=response, retry_num=self._query_retries)
                 self._handle_retry_decision(retry, response, host)
             elif isinstance(response, Exception):
+                self._warnings = None
+                self._custom_payload = None
                 if hasattr(response, 'to_exception'):
                     self._set_final_exception(response.to_exception())
                 else:
