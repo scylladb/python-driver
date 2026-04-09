@@ -96,15 +96,16 @@ class Tablets(object):
             return
         with self._lock:
             for key, tablets in self._tablets.items():
-                to_be_deleted = []
-                for tablet_id, tablet in enumerate(tablets):
-                    if tablet.replica_contains_host_id(host_id):
-                        to_be_deleted.append(tablet_id)
-
-                for tablet_id in reversed(to_be_deleted):
-                    tablets.pop(tablet_id)
-                    self._first_tokens[key].pop(tablet_id)
-                    self._last_tokens[key].pop(tablet_id)
+                # Filter in one pass instead of popping one-by-one (O(n) vs O(k*n))
+                keep = [i for i, t in enumerate(tablets)
+                        if not t.replica_contains_host_id(host_id)]
+                if len(keep) == len(tablets):
+                    continue  # nothing to drop
+                self._tablets[key] = [tablets[i] for i in keep]
+                first = self._first_tokens[key]
+                last = self._last_tokens[key]
+                self._first_tokens[key] = [first[i] for i in keep]
+                self._last_tokens[key] = [last[i] for i in keep]
 
     def add_tablet(self, keyspace, table, tablet):
         with self._lock:
