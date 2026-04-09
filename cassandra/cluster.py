@@ -4794,7 +4794,20 @@ class ResponseFuture(object):
                     new_result_metadata_id = getattr(response, 'result_metadata_id', None)
                     if self.prepared_statement and new_result_metadata_id is not None:
                         if response.column_metadata:
+                            # Write result_metadata before result_metadata_id intentionally:
+                            # a concurrent reader that still sees the old metadata_id will
+                            # ask the server for full metadata and recover safely; a reader
+                            # that sees the new metadata_id together with the new metadata
+                            # is immediately correct. The opposite write order could expose
+                            # a window where a reader uses a new metadata_id with stale metadata.
                             self.prepared_statement.result_metadata = response.column_metadata
+                        else:
+                            log.warning(
+                                "Server sent a new result_metadata_id but no column metadata "
+                                "for prepared statement %r. The cached column metadata will not "
+                                "be updated; only result_metadata_id is refreshed.",
+                                getattr(self.prepared_statement, 'query_id', None)
+                            )
                         self.prepared_statement.result_metadata_id = new_result_metadata_id
                     if getattr(self.message, 'continuous_paging_options', None):
                         self._handle_continuous_paging_first_response(connection, response)

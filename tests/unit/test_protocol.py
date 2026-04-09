@@ -24,7 +24,8 @@ from cassandra.protocol import (
     _PAGING_OPTIONS_FLAG, _WITH_SERIAL_CONSISTENCY_FLAG,
     _PAGE_SIZE_FLAG, _WITH_PAGING_STATE_FLAG,
     _SKIP_METADATA_FLAG,
-    BatchMessage, ResultMessage
+    BatchMessage, ResultMessage,
+    RESULT_KIND_ROWS
 )
 from cassandra.protocol_features import ProtocolFeatures
 from cassandra.query import BatchType
@@ -152,6 +153,44 @@ class MessageTest(unittest.TestCase):
                                   user_type_map={})
         assert msg.query_id == b'ab'
         assert msg.result_metadata_id is None
+
+    def test_recv_results_metadata_changed_flag(self):
+        """
+        When _METADATA_ID_FLAG (0x0008) is set in a ROWS result,
+        recv_results_metadata must read and store the new result_metadata_id
+        sent by the server (METADATA_CHANGED signal), and still populate
+        column_metadata normally.
+        """
+        # Wire layout for a ROWS result with METADATA_CHANGED:
+        #   flags:             int(0x0008)  = _METADATA_ID_FLAG
+        #   colcount:          int(0)
+        #   result_metadata_id: short(4) + b'new1'
+        # (no columns — colcount=0 — to keep the buffer minimal)
+        buf = io.BytesIO(
+            struct.pack('>i', 0x0008)          # flags: METADATA_ID_FLAG
+            + struct.pack('>i', 0)             # colcount = 0
+            + struct.pack('>H', 4) + b'new1'   # result_metadata_id = b'new1'
+        )
+        msg = ResultMessage(kind=RESULT_KIND_ROWS)
+        msg.recv_results_metadata(buf, user_type_map={})
+        assert msg.result_metadata_id == b'new1'
+        assert msg.column_metadata == []
+
+    def test_recv_results_metadata_no_metadata_flag_skips_metadata_id(self):
+        """
+        When _NO_METADATA_FLAG (0x0004) is set, recv_results_metadata returns
+        early and must NOT read or set result_metadata_id, even if the caller
+        mistakenly sets _METADATA_ID_FLAG alongside it.
+        """
+        # flags = _NO_METADATA_FLAG (0x0004), colcount = 0
+        buf = io.BytesIO(
+            struct.pack('>i', 0x0004)  # flags: NO_METADATA
+            + struct.pack('>i', 0)     # colcount = 0
+        )
+        msg = ResultMessage(kind=RESULT_KIND_ROWS)
+        msg.recv_results_metadata(buf, user_type_map={})
+        assert not hasattr(msg, 'result_metadata_id') or msg.result_metadata_id is None
+        assert not hasattr(msg, 'column_metadata') or msg.column_metadata is None
 
     def test_query_message(self):
         """
