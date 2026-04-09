@@ -20,7 +20,7 @@ class Tablet(object):
     def __init__(self, first_token=0, last_token=0, replicas=None):
         self.first_token = first_token
         self.last_token = last_token
-        self.replicas = replicas
+        self.replicas = tuple(replicas) if replicas is not None else None
 
     def __str__(self):
         return "<Tablet: first_token=%s last_token=%s replicas=%s>" \
