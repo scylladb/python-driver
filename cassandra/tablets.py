@@ -1,13 +1,8 @@
-from bisect import bisect_left
-from operator import attrgetter
+from bisect import bisect_left, bisect_right
 from random import getrandbits
 from threading import Lock
 from typing import Optional
 from uuid import UUID
-
-# C-accelerated attrgetter avoids per-call lambda allocation overhead
-_get_first_token = attrgetter("first_token")
-_get_last_token = attrgetter("last_token")
 
 
 def choose_tablet_version_block(tablet_version: int) -> int:
@@ -112,30 +107,41 @@ class Tablet(object):
 
 
 class Tablets(object):
-    _lock = None
-    _tablets = {}
-
     def __init__(self, tablets):
-        self._tablets = tablets
+        # Instance-only: mutable class-level dicts would be shared across instances.
         self._lock = Lock()
+        self._tablets = tablets
+        # Parallel (keyspace, table) -> list[int] so bisect runs without a key= callback.
+        self._last_tokens = {
+            key: [t.last_token for t in tlist]
+            for key, tlist in tablets.items()
+        }
 
     def table_has_tablets(self, keyspace, table) -> bool:
         return bool(self._tablets.get((keyspace, table), []))
 
     def get_tablet_for_key(self, keyspace, table, t):
-        tablet = self._tablets.get((keyspace, table), [])
-        if not tablet:
+        # Lock-free hot path: writers may be mid-update, so verify the pick covers the token.
+        key = (keyspace, table)
+        last_tokens = self._last_tokens.get(key)
+        if not last_tokens:
             return None
 
-        id = bisect_left(tablet, t.value, key=_get_last_token)
-        if id < len(tablet) and t.value > tablet[id].first_token:
-            return tablet[id]
+        token_value = t.value
+        try:
+            tablet = self._tablets[key][bisect_left(last_tokens, token_value)]
+        except (KeyError, IndexError):
+            return None
+        if tablet.first_token < token_value <= tablet.last_token:
+            return tablet
         return None
 
     def drop_tablets(self, keyspace: str, table: Optional[str] = None):
         with self._lock:
             if table is not None:
-                self._tablets.pop((keyspace, table), None)
+                key = (keyspace, table)
+                self._tablets.pop(key, None)
+                self._last_tokens.pop(key, None)
                 return
 
             to_be_deleted = []
@@ -145,6 +151,7 @@ class Tablets(object):
 
             for key in to_be_deleted:
                 del self._tablets[key]
+                self._last_tokens.pop(key, None)
 
     def drop_tablets_by_host_id(self, host_id: Optional[UUID]):
         if host_id is None:
@@ -158,23 +165,23 @@ class Tablets(object):
 
                 for tablet_id in reversed(to_be_deleted):
                     tablets.pop(tablet_id)
+                    self._last_tokens[key].pop(tablet_id)
 
     def add_tablet(self, keyspace, table, tablet):
         with self._lock:
-            tablets_for_table = self._tablets.setdefault((keyspace, table), [])
+            key = (keyspace, table)
+            tablets_for_table = self._tablets.setdefault(key, [])
+            last_tokens = self._last_tokens.setdefault(key, [])
 
             # find first overlapping range
-            start = bisect_left(tablets_for_table, tablet.first_token, key=_get_first_token)
-            if start > 0 and tablets_for_table[start - 1].last_token > tablet.first_token:
-                start = start - 1
+            start = bisect_right(last_tokens, tablet.first_token)
 
             # find last overlapping range
-            end = bisect_left(tablets_for_table, tablet.last_token, key=_get_last_token)
-            if end < len(tablets_for_table) and tablets_for_table[end].first_token >= tablet.last_token:
+            end = bisect_left(last_tokens, tablet.last_token)
+            if end < len(last_tokens) and tablets_for_table[end].first_token >= tablet.last_token:
                 end = end - 1
 
-            if start <= end:
-                del tablets_for_table[start:end + 1]
-
-            tablets_for_table.insert(start, tablet)
+            # Slice assignment: no memmove when one tablet replaces one, and inserts when start > end.
+            tablets_for_table[start:end + 1] = (tablet,)
+            last_tokens[start:end + 1] = (tablet.last_token,)
 

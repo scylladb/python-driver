@@ -130,6 +130,24 @@ class GetTabletForKeyTest(unittest.TestCase):
         # last_token (200) is >= 50, so no match.
         self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))
 
+    def test_torn_index_during_concurrent_write(self):
+        # Reads are lock-free; simulate a writer caught between list updates.
+        t1 = Tablet(0, 100, [(uuid4(), 0)])
+        t2 = Tablet(100, 200, [(uuid4(), 0)])
+        tablets = Tablets({("ks", "tb"): [t1, t2]})
+
+        class Token:
+            def __init__(self, v):
+                self.value = v
+
+        tablets._last_tokens[("ks", "tb")].append(300)
+        self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(250)))
+        tablets._tablets[("ks", "tb")].pop(0)
+        self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))
+        self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(150)))
+        del tablets._tablets[("ks", "tb")]
+        self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(150)))
+
 
 class TabletLeaderTest(unittest.TestCase):
     """Tests for Tablet.leader, the leader-first replica ordering V2 provides."""
