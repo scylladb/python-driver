@@ -280,6 +280,32 @@ class ExecuteMessageSerializationTest(unittest.TestCase):
         self.assertEqual(first, first_again)
         self.assertEqual(first, second_plain + bytes([0x3C]))
 
+class TabletFromRowTest(unittest.TestCase):
+    """Tests for Tablet.from_row, in particular that emptiness is detected
+    correctly regardless of whether `replicas` is a reusable sequence or a
+    one-shot iterator/generator."""
+
+    def test_empty_list_returns_none(self):
+        self.assertIsNone(Tablet.from_row(0, 100, []))
+
+    def test_empty_generator_returns_none(self):
+        # A generator is always truthy, even when empty, so a naive
+        # `if not replicas` check would fail to detect this case.
+        self.assertIsNone(Tablet.from_row(0, 100, (x for x in [])))
+
+    def test_none_returns_none(self):
+        self.assertIsNone(Tablet.from_row(0, 100, None))
+
+    def test_non_empty_list_builds_tablet(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        tablet = Tablet.from_row(0, 100, [(u1, 3), (u2, 7)])
+        self.assertIsNotNone(tablet)
+        self.assertEqual(tablet.replicas, ((u1, 3), (u2, 7)))
+        self.assertTrue(tablet.replica_contains_host_id(u1))
+        self.assertEqual(tablet.get_replica_shard_id(u2), 7)
+
+
 class TabletReplicaDictTest(unittest.TestCase):
     """replica_contains_host_id / get_replica_shard_id lookups."""
 
