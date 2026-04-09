@@ -15,9 +15,7 @@ class Tablet(object):
     It stores information about each replica, its host and shard,
     and the token interval in the format (first_token, last_token].
     """
-    first_token = 0
-    last_token = 0
-    replicas = None
+    __slots__ = ('first_token', 'last_token', 'replicas')
 
     def __init__(self, first_token=0, last_token=0, replicas=None):
         self.first_token = first_token
