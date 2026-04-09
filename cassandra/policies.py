@@ -553,10 +553,10 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         tablet = self._cluster_metadata._tablets.get_tablet_for_key(keyspace, query.table, token)
 
         if tablet is not None:
-            replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
+            replica_dict = tablet._replica_dict
             child_plan = child.make_query_plan(keyspace, query)
 
-            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+            replicas = [host for host in child_plan if host.host_id in replica_dict]
 
             # The leader concept only exists for strongly-consistent keyspaces,
             # which today means exactly the keyspaces whose consistency mode is

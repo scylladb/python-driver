@@ -42,14 +42,17 @@ class Tablet(object):
     It stores information about each replica, its host and shard,
     and the token interval in the format (first_token, last_token].
     """
-    # uint64 hash; None means unknown -- a cold start, or a tablet learned over
+# uint64 hash; None means unknown -- a cold start, or a tablet learned over
     # TABLETS_ROUTING_V1, which does not report a version.
-    __slots__ = ('first_token', 'last_token', 'replicas', 'tablet_version')
+    __slots__ = ('first_token', 'last_token', 'replicas', 'tablet_version', '_replica_dict')
 
     def __init__(self, first_token=0, last_token=0, replicas=None, tablet_version=None):
         self.first_token = first_token
         self.last_token = last_token
+        # Materialize once: `replicas` may be a one-shot iterator, and both
+        # the tuple and the lookup dict must come from the same iteration.
         self.replicas = tuple(replicas) if replicas is not None else None
+        self._replica_dict = {r[0]: r[1] for r in self.replicas} if self.replicas else {}
         self.tablet_version = tablet_version
 
     def __str__(self):
@@ -101,10 +104,10 @@ class Tablet(object):
         return self.replicas[0][0]
 
     def replica_contains_host_id(self, uuid: UUID) -> bool:
-        for replica in self.replicas:
-            if replica[0] == uuid:
-                return True
-        return False
+        return uuid in self._replica_dict
+
+    def get_replica_shard_id(self, uuid: UUID) -> Optional[int]:
+        return self._replica_dict.get(uuid)
 
 
 class Tablets(object):
