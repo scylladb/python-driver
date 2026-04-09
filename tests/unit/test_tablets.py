@@ -89,6 +89,31 @@ class TabletsTest(unittest.TestCase):
                                            (-5011686018427387905, -2987529027641081857)])
 
 
+class TabletsInstanceStateTest(unittest.TestCase):
+    """Tests that Tablets' internal dicts are per-instance state, not
+    shared mutable class attributes (a well-known Python footgun)."""
+
+    def test_internal_dicts_are_not_class_attributes(self):
+        self.assertNotIn('_tablets', vars(Tablets))
+        self.assertNotIn('_first_tokens', vars(Tablets))
+        self.assertNotIn('_last_tokens', vars(Tablets))
+
+    def test_instances_do_not_share_internal_dicts(self):
+        a = Tablets({})
+        b = Tablets({})
+        self.assertIsNot(a._tablets, b._tablets)
+        self.assertIsNot(a._first_tokens, b._first_tokens)
+        self.assertIsNot(a._last_tokens, b._last_tokens)
+
+        t1 = Tablet(0, 100, [("host1", 0)])
+        a.add_tablet("ks", "tb", t1)
+        # Mutating `a` must not be visible through `b`.
+        self.assertFalse(b.table_has_tablets("ks", "tb"))
+        self.assertEqual(b._tablets, {})
+        self.assertEqual(b._first_tokens, {})
+        self.assertEqual(b._last_tokens, {})
+
+
 class GetTabletForKeyTest(unittest.TestCase):
     """Tests for Tablets.get_tablet_for_key."""
 
