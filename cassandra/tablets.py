@@ -34,15 +34,15 @@ class Tablet(object):
     __repr__ = __str__
 
     @staticmethod
-    def _is_valid_tablet(replicas):
-        return replicas is not None and len(replicas) != 0
-
-    @staticmethod
     def from_row(first_token, last_token, replicas):
-        if Tablet._is_valid_tablet(replicas):
-            tablet = Tablet(first_token, last_token, replicas)
-            return tablet
-        return None
+        # Materialize once: `replicas` may be a one-shot iterator (e.g. a
+        # generator), and a plain `if not replicas` truthiness check would
+        # always be False for such an object even when it yields nothing,
+        # since iterators have no __len__/__bool__ and are always truthy.
+        replicas_tuple = tuple(replicas) if replicas is not None else ()
+        if not replicas_tuple:
+            return None
+        return Tablet(first_token, last_token, replicas_tuple)
 
     def replica_contains_host_id(self, uuid: UUID) -> bool:
         return uuid in self._replica_dict
