@@ -4751,7 +4751,26 @@ class ResponseFuture(object):
                         if tablet is not None:
                             self.session.cluster.metadata._tablets.add_tablet(self.query.keyspace, self.query.table, tablet)
 
-                if response.kind == RESULT_KIND_SET_KEYSPACE:
+                if response.kind == RESULT_KIND_ROWS:
+                    self._paging_state = response.paging_state
+                    # Use pre-cached column names/types from PreparedStatement
+                    # when available to avoid rebuilding lists from metadata.
+                    ps = self.prepared_statement
+                    if ps is not None and ps._result_col_names is not None:
+                        col_names = ps._result_col_names
+                        col_types = ps._result_col_types
+                    else:
+                        col_names = response.column_names
+                        col_types = response.column_types
+                    self._col_names = col_names
+                    self._col_types = col_types
+                    if self.message.continuous_paging_options:
+                        self._handle_continuous_paging_first_response(connection, response)
+                    else:
+                        self._set_final_result(self.row_factory(col_names, response.parsed_rows))
+                elif response.kind == RESULT_KIND_VOID:
+                    self._set_final_result(None)
+                elif response.kind == RESULT_KIND_SET_KEYSPACE:
                     session = getattr(self, 'session', None)
                     # since we're running on the event loop thread, we need to
                     # use a non-blocking method for setting the keyspace on
@@ -4771,25 +4790,6 @@ class ResponseFuture(object):
                         refresh_schema_and_set_result,
                         self.session.cluster.control_connection,
                         self, connection, **response.schema_change_event)
-                elif response.kind == RESULT_KIND_ROWS:
-                    self._paging_state = response.paging_state
-                    # Use pre-cached column names/types from PreparedStatement
-                    # when available to avoid rebuilding lists from metadata.
-                    ps = self.prepared_statement
-                    if ps is not None and ps._result_col_names is not None:
-                        col_names = ps._result_col_names
-                        col_types = ps._result_col_types
-                    else:
-                        col_names = response.column_names
-                        col_types = response.column_types
-                    self._col_names = col_names
-                    self._col_types = col_types
-                    if getattr(self.message, 'continuous_paging_options', None):
-                        self._handle_continuous_paging_first_response(connection, response)
-                    else:
-                        self._set_final_result(self.row_factory(col_names, response.parsed_rows))
-                elif response.kind == RESULT_KIND_VOID:
-                    self._set_final_result(None)
                 else:
                     self._set_final_result(response)
             elif isinstance(response, ErrorMessage):
