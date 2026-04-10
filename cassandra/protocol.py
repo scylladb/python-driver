@@ -544,6 +544,11 @@ _PAGING_OPTIONS_FLAG = 0x80000000
 
 class _QueryMessage(_MessageType):
 
+    # DSE continuous paging: stored when the feature is active, otherwise None.
+    # Declared as a class attribute so that callers can use direct attribute
+    # access instead of getattr(msg, 'continuous_paging_options', None).
+    continuous_paging_options = None
+
     def __init__(self, query_params, consistency_level,
                  serial_consistency_level=None, fetch_size=None,
                  paging_state=None, timestamp=None, skip_meta=False,
@@ -906,6 +911,11 @@ class PrepareMessage(_MessageType):
 class BatchMessage(_MessageType):
     opcode = 0x0D
     name = 'BATCH'
+
+    # Batch messages never use continuous paging, but callers access this
+    # attribute directly (instead of getattr) for speed.  Declare it here so
+    # that BatchMessage matches the same interface as _QueryMessage.
+    continuous_paging_options = None
 
     def __init__(self, batch_type, queries, consistency_level,
                  serial_consistency_level=None, timestamp=None,
