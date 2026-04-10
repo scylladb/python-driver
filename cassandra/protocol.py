@@ -72,6 +72,28 @@ _message_types_by_opcode = {}
 
 _UNSET_VALUE = object()
 
+# Inline constants mirroring ProtocolVersion.has_checksumming_support(), to
+# avoid the classmethod call overhead (~94 ns per call) on the encode/decode
+# hot path:
+#
+#     ProtocolVersion.has_checksumming_support(v) == (
+#         _CHECKSUMMING_MIN_VERSION <= v < _CHECKSUMMING_MAX_VERSION_EXCLUSIVE)
+#
+# _CHECKSUMMING_MAX_VERSION_EXCLUSIVE is an *exclusive* upper bound -- DSE_V1
+# itself is deliberately NOT considered checksumming-capable. DSE_V1/DSE_V2
+# are private DSE protocol extensions that do not carry the checksumming
+# feature introduced with the (Cassandra) V5 native protocol, even though
+# their numeric values (0x41/0x42) are greater than V5/V6. This matches the
+# other V5-only feature gates on ProtocolVersion (uses_prepare_flags,
+# uses_prepared_metadata, uses_keyspace_flag), which all explicitly exclude
+# DSE_V1 too. See ProtocolVersion.has_checksumming_support(), which remains
+# the canonical definition (still used as-is in connection.py to decide
+# whether to enable frame-level checksumming for a connection); if it ever
+# changes, these constants must be updated to match -- test_protocol.py
+# asserts the two stay in sync.
+_CHECKSUMMING_MIN_VERSION = ProtocolVersion.V5
+_CHECKSUMMING_MAX_VERSION_EXCLUSIVE = ProtocolVersion.DSE_V1
+
 
 def register_class(cls):
     _message_types_by_opcode[cls.opcode] = cls
@@ -1152,7 +1174,7 @@ class _ProtocolHandler(object):
         buff = io.BytesIO()
 
         # With checksumming, the compression is done at the segment frame encoding
-        if (compressor and not ProtocolVersion.has_checksumming_support(protocol_version)):
+        if (compressor and not (_CHECKSUMMING_MIN_VERSION <= protocol_version < _CHECKSUMMING_MAX_VERSION_EXCLUSIVE)):
             if msg.custom_payload:
                 write_bytesmap(buff, msg.custom_payload)
             msg.send_body(buff, protocol_version, protocol_features)
@@ -1212,7 +1234,7 @@ class _ProtocolHandler(object):
         :param decompressor: optional decompression function to inflate the body
         :return: a message decoded from the body and frame attributes
         """
-        if (not ProtocolVersion.has_checksumming_support(protocol_version) and
+        if (not (_CHECKSUMMING_MIN_VERSION <= protocol_version < _CHECKSUMMING_MAX_VERSION_EXCLUSIVE) and
                 flags & COMPRESSED_FLAG):
             if decompressor is None:
                 raise RuntimeError("No de-compressor available for compressed frame!")
