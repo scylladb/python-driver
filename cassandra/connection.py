@@ -1395,11 +1395,17 @@ class Connection(object):
                 result_metadata = None
             else:
                 need_notify_of_release = False
-                with self.lock:
-                    if stream_id in self.orphaned_request_ids:
-                        self.in_flight -= 1
-                        self.orphaned_request_ids.remove(stream_id)
-                        need_notify_of_release = True
+                # Fast path: skip lock when no orphaned requests (common case).
+                # Reading orphaned_request_ids without the lock is safe: it's a
+                # set and we only check truthiness.  A false negative just means
+                # we'll process the orphaned response normally; a false positive
+                # (rare) falls through to the locked check which is correct.
+                if self.orphaned_request_ids:
+                    with self.lock:
+                        if stream_id in self.orphaned_request_ids:
+                            self.in_flight -= 1
+                            self.orphaned_request_ids.remove(stream_id)
+                            need_notify_of_release = True
                 if need_notify_of_release and self._on_orphaned_stream_released:
                     self._on_orphaned_stream_released()
 
