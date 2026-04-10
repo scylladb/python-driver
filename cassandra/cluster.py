@@ -4821,13 +4821,37 @@ class ResponseFuture(object):
 
         conn_in_flight = None
         if self._connection is not None:
-            try:
-                self._connection._requests.pop(self._req_id)
-            # PYTHON-1044
-            # This request might have been removed from the connection after the latter was defunct by heartbeat.
-            # We should still raise OperationTimedOut to reject the future so that the main event thread will not
-            # wait for it endlessly
-            except KeyError:
+            pool = self.session._pools.get(self._current_host)
+            # Do not return the stream ID to the pool yet. We cannot reuse it
+            # because the node might still be processing the query and will
+            # return a late response to that query - if we used such stream
+            # before the response to the previous query has arrived, the new
+            # query could get a response from the old query
+            mark_orphaned = bool(pool and not pool.is_shutdown) or self._connection.is_control_connection
+
+            # Pop the request and, if applicable, mark the stream orphaned
+            # atomically under the same lock acquisition. Otherwise
+            # process_msg() could observe the popped-but-not-yet-orphaned
+            # state (a KeyError on _requests.pop with stream_id not yet in
+            # orphaned_request_ids) and drop the bookkeeping for this stream
+            # permanently, leaking in_flight and the orphan entry.
+            with self._connection.lock:
+                try:
+                    self._connection._requests.pop(self._req_id)
+                # PYTHON-1044
+                # This request might have been removed from the connection after the latter was defunct by heartbeat.
+                # We should still raise OperationTimedOut to reject the future so that the main event thread will not
+                # wait for it endlessly
+                except KeyError:
+                    popped = False
+                else:
+                    popped = True
+                    if mark_orphaned:
+                        self._connection.orphaned_request_ids.add(self._req_id)
+                        if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
+                            self._connection.orphaned_threshold_reached = True
+
+            if not popped:
                 key = "Connection defunct by heartbeat"
                 errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
                 self._set_final_exception(OperationTimedOut(errors, self._current_host,
@@ -4838,24 +4862,8 @@ class ResponseFuture(object):
             # Capture connection stats before pool.return_connection() can alter state
             conn_in_flight = self._connection.in_flight
 
-            pool = self.session._pools.get(self._current_host)
             if pool and not pool.is_shutdown:
-                # Do not return the stream ID to the pool yet. We cannot reuse it
-                # because the node might still be processing the query and will
-                # return a late response to that query - if we used such stream
-                # before the response to the previous query has arrived, the new
-                # query could get a response from the old query
-                with self._connection.lock:
-                    self._connection.orphaned_request_ids.add(self._req_id)
-                    if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
-                        self._connection.orphaned_threshold_reached = True
-
                 pool.return_connection(self._connection, stream_was_orphaned=True)
-            elif self._connection.is_control_connection:
-                with self._connection.lock:
-                    self._connection.orphaned_request_ids.add(self._req_id)
-                    if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
-                        self._connection.orphaned_threshold_reached = True
 
         errors = self._errors
         if not errors:
