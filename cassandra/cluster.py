@@ -5195,29 +5195,7 @@ class ResponseFuture(object):
                         if tablet is not None:
                             self.session.cluster.metadata._tablets.add_tablet(self.query.keyspace, self.query.table, tablet)
 
-                if response.kind == RESULT_KIND_SET_KEYSPACE:
-                    session = getattr(self, 'session', None)
-                    if connection is not None:
-                        connection.keyspace = response.new_keyspace
-                    # since we're running on the event loop thread, we need to
-                    # use a non-blocking method for setting the keyspace on
-                    # all connections in this session, otherwise the event
-                    # loop thread will deadlock waiting for keyspaces to be
-                    # set.  This uses a callback chain which ends with
-                    # self._set_keyspace_completed() being called in the
-                    # event loop thread.
-                    if session:
-                        session._set_keyspace_for_all_pools(
-                            response.new_keyspace, self._set_keyspace_completed)
-                elif response.kind == RESULT_KIND_SCHEMA_CHANGE:
-                    # refresh the schema before responding, but do it in another
-                    # thread instead of the event loop thread
-                    self.is_schema_agreed = False
-                    self.session.submit(
-                        refresh_schema_and_set_result,
-                        self.session.cluster.control_connection,
-                        self, connection, **response.schema_change_event)
-                elif response.kind == RESULT_KIND_ROWS:
+                if response.kind == RESULT_KIND_ROWS:
                     self._paging_state = response.paging_state
                     new_result_metadata_id = getattr(response, 'result_metadata_id', None)
                     if self.prepared_statement and new_result_metadata_id is not None:
@@ -5282,12 +5260,34 @@ class ResponseFuture(object):
                         col_types = response.column_types
                     self._col_names = col_names
                     self._col_types = col_types
-                    if getattr(self.message, 'continuous_paging_options', None):
+                    if self.message.continuous_paging_options:
                         self._handle_continuous_paging_first_response(connection, response)
                     else:
                         self._set_final_result(self.row_factory(col_names, response.parsed_rows))
                 elif response.kind == RESULT_KIND_VOID:
                     self._set_final_result(None)
+                elif response.kind == RESULT_KIND_SET_KEYSPACE:
+                    session = getattr(self, 'session', None)
+                    if connection is not None:
+                        connection.keyspace = response.new_keyspace
+                    # since we're running on the event loop thread, we need to
+                    # use a non-blocking method for setting the keyspace on
+                    # all connections in this session, otherwise the event
+                    # loop thread will deadlock waiting for keyspaces to be
+                    # set.  This uses a callback chain which ends with
+                    # self._set_keyspace_completed() being called in the
+                    # event loop thread.
+                    if session:
+                        session._set_keyspace_for_all_pools(
+                            response.new_keyspace, self._set_keyspace_completed)
+                elif response.kind == RESULT_KIND_SCHEMA_CHANGE:
+                    # refresh the schema before responding, but do it in another
+                    # thread instead of the event loop thread
+                    self.is_schema_agreed = False
+                    self.session.submit(
+                        refresh_schema_and_set_result,
+                        self.session.cluster.control_connection,
+                        self, connection, **response.schema_change_event)
                 else:
                     self._set_final_result(response)
             elif isinstance(response, ErrorMessage):
