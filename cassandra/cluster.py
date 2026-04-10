@@ -4773,12 +4773,21 @@ class ResponseFuture(object):
                         self, connection, **response.schema_change_event)
                 elif response.kind == RESULT_KIND_ROWS:
                     self._paging_state = response.paging_state
-                    self._col_names = response.column_names
-                    self._col_types = response.column_types
+                    # Use pre-cached column names/types from PreparedStatement
+                    # when available to avoid rebuilding lists from metadata.
+                    ps = self.prepared_statement
+                    if ps is not None and ps._result_col_names is not None:
+                        col_names = ps._result_col_names
+                        col_types = ps._result_col_types
+                    else:
+                        col_names = response.column_names
+                        col_types = response.column_types
+                    self._col_names = col_names
+                    self._col_types = col_types
                     if getattr(self.message, 'continuous_paging_options', None):
                         self._handle_continuous_paging_first_response(connection, response)
                     else:
-                        self._set_final_result(self.row_factory(response.column_names, response.parsed_rows))
+                        self._set_final_result(self.row_factory(col_names, response.parsed_rows))
                 elif response.kind == RESULT_KIND_VOID:
                     self._set_final_result(None)
                 else:
@@ -4944,6 +4953,7 @@ class ResponseFuture(object):
                             )
                         ))
                     self.prepared_statement.result_metadata = response.column_metadata
+                    self.prepared_statement._cache_result_metadata_columns(response.column_metadata)
                     new_metadata_id = response.result_metadata_id
                     if new_metadata_id is not None:
                         self.prepared_statement.result_metadata_id = new_metadata_id
