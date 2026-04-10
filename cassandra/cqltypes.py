@@ -294,6 +294,11 @@ class _CassandraType(object, metaclass=CassandraTypeType):
     num_subtypes = 0
     empty_binary_ok = False
 
+    # Cached result of cql_parameterized_type(). Computed lazily on first
+    # access and stored as a class attribute. Safe because type classes are
+    # immutable after creation via apply_parameters().
+    _cql_type_str = None
+
     support_empty_values = False
     """
     Back in the Thrift days, empty strings were used for "null" values of
@@ -399,7 +404,18 @@ class _CassandraType(object, metaclass=CassandraTypeType):
         return type(
             newname,
             (cls,),
-            {"subtypes": subtypes, "cassname": cls.cassname, "fieldnames": names},
+            {
+                "subtypes": subtypes,
+                "cassname": cls.cassname,
+                "fieldnames": names,
+                # Must be reset explicitly: without this, a class dict lookup
+                # for `_cql_type_str` falls through to the base class's
+                # __dict__ via the MRO, so a new type created from a base
+                # whose own cache is already populated would silently
+                # inherit (and return) the base's cached CQL type string
+                # instead of computing its own.
+                "_cql_type_str": None,
+            },
         )
 
     @classmethod
@@ -408,12 +424,18 @@ class _CassandraType(object, metaclass=CassandraTypeType):
         Return a CQL type specifier for this type. If this type has parameters,
         they are included in standard CQL <> notation.
         """
+        result = cls._cql_type_str
+        if result is not None:
+            return result
         if not cls.subtypes:
-            return cls.typename
-        return "%s<%s>" % (
-            cls.typename,
-            ", ".join(styp.cql_parameterized_type() for styp in cls.subtypes),
-        )
+            result = cls.typename
+        else:
+            result = "%s<%s>" % (
+                cls.typename,
+                ", ".join(styp.cql_parameterized_type() for styp in cls.subtypes),
+            )
+        cls._cql_type_str = result
+        return result
 
     @classmethod
     def cass_parameterized_type(cls, full=False):
@@ -1022,10 +1044,15 @@ class TupleType(_ParameterizedType):
 
     @classmethod
     def cql_parameterized_type(cls):
+        result = cls._cql_type_str
+        if result is not None:
+            return result
         subtypes_string = ", ".join(
             sub.cql_parameterized_type() for sub in cls.subtypes
         )
-        return "frozen<tuple<%s>>" % (subtypes_string,)
+        result = "frozen<tuple<%s>>" % (subtypes_string,)
+        cls._cql_type_str = result
+        return result
 
 
 class UserType(TupleType):
@@ -1057,6 +1084,10 @@ class UserType(TupleType):
                     "tuple_type": cls._make_registered_udt_namedtuple(
                         keyspace, udt_name, field_names
                     ),
+                    # See the comment in _CassandraType.apply_parameters:
+                    # this must be reset explicitly to avoid inheriting a
+                    # base class's already-cached CQL type string.
+                    "_cql_type_str": None,
                 },
             )
             cls._cache[(keyspace, udt_name)] = instance
@@ -1082,7 +1113,12 @@ class UserType(TupleType):
 
     @classmethod
     def cql_parameterized_type(cls):
-        return "frozen<%s>" % (cls.typename,)
+        result = cls._cql_type_str
+        if result is not None:
+            return result
+        result = "frozen<%s>" % (cls.typename,)
+        cls._cql_type_str = result
+        return result
 
     @classmethod
     def deserialize_safe(cls, byts, protocol_version):
@@ -1162,8 +1198,13 @@ class CompositeType(_ParameterizedType):
         """
         There is no CQL notation for Composites, so we override this.
         """
+        result = cls._cql_type_str
+        if result is not None:
+            return result
         typestring = cls.cass_parameterized_type(full=True)
-        return "'%s'" % (typestring,)
+        result = "'%s'" % (typestring,)
+        cls._cql_type_str = result
+        return result
 
     @classmethod
     def deserialize_safe(cls, byts, protocol_version):
@@ -1188,11 +1229,16 @@ class DynamicCompositeType(_ParameterizedType):
 
     @classmethod
     def cql_parameterized_type(cls):
+        result = cls._cql_type_str
+        if result is not None:
+            return result
         sublist = ", ".join(
             "%s=>%s" % (alias, typ.cass_parameterized_type(full=True))
             for alias, typ in zip(cls.fieldnames, cls.subtypes)
         )
-        return "'%s(%s)'" % (cls.typename, sublist)
+        result = "'%s(%s)'" % (cls.typename, sublist)
+        cls._cql_type_str = result
+        return result
 
 
 class ColumnToCollectionType(_ParameterizedType):
@@ -1565,7 +1611,14 @@ class VectorType(_CassandraType):
         return type(
             "%s(%s)" % (cls.cass_parameterized_type_with([]), vsize),
             (cls,),
-            {"vector_size": vsize, "subtype": subtype},
+            {
+                "vector_size": vsize,
+                "subtype": subtype,
+                # See the comment in _CassandraType.apply_parameters:
+                # this must be reset explicitly to avoid inheriting a
+                # base class's already-cached CQL type string.
+                "_cql_type_str": None,
+            },
         )
 
     @classmethod
@@ -1635,8 +1688,13 @@ class VectorType(_CassandraType):
 
     @classmethod
     def cql_parameterized_type(cls):
-        return "%s<%s, %s>" % (
+        result = cls._cql_type_str
+        if result is not None:
+            return result
+        result = "%s<%s, %s>" % (
             cls.typename,
             cls.subtype.cql_parameterized_type(),
             cls.vector_size,
         )
+        cls._cql_type_str = result
+        return result
