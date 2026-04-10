@@ -1264,15 +1264,30 @@ def cython_protocol_handler(colparser):
     The default is to use obj_parser.ListParser
     """
     from cassandra.row_parser import make_recv_results_rows
+    from cassandra.metadata_parser import make_recv_results_metadata
+
+    # Pass already-available module-level names in explicitly instead of
+    # letting metadata_parser import them itself: cassandra.metadata_parser is
+    # imported here, from inside cassandra.protocol's own module body, so a
+    # "from cassandra.protocol import ResultMessage, CUSTOM_TYPE" inside
+    # metadata_parser would be a self-referential import back into this
+    # (still-initializing) module. NotSupportedError is injected the same
+    # way, so metadata_parser never needs to import it from protocol.py at
+    # runtime either.
+    recv_results_metadata_br = make_recv_results_metadata(
+        ResultMessage.type_codes, CUSTOM_TYPE,
+        ListType, SetType, MapType, TupleType, UserType, lookup_casstype,
+        NotSupportedError,
+    )
 
     class FastResultMessage(ResultMessage):
         """
         Cython version of Result Message that has a faster implementation of
-        recv_results_row.
+        recv_results_rows using BytesIOReader for zero-copy metadata + row parsing.
         """
         # type_codes = ResultMessage.type_codes.copy()
         code_to_type = dict((v, k) for k, v in ResultMessage.type_codes.items())
-        recv_results_rows = make_recv_results_rows(colparser)
+        recv_results_rows = make_recv_results_rows(colparser, recv_results_metadata_br)
 
     class CythonProtocolHandler(_ProtocolHandler):
         """
