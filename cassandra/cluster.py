@@ -3047,9 +3047,13 @@ class Session(object):
         else:
             timestamp = None
 
-        # Snapshot passed to the ResponseFuture for decoding skip_meta responses; only
-        # bound statements carry cached result metadata (set in the BoundStatement branch).
+        # Snapshot passed to the ResponseFuture for decoding skip_meta responses, and
+        # the column names/types derived from that same metadata (see
+        # PreparedStatement.result_metadata_snapshot); only bound statements carry
+        # cached result metadata (set in the BoundStatement branch).
         bound_result_metadata = _NOT_SET
+        bound_col_names = None
+        bound_col_types = None
 
         if isinstance(query, SimpleStatement):
             query_string = query.query_string
@@ -3062,11 +3066,13 @@ class Session(object):
                 continuous_paging_options, statement_keyspace)
         elif isinstance(query, BoundStatement):
             prepared_statement = query.prepared_statement
-            # Snapshot metadata and its id as one atomic pair so the message never
-            # carries the id of one schema version alongside a skip_meta decision
-            # made for another. skip_meta is requested only when there is both an
-            # id to validate it with and cached metadata to decode against: while
-            # a statement has no cached metadata there is nothing to decode a
+            # Snapshot metadata, its id, and the column names/types derived from
+            # that metadata all together in one atomic read (result_metadata_snapshot)
+            # so the message never carries the id of one schema version alongside a
+            # skip_meta decision, or a later column-name/type lookup, made for
+            # another. skip_meta is requested only when there is both an id to
+            # validate it with and cached metadata to decode against: while a
+            # statement has no cached metadata there is nothing to decode a
             # metadata-less response with, so the server must send it.
             # Whether skip_meta and the id actually reach the wire is decided per
             # connection at serialization time (see ExecuteMessage.send_body).
@@ -3074,7 +3080,8 @@ class Session(object):
             # result_metadata=None for every page after the first (it isn't threaded
             # through the paging session), so a skip_meta response has nothing to
             # decode page 2+ against.
-            result_metadata, result_metadata_id = prepared_statement.result_metadata_and_id
+            result_metadata, result_metadata_id, bound_col_names, bound_col_types = \
+                prepared_statement.result_metadata_snapshot
             bound_result_metadata = result_metadata
             message = ExecuteMessage(
                 prepared_statement.query_id, query.values, cl,
@@ -3109,7 +3116,8 @@ class Session(object):
             self, message, query, timeout, metrics=self._metrics,
             prepared_statement=prepared_statement, retry_policy=retry_policy, row_factory=row_factory,
             load_balancer=load_balancing_policy, start_time=start_time, speculative_execution_plan=spec_exec_plan,
-            continuous_paging_state=None, host=host, bound_result_metadata=bound_result_metadata)
+            continuous_paging_state=None, host=host, bound_result_metadata=bound_result_metadata,
+            bound_col_names=bound_col_names, bound_col_types=bound_col_types)
 
     def get_execution_profile(self, name):
         """
@@ -4737,13 +4745,15 @@ class ResponseFuture(object):
     _control_connection_query_attempted = False
     _TABLET_ROUTING_CTYPE = None
     _bound_result_metadata = None
+    _bound_col_names = None
+    _bound_col_types = None
 
     _warned_timeout = False
 
     def __init__(self, session, message, query, timeout, metrics=None, prepared_statement=None,
                  retry_policy=RetryPolicy(), row_factory=None, load_balancer=None, start_time=None,
                  speculative_execution_plan=None, continuous_paging_state=None, host=None,
-                 bound_result_metadata=_NOT_SET):
+                 bound_result_metadata=_NOT_SET, bound_col_names=None, bound_col_types=None):
         self.session = session
         # TODO: normalize handling of retry policy and row factory
         self.row_factory = row_factory or session.row_factory
@@ -4760,6 +4770,15 @@ class ResponseFuture(object):
         # even if a concurrent METADATA_CHANGED replaces the prepared statement's cache in
         # between. Defaults to [] for unprepared statements (no cached metadata).
         self._bound_result_metadata = [] if bound_result_metadata is _NOT_SET else bound_result_metadata
+        # Column names/types derived from that same result_metadata snapshot (see
+        # PreparedStatement.result_metadata_snapshot), captured together with it in
+        # one atomic read. _set_result() uses these -- rather than a fresh read of
+        # prepared_statement's live cache -- so a response decoded against this
+        # snapshot can never be paired with column names/types cached for a
+        # different schema version by a concurrent in-flight response for the same
+        # prepared statement.
+        self._bound_col_names = bound_col_names
+        self._bound_col_types = bound_col_types
         self._callback_lock = Lock()
         self._start_time = start_time or time.time()
         self._host = host
@@ -5200,8 +5219,6 @@ class ResponseFuture(object):
                         self, connection, **response.schema_change_event)
                 elif response.kind == RESULT_KIND_ROWS:
                     self._paging_state = response.paging_state
-                    self._col_names = response.column_names
-                    self._col_types = response.column_types
                     new_result_metadata_id = getattr(response, 'result_metadata_id', None)
                     if self.prepared_statement and new_result_metadata_id is not None:
                         if response.column_metadata:
@@ -5210,7 +5227,9 @@ class ResponseFuture(object):
                             # new id with the old metadata (the server would then
                             # skip sending metadata and rows would be decoded
                             # against stale columns, with no recovery).
-                            # (this also re-arms the anomaly warning below)
+                            # (this also re-arms the anomaly warning below, and
+                            # refreshes the cached column names/types together
+                            # with the metadata they were derived from)
                             self.prepared_statement.update_result_metadata(
                                 response.column_metadata, new_result_metadata_id)
                         elif not self.prepared_statement._warned_missing_column_metadata:
@@ -5229,10 +5248,44 @@ class ResponseFuture(object):
                                 "and id are left unchanged.",
                                 getattr(self.prepared_statement, 'query_id', None)
                             )
+                    # A response that carries its own column_metadata (set only
+                    # when the server actually sent metadata on the wire -- see
+                    # ResultMessage.recv_results_metadata's _NO_METADATA_FLAG
+                    # check) was decoded against THAT metadata, not against
+                    # whatever this ResponseFuture had bound at construction
+                    # time: this is either the METADATA_CHANGED case (the
+                    # schema changed since the statement was prepared, and the
+                    # response's rows may have a different column count/types
+                    # than the old snapshot) or the very first response for a
+                    # statement with no cached metadata yet. response.column_names/
+                    # column_types are derived from that same response metadata
+                    # (see recv_results_rows), so they always match
+                    # response.parsed_rows and must be preferred here.
+                    #
+                    # Only when the response is metadata-less (the common,
+                    # schema-unchanged skip_meta case) do we use the column
+                    # names/types snapshotted on this ResponseFuture at
+                    # construction time (see Session._create_response_future),
+                    # to avoid rebuilding lists from metadata. Those come from
+                    # the same atomic read as _bound_result_metadata, which is
+                    # what a metadata-less response was actually decoded
+                    # against; a fresh read of prepared_statement's live cache
+                    # here could instead observe a different schema version if
+                    # a concurrent in-flight response for the same prepared
+                    # statement updated it (via update_result_metadata) between
+                    # decode and this callback.
+                    if not response.column_metadata and self._bound_col_names is not None:
+                        col_names = self._bound_col_names
+                        col_types = self._bound_col_types
+                    else:
+                        col_names = response.column_names
+                        col_types = response.column_types
+                    self._col_names = col_names
+                    self._col_types = col_types
                     if getattr(self.message, 'continuous_paging_options', None):
                         self._handle_continuous_paging_first_response(connection, response)
                     else:
-                        self._set_final_result(self.row_factory(response.column_names, response.parsed_rows))
+                        self._set_final_result(self.row_factory(col_names, response.parsed_rows))
                 elif response.kind == RESULT_KIND_VOID:
                     self._set_final_result(None)
                 else:
@@ -5405,7 +5458,9 @@ class ResponseFuture(object):
                     # between the two PREPAREs) - a stale-but-plausible id a later
                     # id-aware execute could send without the server detecting the
                     # mismatch. Dropping it instead triggers the same self-healing
-                    # b'' sentinel path a never-prepared id would.
+                    # b'' sentinel path a never-prepared id would. This also
+                    # refreshes the cached column names/types together with the
+                    # metadata they were derived from.
                     self.prepared_statement.update_result_metadata(
                         response.column_metadata, response.result_metadata_id)
                 
