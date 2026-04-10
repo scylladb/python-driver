@@ -1212,15 +1212,18 @@ def cython_protocol_handler(colparser):
     The default is to use obj_parser.ListParser
     """
     from cassandra.row_parser import make_recv_results_rows
+    from cassandra.metadata_parser import make_recv_results_metadata
+
+    recv_results_metadata_br = make_recv_results_metadata()
 
     class FastResultMessage(ResultMessage):
         """
         Cython version of Result Message that has a faster implementation of
-        recv_results_row.
+        recv_results_rows using BytesIOReader for zero-copy metadata + row parsing.
         """
         # type_codes = ResultMessage.type_codes.copy()
         code_to_type = dict((v, k) for k, v in ResultMessage.type_codes.items())
-        recv_results_rows = make_recv_results_rows(colparser)
+        recv_results_rows = make_recv_results_rows(colparser, recv_results_metadata_br)
 
     class CythonProtocolHandler(_ProtocolHandler):
         """
