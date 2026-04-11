@@ -4730,26 +4730,30 @@ class ResponseFuture(object):
                 # custom_payload in __slots__, always initialised in __init__,
                 # so direct attribute access is safe and faster than getattr().
                 trace_id = response.trace_id
+                session = self.session
                 if trace_id:
                     if not self._query_traces:
                         self._query_traces = []
-                    self._query_traces.append(QueryTrace(trace_id, self.session))
+                    self._query_traces.append(QueryTrace(trace_id, session))
 
                 self._warnings = response.warnings
                 custom_payload = response.custom_payload
                 self._custom_payload = custom_payload
 
-                if custom_payload and self.session.cluster.control_connection._tablets_routing_v1:
+                # Cache session.cluster to avoid repeated double-lookup in the
+                # tablet routing block (3 accesses) and schema-change path.
+                cluster = session.cluster
+                if custom_payload and cluster.control_connection._tablets_routing_v1:
                     info = custom_payload.get('tablets-routing-v1')
                     if info is not None:
                         ctype = ResponseFuture._TABLET_ROUTING_CTYPE
                         if ctype is None:
                             ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
                             ResponseFuture._TABLET_ROUTING_CTYPE = ctype
-                        first_token, last_token, tablet_replicas = ctype.from_binary(info, self.session.cluster.protocol_version)
+                        first_token, last_token, tablet_replicas = ctype.from_binary(info, cluster.protocol_version)
                         tablet = Tablet.from_row(first_token, last_token, tablet_replicas)
                         if tablet is not None:
-                            self.session.cluster.metadata._tablets.add_tablet(self.query.keyspace, self.query.table, tablet)
+                            cluster.metadata._tablets.add_tablet(self.query.keyspace, self.query.table, tablet)
 
                 if response.kind == RESULT_KIND_ROWS:
                     self._paging_state = response.paging_state
@@ -4771,7 +4775,6 @@ class ResponseFuture(object):
                 elif response.kind == RESULT_KIND_VOID:
                     self._set_final_result(None)
                 elif response.kind == RESULT_KIND_SET_KEYSPACE:
-                    session = getattr(self, 'session', None)
                     # since we're running on the event loop thread, we need to
                     # use a non-blocking method for setting the keyspace on
                     # all connections in this session, otherwise the event
@@ -4786,9 +4789,9 @@ class ResponseFuture(object):
                     # refresh the schema before responding, but do it in another
                     # thread instead of the event loop thread
                     self.is_schema_agreed = False
-                    self.session.submit(
+                    session.submit(
                         refresh_schema_and_set_result,
-                        self.session.cluster.control_connection,
+                        cluster.control_connection,
                         self, connection, **response.schema_change_event)
                 else:
                     self._set_final_result(response)
