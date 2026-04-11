@@ -5279,15 +5279,19 @@ class ResponseFuture(object):
                 # custom_payload in __slots__, always initialised in __init__,
                 # so direct attribute access is safe and faster than getattr().
                 trace_id = response.trace_id
+                session = self.session
                 if trace_id:
                     if not self._query_traces:
                         self._query_traces = []
-                    self._query_traces.append(QueryTrace(trace_id, self.session))
+                    self._query_traces.append(QueryTrace(trace_id, session))
 
                 self._warnings = response.warnings
                 custom_payload = response.custom_payload
                 self._custom_payload = custom_payload
 
+# Cache session.cluster to avoid repeated double-lookup in the
+                # tablet routing block (3 accesses) and schema-change path.
+                cluster = session.cluster
                 if custom_payload and connection is not None:
                     # Parse the routing payload according to what the connection that
                     # *served this request* negotiated, not the control connection:
@@ -5378,7 +5382,13 @@ class ResponseFuture(object):
                 elif response.kind == RESULT_KIND_VOID:
                     self._set_final_result(None)
                 elif response.kind == RESULT_KIND_SET_KEYSPACE:
-                    session = getattr(self, 'session', None)
+                    # Update this response's own connection directly and
+                    # immediately. This matters most when pool is None (the
+                    # control-connection fallback case): _set_keyspace_for_all_pools
+                    # below only updates session.keyspace and pooled connections, so
+                    # without this the control connection's fallback connection would
+                    # keep its old keyspace and subsequent fallback queries would run
+                    # against the wrong keyspace.
                     if connection is not None:
                         connection.keyspace = response.new_keyspace
                     # since we're running on the event loop thread, we need to
@@ -5395,9 +5405,9 @@ class ResponseFuture(object):
                     # refresh the schema before responding, but do it in another
                     # thread instead of the event loop thread
                     self.is_schema_agreed = False
-                    self.session.submit(
+                    session.submit(
                         refresh_schema_and_set_result,
-                        self.session.cluster.control_connection,
+                        cluster.control_connection,
                         self, connection, **response.schema_change_event)
                 else:
                     self._set_final_result(response)
