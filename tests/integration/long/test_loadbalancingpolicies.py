@@ -479,6 +479,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(2, 0)
 
     def test_token_aware_composite_key(self):
+        remove_cluster()
         use_singledc()
         keyspace = 'test_token_aware_composite_key'
         table = 'composite'
@@ -538,6 +539,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(3, 12)
 
     def test_token_aware_with_local_table(self):
+        remove_cluster()
         use_singledc()
         cluster, session = self._cluster_session_with_lbp(TokenAwarePolicy(RoundRobinPolicy()))
         self.addCleanup(cluster.shutdown)
