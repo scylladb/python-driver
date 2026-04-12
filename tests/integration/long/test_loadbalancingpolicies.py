@@ -372,23 +372,25 @@ class LoadBalancingPolicyTests(unittest.TestCase):
             responses.add(self.coordinator_stats.get_query_count(node))
         assert set([0, 0, 12]) == responses
 
+        # Decommission node 1 while 3 Raft voters remain (nodes 1, 2, 5).
+        # Doing this later (with only 2 voters) can cause Raft issues.
         self.coordinator_stats.reset_counts()
-        decommission(5)
-        self._wait_for_nodes_down([5])
+        decommission(1)
+        self._wait_for_nodes_down([1])
 
         self._query(session, keyspace)
 
+        self.coordinator_stats.assert_query_count_equals(1, 0)
         self.coordinator_stats.assert_query_count_equals(3, 0)
         self.coordinator_stats.assert_query_count_equals(4, 0)
-        self.coordinator_stats.assert_query_count_equals(5, 0)
         responses = set()
-        for node in [1, 2]:
+        for node in [2, 5]:
             responses.add(self.coordinator_stats.get_query_count(node))
         assert set([0, 12]) == responses
 
         self.coordinator_stats.reset_counts()
-        decommission(1)
-        self._wait_for_nodes_down([1])
+        decommission(5)
+        self._wait_for_nodes_down([5])
 
         self._query(session, keyspace)
 
