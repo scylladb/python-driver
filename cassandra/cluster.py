@@ -1683,7 +1683,7 @@ class Cluster(object):
             futures.update(session.update_created_pools())
         _, not_done = wait_futures(futures, pool_wait_timeout)
         if not_done:
-            raise OperationTimedOut("Failed to create all new connection pools in the %ss timeout.")
+            raise OperationTimedOut("Failed to create all new connection pools in the %ss timeout." % pool_wait_timeout)
 
     def connection_factory(self, endpoint, host_conn = None, *args, **kwargs):
         """
