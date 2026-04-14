@@ -520,6 +520,8 @@ class ConnectionHeartbeatTest(unittest.TestCase):
         assert isinstance(exc, OperationTimedOut)
         assert exc.errors == 'Connection heartbeat timeout after 0.05 seconds'
         assert exc.last_host == DefaultEndPoint('localhost')
+        assert exc.timeout == 0.05
+        assert isinstance(exc.in_flight, int)
         holder.return_connection.assert_has_calls(
             [call(connection)] * get_holders.call_count)
 

@@ -687,10 +687,29 @@ class OperationTimedOut(DriverException):
     The last :class:`~.Host` this operation was attempted against.
     """
 
-    def __init__(self, errors=None, last_host=None):
+    timeout = None
+    """
+    The timeout value (in seconds) that was in effect when the operation
+    timed out, or ``None`` if not applicable.
+    """
+
+    in_flight = None
+    """
+    The number of in-flight requests on the connection at the time of
+    the timeout (includes orphaned requests), or ``None`` if not applicable.
+    """
+
+    def __init__(self, errors=None, last_host=None, timeout=None, in_flight=None):
         self.errors = errors
         self.last_host = last_host
+        self.timeout = timeout
+        self.in_flight = in_flight
         message = "errors=%s, last_host=%s" % (self.errors, self.last_host)
+        if self.timeout is not None:
+            message += " (timeout=%ss" % self.timeout
+            if self.in_flight is not None:
+                message += ", in_flight=%d" % self.in_flight
+            message += ")"
         Exception.__init__(self, message)
 
 

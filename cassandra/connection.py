@@ -984,7 +984,8 @@ class Connection(object):
             raise conn.last_error
         elif not conn.connected_event.is_set():
             conn.close()
-            raise OperationTimedOut("Timed out creating connection (%s seconds)" % timeout)
+            raise OperationTimedOut("Timed out creating connection (%s seconds)" % timeout,
+                                    timeout=timeout)
         else:
             return conn
 
@@ -1247,6 +1248,7 @@ class Connection(object):
                 msg += ": %s" % (self.last_error,)
             raise ConnectionShutdown(msg)
         timeout = kwargs.get('timeout')
+        original_timeout = timeout  # preserve for exception reporting
         fail_on_error = kwargs.get('fail_on_error', True)
         waiter = ResponseWaiter(self, len(msgs), fail_on_error)
 
@@ -1271,7 +1273,8 @@ class Connection(object):
                 if timeout is not None:
                     timeout -= 0.01
                     if timeout <= 0.0:
-                        raise OperationTimedOut()
+                        raise OperationTimedOut(timeout=original_timeout,
+                                                in_flight=self.in_flight)
                 time.sleep(0.01)
 
         try:
@@ -1796,7 +1799,8 @@ class ResponseWaiter(object):
         if self.error:
             raise self.error
         elif not self.event.is_set():
-            raise OperationTimedOut()
+            raise OperationTimedOut(timeout=timeout,
+                                    in_flight=self.connection.in_flight)
         else:
             return self.responses
 
@@ -1823,7 +1827,10 @@ class HeartbeatFuture(object):
             if self._exception:
                 raise self._exception
         else:
-            raise OperationTimedOut("Connection heartbeat timeout after %s seconds" % (timeout,), self.connection.endpoint)
+            raise OperationTimedOut("Connection heartbeat timeout after %s seconds" % (timeout,),
+                                    self.connection.endpoint,
+                                    timeout=timeout,
+                                    in_flight=self.connection.in_flight)
 
     def _options_callback(self, response):
         if isinstance(response, SupportedMessage):

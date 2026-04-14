@@ -142,6 +142,8 @@ class ResponseFutureTests(unittest.TestCase):
 
         connection = MagicMock(spec=Connection)
         connection._requests = {}
+        connection.in_flight = 5
+        connection.orphaned_request_ids = set()
 
         pool = Mock()
         pool.is_shutdown = False
@@ -162,8 +164,10 @@ class ResponseFutureTests(unittest.TestCase):
 
         # Simulate ResponseFuture timing out
         rf._on_timeout()
-        with pytest.raises(OperationTimedOut, match="Connection defunct by heartbeat"):
+        with pytest.raises(OperationTimedOut, match="Connection defunct by heartbeat") as exc_info:
             rf.result()
+        assert exc_info.value.timeout == 1
+        assert exc_info.value.in_flight == 5
 
     def test_read_timeout_error_message(self):
         session = self.make_session()
@@ -653,7 +657,7 @@ class ResponseFutureTests(unittest.TestCase):
         pool = self.make_pool()
         session._pools.get.return_value = pool
         connection = Mock(spec=Connection, lock=RLock(), _requests={}, request_ids=deque(),
-                orphaned_request_ids=set(), orphaned_threshold=256)
+                orphaned_request_ids=set(), orphaned_threshold=256, in_flight=3)
         pool.borrow_connection.return_value = (connection, 1)
 
         rf = self.make_response_future(session)
@@ -663,8 +667,10 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf._on_timeout()
         pool.return_connection.assert_called_once_with(connection, stream_was_orphaned=True)
-        with pytest.raises(OperationTimedOut, match="Client request timeout"):
+        with pytest.raises(OperationTimedOut, match="Client request timeout") as exc_info:
             rf.result()
+        assert exc_info.value.timeout == 1
+        assert exc_info.value.in_flight == 3
 
         assert len(connection.request_ids) == 0, \
             "Request IDs should be empty but it's not: {}".format(connection.request_ids)
