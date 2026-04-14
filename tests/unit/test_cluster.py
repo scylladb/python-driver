@@ -87,6 +87,64 @@ class ExceptionTypeTest(unittest.TestCase):
         assert issubclass(UnsupportedOperation, DriverException)
 
 
+class OperationTimedOutTest(unittest.TestCase):
+
+    def test_message_without_timeout(self):
+        """Default message format when no timeout info is provided."""
+        exc = OperationTimedOut(errors={'host1': 'some error'}, last_host='host1')
+        msg = str(exc)
+        assert "errors={'host1': 'some error'}" in msg
+        assert "last_host=host1" in msg
+        assert "timeout=" not in msg
+        assert "in_flight=" not in msg
+
+    def test_message_with_timeout_and_in_flight(self):
+        """Message includes timeout and in_flight when both are provided."""
+        exc = OperationTimedOut(errors={'host1': 'err'}, last_host='host1',
+                                timeout=10.0, in_flight=42)
+        msg = str(exc)
+        assert "(timeout=10.0s, in_flight=42)" in msg
+
+    def test_message_with_timeout_no_in_flight(self):
+        """Message includes timeout but not in_flight when only timeout is set."""
+        exc = OperationTimedOut(timeout=5.0)
+        msg = str(exc)
+        assert "(timeout=5.0s)" in msg
+        assert "in_flight=" not in msg
+
+    def test_message_no_args(self):
+        """No-argument form should not crash and should have clean message."""
+        exc = OperationTimedOut()
+        msg = str(exc)
+        assert "errors=None, last_host=None" in msg
+        assert "timeout=" not in msg
+
+    def test_attributes_accessible(self):
+        """New and existing attributes should be readable."""
+        exc = OperationTimedOut(errors={'h': 'e'}, last_host='h',
+                                timeout=10.0, in_flight=42)
+        assert exc.errors == {'h': 'e'}
+        assert exc.last_host == 'h'
+        assert exc.timeout == 10.0
+        assert exc.in_flight == 42
+
+    def test_attributes_default_none(self):
+        """New attributes should default to None when not provided."""
+        exc = OperationTimedOut()
+        assert exc.timeout is None
+        assert exc.in_flight is None
+        assert exc.errors is None
+        assert exc.last_host is None
+
+    def test_backward_compat_positional(self):
+        """Existing two-positional-arg form should still work."""
+        exc = OperationTimedOut({'h': 'err'}, 'host1')
+        assert exc.errors == {'h': 'err'}
+        assert exc.last_host == 'host1'
+        assert exc.timeout is None
+        assert exc.in_flight is None
+
+
 class ClusterTest(unittest.TestCase):
 
     def test_tuple_for_contact_points(self):

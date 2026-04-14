@@ -191,7 +191,6 @@ DefaultConnection = conn_class
 
 log = logging.getLogger(__name__)
 
-
 _GRAPH_PAGING_MIN_DSE_VERSION = Version('6.8.0')
 
 _NOT_SET = object()
@@ -1683,7 +1682,8 @@ class Cluster(object):
             futures.update(session.update_created_pools())
         _, not_done = wait_futures(futures, pool_wait_timeout)
         if not_done:
-            raise OperationTimedOut("Failed to create all new connection pools in the %ss timeout." % pool_wait_timeout)
+            raise OperationTimedOut("Failed to create all new connection pools in the %ss timeout." % pool_wait_timeout,
+                                    timeout=pool_wait_timeout)
 
     def connection_factory(self, endpoint, host_conn = None, *args, **kwargs):
         """
@@ -4505,6 +4505,7 @@ class ResponseFuture(object):
             )
             return
 
+        conn_in_flight = None
         if self._connection is not None:
             try:
                 self._connection._requests.pop(self._req_id)
@@ -4515,8 +4516,13 @@ class ResponseFuture(object):
             except KeyError:
                 key = "Connection defunct by heartbeat"
                 errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
-                self._set_final_exception(OperationTimedOut(errors, self._current_host))
+                self._set_final_exception(OperationTimedOut(errors, self._current_host,
+                                                            timeout=self.timeout,
+                                                            in_flight=self._connection.in_flight))
                 return
+
+            # Capture connection stats before pool.return_connection() can alter state
+            conn_in_flight = self._connection.in_flight
 
             pool = self.session._pools.get(self._current_host)
             if pool and not pool.is_shutdown:
@@ -4542,7 +4548,9 @@ class ResponseFuture(object):
                 host = str(connection.endpoint) if connection else 'unknown'
                 errors = {host: "Request timed out while waiting for schema agreement. See Session.execute[_async](timeout) and Cluster.max_schema_agreement_wait."}
 
-        self._set_final_exception(OperationTimedOut(errors, self._current_host))
+        self._set_final_exception(OperationTimedOut(errors, self._current_host,
+                                                    timeout=self.timeout,
+                                                    in_flight=conn_in_flight))
 
     def _on_speculative_execute(self):
         self._timer = None
