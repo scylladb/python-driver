@@ -19,5 +19,7 @@ jobs:
     name: "Test wheels building"
     if: "!contains(github.event.pull_request.labels.*.name, 'disable-test-build')"
     uses: ./.github/workflows/lib-build-and-push.yml
+    permissions:
+      id-token: write
     with:
       upload: false
