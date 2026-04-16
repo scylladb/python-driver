@@ -677,7 +677,7 @@ class HostConnection(object):
         self.advanced_shardaware_block_until = max(time.time() + secs, self.advanced_shardaware_block_until)
 
     def _get_shard_aware_endpoint(self):
-        if (self.advanced_shardaware_block_until and self.advanced_shardaware_block_until < time.time()) or \
+        if (self.advanced_shardaware_block_until and self.advanced_shardaware_block_until > time.time()) or \
            self._session.cluster.shard_aware_options.disable_shardaware_port:
             return None
 
