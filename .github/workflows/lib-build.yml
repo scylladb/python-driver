@@ -140,12 +140,12 @@ jobs:
         if: matrix.target != 'linux-aarch64'
         shell: bash
         run: |
-          GITHUB_WORKFLOW_REF="scylladb/python-driver/.github/workflows/lib-build.yml@refs/heads/master" cibuildwheel --output-dir wheelhouse
+          cibuildwheel --output-dir wheelhouse
 
       - name: Build wheels for linux aarch64
         if: matrix.target == 'linux-aarch64'
         run: |
-          GITHUB_WORKFLOW_REF="scylladb/python-driver/.github/workflows/lib-build.yml@refs/heads/master" CIBW_BUILD="cp3*" cibuildwheel --archs aarch64 --output-dir wheelhouse
+          CIBW_BUILD="cp3*" cibuildwheel --archs aarch64 --output-dir wheelhouse
 
       - uses: actions/upload-artifact@v7
         with:
