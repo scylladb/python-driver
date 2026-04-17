@@ -15,7 +15,7 @@ on:
 
 jobs:
   build-and-publish:
-    uses: ./.github/workflows/lib-build-and-push.yml
+    uses: ./.github/workflows/lib-build.yml
     with:
       python-version: ${{ inputs.python-version }}
       target: ${{ inputs.target }}
