@@ -1,14 +1,8 @@
-name: Build and upload to PyPi
+name: Build wheels
 
 on:
   workflow_call:
     inputs:
-      upload:
-        description: 'Upload to PyPI'
-        type: boolean
-        required: false
-        default: false
-
       python-version:
         description: 'Python version to run on'
         type: string
@@ -146,12 +140,12 @@ jobs:
         if: matrix.target != 'linux-aarch64'
         shell: bash
         run: |
-          GITHUB_WORKFLOW_REF="scylladb/python-driver/.github/workflows/lib-build-and-push.yml@refs/heads/master" cibuildwheel --output-dir wheelhouse
+          GITHUB_WORKFLOW_REF="scylladb/python-driver/.github/workflows/lib-build.yml@refs/heads/master" cibuildwheel --output-dir wheelhouse
 
       - name: Build wheels for linux aarch64
         if: matrix.target == 'linux-aarch64'
         run: |
-          GITHUB_WORKFLOW_REF="scylladb/python-driver/.github/workflows/lib-build-and-push.yml@refs/heads/master" CIBW_BUILD="cp3*" cibuildwheel --archs aarch64 --output-dir wheelhouse
+          GITHUB_WORKFLOW_REF="scylladb/python-driver/.github/workflows/lib-build.yml@refs/heads/master" CIBW_BUILD="cp3*" cibuildwheel --archs aarch64 --output-dir wheelhouse
 
       - uses: actions/upload-artifact@v7
         with:
@@ -176,20 +170,3 @@ jobs:
         with:
           name: source-dist
           path: dist/*.tar.gz
-
-  upload_pypi:
-    if: inputs.upload
-    needs: [build-wheels, build-sdist]
-    runs-on: ubuntu-24.04
-    permissions:
-      id-token: write
-
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: dist
-          merge-multiple: true
-
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          skip-existing: true

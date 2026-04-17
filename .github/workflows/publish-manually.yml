@@ -39,15 +39,17 @@ on:
 jobs:
   build-and-publish:
     name: "Build wheels"
-    uses: ./.github/workflows/lib-build-and-push.yml
+    uses: ./.github/workflows/lib-build.yml
     with:
-      upload: false
       python-version: ${{ inputs.python-version }}
       ignore_tests: ${{ inputs.ignore_tests }}
       target_tag: ${{ inputs.target_tag }}
       target: ${{ inputs.target }}
 
-  # TODO: Remove when https://github.com/pypa/gh-action-pypi-publish/issues/166 is fixed and update build-and-publish.with.upload to ${{ inputs.upload }}
+  # Publishing is a separate job (not inside the reusable workflow) because PyPI Trusted Publishing
+  # requires the *caller* workflow path in the OIDC token. A reusable workflow would embed its own
+  # path instead, causing an `invalid-publisher` error on the PyPI side.
+  # See: https://github.com/pypa/gh-action-pypi-publish/issues/166
   publish:
     name: "Publish wheels to PyPi"
     needs: build-and-publish
