@@ -1082,6 +1082,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata.token_map = Mock()
         cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         cluster.metadata.token_map.get_replicas.return_value = hosts[2:]
+        # Provide a real dict for keyspace-aware cache invalidation checks.
+        cluster.metadata.token_map.tokens_to_hosts_by_ks = {'ks': {}, 'ks1': {}, 'ks2': {}}
         return cluster, hosts
 
     def test_cache_hit(self):
@@ -1160,6 +1162,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         new_token_map = Mock()
         new_token_map.token_class.from_key.side_effect = lambda key: key
         new_token_map.get_replicas.return_value = hosts[2:]
+        new_token_map.tokens_to_hosts_by_ks = {'ks': {}}
         cluster.metadata.token_map = new_token_map
 
         list(policy.make_query_plan(None, query))
@@ -1229,6 +1232,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata.token_map = Mock()
         cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         cluster.metadata.token_map.get_replicas.return_value = hosts[2:]
+        cluster.metadata.token_map.tokens_to_hosts_by_ks = {'ks': {}}
 
         child_policy = Mock()
         child_policy.make_query_plan.return_value = hosts
@@ -1246,6 +1250,30 @@ class TokenAwarePolicyTest(unittest.TestCase):
         assert cluster.metadata.token_map.get_replicas.call_count == 0
         # Cache should remain empty (tablet results are not cached)
         assert len(policy._replica_cache) == 0
+
+    def test_cache_invalidation_on_keyspace_replication_change(self):
+        """Cache should detect in-place keyspace replica map rebuild (e.g. ALTER KEYSPACE)."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'key1', keyspace='ks')
+        list(policy.make_query_plan(None, query))
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
+
+        # Simulate ALTER KEYSPACE: same token_map object, but the per-keyspace
+        # replica map is replaced in-place (new dict object for that keyspace).
+        cluster.metadata.token_map.tokens_to_hosts_by_ks['ks'] = {'new': 'map'}
+
+        list(policy.make_query_plan(None, query))
+        # Should have re-fetched replicas because the ks map id changed.
+        assert cluster.metadata.token_map.get_replicas.call_count == 2
 
     # --- LWT determinism tests ---
 
