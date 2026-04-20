@@ -248,7 +248,6 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
 
     _local_dc = None
     _local_dc_explicit = False
-    used_hosts_per_remote_dc = 0
 
     @property
     def local_dc(self):
@@ -285,11 +284,23 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         # An empty local_dc is the default rather than a choice, which is also
         # what makes on_up() infer one.
         self._local_dc_explicit = bool(local_dc)
-        self.used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._dc_live_hosts = {}
         self._remote_hosts = {}
+        self._used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._position = 0
         LoadBalancingPolicy.__init__(self)
+
+    @property
+    def used_hosts_per_remote_dc(self):
+        return self._used_hosts_per_remote_dc
+
+    @used_hosts_per_remote_dc.setter
+    def used_hosts_per_remote_dc(self, value):
+        if value == self._used_hosts_per_remote_dc:
+            return
+        with self._hosts_lock:
+            self._used_hosts_per_remote_dc = value
+            self._refresh_remote_hosts()
 
     def _dc(self, host):
         return host.datacenter or self.local_dc
@@ -333,8 +344,9 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
             for i in range(length):
                 yield local_live[(pos + i) % length]
 
-        remote_hosts = self._remote_hosts
-        for host in remote_hosts:
+        # Read _remote_hosts late so topology changes during local
+        # iteration are visible.
+        for host in self._remote_hosts:
             yield host
 
     def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
@@ -349,7 +361,6 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
 
         local_live = self._dc_live_hosts.get(self.local_dc, ())
         length = len(local_live)
-        remote_hosts = self._remote_hosts
         if not isinstance(excluded, set):
             excluded = set(excluded)
 
@@ -361,7 +372,7 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
                     continue
                 yield host
 
-        for host in remote_hosts:
+        for host in self._remote_hosts:
             if host in excluded:
                 continue
             yield host
@@ -369,14 +380,16 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
     def on_up(self, host):
         # not worrying about threads because this will happen during
         # control connection startup/refresh
-        refresh_remote = False
         if not self.local_dc and host.datacenter:
-            self._local_dc = host.datacenter
+            # local_dc is read-only, so refresh here what a setter would have:
+            # _remote_hosts was computed against the empty local_dc.
+            with self._hosts_lock:
+                self._local_dc = host.datacenter
+                self._refresh_remote_hosts()
             log.info("Using datacenter '%s' for DCAwareRoundRobinPolicy (via host '%s'); "
                         "if incorrect, please specify a local_dc to the constructor, "
                         "or limit contact points to local cluster nodes" %
                         (self.local_dc, host.endpoint))
-            refresh_remote = True
 
         dc = self._dc(host)
         with self._hosts_lock:
@@ -384,10 +397,7 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
             if host not in current_hosts:
                 self._dc_live_hosts[dc] = current_hosts + (host, )
                 if dc != self.local_dc:
-                    refresh_remote = True
-
-            if refresh_remote:
-                self._refresh_remote_hosts()
+                    self._refresh_remote_hosts()
 
     def on_down(self, host):
         dc = self._dc(host)
@@ -416,9 +426,8 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
     different rack, before hosts in all other datercentres
     """
 
-    local_dc = None
-    local_rack = None
-    used_hosts_per_remote_dc = 0
+    _local_dc = None
+    _local_rack = None
 
     def __init__(self, local_dc, local_rack, used_hosts_per_remote_dc=0):
         """
@@ -433,16 +442,57 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
         rest will be considered :attr:`~.HostDistance.IGNORED`.
         By default, all remote hosts are ignored.
         """
-        self.local_rack = local_rack
-        self.local_dc = local_dc
-        self.used_hosts_per_remote_dc = used_hosts_per_remote_dc
+        # Set the private attributes directly here (bypassing the local_dc
+        # and local_rack property setters below): those setters refresh
+        # cached state under _hosts_lock, but neither _dc_live_hosts nor
+        # _hosts_lock exist yet at this point in construction.
+        self._local_rack = local_rack
+        self._local_dc = local_dc
         self._live_hosts = {}
         self._dc_live_hosts = {}
         self._remote_hosts = {}
         self._non_local_rack_hosts = ()
+        self._used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._endpoints = []
         self._position = 0
         LoadBalancingPolicy.__init__(self)
+
+    @property
+    def local_dc(self):
+        return self._local_dc
+
+    @local_dc.setter
+    def local_dc(self, value):
+        if value == self._local_dc:
+            return
+        with self._hosts_lock:
+            self._local_dc = value
+            self._refresh_remote_hosts()
+            self._refresh_non_local_rack_hosts()
+
+    @property
+    def local_rack(self):
+        return self._local_rack
+
+    @local_rack.setter
+    def local_rack(self, value):
+        if value == self._local_rack:
+            return
+        with self._hosts_lock:
+            self._local_rack = value
+            self._refresh_non_local_rack_hosts()
+
+    @property
+    def used_hosts_per_remote_dc(self):
+        return self._used_hosts_per_remote_dc
+
+    @used_hosts_per_remote_dc.setter
+    def used_hosts_per_remote_dc(self, value):
+        if value == self._used_hosts_per_remote_dc:
+            return
+        with self._hosts_lock:
+            self._used_hosts_per_remote_dc = value
+            self._refresh_remote_hosts()
 
     def _rack(self, host):
         return host.rack or self.local_rack
@@ -495,8 +545,9 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
             for i in range(length):
                 yield local_non_rack[(p + i) % length]
 
-        remote_hosts = self._remote_hosts
-        for host in remote_hosts:
+        # Read _remote_hosts late so topology changes during local
+        # iteration are visible.
+        for host in self._remote_hosts:
             yield host
 
     def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
@@ -509,7 +560,6 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
 
         local_rack_live = self._live_hosts.get((self.local_dc, self.local_rack), ())
         length = len(local_rack_live)
-        remote_hosts = self._remote_hosts
         if not isinstance(excluded, set):
             excluded = set(excluded)
 
@@ -531,7 +581,9 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
                     continue
                 yield host
 
-        for host in remote_hosts:
+        # Read _remote_hosts late so topology changes during local
+        # iteration are visible.
+        for host in self._remote_hosts:
             if host in excluded:
                 continue
             yield host
