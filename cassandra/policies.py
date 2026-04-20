@@ -662,10 +662,12 @@ class TokenAwarePolicy(LoadBalancingPolicy):
     An LRU cache of :attr:`cache_replicas_size` entries per keyspace (default 16384) avoids
     repeated token-to-replica lookups for the same (keyspace, routing_key)
     pair.  Set to 0 to disable caching.  The cache is automatically
-    invalidated when the cluster topology changes. It is only consulted for
-    non-tablet keyspaces; tablet replicas are always resolved fresh since
-    they carry leader information that can change independently of the
-    token map.
+    invalidated when the cluster topology changes.  It only ever holds
+    vnode-derived replica sets; tables with known tablets always resolve
+    replicas via the tablet metadata directly, so tablet-aware routing is
+    never masked by a cache entry created before a tablet was learned, and
+    the leader information a tablet carries is never masked by a stale
+    cache entry either.
     """
 
     _child_policy = None
@@ -744,8 +746,8 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
     def _get_cached_replicas(self, keyspace, routing_key, token_map):
         """
-        Cached replicas for (keyspace, routing key), or None if absent or stale
-        (token map or keyspace replica map rebuilt).
+        Cached vnode replicas for (keyspace, routing key), or None if absent or stale
+        (token map or keyspace replica map rebuilt). Never consult it for a table with tablets.
         """
         if not self._cache_replicas_size:
             return None
@@ -768,9 +770,10 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                 lru.move_to_end(routing_key)
             return replicas
 
-    def _put_cached_replicas(self, keyspace, routing_key, replicas, token_map):
+    def _put_cached_replicas(self, keyspace, routing_key, replicas, token_map, ks_map_ref):
         """
-        Cache vnode replicas, evicting the keyspace's least recently used entry when full.
+        Cache vnode replicas, evicting the keyspace's least recently used entry when full. `ks_map_ref`
+        must be captured before resolving `replicas`, or a concurrent ALTER KEYSPACE would go unnoticed.
         """
         if not self._cache_replicas_size:
             return
@@ -778,7 +781,6 @@ class TokenAwarePolicy(LoadBalancingPolicy):
             if token_map is not self._replica_cache_token_map_ref:
                 self._replica_cache = {}
                 self._replica_cache_token_map_ref = token_map
-            ks_map_ref = token_map.tokens_to_hosts_by_ks.get(keyspace)
             entry = self._replica_cache.get(keyspace)
             if entry is None or entry[0] is not ks_map_ref:
                 # One sub-cache per keyspace replica map, so an ALTER KEYSPACE drops it whole.
@@ -808,67 +810,79 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         leader_host = None
         if token_map:
             try:
-                # Check the LRU cache first -- avoids the hash (from_key)
-                # and token-map lookup on repeated routing keys. A cache hit
-                # only ever comes from the non-tablet path below (tablet
-                # replicas are never cached), so there is no leader to
-                # compute in that case.
-                cached = self._get_cached_replicas(keyspace, query.routing_key, token_map)
+                tablets = cluster_metadata._tablets
+
+                # Check for tablets before the cache: it holds only vnode replicas, so an entry
+                # cached before this table's first tablet was learned would shadow the tablet.
+                table_has_tablets = bool(tablets) and tablets.table_has_tablets(keyspace, query.table)
+
+                cached = None
+                if not table_has_tablets:
+                    # Check the LRU cache first -- avoids the hash (from_key)
+                    # and token-map lookup on repeated routing keys.
+                    cached = self._get_cached_replicas(keyspace, query.routing_key, token_map)
+
                 if cached is not None:
                     replicas = cached
                 else:
                     token = token_map.token_class.from_key(query.routing_key)
-                    tablet = cluster_metadata._tablets.get_tablet_for_key(
-                        keyspace, query.table, token
-                    )
 
-                    if tablet is not None:
-                        # Hash host_id.int: UUID.__hash__ is pure Python, int hashing is C.
-                        replicas_mapped = {r[0].int for r in tablet.replicas}
-                        child_plan = child.make_query_plan(keyspace, query)
-                        replicas = [host for host in child_plan if host.host_id.int in replicas_mapped]
+                    tablet_found = False
+                    if table_has_tablets:
+                        tablet = tablets.get_tablet_for_key(keyspace, query.table, token)
+                        if tablet is not None:
+                            tablet_found = True
+                            # Hash host_id.int: UUID.__hash__ is pure Python, int hashing is C.
+                            replicas_mapped = {r[0].int for r in tablet.replicas}
+                            child_plan = child.make_query_plan(keyspace, query)
+                            replicas = [host for host in child_plan if host.host_id.int in replicas_mapped]
 
-                        # The leader concept only exists for strongly-consistent keyspaces,
-                        # which today means exactly the keyspaces whose consistency mode is
-                        # GLOBAL: it is the only mode ScyllaDB implements so far, so LOCAL
-                        # (reserved, unimplemented) and EVENTUAL both have no leader. This
-                        # comparison has to widen once 'local' consistency exists.
-                        # TABLETS_ROUTING_V2 assigns a tablet_version to *every* tablet table
-                        # (eventually- and strongly-consistent alike), so the version alone
-                        # must not be used to infer a leader. Conversely, replicas[0] is only
-                        # leader-ordered for a tablet that came from a V2 payload, so a
-                        # versionless tablet (V1-sourced, or stale across a consistency flip)
-                        # must not be treated as a leader hint either. Require both a
-                        # strongly-consistent keyspace and a versioned tablet; otherwise keep
-                        # normal token-aware/shuffled ordering.
-                        ks_meta = cluster_metadata.keyspaces.get(keyspace)
-                        if (self._prefer_tablet_leader
-                                and ks_meta is not None and ks_meta._consistency_mode == _ConsistencyMode.GLOBAL
-                                and tablet.tablet_version is not None):
-                            # Even for a leader-eligible tablet, a request at consistency
-                            # level ONE or LOCAL_ONE is satisfied by any single replica, so
-                            # preferring the leader would only concentrate load into a
-                            # hotspot without buying any consistency; spread those instead.
-                            # TODO: This reads the level off the statement, so a request that
-                            #       inherits its consistency level from an execution profile
-                            #       looks unset here and is routed to the leader anyway. See
-                            #       https://github.com/scylladb/python-driver/issues/953
-                            effective_cl = query.consistency_level
-                            prefer_leader = effective_cl not in (ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE)
-                            if prefer_leader:
-                                leader_host_id = tablet.leader
-                                # A tablet with no replicas reports no leader; guard against
-                                # matching a host whose own host_id is still unknown.
-                                if leader_host_id is not None:
-                                    for host in replicas:
-                                        if host.host_id == leader_host_id:
-                                            leader_host = host
-                                            break
-                    else:
+                            # The leader concept only exists for strongly-consistent keyspaces,
+                            # which today means exactly the keyspaces whose consistency mode is
+                            # GLOBAL: it is the only mode ScyllaDB implements so far, so LOCAL
+                            # (reserved, unimplemented) and EVENTUAL both have no leader. This
+                            # comparison has to widen once 'local' consistency exists.
+                            # TABLETS_ROUTING_V2 assigns a tablet_version to *every* tablet table
+                            # (eventually- and strongly-consistent alike), so the version alone
+                            # must not be used to infer a leader. Conversely, replicas[0] is only
+                            # leader-ordered for a tablet that came from a V2 payload, so a
+                            # versionless tablet (V1-sourced, or stale across a consistency flip)
+                            # must not be treated as a leader hint either. Require both a
+                            # strongly-consistent keyspace and a versioned tablet; otherwise keep
+                            # normal token-aware/shuffled ordering.
+                            ks_meta = cluster_metadata.keyspaces.get(keyspace)
+                            if (self._prefer_tablet_leader
+                                    and ks_meta is not None and ks_meta._consistency_mode == _ConsistencyMode.GLOBAL
+                                    and tablet.tablet_version is not None):
+                                # Even for a leader-eligible tablet, a request at consistency
+                                # level ONE or LOCAL_ONE is satisfied by any single replica, so
+                                # preferring the leader would only concentrate load into a
+                                # hotspot without buying any consistency; spread those instead.
+                                # TODO: This reads the level off the statement, so a request that
+                                #       inherits its consistency level from an execution profile
+                                #       looks unset here and is routed to the leader anyway. See
+                                #       https://github.com/scylladb/python-driver/issues/953
+                                effective_cl = query.consistency_level
+                                prefer_leader = effective_cl not in (ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE)
+                                if prefer_leader:
+                                    leader_host_id = tablet.leader
+                                    # A tablet with no replicas reports no leader; guard against
+                                    # matching a host whose own host_id is still unknown.
+                                    if leader_host_id is not None:
+                                        for host in replicas:
+                                            if host.host_id == leader_host_id:
+                                                leader_host = host
+                                                break
+
+                    if not replicas and not tablet_found:
+                        # Captured before resolving, so a concurrent ALTER KEYSPACE invalidates the entry.
+                        ks_map_ref = token_map.tokens_to_hosts_by_ks.get(keyspace)
                         replicas = token_map.get_replicas(keyspace, token)
-                        self._put_cached_replicas(
-                            keyspace, query.routing_key, replicas, token_map
-                        )
+                        # Tables with tablets never read the cache, so don't fill it for them.
+                        if not table_has_tablets:
+                            self._put_cached_replicas(
+                                keyspace, query.routing_key, replicas, token_map, ks_map_ref
+                            )
             except Exception:
                 log.debug(
                     "Failed to resolve token or tablet for query plan, "
