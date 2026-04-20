@@ -249,7 +249,6 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
     """
 
     local_dc = None
-    used_hosts_per_remote_dc = 0
 
     def __init__(self, local_dc='', used_hosts_per_remote_dc=0):
         """
@@ -268,11 +267,20 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         By default, all remote hosts are ignored.
         """
         self.local_dc = local_dc
-        self.used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._dc_live_hosts = {}
         self._remote_hosts = {}
+        self._used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._position = 0
         LoadBalancingPolicy.__init__(self)
+
+    @property
+    def used_hosts_per_remote_dc(self):
+        return self._used_hosts_per_remote_dc
+
+    @used_hosts_per_remote_dc.setter
+    def used_hosts_per_remote_dc(self, value):
+        self._used_hosts_per_remote_dc = value
+        self._refresh_remote_hosts()
 
     def _dc(self, host):
         return host.datacenter or self.local_dc
@@ -319,8 +327,9 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
             for i in range(length):
                 yield local_live[(pos + i) % length]
 
-        remote_hosts = self._remote_hosts
-        for host in remote_hosts:
+        # Read _remote_hosts late so topology changes during local
+        # iteration are visible.
+        for host in self._remote_hosts:
             yield host
 
     def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
@@ -331,13 +340,14 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
 
         local_live = self._dc_live_hosts.get(self.local_dc, ())
         length = len(local_live)
-        remote_hosts = self._remote_hosts
         if not excluded:
             if length:
                 pos %= length
                 for i in range(length):
                     yield local_live[(pos + i) % length]
-            for host in remote_hosts:
+            # Read _remote_hosts late so topology changes during local
+            # iteration are visible.
+            for host in self._remote_hosts:
                 yield host
             return
 
@@ -352,7 +362,7 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
                     continue
                 yield host
 
-        for host in remote_hosts:
+        for host in self._remote_hosts:
             if host in excluded:
                 continue
             yield host
@@ -409,7 +419,6 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
 
     local_dc = None
     local_rack = None
-    used_hosts_per_remote_dc = 0
 
     def __init__(self, local_dc, local_rack, used_hosts_per_remote_dc=0):
         """
@@ -426,14 +435,23 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
         """
         self.local_rack = local_rack
         self.local_dc = local_dc
-        self.used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._live_hosts = {}
         self._dc_live_hosts = {}
         self._remote_hosts = {}
         self._non_local_rack_hosts = ()
+        self._used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._endpoints = []
         self._position = 0
         LoadBalancingPolicy.__init__(self)
+
+    @property
+    def used_hosts_per_remote_dc(self):
+        return self._used_hosts_per_remote_dc
+
+    @used_hosts_per_remote_dc.setter
+    def used_hosts_per_remote_dc(self, value):
+        self._used_hosts_per_remote_dc = value
+        self._refresh_remote_hosts()
 
     def _rack(self, host):
         return host.rack or self.local_rack
@@ -499,8 +517,9 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
             for i in range(length):
                 yield local_non_rack[(p + i) % length]
 
-        remote_hosts = self._remote_hosts
-        for host in remote_hosts:
+        # Read _remote_hosts late so topology changes during local
+        # iteration are visible.
+        for host in self._remote_hosts:
             yield host
 
     def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
@@ -509,7 +528,6 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
 
         local_rack_live = self._live_hosts.get((self.local_dc, self.local_rack), ())
         length = len(local_rack_live)
-        remote_hosts = self._remote_hosts
         if not excluded:
             if length:
                 p = pos % length
@@ -523,7 +541,9 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
                 for i in range(length):
                     yield local_non_rack[(p + i) % length]
 
-            for host in remote_hosts:
+            # Read _remote_hosts late so topology changes during local
+            # iteration are visible.
+            for host in self._remote_hosts:
                 yield host
             return
 
@@ -548,7 +568,9 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
                     continue
                 yield host
 
-        for host in remote_hosts:
+        # Read _remote_hosts late so topology changes during local
+        # iteration are visible.
+        for host in self._remote_hosts:
             if host in excluded:
                 continue
             yield host

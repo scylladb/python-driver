@@ -624,6 +624,88 @@ class TestRackOrDCAwareRoundRobinPolicy:
         qplan = list(policy.make_query_plan())
         assert len(qplan) == 0
 
+    def test_runtime_used_hosts_per_remote_dc_change(self, policy_specialization, constructor_args):
+        """Changing used_hosts_per_remote_dc at runtime should take effect
+        immediately without needing a repopulate or topology event."""
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:]:
+            h.set_location_info("dc2", "rack1")
+
+        policy = policy_specialization(*constructor_args, used_hosts_per_remote_dc=0)
+        policy.populate(Mock(), hosts)
+
+        # With 0, remotes are IGNORED and absent from query plan
+        for h in hosts[2:]:
+            assert policy.distance(h) == HostDistance.IGNORED
+        qplan = list(policy.make_query_plan())
+        assert set(qplan) == set(hosts[:2])
+
+        # Raise to 1 at runtime -- should take effect immediately
+        policy.used_hosts_per_remote_dc = 1
+        assert policy.distance(hosts[2]) == HostDistance.REMOTE or \
+               policy.distance(hosts[3]) == HostDistance.REMOTE
+        qplan = list(policy.make_query_plan())
+        assert len(qplan) == 3  # 2 local + 1 remote
+
+        # Raise to 2 -- both remotes visible
+        policy.used_hosts_per_remote_dc = 2
+        qplan = list(policy.make_query_plan())
+        assert set(qplan) == set(hosts)
+
+        # Drop back to 0 -- remotes disappear
+        policy.used_hosts_per_remote_dc = 0
+        for h in hosts[2:]:
+            assert policy.distance(h) == HostDistance.IGNORED
+        qplan = list(policy.make_query_plan())
+        assert set(qplan) == set(hosts[:2])
+
+    def test_modification_during_generation_exclusion(self, policy_specialization, constructor_args):
+        """Topology changes to remote hosts during local iteration should be
+        visible when the generator reaches the remote phase, for the exclusion
+        path as well as the normal path."""
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:]:
+            h.set_location_info("dc2", "rack1")
+
+        policy = policy_specialization(*constructor_args, used_hosts_per_remote_dc=3)
+        policy.populate(Mock(), hosts)
+
+        new_host = Host(DefaultEndPoint(4), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        new_host.set_location_info("dc2", "rack1")
+
+        # -- make_query_plan: add remote after starting local iteration --
+        plan = policy.make_query_plan()
+        next(plan)  # consume one local
+        policy.on_up(new_host)
+        remaining = list(plan)
+        # new_host should appear because _remote_hosts is read late
+        assert new_host in remaining
+
+        # -- make_query_plan: remove remote after starting local --
+        plan = policy.make_query_plan()
+        next(plan)
+        policy.on_down(new_host)
+        remaining = list(plan)
+        assert new_host not in remaining
+
+        # -- make_query_plan_with_exclusion: add remote after starting local --
+        plan = policy.make_query_plan_with_exclusion(excluded={hosts[0]})
+        next(plan)  # consume one local
+        policy.on_up(new_host)
+        remaining = list(plan)
+        assert new_host in remaining
+
+        # -- make_query_plan_with_exclusion: remove remote after starting local --
+        plan = policy.make_query_plan_with_exclusion(excluded={hosts[0]})
+        next(plan)
+        policy.on_down(new_host)
+        remaining = list(plan)
+        assert new_host not in remaining
+
 class DCAwareRoundRobinPolicyTest(unittest.TestCase):
 
     def test_default_dc(self):
