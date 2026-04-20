@@ -694,7 +694,10 @@ class TokenAwarePolicy(LoadBalancingPolicy):
     An LRU cache of size :attr:`cache_replicas_size` (default 1024) avoids
     repeated token-to-replica lookups for the same (keyspace, routing_key)
     pair.  Set to 0 to disable caching.  The cache is automatically
-    invalidated when the cluster topology changes.
+    invalidated when the cluster topology changes.  It only ever holds
+    vnode-derived replica sets; tables with known tablets always resolve
+    replicas via the tablet metadata directly, so tablet-aware routing is
+    never masked by a cache entry created before a tablet was learned.
     """
 
     _child_policy = None
@@ -749,6 +752,14 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
         The table is part of the cache key so that tablet-backed and
         non-tablet tables in the same keyspace don't collide.
+
+        NOTE: this cache only ever holds vnode-derived replica sets (see
+        make_query_plan). Callers must not consult it for a table that
+        currently has any known tablets -- otherwise an entry cached before
+        a tablet for that key was learned would permanently shadow the
+        tablet-aware path (tablets are learned lazily from server responses
+        and nothing else invalidates a vnode-derived entry when that
+        happens).
         """
         if not self._cache_replicas_size:
             return None
@@ -772,12 +783,22 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                 return replicas
             return None
 
-    def _put_cached_replicas(self, keyspace, table, routing_key_bytes, replicas, token_map):
+    def _put_cached_replicas(self, keyspace, table, routing_key_bytes, replicas, token_map, ks_map_ref):
         """
         Store replicas in the LRU cache, evicting the oldest entry if
         the cache exceeds its configured size.  The keyspace's current
         replica-map object reference is stored alongside so that in-place
         rebuilds (ALTER KEYSPACE) are detected on lookup via identity check.
+
+        `ks_map_ref` must be the identity of `token_map.tokens_to_hosts_by_ks
+        [keyspace]` as it was captured by the caller BEFORE `replicas` was
+        resolved (i.e. before token_map.get_replicas() was called) -- not
+        re-fetched here. Re-fetching it at this point would open a window
+        between replica resolution and the identity snapshot in which a
+        concurrent ALTER KEYSPACE could rebuild the per-keyspace map; the
+        stale `replicas` computed against the OLD map would then be stored
+        alongside the identity of the NEW map and would incorrectly
+        validate as current forever afterward.
         """
         if not self._cache_replicas_size:
             return
@@ -786,7 +807,6 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                 self._replica_cache = OrderedDict()
                 self._replica_cache_token_map_ref = token_map
             cache_key = (keyspace, table, routing_key_bytes)
-            ks_map_ref = token_map.tokens_to_hosts_by_ks.get(keyspace)
             self._replica_cache[cache_key] = (replicas, ks_map_ref)
             self._replica_cache.move_to_end(cache_key)
             if len(self._replica_cache) > self._cache_replicas_size:
@@ -805,22 +825,53 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         replicas = []
         if token_map:
             try:
-                # Check the LRU cache first -- avoids the hash (from_key)
-                # and token-map lookup on repeated routing keys.
-                cached = self._get_cached_replicas(keyspace, query.table, query.routing_key, token_map)
+                tablets = cluster_metadata._tablets
+
+                # Only check tablets if any exist -- avoids the method
+                # call + dict lookup when tablets are not in use.
+                #
+                # IMPORTANT: this must be checked *before* consulting the
+                # replica cache, not after. The cache only ever stores
+                # vnode-derived replica sets (see below), and tablets are
+                # learned lazily from server responses -- so an entry may
+                # have been cached at a moment when no tablet existed yet
+                # for this (keyspace, table). Nothing else invalidates that
+                # entry once a tablet for it is subsequently learned, so a
+                # cache-first check would permanently pin the key to stale
+                # vnode replicas and defeat tablet-aware routing for it.
+                # Gating on table_has_tablets (an O(1) dict lookup, no
+                # routing-key hashing) is cheap enough to do on every call
+                # and keeps the fast cache path fully intact for the common
+                # case: non-tablet keyspaces, and tables tablets haven't
+                # touched at all.
+                table_has_tablets = bool(tablets) and tablets.table_has_tablets(keyspace, query.table)
+
+                cached = None
+                if not table_has_tablets:
+                    # Check the LRU cache first -- avoids the hash (from_key)
+                    # and token-map lookup on repeated routing keys.
+                    cached = self._get_cached_replicas(keyspace, query.table, query.routing_key, token_map)
+
                 if cached is not None:
                     replicas = cached
                 else:
                     token = token_map.token_class.from_key(query.routing_key)
-                    tablet = cluster_metadata._tablets.get_tablet_for_key(
-                        keyspace, query.table, token
-                    )
 
-                    if tablet is not None:
-                        replicas_mapped = {r[0] for r in tablet.replicas}
-                        child_plan = child.make_query_plan(keyspace, query)
-                        replicas = [host for host in child_plan if host.host_id in replicas_mapped]
-                    else:
+                    if table_has_tablets:
+                        tablet = tablets.get_tablet_for_key(keyspace, query.table, token)
+                        if tablet is not None:
+                            replicas_mapped = {r[0] for r in tablet.replicas}
+                            child_plan = child.make_query_plan(keyspace, query)
+                            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+
+                    if not replicas:
+                        # Snapshot the keyspace replica-map identity BEFORE
+                        # resolving replicas (not after) so a concurrent
+                        # ALTER KEYSPACE rebuild in this window is detected
+                        # as invalidating the entry we're about to cache
+                        # rather than accidentally validating it later. See
+                        # _put_cached_replicas.
+                        ks_map_ref = token_map.tokens_to_hosts_by_ks.get(keyspace)
                         try:
                             replicas = token_map.get_replicas(keyspace, token)
                         except Exception:
@@ -829,9 +880,15 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                                 "falling back to cluster metadata"
                             )
                             replicas = cluster_metadata.get_replicas(keyspace, query.routing_key)
-                        self._put_cached_replicas(
-                            keyspace, query.table, query.routing_key, replicas, token_map
-                        )
+                        # Never cache for a table that currently has known
+                        # tablets -- such entries could never be safely
+                        # read back (table_has_tablets would gate the cache
+                        # lookup out again above) and would only waste LRU
+                        # capacity that other keys need.
+                        if not table_has_tablets:
+                            self._put_cached_replicas(
+                                keyspace, query.table, query.routing_key, replicas, token_map, ks_map_ref
+                            )
             except Exception:
                 log.debug(
                     "Failed to resolve token or tablet for query plan, "

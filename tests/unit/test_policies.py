@@ -859,6 +859,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata._tablets.table_has_tablets.return_value = False
         cluster.metadata.token_map = Mock()
         cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
@@ -895,6 +896,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata._tablets.table_has_tablets.return_value = False
         cluster.metadata.token_map = Mock()
         cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
@@ -947,6 +949,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata._tablets.table_has_tablets.return_value = False
         cluster.metadata.token_map = Mock()
         cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(8)]
@@ -1153,6 +1156,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         replicas = hosts[2:]
         cluster.metadata.get_replicas.return_value = replicas
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata._tablets.table_has_tablets.return_value = False
         cluster.metadata.token_map = Mock()
         cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
@@ -1252,6 +1256,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata.all_hosts.return_value = hosts
         cluster.metadata.get_replicas.return_value = hosts[2:]
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata._tablets.table_has_tablets.return_value = False
         cluster.metadata.token_map = Mock()
         cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
@@ -1267,6 +1272,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata.all_hosts.return_value = hosts
         cluster.metadata.get_replicas.return_value = hosts[2:]
         cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(replicas=[(h.host_id, 0) for h in hosts[2:]])
+        cluster.metadata._tablets.table_has_tablets.return_value = True
         cluster.metadata.token_map = Mock()
         cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
@@ -1332,6 +1338,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata._tablets.table_has_tablets.return_value = False
         cluster.metadata.token_map = Mock()
         cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         cluster.metadata.token_map.get_replicas.return_value = hosts[2:]
@@ -1482,6 +1489,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(replicas=[(h.host_id, 0) for h in hosts[2:]])
+        cluster.metadata._tablets.table_has_tablets.return_value = True
         cluster.metadata.token_map = Mock()
         cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         cluster.metadata.token_map.get_replicas.return_value = hosts[2:]
@@ -1527,6 +1535,144 @@ class TokenAwarePolicyTest(unittest.TestCase):
         list(policy.make_query_plan(None, query))
         # Should have re-fetched replicas because the ks map id changed.
         assert cluster.metadata.token_map.get_replicas.call_count == 2
+
+    def test_tablet_learned_after_vnode_cache_populated_is_used(self):
+        """
+        Regression test for tablet cache poisoning (PR #651 review threads):
+        a cache entry populated with vnode-derived replicas before a tablet
+        was known for that (keyspace, table, routing_key) must NOT
+        permanently shadow a tablet that is later learned for that exact
+        key. Reproduces:
+          (a) query a key before its tablet is known -> gets cached as
+              vnode-derived replicas (the only thing that could have
+              happened, since no tablet existed yet);
+          (b) a tablet covering that key is learned, e.g. via
+              cluster.metadata._tablets.add_tablet(...) as triggered from
+              cassandra/cluster.py on a server response;
+          (c) the same key is queried again -> the NEWLY learned
+              tablet-derived replicas must be used, not the stale cached
+              vnode ones.
+        """
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for host in hosts:
+            host.set_up()
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        # A real (not mocked) Tablets instance, starting empty -- exactly
+        # the state at cluster startup before any tablets have been
+        # learned from server responses.
+        real_tablets = Tablets({})
+        cluster.metadata._tablets = real_tablets
+
+        vnode_replicas = hosts[:2]
+        tablet_replicas = hosts[2:]
+
+        class _FakeToken:
+            """Stand-in for a real Token: get_tablet_for_key only needs `.value`."""
+            def __init__(self, value):
+                self.value = value
+
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.return_value = _FakeToken(500)
+        cluster.metadata.token_map.get_replicas.return_value = vnode_replicas
+        cluster.metadata.token_map.tokens_to_hosts_by_ks = {'ks': {}}
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'routing-key-1', keyspace='ks', table='t')
+
+        # (a) No tablet known yet for ('ks', 't') -> falls back to vnode
+        # replicas, which get cached.
+        plan1 = list(policy.make_query_plan(None, query))
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
+        assert plan1[:2] == vnode_replicas
+        assert len(policy._replica_cache) == 1
+
+        # (b) Learn a tablet for that same key, exactly as cluster.py does
+        # via cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
+        # when handling a server response (see ResponseFuture in
+        # cassandra/cluster.py). The tablet's (first_token, last_token]
+        # range covers the token (500) our fake token_class resolves to.
+        tablet = Tablet(first_token=0, last_token=1000,
+                         replicas=[(h.host_id, 0) for h in tablet_replicas])
+        real_tablets.add_tablet('ks', 't', tablet)
+
+        # (c) Querying the same key again must now use the newly learned
+        # tablet replicas -- NOT the stale cached vnode replicas.
+        plan2 = list(policy.make_query_plan(None, query))
+        assert plan2[:2] == tablet_replicas
+        assert set(plan2[:2]) != set(vnode_replicas)
+        # The vnode fallback (and therefore the cache) must not have been
+        # consulted again -- the tablet path was used instead.
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
+        # Once a table has known tablets we never write to the vnode
+        # cache for it again, so the cache should not have grown.
+        assert len(policy._replica_cache) == 1
+
+    def test_put_cached_replicas_captures_ks_map_identity_before_get_replicas(self):
+        """
+        Regression test for a TOCTOU race in _put_cached_replicas: the
+        keyspace replica-map identity used to later validate a cache entry
+        must be captured BEFORE get_replicas() resolves the replicas being
+        cached, not after. Otherwise a concurrent ALTER KEYSPACE rebuild
+        happening while get_replicas() is executing would tag stale
+        replicas with the identity of the NEW map, and they would
+        incorrectly validate as current forever afterward.
+
+        We simulate the race deterministically (no real thread timing) by
+        having get_replicas() itself perform the "concurrent" rebuild of
+        tokens_to_hosts_by_ks['ks'] as a side effect, i.e. exactly mid-way
+        through the window whose ordering item 2 is concerned with.
+        """
+        cluster, hosts = self._make_cache_cluster()
+
+        old_map = {}
+        cluster.metadata.token_map.tokens_to_hosts_by_ks['ks'] = old_map
+        new_map = {'rebuilt': True}
+
+        def get_replicas_side_effect(keyspace, token):
+            # Simulate a concurrent ALTER KEYSPACE rebuilding the
+            # per-keyspace map WHILE this call is resolving replicas for
+            # the current query.
+            cluster.metadata.token_map.tokens_to_hosts_by_ks['ks'] = new_map
+            return hosts[2:]
+
+        cluster.metadata.token_map.get_replicas.side_effect = get_replicas_side_effect
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'key1', keyspace='ks')
+        list(policy.make_query_plan(None, query))
+
+        # The identity stored alongside the cached entry must be the map
+        # that existed BEFORE get_replicas() ran (old_map), since that is
+        # the map the returned replicas were actually resolved against --
+        # not new_map, which only came into existence afterward.
+        cache_key = ('ks', None, b'key1')
+        _, stored_ks_map_ref = policy._replica_cache[cache_key]
+        assert stored_ks_map_ref is old_map
+        assert stored_ks_map_ref is not new_map
+
+        # Because the map was rebuilt during resolution, the entry must be
+        # correctly treated as stale (a cache miss) on the very next
+        # lookup -- not incorrectly validated as still current.
+        cluster.metadata.token_map.get_replicas.reset_mock(side_effect=True)
+        cluster.metadata.token_map.get_replicas.return_value = hosts[:2]
+        list(policy.make_query_plan(None, query))
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
 
     # --- LWT determinism tests ---
 
@@ -2367,6 +2513,7 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
         cluster.metadata.get_replicas.side_effect = get_replicas
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata._tablets.table_has_tablets.return_value = False
         cluster.metadata.token_map = Mock()
         cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
