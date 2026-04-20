@@ -751,15 +751,18 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                     replicas = cached
                 else:
                     token = token_map.token_class.from_key(query.routing_key)
-                    tablet = cluster_metadata._tablets.get_tablet_for_key(
-                        keyspace, query.table, token
-                    )
 
-                    if tablet is not None:
-                        replicas_mapped = {r[0] for r in tablet.replicas}
-                        child_plan = child.make_query_plan(keyspace, query)
-                        replicas = [host for host in child_plan if host.host_id in replicas_mapped]
-                    else:
+                    # Only check tablets if any exist -- avoids the method
+                    # call + dict lookup when tablets are not in use.
+                    if cluster_metadata._tablets:
+                        tablet = cluster_metadata._tablets.get_tablet_for_key(
+                            keyspace, query.table, token)
+                        if tablet is not None:
+                            replicas_mapped = {r[0] for r in tablet.replicas}
+                            child_plan = child.make_query_plan(keyspace, query)
+                            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+
+                    if not replicas:
                         try:
                             replicas = token_map.get_replicas(keyspace, token)
                         except Exception:

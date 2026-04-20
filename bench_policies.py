@@ -92,11 +92,10 @@ def make_mock_cluster(hosts):
 
     token_map.get_replicas = get_replicas
 
-    tablets_mock = Mock()
-    tablets_mock.get_tablet_for_key = Mock(return_value=None)
+    from cassandra.tablets import Tablets
     cluster.metadata = Mock()
     cluster.metadata.token_map = token_map
-    cluster.metadata._tablets = tablets_mock
+    cluster.metadata._tablets = Tablets({})
     cluster.metadata.get_replicas = lambda ks, key: get_replicas(ks, Murmur3Token.from_key(key))
     return cluster
 
@@ -132,9 +131,21 @@ def main():
 
     # Pre-generate routing keys for TokenAware
     import struct
-    routing_keys = [struct.pack(">q", i) for i in range(NUM_QUERIES)]
-    queries_with_routing = [make_query(rk) for rk in routing_keys]
+    import random
+    import numpy as np
+
+    # Unique keys (100% cache miss)
+    routing_keys_unique = [struct.pack(">q", i) for i in range(NUM_QUERIES)]
+    queries_unique = [make_query(rk) for rk in routing_keys_unique]
     queries_no_routing = [make_query(None) for _ in range(NUM_QUERIES)]
+
+    # Zipfian workload: 500 distinct keys, sampled with Zipf distribution
+    # Models real workloads where a few partitions are very hot.
+    NUM_DISTINCT_KEYS = 500
+    distinct_keys = [struct.pack(">q", i) for i in range(NUM_DISTINCT_KEYS)]
+    rng = np.random.default_rng(42)
+    zipf_indices = rng.zipf(1.2, size=NUM_QUERIES) % NUM_DISTINCT_KEYS
+    queries_zipfian = [make_query(distinct_keys[i]) for i in zipf_indices]
 
     results = {}
 
@@ -150,19 +161,33 @@ def main():
     ns = bench("RackAware", policy, hosts, queries_no_routing)
     results["RackAware"] = ns
 
-    # 3. TokenAware(DCAware)
+    # 3. TokenAware(DCAware) -- cache miss (unique keys)
     child = DCAwareRoundRobinPolicy(local_dc=LOCAL_DC, used_hosts_per_remote_dc=1)
     policy = TokenAwarePolicy(child, shuffle_replicas=False)
     policy.populate(cluster, hosts)
-    ns = bench("TokenAware(DCAware)", policy, hosts, queries_with_routing)
-    results["TokenAware(DCAware)"] = ns
+    ns = bench("TokenAware(DCAware) miss", policy, hosts, queries_unique)
+    results["TokenAware(DCAware) miss"] = ns
 
-    # 4. TokenAware(RackAware)
+    # 3b. TokenAware(DCAware) -- cache hit (zipfian keys)
+    child = DCAwareRoundRobinPolicy(local_dc=LOCAL_DC, used_hosts_per_remote_dc=1)
+    policy = TokenAwarePolicy(child, shuffle_replicas=False)
+    policy.populate(cluster, hosts)
+    ns = bench("TokenAware(DCAware) zipf", policy, hosts, queries_zipfian)
+    results["TokenAware(DCAware) zipf"] = ns
+
+    # 4. TokenAware(RackAware) -- cache miss (unique keys)
     child = RackAwareRoundRobinPolicy(local_dc=LOCAL_DC, local_rack=LOCAL_RACK, used_hosts_per_remote_dc=1)
     policy = TokenAwarePolicy(child, shuffle_replicas=False)
     policy.populate(cluster, hosts)
-    ns = bench("TokenAware(RackAware)", policy, hosts, queries_with_routing)
-    results["TokenAware(RackAware)"] = ns
+    ns = bench("TokenAware(RackAware) miss", policy, hosts, queries_unique)
+    results["TokenAware(RackAware) miss"] = ns
+
+    # 4b. TokenAware(RackAware) -- cache hit (zipfian keys)
+    child = RackAwareRoundRobinPolicy(local_dc=LOCAL_DC, local_rack=LOCAL_RACK, used_hosts_per_remote_dc=1)
+    policy = TokenAwarePolicy(child, shuffle_replicas=False)
+    policy.populate(cluster, hosts)
+    ns = bench("TokenAware(RackAware) zipf", policy, hosts, queries_zipfian)
+    results["TokenAware(RackAware) zipf"] = ns
 
     # 5. Default(DCAware)
     child = DCAwareRoundRobinPolicy(local_dc=LOCAL_DC, used_hosts_per_remote_dc=1)
@@ -178,10 +203,10 @@ def main():
     ns = bench("HostFilter(DCAware)", policy, hosts, queries_no_routing)
     results["HostFilter(DCAware)"] = ns
 
-    print(f"\n{'Policy':<30} {'ns/op':>10}")
-    print("-" * 42)
+    print(f"\n{'Policy':<36} {'ns/op':>10}")
+    print("-" * 48)
     for name, ns in results.items():
-        print(f"{name:<30} {ns:>10.0f}")
+        print(f"{name:<36} {ns:>10.0f}")
 
 
 if __name__ == "__main__":
