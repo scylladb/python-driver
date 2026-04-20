@@ -624,6 +624,131 @@ class TestRackOrDCAwareRoundRobinPolicy:
         qplan = list(policy.make_query_plan())
         assert len(qplan) == 0
 
+    def test_runtime_used_hosts_per_remote_dc_change(self, policy_specialization, constructor_args):
+        """Changing used_hosts_per_remote_dc at runtime should take effect
+        immediately without needing a repopulate or topology event."""
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:]:
+            h.set_location_info("dc2", "rack1")
+
+        policy = policy_specialization(*constructor_args, used_hosts_per_remote_dc=0)
+        policy.populate(Mock(), hosts)
+
+        # With 0, remotes are IGNORED and absent from query plan
+        for h in hosts[2:]:
+            assert policy.distance(h) == HostDistance.IGNORED
+        qplan = list(policy.make_query_plan())
+        assert set(qplan) == set(hosts[:2])
+
+        # Raise to 1 at runtime -- should take effect immediately
+        policy.used_hosts_per_remote_dc = 1
+        assert policy.distance(hosts[2]) == HostDistance.REMOTE or \
+               policy.distance(hosts[3]) == HostDistance.REMOTE
+        qplan = list(policy.make_query_plan())
+        assert len(qplan) == 3  # 2 local + 1 remote
+
+        # Raise to 2 -- both remotes visible
+        policy.used_hosts_per_remote_dc = 2
+        qplan = list(policy.make_query_plan())
+        assert set(qplan) == set(hosts)
+
+        # Drop back to 0 -- remotes disappear
+        policy.used_hosts_per_remote_dc = 0
+        for h in hosts[2:]:
+            assert policy.distance(h) == HostDistance.IGNORED
+        qplan = list(policy.make_query_plan())
+        assert set(qplan) == set(hosts[:2])
+
+    def test_runtime_local_dc_change(self, policy_specialization, constructor_args):
+        """Changing local_dc at runtime should take effect immediately --
+        distance()/make_query_plan() must not be computed against a stale
+        _remote_hosts (and, for RackAwareRoundRobinPolicy, _non_local_rack_hosts)
+        cache left over from before the reassignment."""
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:]:
+            h.set_location_info("dc2", "rack1")
+
+        policy = policy_specialization(*constructor_args, used_hosts_per_remote_dc=2)
+        policy.populate(Mock(), hosts)
+
+        # dc1 starts out local: dc1 hosts are LOCAL(_RACK), dc2 hosts are REMOTE
+        assert policy.local_dc == "dc1"
+        for h in hosts[:2]:
+            assert policy.distance(h) in (HostDistance.LOCAL, HostDistance.LOCAL_RACK)
+        for h in hosts[2:]:
+            assert policy.distance(h) == HostDistance.REMOTE
+        qplan = list(policy.make_query_plan())
+        assert set(qplan[:2]) == set(hosts[:2])
+        assert set(qplan[2:]) == set(hosts[2:])
+
+        # Reassign local_dc at runtime -- should take effect immediately,
+        # without needing a repopulate or topology event to refresh caches.
+        policy.local_dc = "dc2"
+        assert policy.local_dc == "dc2"
+        for h in hosts[2:]:
+            assert policy.distance(h) in (HostDistance.LOCAL, HostDistance.LOCAL_RACK)
+        for h in hosts[:2]:
+            assert policy.distance(h) == HostDistance.REMOTE
+        qplan = list(policy.make_query_plan())
+        assert set(qplan[:2]) == set(hosts[2:])
+        assert set(qplan[2:]) == set(hosts[:2])
+
+        # Setting to the same value again should be a no-op (no crash, and
+        # caches remain correct).
+        policy.local_dc = "dc2"
+        assert policy.local_dc == "dc2"
+        for h in hosts[2:]:
+            assert policy.distance(h) in (HostDistance.LOCAL, HostDistance.LOCAL_RACK)
+
+    def test_modification_during_generation_exclusion(self, policy_specialization, constructor_args):
+        """Topology changes to remote hosts during local iteration should be
+        visible when the generator reaches the remote phase, for the exclusion
+        path as well as the normal path."""
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:]:
+            h.set_location_info("dc2", "rack1")
+
+        policy = policy_specialization(*constructor_args, used_hosts_per_remote_dc=3)
+        policy.populate(Mock(), hosts)
+
+        new_host = Host(DefaultEndPoint(4), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        new_host.set_location_info("dc2", "rack1")
+
+        # -- make_query_plan: add remote after starting local iteration --
+        plan = policy.make_query_plan()
+        next(plan)  # consume one local
+        policy.on_up(new_host)
+        remaining = list(plan)
+        # new_host should appear because _remote_hosts is read late
+        assert new_host in remaining
+
+        # -- make_query_plan: remove remote after starting local --
+        plan = policy.make_query_plan()
+        next(plan)
+        policy.on_down(new_host)
+        remaining = list(plan)
+        assert new_host not in remaining
+
+        # -- make_query_plan_with_exclusion: add remote after starting local --
+        plan = policy.make_query_plan_with_exclusion(excluded={hosts[0]})
+        next(plan)  # consume one local
+        policy.on_up(new_host)
+        remaining = list(plan)
+        assert new_host in remaining
+
+        # -- make_query_plan_with_exclusion: remove remote after starting local --
+        plan = policy.make_query_plan_with_exclusion(excluded={hosts[0]})
+        next(plan)
+        policy.on_down(new_host)
+        remaining = list(plan)
+        assert new_host not in remaining
+
 class DCAwareRoundRobinPolicyTest(unittest.TestCase):
 
     def test_default_dc(self):
@@ -656,6 +781,76 @@ class DCAwareRoundRobinPolicyTest(unittest.TestCase):
         assert not policy.local_dc
         policy.on_add(host_remote)
         assert policy.local_dc
+
+    def test_local_dc_auto_detect_refreshes_remote_hosts(self):
+        """The auto-detect path (on_up assigning self.local_dc from the
+        first host with a datacenter) goes through the local_dc property
+        setter and must correctly refresh _remote_hosts, without needing a
+        second, separate topology event."""
+        host_local = Host(DefaultEndPoint(1), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host_local.set_location_info("dc1", "rack1")
+        host_remote = Host(DefaultEndPoint(2), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host_remote.set_location_info("dc2", "rack1")
+
+        policy = DCAwareRoundRobinPolicy(used_hosts_per_remote_dc=1)
+        policy.populate(Mock(), [])
+        assert not policy.local_dc
+
+        # Auto-detects dc1 as local via on_up/on_add (host_local is added
+        # first, same as the "contact DC first" case in test_default_dc).
+        policy.on_add(host_local)
+        policy.on_add(host_remote)
+
+        assert policy.local_dc == "dc1"
+        assert policy.distance(host_local) == HostDistance.LOCAL
+        assert policy.distance(host_remote) == HostDistance.REMOTE
+        qplan = list(policy.make_query_plan())
+        assert qplan == [host_local, host_remote]
+
+
+class RackAwareRoundRobinPolicyTest(unittest.TestCase):
+
+    def test_runtime_local_rack_change(self):
+        """Changing local_rack at runtime should take effect immediately --
+        _non_local_rack_hosts must not remain stale from before the
+        reassignment."""
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:]:
+            h.set_location_info("dc1", "rack2")
+
+        policy = RackAwareRoundRobinPolicy("dc1", "rack1")
+        policy.populate(Mock(), hosts)
+
+        # rack1 starts out local: rack1 hosts are LOCAL_RACK, rack2 hosts are LOCAL
+        assert policy.local_rack == "rack1"
+        for h in hosts[:2]:
+            assert policy.distance(h) == HostDistance.LOCAL_RACK
+        for h in hosts[2:]:
+            assert policy.distance(h) == HostDistance.LOCAL
+        qplan = list(policy.make_query_plan())
+        assert set(qplan[:2]) == set(hosts[:2])
+        assert set(qplan[2:]) == set(hosts[2:])
+
+        # Reassign local_rack at runtime -- should take effect immediately.
+        policy.local_rack = "rack2"
+        assert policy.local_rack == "rack2"
+        for h in hosts[2:]:
+            assert policy.distance(h) == HostDistance.LOCAL_RACK
+        for h in hosts[:2]:
+            assert policy.distance(h) == HostDistance.LOCAL
+        qplan = list(policy.make_query_plan())
+        assert set(qplan[:2]) == set(hosts[2:])
+        assert set(qplan[2:]) == set(hosts[:2])
+
+        # Setting to the same value again should be a no-op (no crash, and
+        # caches remain correct).
+        policy.local_rack = "rack2"
+        assert policy.local_rack == "rack2"
+        for h in hosts[2:]:
+            assert policy.distance(h) == HostDistance.LOCAL_RACK
+
 
 class TokenAwarePolicyTest(unittest.TestCase):
 
