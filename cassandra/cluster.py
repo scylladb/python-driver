@@ -4992,6 +4992,13 @@ class ResponseFuture(object):
             self._start_timer()
 
     def _make_query_plan(self):
+        # Clear any tablet stashed by an earlier, unrelated execution of this
+        # reused statement before deciding how to plan this one -- both the
+        # explicit-host branch below and a non-token-aware load balancing
+        # policy never repopulate it themselves.
+        if self.query is not None:
+            self.query._tablet = None
+
         # set the query_plan according to the load balancing policy,
         # or to the explicit host target if set
         if self._host:
@@ -5135,11 +5142,14 @@ class ResponseFuture(object):
             # TODO get connectTimeout from cluster settings
             if self.query:
                 # Pass the ring token computed once for this request so the pool
-                # can select the shard without re-hashing the routing key.
+                # can select the shard without re-hashing the routing key, and
+                # the tablet found during query planning so the pool can skip a
+                # redundant lookup in the tablet map.
                 connection, request_id = pool.borrow_connection(
                     timeout=2.0, routing_key=self.query.routing_key,
                     keyspace=self.query.keyspace, table=self.query.table,
-                    routing_token=self._routing_token)
+                    routing_token=self._routing_token,
+                    tablet=getattr(self.query, '_tablet', None))
             else:
                 connection, request_id = pool.borrow_connection(timeout=2.0)
             self._connection = connection
