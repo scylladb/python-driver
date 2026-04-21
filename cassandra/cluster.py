@@ -5114,11 +5114,14 @@ class ResponseFuture(object):
             # TODO get connectTimeout from cluster settings
             if self.query:
                 # Pass the ring token computed once for this request so the pool
-                # can select the shard without re-hashing the routing key.
+                # can select the shard without re-hashing the routing key, and
+                # the tablet found during query planning so the pool can skip a
+                # redundant lookup in the tablet map.
                 connection, request_id = pool.borrow_connection(
                     timeout=2.0, routing_key=self.query.routing_key,
                     keyspace=self.query.keyspace, table=self.query.table,
-                    routing_token=self._routing_token)
+                    routing_token=self._routing_token,
+                    tablet=getattr(self.query, '_tablet', None))
             else:
                 connection, request_id = pool.borrow_connection(timeout=2.0)
             self._connection = connection
