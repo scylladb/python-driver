@@ -583,7 +583,7 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
 
         # make sure we're testing all non primitive data types in the future
         if set(COLLECTION_TYPES) != set(['tuple', 'list', 'map', 'set']):
-            raise NotImplemented('Missing datatype not implemented: {}'.format(
+            raise NotImplementedError('Missing datatype not implemented: {}'.format(
                 set(COLLECTION_TYPES) - set(['tuple', 'list', 'map', 'set'])
             ))
 
