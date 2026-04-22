@@ -1497,7 +1497,7 @@ class Cluster(object):
         self.executor = self._create_thread_pool_executor(max_workers=executor_threads)
         self.scheduler = _Scheduler(self.executor)
 
-        self._lock = RLock()
+        self._lock = Lock()
 
         if self.metrics_enabled:
             from cassandra.metrics import Metrics
@@ -1746,6 +1746,7 @@ class Cluster(object):
         established or attempted. Default is `False`, which means it will return when the first
         successful connection is established. Remaining pools are added asynchronously.
         """
+        connect_exc = None
         with self._lock:
             if self.is_shutdown:
                 raise DriverException("Cluster is already shut down")
@@ -1761,21 +1762,27 @@ class Cluster(object):
                     self._populate_hosts()
 
                     log.debug("Control connection created")
-                except Exception:
+                except Exception as exc:
                     log.exception("Control connection failed to connect, "
                                   "shutting down Cluster:")
-                    self.shutdown()
-                    raise
+                    connect_exc = exc
 
-                self.profile_manager.check_supported()  # todo: rename this method
+                if connect_exc is None:
+                    self.profile_manager.check_supported()  # todo: rename this method
 
-                if self.idle_heartbeat_interval:
-                    self._idle_heartbeat = ConnectionHeartbeat(
-                        self.idle_heartbeat_interval,
-                        self.get_connection_holders,
-                        timeout=self.idle_heartbeat_timeout
-                    )
-                self._is_setup = True
+                    if self.idle_heartbeat_interval:
+                        self._idle_heartbeat = ConnectionHeartbeat(
+                            self.idle_heartbeat_interval,
+                            self.get_connection_holders,
+                            timeout=self.idle_heartbeat_timeout
+                        )
+                    self._is_setup = True
+
+        if connect_exc is not None:
+            # shutdown() acquires self._lock, so must be called after
+            # releasing it above to avoid deadlock.
+            self.shutdown()
+            raise connect_exc
 
         session = self._new_session(keyspace)
         if wait_for_all_pools:
@@ -3540,11 +3547,11 @@ class ControlConnection(object):
         self._token_meta_enabled = token_meta_enabled
         self._schema_meta_page_size = schema_meta_page_size
 
-        self._lock = RLock()
+        self._lock = Lock()
         self._schema_agreement_lock = Lock()
 
         self._reconnection_handler = None
-        self._reconnection_lock = RLock()
+        self._reconnection_lock = Lock()
 
         self._event_schedule_times = {}
 
