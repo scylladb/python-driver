@@ -4975,16 +4975,21 @@ class ResponseFuture(object):
             # -- prevents case where _final_result is set, then a callback is
             # added and executed on the spot, then executed again as a
             # registered callback
-            to_call = tuple(
-                partial(fn, response, *args, **kwargs)
-                for (fn, args, kwargs) in self._callbacks
-            )
+            callbacks = self._callbacks
+            if callbacks:
+                to_call = tuple(
+                    partial(fn, response, *args, **kwargs)
+                    for (fn, args, kwargs) in callbacks
+                )
+            else:
+                to_call = None
 
         self._event.set()
 
         # apply each callback
-        for callback_partial in to_call:
-            callback_partial()
+        if to_call:
+            for callback_partial in to_call:
+                callback_partial()
 
     def _set_final_exception(self, response):
         self._cancel_timer()
@@ -4997,15 +5002,20 @@ class ResponseFuture(object):
             # prevents case where _final_exception is set, then an errback is
             # added and executed on the spot, then executed again as a
             # registered errback
-            to_call = tuple(
-                partial(fn, response, *args, **kwargs)
-                for (fn, args, kwargs) in self._errbacks
-            )
+            errbacks = self._errbacks
+            if errbacks:
+                to_call = tuple(
+                    partial(fn, response, *args, **kwargs)
+                    for (fn, args, kwargs) in errbacks
+                )
+            else:
+                to_call = None
         self._event.set()
 
         # apply each callback
-        for callback_partial in to_call:
-            callback_partial()
+        if to_call:
+            for callback_partial in to_call:
+                callback_partial()
 
     def _handle_retry_decision(self, retry_decision, response, host):
 
