@@ -4621,7 +4621,10 @@ class ResponseFuture(object):
         try:
             # TODO get connectTimeout from cluster settings
             if self.query:
-                connection, request_id = pool.borrow_connection(timeout=2.0, routing_key=self.query.routing_key, keyspace=self.query.keyspace, table=self.query.table)
+                connection, request_id = pool.borrow_connection(
+                    timeout=2.0, routing_key=self.query.routing_key,
+                    keyspace=self.query.keyspace, table=self.query.table,
+                    tablet=getattr(self.query, '_tablet', None))
             else:
                 connection, request_id = pool.borrow_connection(timeout=2.0)
             self._connection = connection
