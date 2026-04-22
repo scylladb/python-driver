@@ -1281,14 +1281,14 @@ class ClusterTests(unittest.TestCase):
                 "({i}, 'a{i}{i}', {i}{i}, {i}{i}, textAsBlob('b{i}{i}'))".format(i=i))
 
         nc_results = nc_session.execute("SELECT * FROM compact_table")
-        assert set(nc_results.current_rows) == {(1, u'a1', 11, 11, 'b1'),
-         (1, u'a11', 11, 11, 'b11'),
-         (2, u'a2', 22, 22, 'b2'),
-         (2, u'a22', 22, 22, 'b22'),
-         (3, u'a3', 33, 33, 'b3'),
-         (3, u'a33', 33, 33, 'b33'),
-         (4, u'a4', 44, 44, 'b4'),
-         (4, u'a44', 44, 44, 'b44')}
+        assert set(nc_results.current_rows) == {(1, 'a1', 11, 11, 'b1'),
+         (1, 'a11', 11, 11, 'b11'),
+         (2, 'a2', 22, 22, 'b2'),
+         (2, 'a22', 22, 22, 'b22'),
+         (3, 'a3', 33, 33, 'b3'),
+         (3, 'a33', 33, 33, 'b33'),
+         (4, 'a4', 44, 44, 'b4'),
+         (4, 'a44', 44, 44, 'b44')}
 
         results = session.execute("SELECT * FROM compact_table")
         assert set(results.current_rows) == {(1, 11, 11),

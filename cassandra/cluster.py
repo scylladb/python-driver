@@ -16,7 +16,6 @@
 This module houses the main classes you will interact with,
 :class:`.Cluster` and :class:`.Session`.
 """
-from __future__ import absolute_import
 
 import atexit
 import datetime
@@ -110,10 +109,7 @@ except (ImportError, AttributeError):
     # TODO: remove it when eventlet issue would be fixed
     EventletConnection = None
 
-try:
-    from weakref import WeakSet
-except ImportError:
-    from cassandra.util import WeakSet  # NOQA
+from weakref import WeakSet
 
 def _is_gevent_monkey_patched():
     if 'gevent.monkey' not in sys.modules:
@@ -182,12 +178,6 @@ conn_fns = (_try_gevent_import, _try_eventlet_import, _try_libev_import, _try_as
 if not conn_class:
     raise DependencyException("Exception loading connection class dependencies", excs)
 DefaultConnection = conn_class
-
-# Forces load of utf8 encoding module to avoid deadlock that occurs
-# if code that is being imported tries to import the module in a seperate
-# thread.
-# See http://bugs.python.org/issue10923
-"".encode('utf8')
 
 log = logging.getLogger(__name__)
 
@@ -1547,7 +1537,7 @@ class Cluster(object):
         Create a ThreadPoolExecutor for the cluster. In most cases, the built-in
         `concurrent.futures.ThreadPoolExecutor` is used.
 
-        Python 3.7+ and Eventlet cause the `concurrent.futures.ThreadPoolExecutor`
+        Eventlet causes the `concurrent.futures.ThreadPoolExecutor`
         to hang indefinitely. In that case, the user needs to have the `futurist`
         package so we can use the `futurist.GreenThreadPoolExecutor` class instead.
 
@@ -1555,26 +1545,25 @@ class Cluster(object):
         :return: A ThreadPoolExecutor instance.
         """
         tpe_class = ThreadPoolExecutor
-        if sys.version_info[0] >= 3 and sys.version_info[1] >= 7:
-            try:
-                from cassandra.io.eventletreactor import EventletConnection
-                is_eventlet = issubclass(self.connection_class, EventletConnection)
-            except:
-                # Eventlet is not available or can't be detected
-                return tpe_class(**kwargs)
+        try:
+            from cassandra.io.eventletreactor import EventletConnection
+            is_eventlet = issubclass(self.connection_class, EventletConnection)
+        except:
+            # Eventlet is not available or can't be detected
+            return tpe_class(**kwargs)
 
-            if is_eventlet:
-                try:
-                    from futurist import GreenThreadPoolExecutor
-                    tpe_class = GreenThreadPoolExecutor
-                except ImportError:
-                    # futurist is not available
-                    raise ImportError(
-                        ("Python 3.7+ and Eventlet cause the `concurrent.futures.ThreadPoolExecutor` "
-                         "to hang indefinitely. If you want to use the Eventlet reactor, you "
-                         "need to install the `futurist` package to allow the driver to use "
-                         "the GreenThreadPoolExecutor. See https://github.com/eventlet/eventlet/issues/508 "
-                         "for more details."))
+        if is_eventlet:
+            try:
+                from futurist import GreenThreadPoolExecutor
+                tpe_class = GreenThreadPoolExecutor
+            except ImportError:
+                # futurist is not available
+                raise ImportError(
+                    ("Eventlet causes the `concurrent.futures.ThreadPoolExecutor` "
+                     "to hang indefinitely. If you want to use the Eventlet reactor, you "
+                     "need to install the `futurist` package to allow the driver to use "
+                     "the GreenThreadPoolExecutor. See https://github.com/eventlet/eventlet/issues/508 "
+                     "for more details."))
 
         return tpe_class(**kwargs)
 
@@ -5397,10 +5386,8 @@ class ResultSet(object):
         self._enter_list_mode("index operator")
         return self._current_rows[i]
 
-    def __nonzero__(self):
+    def __bool__(self):
         return bool(self._current_rows)
-
-    __bool__ = __nonzero__
 
     def get_query_trace(self, max_wait_sec=None):
         """
