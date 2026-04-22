@@ -2751,8 +2751,9 @@ class Session(object):
             ...     log.exception("Operation failed:")
 
         """
-        custom_payload = custom_payload if custom_payload else {}
         if execute_as:
+            if not custom_payload:
+                custom_payload = {}
             custom_payload[_proxy_execute_key] = execute_as.encode()
 
         future = self._create_response_future(
@@ -3018,8 +3019,13 @@ class Session(object):
                                    continuous_paging_options)
 
         message.tracing = trace
-        message.update_custom_payload(query.custom_payload)
-        message.update_custom_payload(custom_payload)
+        # Guard: skip method calls when payloads are None (common case).
+        # update_custom_payload() already has an internal 'if other:' guard,
+        # but avoiding the function-call overhead entirely saves ~100-200ns.
+        if query.custom_payload:
+            message.update_custom_payload(query.custom_payload)
+        if custom_payload:
+            message.update_custom_payload(custom_payload)
         message.allow_beta_protocol_version = self.cluster.allow_beta_protocol_version
 
         spec_exec_plan = spec_exec_policy.new_plan(query.keyspace or self.keyspace, query) if query.is_idempotent and spec_exec_policy else None
