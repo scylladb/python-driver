@@ -68,7 +68,7 @@ class ControlConnectionTests(unittest.TestCase):
         self.session = self.cluster.connect()
         self.session.execute("""
             CREATE KEYSPACE keyspacetodrop
-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
+            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
             """)
         self.session.set_keyspace("keyspacetodrop")
         self.session.execute("CREATE TYPE user (age int, name text)")

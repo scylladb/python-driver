@@ -230,8 +230,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
         assert ksmeta.name == self.keyspace_name
         assert ksmeta.durable_writes
-        assert ksmeta.replication_strategy.name == 'SimpleStrategy'
-        assert ksmeta.replication_strategy.replication_factor == 1
+        assert ksmeta.replication_strategy.name == 'NetworkTopologyStrategy'
+        assert ksmeta.replication_strategy.dc_replication_factors["dc1"] == 1
 
         assert self.function_table_name in ksmeta.tables
         tablemeta = ksmeta.tables[self.function_table_name]
@@ -448,6 +448,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         tablemeta = self.get_table_metadata()
         self.check_create_statement(tablemeta, create_statement)
 
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Counters are not yet supported with tablets',
+                             oss_scylla_version="7.0", ent_scylla_version="2026.1")
     def test_counter(self):
         create_statement = (
             "CREATE TABLE {keyspace}.{table} ("
@@ -601,7 +603,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         assert "new_keyspace" not in cluster2.metadata.keyspaces
 
         # Cluster metadata modification
-        self.session.execute("CREATE KEYSPACE new_keyspace WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}")
+        self.session.execute("CREATE KEYSPACE new_keyspace WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}")
         assert "new_keyspace" not in cluster2.metadata.keyspaces
 
         cluster2.refresh_schema_metadata()
@@ -722,6 +724,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         cluster2.shutdown()
 
     @greaterthanorequalcass30
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
+                             oss_scylla_version="7.0", ent_scylla_version="2026.1")
     def test_refresh_metadata_for_mv(self):
         """
         test for synchronously refreshing materialized view metadata
@@ -931,6 +935,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
     @greaterthanorequalcass30
     @requires_collection_indexes
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
+                             oss_scylla_version="7.0", ent_scylla_version="2026.1")
     def test_multiple_indices(self):
         """
         test multiple indices on the same column.
@@ -964,6 +970,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         assert index_2.keyspace_name == "schemametadatatests"
 
     @greaterthanorequalcass30
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
+                             oss_scylla_version="7.0", ent_scylla_version="2026.1")
     def test_table_extensions(self):
         s = self.session
         ks = self.keyspace_name
@@ -1077,7 +1085,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
         for ks in keyspaces:
             self.session.execute(
-                f"CREATE KEYSPACE IF NOT EXISTS {ks} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 3 }}"
+                f"CREATE KEYSPACE IF NOT EXISTS {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }}"
             )
 
         self.cluster.schema_metadata_page_size = 2000
@@ -1138,7 +1146,7 @@ class TestCodeCoverage(unittest.TestCase):
 
         session.execute("""
             CREATE KEYSPACE export_udts
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
             AND durable_writes = true;
         """)
         session.execute("""
@@ -1162,7 +1170,7 @@ class TestCodeCoverage(unittest.TestCase):
             addresses map<text, frozen<address>>)
         """)
 
-        expected_prefix = """CREATE KEYSPACE export_udts WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}  AND durable_writes = true;
+        expected_prefix = """CREATE KEYSPACE export_udts WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}  AND durable_writes = true;
 
 CREATE TYPE export_udts.street (
     street_number int,
@@ -1212,7 +1220,7 @@ CREATE TABLE export_udts.users (
         session.execute("DROP KEYSPACE IF EXISTS {0}".format(ksname))
         session.execute("""
             CREATE KEYSPACE "%s"
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
             """ % (ksname,))
         session.execute("""
             CREATE TABLE "%s"."%s" (
@@ -1256,7 +1264,7 @@ CREATE TABLE export_udts.users (
 
         ddl = '''
             CREATE KEYSPACE %s
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}'''
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}'''
         with pytest.raises(AlreadyExists):
             session.execute(ddl % ksname)
 
@@ -1387,7 +1395,7 @@ class KeyspaceAlterMetadata(unittest.TestCase):
         self.session = self.cluster.connect()
         name = self._testMethodName.lower()
         crt_ks = '''
-                CREATE KEYSPACE %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1} AND durable_writes = true''' % name
+                CREATE KEYSPACE %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND durable_writes = true''' % name
         self.session.execute(crt_ks)
 
     def tearDown(self):
@@ -1437,7 +1445,7 @@ class IndexMapTests(unittest.TestCase):
             cls.session.execute(
                 """
                 CREATE KEYSPACE %s
-                WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'};
+                WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'};
                 """ % cls.keyspace_name)
             cls.session.set_keyspace(cls.keyspace_name)
         except Exception:
@@ -1540,7 +1548,7 @@ class FunctionTest(unittest.TestCase):
             cls.cluster = TestCluster()
             cls.keyspace_name = cls.__name__.lower()
             cls.session = cls.cluster.connect()
-            cls.session.execute("CREATE KEYSPACE IF NOT EXISTS %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}" % cls.keyspace_name)
+            cls.session.execute("CREATE KEYSPACE IF NOT EXISTS %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}" % cls.keyspace_name)
             cls.session.set_keyspace(cls.keyspace_name)
             cls.keyspace_function_meta = cls.cluster.metadata.keyspaces[cls.keyspace_name].functions
             cls.keyspace_aggregate_meta = cls.cluster.metadata.keyspaces[cls.keyspace_name].aggregates
@@ -2007,7 +2015,7 @@ class BadMetaTest(unittest.TestCase):
         cls.cluster = TestCluster()
         cls.keyspace_name = cls.__name__.lower()
         cls.session = cls.cluster.connect()
-        cls.session.execute("CREATE KEYSPACE %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}" % cls.keyspace_name)
+        cls.session.execute("CREATE KEYSPACE %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}" % cls.keyspace_name)
         cls.session.set_keyspace(cls.keyspace_name)
         connection = cls.cluster.control_connection._connection
 

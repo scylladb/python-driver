@@ -62,7 +62,7 @@ class PreparedStatementTests(unittest.TestCase):
         self.session.execute(
             """
             CREATE KEYSPACE preparedtests
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
             """)
 
         self.session.set_keyspace("preparedtests")
@@ -437,7 +437,7 @@ class PreparedStatementTests(unittest.TestCase):
         keyspace = "test_fail_if_different_query_id_on_reprepare"
         self.session.execute(
             "CREATE KEYSPACE IF NOT EXISTS {} WITH replication = "
-            "{{'class': 'SimpleStrategy', 'replication_factor': 1}}".format(keyspace)
+            "{{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}".format(keyspace)
         )
         self.session.execute("CREATE TABLE IF NOT EXISTS {}.foo(k int PRIMARY KEY)".format(keyspace))
         prepared = self.session.prepare("SELECT * FROM {}.foo WHERE k=?".format(keyspace))

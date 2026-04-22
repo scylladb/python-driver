@@ -89,7 +89,7 @@ class TestShardAwareIntegration(unittest.TestCase):
         self.session.execute(
             """
             CREATE KEYSPACE preparedtests
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'} AND tablets = {'enabled': false}
             """)
 
         self.session.execute("USE preparedtests")
@@ -174,6 +174,8 @@ class TestShardAwareIntegration(unittest.TestCase):
 
         using the traces to validate that all the action been executed on the the same shard.
         this test is using prepared SELECT statements for this validation
+
+        Requires tablets to be disabled to ensure shard consistency.
         """
 
         self.create_ks_and_cf()
