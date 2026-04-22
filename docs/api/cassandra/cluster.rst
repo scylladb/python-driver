@@ -78,6 +78,8 @@ Clusters and Sessions
 
    .. automethod:: connect
 
+   .. automethod:: connect_to_control_host
+
    .. automethod:: shutdown
 
    .. automethod:: register_user_type
