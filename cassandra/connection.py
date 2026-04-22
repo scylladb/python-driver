@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from __future__ import absolute_import  # to enable import io from stdlib
-from collections import defaultdict, deque
+from collections import defaultdict, deque, namedtuple, OrderedDict
 import errno
 from functools import wraps, partial, total_ordering
 from heapq import heappush, heappop
@@ -22,7 +22,7 @@ import logging
 import socket
 import struct
 import sys
-from threading import Thread, Event, RLock, Condition
+from threading import Thread, Event, Lock, RLock, Condition
 import time
 import ssl
 import uuid
@@ -163,6 +163,15 @@ class EndPoint(object):
         """
         return socket.AF_UNSPEC
 
+    @property
+    def tls_session_cache_key(self):
+        """
+        Returns the cache key components for TLS session caching.
+        This is a tuple that uniquely identifies this endpoint for TLS session purposes.
+        Subclasses may override this to include additional components (e.g., SNI server name).
+        """
+        return (self.address, self.port)
+
     def resolve(self):
         """
         Resolve the endpoint to an address/port. This is called
@@ -209,6 +218,10 @@ class DefaultEndPoint(EndPoint):
 
     def resolve(self):
         return self._address, self._port
+
+    @property
+    def tls_session_cache_key(self):
+        return (self.address, self.port)
 
     def __eq__(self, other):
         return isinstance(other, DefaultEndPoint) and \
@@ -276,6 +289,14 @@ class SniEndPoint(EndPoint):
     @property
     def ssl_options(self):
         return self._ssl_options
+
+    @property
+    def tls_session_cache_key(self):
+        """
+        Returns the cache key including server_name for SNI endpoints.
+        This prevents cache collisions when multiple SNI endpoints use the same proxy.
+        """
+        return (self.address, self.port, self._server_name)
 
     def resolve(self):
         try:
@@ -395,6 +416,14 @@ class UnixSocketEndPoint(EndPoint):
     def socket_family(self):
         return socket.AF_UNIX
 
+    @property
+    def tls_session_cache_key(self):
+        """
+        Returns the cache key for Unix socket endpoints.
+        Since Unix sockets don't have a port, only the path is used.
+        """
+        return (self._unix_socket_path,)
+
     def resolve(self):
         return self.address, None
 
@@ -454,6 +483,14 @@ class ClientRoutesEndPoint(EndPoint):
     @property
     def host_id(self) -> uuid.UUID:
         return self._host_id
+
+    @property
+    def tls_session_cache_key(self):
+        """
+        Returns the cache key for Client Routes endpoints.
+        Uses host_id and original address for uniqueness.
+        """
+        return (str(self._host_id), self._original_address, self._original_port)
 
     def resolve(self) -> Tuple[str, int]:
         """
@@ -783,6 +820,132 @@ class ShardAwarePortGenerator:
 DefaultShardAwarePortGenerator = ShardAwarePortGenerator(DEFAULT_LOCAL_PORT_LOW, DEFAULT_LOCAL_PORT_HIGH)
 
 
+_SessionCacheEntry = namedtuple('_SessionCacheEntry', ['session', 'timestamp'])
+
+
+class SSLSessionCache(object):
+    """
+    A thread-safe cache of TLS session objects, keyed by connection TLS
+    identity, with LRU eviction and TTL expiration.
+
+    When TLS is enabled, the driver stores the negotiated session after each
+    successful handshake and reuses it for subsequent connections to the same
+    host, enabling TLS session resumption (tickets / PSK) without any extra
+    configuration.
+
+    This cache is created automatically by :class:`.Cluster` when
+    ``ssl_context`` or ``ssl_options`` are set.  Pass ``ssl_session_cache=None``
+    to :class:`.Cluster` to opt out.
+
+    Works with both the stdlib ``ssl`` module (asyncore, libev, gevent, asyncio
+    reactors) and PyOpenSSL (Twisted and Eventlet reactors).
+
+    TLS session resumption works with both TLS 1.2 and TLS 1.3:
+
+    - TLS 1.2: Session IDs (RFC 5246) and optionally Session Tickets (RFC 5077)
+    - TLS 1.3: Session Tickets (RFC 8446)
+    """
+
+    # Cleanup expired sessions every N set() calls
+    _EXPIRY_CLEANUP_INTERVAL = 100
+
+    def __init__(self, max_size=100, ttl=3600):
+        """
+        Initialize the TLS session cache.
+
+        :param max_size: Maximum number of sessions to cache.  Must be at
+            least ``1``.  When full, the least recently used entry is evicted.
+            Default: ``100``.
+        :param ttl: Time-to-live for cached sessions in seconds.  Must be
+            greater than ``0``.  Expired entries are lazily removed on access
+            and periodically during :meth:`set`.  Default: ``3600`` (one hour).
+        """
+        if max_size < 1:
+            raise ValueError("max_size must be >= 1, got %r" % (max_size,))
+        if ttl <= 0:
+            raise ValueError("ttl must be > 0, got %r" % (ttl,))
+        self._sessions = OrderedDict()
+        self._lock = Lock()
+        self._max_size = max_size
+        self._ttl = ttl
+        self._operation_count = 0
+
+    @property
+    def max_size(self):
+        return self._max_size
+
+    @property
+    def ttl(self):
+        return self._ttl
+
+    def get(self, key):
+        """
+        Return the cached TLS session for *key*, or ``None`` if none
+        is stored or if the entry has expired.  Accessing an entry
+        marks it as recently used.
+        """
+        with self._lock:
+            entry = self._sessions.get(key)
+            if entry is None:
+                return None
+            if time.time() - entry.timestamp > self._ttl:
+                del self._sessions[key]
+                return None
+            # Mark as recently used
+            self._sessions.move_to_end(key)
+            return entry.session
+
+    def set(self, key, session):
+        """
+        Store *session* for *key*.  ``None`` sessions are silently ignored.
+        """
+        if session is None:
+            return
+
+        current_time = time.time()
+        with self._lock:
+            self._operation_count += 1
+            if self._operation_count >= self._EXPIRY_CLEANUP_INTERVAL:
+                self._operation_count = 0
+                self._clear_expired_unlocked(current_time)
+
+            if key in self._sessions:
+                self._sessions[key] = _SessionCacheEntry(session, current_time)
+                self._sessions.move_to_end(key)
+                return
+
+            if len(self._sessions) >= self._max_size:
+                self._sessions.popitem(last=False)
+
+            self._sessions[key] = _SessionCacheEntry(session, current_time)
+
+    def clear(self):
+        """Clear all sessions from the cache."""
+        with self._lock:
+            self._sessions.clear()
+
+    def clear_expired(self):
+        """Remove all expired sessions from the cache."""
+        with self._lock:
+            self._clear_expired_unlocked()
+
+    def size(self):
+        """Return the current number of cached sessions."""
+        with self._lock:
+            return len(self._sessions)
+
+    def _clear_expired_unlocked(self, current_time=None):
+        """Remove all expired sessions (must be called with lock held)."""
+        if current_time is None:
+            current_time = time.time()
+        expired_keys = [
+            key for key, entry in self._sessions.items()
+            if current_time - entry.timestamp > self._ttl
+        ]
+        for key in expired_keys:
+            del self._sessions[key]
+
+
 class Connection(object):
 
     CALLBACK_ERR_THREAD_THRESHOLD = 100
@@ -803,6 +966,7 @@ class Connection(object):
     endpoint = None
     ssl_options = None
     ssl_context = None
+    _ssl_session_cache = None
     last_error = None
 
     # The current number of operations that are in flight. More precisely,
@@ -880,13 +1044,15 @@ class Connection(object):
                  cql_version=None, protocol_version=ProtocolVersion.MAX_SUPPORTED, is_control_connection=False,
                  user_type_map=None, connect_timeout=None, allow_beta_protocol_version=False, no_compact=False,
                  ssl_context=None, owning_pool=None, shard_id=None, total_shards=None,
-                 on_orphaned_stream_released=None, application_info: Optional[ApplicationInfoBase] = None):
+                 on_orphaned_stream_released=None, application_info: Optional[ApplicationInfoBase] = None,
+                 ssl_session_cache=None):
         # TODO next major rename host to endpoint and remove port kwarg.
         self.endpoint = host if isinstance(host, EndPoint) else DefaultEndPoint(host, port)
 
         self.authenticator = authenticator
         self.ssl_options = ssl_options.copy() if ssl_options else {}
         self.ssl_context = ssl_context
+        self._ssl_session_cache = ssl_session_cache
         self.sockopts = sockopts
         self.compression = compression
         self.cql_version = cql_version
@@ -1029,7 +1195,25 @@ class Connection(object):
             server_hostname = self.endpoint.address
             opts['server_hostname'] = server_hostname
 
-        return self.ssl_context.wrap_socket(self._socket, **opts)
+        ssl_sock = self.ssl_context.wrap_socket(self._socket, **opts)
+
+        # Restore a previously cached session to enable TLS session resumption
+        # (session tickets / PSK).  The session must be set *after*
+        # wrap_socket() (which only creates the SSLSocket) but *before*
+        # connect(), because connect() triggers the actual TLS handshake
+        # (via do_handshake_on_connect, which defaults to True).
+        # _initiate_connection, called after this method returns, performs
+        # the connect().
+        if self._ssl_session_cache is not None:
+            cached_session = self._ssl_session_cache.get(
+                self._ssl_session_cache_key())
+            if cached_session is not None:
+                try:
+                    ssl_sock.session = cached_session
+                except (AttributeError, ssl.SSLError, ValueError):
+                    log.debug("Could not restore TLS session for %s", self.endpoint)
+
+        return ssl_sock
 
     def _initiate_connection(self, sockaddr):
         if self.features.shard_id is not None:
@@ -1042,6 +1226,26 @@ class Connection(object):
             log.debug('connection (%r) port=%d should be shard_id=%d', id(self), port, port % self.total_shards)
 
         self._socket.connect(sockaddr)
+
+    def _cache_tls_session_if_needed(self):
+        """
+        Store the current TLS session in the cache (if any) so that future
+        connections to the same endpoint can resume it.
+        """
+        if self._ssl_session_cache is not None and self.ssl_context is not None:
+            session = getattr(self._socket, 'session', None)
+            if session is not None:
+                self._ssl_session_cache.set(self._ssl_session_cache_key(), session)
+
+    def _ssl_session_cache_key(self):
+        """
+        Return a cache key that matches the TLS peer identity.
+
+        Delegates to the endpoint's ``tls_session_cache_key`` property, which
+        returns appropriate components for each endpoint type (e.g., includes
+        ``server_name`` for SNI endpoints to prevent cache collisions).
+        """
+        return self.endpoint.tls_session_cache_key
 
     # PYTHON-1331
     #
@@ -1073,6 +1277,16 @@ class Connection(object):
                 self._socket.settimeout(self.connect_timeout)
                 self._initiate_connection(sockaddr)
                 self._socket.settimeout(None)
+
+                # Cache the negotiated TLS session for future resumption.
+                # For TLS 1.2 the session is available right after connect().
+                # For TLS 1.3 the server sends the session ticket
+                # asynchronously after the first application-data exchange,
+                # so socket.session may still be None here; a second
+                # attempt is made in _cache_tls_session_if_needed() after
+                # the CQL handshake completes (see _handle_startup_response
+                # and _handle_auth_response).
+                self._cache_tls_session_if_needed()
 
                 local_addr = self._socket.getsockname()
                 log.debug("Connection %s: '%s' -> '%s'", id(self), local_addr, sockaddr)
@@ -1578,6 +1792,9 @@ class Connection(object):
             if ProtocolVersion.has_checksumming_support(self.protocol_version):
                 self._enable_checksumming()
 
+            # TLS 1.3: the session ticket is sent after the first
+            # application-data exchange, so try caching it now.
+            self._cache_tls_session_if_needed()
             self.connected_event.set()
         elif isinstance(startup_response, AuthenticateMessage):
             log.debug("Got AuthenticateMessage on new connection (%s) from %s: %s",
@@ -1634,6 +1851,9 @@ class Connection(object):
             self.authenticator.on_authentication_success(auth_response.token)
             if self._compressor:
                 self.compressor = self._compressor
+            # TLS 1.3: the session ticket is sent after the first
+            # application-data exchange, so try caching it now.
+            self._cache_tls_session_if_needed()
             self.connected_event.set()
         elif isinstance(auth_response, AuthChallengeMessage):
             response = self.authenticator.evaluate_challenge(auth_response.challenge)

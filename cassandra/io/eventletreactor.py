@@ -108,6 +108,16 @@ class EventletConnection(Connection):
         if self.ssl_options and 'server_hostname' in self.ssl_options:
             # This is necessary for SNI
             self._socket.set_tlsext_host_name(self.ssl_options['server_hostname'].encode('ascii'))
+        # Apply cached TLS session for resumption (PyOpenSSL)
+        if self._ssl_session_cache:
+            cached_session = self._ssl_session_cache.get(
+                self._ssl_session_cache_key())
+            if cached_session:
+                try:
+                    self._socket.set_session(cached_session)
+                    log.debug("Using cached TLS session for %s", self.endpoint)
+                except Exception:
+                    log.debug("Could not restore TLS session for %s", self.endpoint)
 
     def _initiate_connection(self, sockaddr):
         if self.uses_legacy_ssl_options:
@@ -116,6 +126,8 @@ class EventletConnection(Connection):
             self._socket.connect(sockaddr)
             if self.ssl_context or self.ssl_options:
                 self._socket.do_handshake()
+                # Store TLS session after successful handshake (PyOpenSSL)
+                self._cache_pyopenssl_session()
 
     def _match_hostname(self):
         if self.uses_legacy_ssl_options:
@@ -125,6 +137,19 @@ class EventletConnection(Connection):
             if cert_name != self.endpoint.address:
                 raise Exception("Hostname verification failed! Certificate name '{}' "
                                 "doesn't endpoint '{}'".format(cert_name, self.endpoint.address))
+
+    def _cache_pyopenssl_session(self):
+        """Store the PyOpenSSL TLS session in the cache after a successful handshake."""
+        if self._ssl_session_cache is not None:
+            try:
+                session = self._socket.get_session()
+                if session:
+                    self._ssl_session_cache.set(
+                        self._ssl_session_cache_key(), session)
+                    if self._socket.session_reused():
+                        log.debug("TLS session was reused for %s", self.endpoint)
+            except Exception:
+                log.debug("Could not cache TLS session for %s", self.endpoint)
 
     def close(self):
         with self.lock:
