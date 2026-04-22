@@ -459,6 +459,11 @@ class PreparedStatement(object):
     serial_consistency_level = None  # TODO never used?
     _is_lwt = False
 
+    # Cached column names/types derived from result_metadata, to avoid
+    # rebuilding [c[2] for c in result_metadata] on every result set.
+    _result_col_names = None
+    _result_col_types = None
+
     def __init__(self, column_metadata, query_id, routing_key_indexes, query,
                  keyspace, protocol_version, result_metadata, result_metadata_id,
                  is_lwt=False, column_encryption_policy=None):
@@ -469,10 +474,20 @@ class PreparedStatement(object):
         self.keyspace = keyspace
         self.protocol_version = protocol_version
         self.result_metadata = result_metadata
+        self._cache_result_metadata_columns(result_metadata)
         self.result_metadata_id = result_metadata_id
         self.column_encryption_policy = column_encryption_policy
         self.is_idempotent = False
         self._is_lwt = is_lwt
+
+    def _cache_result_metadata_columns(self, result_metadata):
+        """Pre-compute column names and types from result_metadata."""
+        if result_metadata:
+            self._result_col_names = [c[2] for c in result_metadata]
+            self._result_col_types = [c[3] for c in result_metadata]
+        else:
+            self._result_col_names = None
+            self._result_col_types = None
 
     @classmethod
     def from_message(cls, query_id, column_metadata, pk_indexes, cluster_metadata,

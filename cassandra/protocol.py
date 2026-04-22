@@ -86,6 +86,8 @@ class _RegisterMessageType(type):
 
 class _MessageType(object, metaclass=_RegisterMessageType):
 
+    __slots__ = ()
+
     tracing = False
     custom_payload = None
     warnings = None
@@ -105,7 +107,7 @@ class _MessageType(object, metaclass=_RegisterMessageType):
 def _get_params(message_obj):
     base_attrs = dir(_MessageType)
     return (
-        (n, a) for n, a in message_obj.__dict__.items()
+        (n, a) for n, a in getattr(message_obj, '__dict__', {}).items()
         if n not in base_attrs and not n.startswith('_') and not callable(a)
     )
 
@@ -542,6 +544,11 @@ _PAGING_OPTIONS_FLAG = 0x80000000
 
 class _QueryMessage(_MessageType):
 
+    # DSE continuous paging: stored when the feature is active, otherwise None.
+    # Declared as a class attribute so that callers can use direct attribute
+    # access instead of getattr(msg, 'continuous_paging_options', None).
+    continuous_paging_options = None
+
     def __init__(self, query_params, consistency_level,
                  serial_consistency_level=None, fetch_size=None,
                  paging_state=None, timestamp=None, skip_meta=False,
@@ -658,9 +665,12 @@ class ResultMessage(_MessageType):
     opcode = 0x08
     name = 'RESULT'
 
-    kind = None
-    results = None
-    paging_state = None
+    __slots__ = ('kind', 'column_names', 'column_types', 'parsed_rows',
+                 'paging_state', 'continuous_paging_seq', 'continuous_paging_last',
+                 'new_keyspace', 'column_metadata', 'query_id', 'bind_metadata',
+                 'pk_indexes', 'schema_change_event', 'is_lwt',
+                 'result_metadata_id', 'stream_id', 'trace_id',
+                 'custom_payload', 'warnings')
 
     # Names match type name in module scope. Most are imported from cassandra.cqltypes (except CUSTOM_TYPE)
     type_codes = _cqltypes_by_code = dict((v, globals()[k]) for k, v in type_codes.__dict__.items() if not k.startswith('_'))
@@ -672,25 +682,26 @@ class ResultMessage(_MessageType):
     _CONTINUOUS_PAGING_LAST_FLAG = 0x80000000
     _METADATA_ID_FLAG = 0x0008
 
-    kind = None
-
-    # These are all the things a result message might contain. They are populated according to 'kind'
-    column_names = None
-    column_types = None
-    parsed_rows = None
-    paging_state = None
-    continuous_paging_seq = None
-    continuous_paging_last = None
-    new_keyspace = None
-    column_metadata = None
-    query_id = None
-    bind_metadata = None
-    pk_indexes = None
-    schema_change_event = None
-    is_lwt = False
-
     def __init__(self, kind):
         self.kind = kind
+        self.column_names = None
+        self.column_types = None
+        self.parsed_rows = None
+        self.paging_state = None
+        self.continuous_paging_seq = None
+        self.continuous_paging_last = None
+        self.new_keyspace = None
+        self.column_metadata = None
+        self.query_id = None
+        self.bind_metadata = None
+        self.pk_indexes = None
+        self.schema_change_event = None
+        self.is_lwt = False
+        self.result_metadata_id = None
+        self.stream_id = None
+        self.trace_id = None
+        self.custom_payload = None
+        self.warnings = None
 
     def recv(self, f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy):
         if self.kind == RESULT_KIND_VOID:
@@ -900,6 +911,11 @@ class PrepareMessage(_MessageType):
 class BatchMessage(_MessageType):
     opcode = 0x0D
     name = 'BATCH'
+
+    # Batch messages never use continuous paging, but callers access this
+    # attribute directly (instead of getattr) for speed.  Declare it here so
+    # that BatchMessage matches the same interface as _QueryMessage.
+    continuous_paging_options = None
 
     def __init__(self, batch_type, queries, consistency_level,
                  serial_consistency_level=None, timestamp=None,
@@ -1182,11 +1198,14 @@ class _ProtocolHandler(object):
         msg_class = cls.message_types_by_opcode[opcode]
         msg = msg_class.recv_body(body, protocol_version, protocol_features, user_type_map, result_metadata, cls.column_encryption_policy)
         msg.stream_id = stream_id
-        msg.trace_id = trace_id
-        msg.custom_payload = custom_payload
-        msg.warnings = warnings
+        if trace_id is not None:
+            msg.trace_id = trace_id
+        if custom_payload is not None:
+            msg.custom_payload = custom_payload
+        if warnings is not None:
+            msg.warnings = warnings
 
-        if msg.warnings:
+        if warnings:
             for w in msg.warnings:
                 log.warning("Server warning: %s", w)
 
@@ -1218,6 +1237,7 @@ def cython_protocol_handler(colparser):
         Cython version of Result Message that has a faster implementation of
         recv_results_row.
         """
+        __slots__ = ()
         # type_codes = ResultMessage.type_codes.copy()
         code_to_type = dict((v, k) for k, v in ResultMessage.type_codes.items())
         recv_results_rows = make_recv_results_rows(colparser)

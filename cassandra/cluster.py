@@ -4733,34 +4733,56 @@ class ResponseFuture(object):
             if pool and not pool.is_shutdown:
                 pool.return_connection(connection)
 
-            trace_id = getattr(response, 'trace_id', None)
-            if trace_id:
-                if not self._query_traces:
-                    self._query_traces = []
-                self._query_traces.append(QueryTrace(trace_id, self.session))
-
-            self._warnings = getattr(response, 'warnings', None)
-            self._custom_payload = getattr(response, 'custom_payload', None)
-
-            if self._custom_payload and self.session.cluster.control_connection._tablets_routing_v1 and 'tablets-routing-v1' in self._custom_payload:
-                protocol = self.session.cluster.protocol_version
-                info = self._custom_payload.get('tablets-routing-v1')
-                ctype = ResponseFuture._TABLET_ROUTING_CTYPE
-                if ctype is None:
-                    ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
-                    ResponseFuture._TABLET_ROUTING_CTYPE = ctype
-                tablet_routing_info = ctype.from_binary(info, protocol)
-                first_token = tablet_routing_info[0]
-                last_token = tablet_routing_info[1]
-                tablet_replicas = tablet_routing_info[2]
-                tablet = Tablet.from_row(first_token, last_token, tablet_replicas)
-                keyspace = self.query.keyspace
-                table = self.query.table
-                self.session.cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
-
             if isinstance(response, ResultMessage):
-                if response.kind == RESULT_KIND_SET_KEYSPACE:
-                    session = getattr(self, 'session', None)
+                # Hot path: ResultMessage has trace_id, warnings, and
+                # custom_payload in __slots__, always initialised in __init__,
+                # so direct attribute access is safe and faster than getattr().
+                trace_id = response.trace_id
+                session = self.session
+                if trace_id:
+                    if not self._query_traces:
+                        self._query_traces = []
+                    self._query_traces.append(QueryTrace(trace_id, session))
+
+                self._warnings = response.warnings
+                custom_payload = response.custom_payload
+                self._custom_payload = custom_payload
+
+                # Cache session.cluster to avoid repeated double-lookup in the
+                # tablet routing block (3 accesses) and schema-change path.
+                cluster = session.cluster
+                if custom_payload and cluster.control_connection._tablets_routing_v1:
+                    info = custom_payload.get('tablets-routing-v1')
+                    if info is not None:
+                        ctype = ResponseFuture._TABLET_ROUTING_CTYPE
+                        if ctype is None:
+                            ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
+                            ResponseFuture._TABLET_ROUTING_CTYPE = ctype
+                        first_token, last_token, tablet_replicas = ctype.from_binary(info, cluster.protocol_version)
+                        tablet = Tablet.from_row(first_token, last_token, tablet_replicas)
+                        if tablet is not None:
+                            cluster.metadata._tablets.add_tablet(self.query.keyspace, self.query.table, tablet)
+
+                if response.kind == RESULT_KIND_ROWS:
+                    self._paging_state = response.paging_state
+                    # Use pre-cached column names/types from PreparedStatement
+                    # when available to avoid rebuilding lists from metadata.
+                    ps = self.prepared_statement
+                    if ps is not None and ps._result_col_names is not None:
+                        col_names = ps._result_col_names
+                        col_types = ps._result_col_types
+                    else:
+                        col_names = response.column_names
+                        col_types = response.column_types
+                    self._col_names = col_names
+                    self._col_types = col_types
+                    if self.message.continuous_paging_options:
+                        self._handle_continuous_paging_first_response(connection, response)
+                    else:
+                        self._set_final_result(self.row_factory(col_names, response.parsed_rows))
+                elif response.kind == RESULT_KIND_VOID:
+                    self._set_final_result(None)
+                elif response.kind == RESULT_KIND_SET_KEYSPACE:
                     # since we're running on the event loop thread, we need to
                     # use a non-blocking method for setting the keyspace on
                     # all connections in this session, otherwise the event
@@ -4775,23 +4797,25 @@ class ResponseFuture(object):
                     # refresh the schema before responding, but do it in another
                     # thread instead of the event loop thread
                     self.is_schema_agreed = False
-                    self.session.submit(
+                    session.submit(
                         refresh_schema_and_set_result,
-                        self.session.cluster.control_connection,
+                        cluster.control_connection,
                         self, connection, **response.schema_change_event)
-                elif response.kind == RESULT_KIND_ROWS:
-                    self._paging_state = response.paging_state
-                    self._col_names = response.column_names
-                    self._col_types = response.column_types
-                    if getattr(self.message, 'continuous_paging_options', None):
-                        self._handle_continuous_paging_first_response(connection, response)
-                    else:
-                        self._set_final_result(self.row_factory(response.column_names, response.parsed_rows))
-                elif response.kind == RESULT_KIND_VOID:
-                    self._set_final_result(None)
                 else:
                     self._set_final_result(response)
             elif isinstance(response, ErrorMessage):
+                # Cold path: ErrorMessage inherits from _MessageType which
+                # defines warnings/custom_payload as class-level defaults but
+                # does NOT have trace_id -- getattr is required here.
+                trace_id = getattr(response, 'trace_id', None)
+                if trace_id:
+                    if not self._query_traces:
+                        self._query_traces = []
+                    self._query_traces.append(QueryTrace(trace_id, self.session))
+
+                self._warnings = getattr(response, 'warnings', None)
+                self._custom_payload = getattr(response, 'custom_payload', None)
+
                 retry_policy = self._retry_policy
 
                 if isinstance(response, ReadTimeoutErrorMessage):
@@ -4870,6 +4894,10 @@ class ResponseFuture(object):
 
                 self._handle_retry_decision(retry, response, host)
             elif isinstance(response, ConnectionException):
+                # ConnectionException has no trace_id/warnings/custom_payload;
+                # clear any stale values from a previous retry attempt.
+                self._warnings = None
+                self._custom_payload = None
                 if self._metrics is not None:
                     self._metrics.on_connection_error()
                 if not isinstance(response, ConnectionShutdown):
@@ -4879,6 +4907,8 @@ class ResponseFuture(object):
                     self.query, cl, error=response, retry_num=self._query_retries)
                 self._handle_retry_decision(retry, response, host)
             elif isinstance(response, Exception):
+                self._warnings = None
+                self._custom_payload = None
                 if hasattr(response, 'to_exception'):
                     self._set_final_exception(response.to_exception())
                 else:
@@ -4934,6 +4964,7 @@ class ResponseFuture(object):
                             )
                         ))
                     self.prepared_statement.result_metadata = response.column_metadata
+                    self.prepared_statement._cache_result_metadata_columns(response.column_metadata)
                     new_metadata_id = response.result_metadata_id
                     if new_metadata_id is not None:
                         self.prepared_statement.result_metadata_id = new_metadata_id
@@ -5084,9 +5115,12 @@ class ResponseFuture(object):
             ...     log.exception("Operation failed:")
 
         """
+        return ResultSet(self, self._wait_for_result())
+
+    def _wait_for_result(self):
         self._event.wait()
         if self._final_result is not _NOT_SET:
-            return ResultSet(self, self._final_result)
+            return self._final_result
         else:
             raise self._final_exception
 
@@ -5272,6 +5306,9 @@ class ResultSet(object):
     like you might see on a normal call to ``session.execute()``.
     """
 
+    __slots__ = ('response_future', 'column_names', 'column_types',
+                 '_current_rows', '_page_iter', '_list_mode')
+
     def __init__(self, response_future, initial_response):
         self.response_future = response_future
         self.column_names = response_future._col_names
@@ -5357,8 +5394,7 @@ class ResultSet(object):
         """
         if self.response_future.has_more_pages:
             self.response_future.start_fetching_next_page()
-            result = self.response_future.result()
-            self._current_rows = result._current_rows  # ResultSet has already _set_current_rows to the appropriate form
+            self._set_current_rows(self.response_future._wait_for_result())
         else:
             self._current_rows = []
 
