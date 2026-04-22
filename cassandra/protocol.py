@@ -587,9 +587,20 @@ class _QueryMessage(_MessageType):
             write_byte(f, flags)
 
         if self.query_params is not None:
-            write_short(f, len(self.query_params))
+            # Accumulate param bytes in a list and write once instead of
+            # 2*N+1 separate f.write() calls via write_value().
+            _int32_pack = int32_pack
+            parts = [uint16_pack(len(self.query_params))]
+            _parts_append = parts.append
             for param in self.query_params:
-                write_value(f, param)
+                if param is None:
+                    _parts_append(_int32_pack(-1))
+                elif param is _UNSET_VALUE:
+                    _parts_append(_int32_pack(-2))
+                else:
+                    _parts_append(_int32_pack(len(param)))
+                    _parts_append(param)
+            f.write(b"".join(parts))
         if self.fetch_size:
             write_int(f, self.fetch_size)
         if self.paging_state:
@@ -635,8 +646,8 @@ class ExecuteMessage(_QueryMessage):
         super(ExecuteMessage, self).__init__(query_params, consistency_level, serial_consistency_level, fetch_size,
                                              paging_state, timestamp, skip_meta, continuous_paging_options)
 
-    def _write_query_params(self, f, protocol_version):
-        super(ExecuteMessage, self)._write_query_params(f, protocol_version)
+    # _write_query_params inherited from _QueryMessage; removed redundant
+    # pass-through override to avoid extra MRO lookup per call.
 
     def send_body(self, f, protocol_version):
         write_string(f, self.query_id)
