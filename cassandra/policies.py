@@ -13,7 +13,7 @@
 # limitations under the License.
 import random
 
-from collections import namedtuple
+from collections import namedtuple, OrderedDict
 from itertools import islice, cycle, groupby, repeat
 import logging
 from random import randint, shuffle
@@ -157,6 +157,18 @@ class LoadBalancingPolicy(HostStateListener):
         """
         raise NotImplementedError()
 
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        """
+        Same as :meth:`make_query_plan`, but with an additional `excluded` parameter.
+        `excluded` should be a container (set, list, etc.) of hosts to skip.
+
+        The default implementation simply delegates to `make_query_plan` and filters the result.
+        Subclasses may override this for performance.
+        """
+        for host in self.make_query_plan(working_keyspace, query):
+            if host not in excluded:
+                yield host
+
     def check_supported(self):
         """
         This will be called after the cluster Metadata has been initialized.
@@ -198,6 +210,20 @@ class RoundRobinPolicy(LoadBalancingPolicy):
         else:
             return []
 
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        pos = self._position
+        self._position += 1
+
+        hosts = self._live_hosts
+        length = len(hosts)
+        if length:
+            pos %= length
+            for host in islice(cycle(hosts), pos, pos + length):
+                if host not in excluded:
+                    yield host
+        else:
+            return
+
     def on_up(self, host):
         with self._hosts_lock:
             self._live_hosts = self._live_hosts.union((host, ))
@@ -223,7 +249,6 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
     """
 
     local_dc = None
-    used_hosts_per_remote_dc = 0
 
     def __init__(self, local_dc='', used_hosts_per_remote_dc=0):
         """
@@ -242,36 +267,52 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         By default, all remote hosts are ignored.
         """
         self.local_dc = local_dc
-        self.used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._dc_live_hosts = {}
+        self._remote_hosts = {}
+        self._used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._position = 0
         LoadBalancingPolicy.__init__(self)
 
+    @property
+    def used_hosts_per_remote_dc(self):
+        return self._used_hosts_per_remote_dc
+
+    @used_hosts_per_remote_dc.setter
+    def used_hosts_per_remote_dc(self, value):
+        self._used_hosts_per_remote_dc = value
+        self._refresh_remote_hosts()
+
     def _dc(self, host):
         return host.datacenter or self.local_dc
+
+    def _refresh_remote_hosts(self):
+        # Using dict.fromkeys() instead of a set to preserve insertion order (Python 3.7+)
+        # while still providing O(1) lookup for `host in self._remote_hosts`.
+        remote_hosts = {}
+        if self.used_hosts_per_remote_dc > 0:
+            for datacenter, hosts in self._dc_live_hosts.items():
+                if datacenter != self.local_dc:
+                    remote_hosts.update(
+                        dict.fromkeys(hosts[:self.used_hosts_per_remote_dc])
+                    )
+        self._remote_hosts = remote_hosts
 
     def populate(self, cluster, hosts):
         for dc, dc_hosts in groupby(hosts, lambda h: self._dc(h)):
             self._dc_live_hosts[dc] = tuple({*dc_hosts, *self._dc_live_hosts.get(dc, [])})
 
         self._position = randint(0, len(hosts) - 1) if hosts else 0
+        self._refresh_remote_hosts()
 
     def distance(self, host):
         dc = self._dc(host)
         if dc == self.local_dc:
             return HostDistance.LOCAL
 
-        if not self.used_hosts_per_remote_dc:
-            return HostDistance.IGNORED
-        else:
-            dc_hosts = self._dc_live_hosts.get(dc)
-            if not dc_hosts:
-                return HostDistance.IGNORED
-
-            if host in list(dc_hosts)[:self.used_hosts_per_remote_dc]:
-                return HostDistance.REMOTE
-            else:
-                return HostDistance.IGNORED
+        remote_hosts = self._remote_hosts
+        if host in remote_hosts:
+            return HostDistance.REMOTE
+        return HostDistance.IGNORED
 
     def make_query_plan(self, working_keyspace=None, query=None):
         # not thread-safe, but we don't care much about lost increments
@@ -280,32 +321,74 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         self._position += 1
 
         local_live = self._dc_live_hosts.get(self.local_dc, ())
-        pos = (pos % len(local_live)) if local_live else 0
-        for host in islice(cycle(local_live), pos, pos + len(local_live)):
+        length = len(local_live)
+        if length:
+            pos %= length
+            for i in range(length):
+                yield local_live[(pos + i) % length]
+
+        # Read _remote_hosts late so topology changes during local
+        # iteration are visible.
+        for host in self._remote_hosts:
             yield host
 
-        # the dict can change, so get candidate DCs iterating over keys of a copy
-        other_dcs = [dc for dc in self._dc_live_hosts.copy().keys() if dc != self.local_dc]
-        for dc in other_dcs:
-            remote_live = self._dc_live_hosts.get(dc, ())
-            for host in remote_live[:self.used_hosts_per_remote_dc]:
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        # not thread-safe, but we don't care much about lost increments
+        # for the purposes of load balancing
+        pos = self._position
+        self._position += 1
+
+        local_live = self._dc_live_hosts.get(self.local_dc, ())
+        length = len(local_live)
+        if not excluded:
+            if length:
+                pos %= length
+                for i in range(length):
+                    yield local_live[(pos + i) % length]
+            # Read _remote_hosts late so topology changes during local
+            # iteration are visible.
+            for host in self._remote_hosts:
                 yield host
+            return
+
+        if not isinstance(excluded, set):
+            excluded = set(excluded)
+
+        if length:
+            pos %= length
+            for i in range(length):
+                host = local_live[(pos + i) % length]
+                if host in excluded:
+                    continue
+                yield host
+
+        for host in self._remote_hosts:
+            if host in excluded:
+                continue
+            yield host
 
     def on_up(self, host):
         # not worrying about threads because this will happen during
         # control connection startup/refresh
+        refresh_remote = False
         if not self.local_dc and host.datacenter:
             self.local_dc = host.datacenter
             log.info("Using datacenter '%s' for DCAwareRoundRobinPolicy (via host '%s'); "
                         "if incorrect, please specify a local_dc to the constructor, "
                         "or limit contact points to local cluster nodes" %
                         (self.local_dc, host.endpoint))
+            refresh_remote = True
 
         dc = self._dc(host)
         with self._hosts_lock:
             current_hosts = self._dc_live_hosts.get(dc, ())
             if host not in current_hosts:
                 self._dc_live_hosts[dc] = current_hosts + (host, )
+                if dc != self.local_dc:
+                    refresh_remote = True
+
+            if refresh_remote:
+                self._refresh_remote_hosts()
 
     def on_down(self, host):
         dc = self._dc(host)
@@ -317,6 +400,9 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
                     self._dc_live_hosts[dc] = hosts
                 else:
                     del self._dc_live_hosts[dc]
+
+                if dc != self.local_dc:
+                    self._refresh_remote_hosts()
 
     def on_add(self, host):
         self.on_up(host)
@@ -333,7 +419,6 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
 
     local_dc = None
     local_rack = None
-    used_hosts_per_remote_dc = 0
 
     def __init__(self, local_dc, local_rack, used_hosts_per_remote_dc=0):
         """
@@ -350,18 +435,47 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
         """
         self.local_rack = local_rack
         self.local_dc = local_dc
-        self.used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._live_hosts = {}
         self._dc_live_hosts = {}
+        self._remote_hosts = {}
+        self._non_local_rack_hosts = ()
+        self._used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._endpoints = []
         self._position = 0
         LoadBalancingPolicy.__init__(self)
+
+    @property
+    def used_hosts_per_remote_dc(self):
+        return self._used_hosts_per_remote_dc
+
+    @used_hosts_per_remote_dc.setter
+    def used_hosts_per_remote_dc(self, value):
+        self._used_hosts_per_remote_dc = value
+        self._refresh_remote_hosts()
 
     def _rack(self, host):
         return host.rack or self.local_rack
 
     def _dc(self, host):
         return host.datacenter or self.local_dc
+
+    def _refresh_remote_hosts(self):
+        # Using dict.fromkeys() instead of a set to preserve insertion order (Python 3.7+)
+        # while still providing O(1) lookup for `host in self._remote_hosts`.
+        remote_hosts = {}
+        if self.used_hosts_per_remote_dc > 0:
+            for datacenter, hosts in self._dc_live_hosts.items():
+                if datacenter != self.local_dc:
+                    remote_hosts.update(
+                        dict.fromkeys(hosts[:self.used_hosts_per_remote_dc])
+                    )
+        self._remote_hosts = remote_hosts
+
+    def _refresh_non_local_rack_hosts(self):
+        local_live = self._dc_live_hosts.get(self.local_dc, ())
+        self._non_local_rack_hosts = tuple(
+            h for h in local_live if self._rack(h) != self.local_rack
+        )
 
     def populate(self, cluster, hosts):
         for (dc, rack), rack_hosts in groupby(hosts, lambda host: (self._dc(host), self._rack(host))):
@@ -370,71 +484,118 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
             self._dc_live_hosts[dc] = tuple({*dc_hosts, *self._dc_live_hosts.get(dc, [])})
 
         self._position = randint(0, len(hosts) - 1) if hosts else 0
+        self._refresh_remote_hosts()
+        self._refresh_non_local_rack_hosts()
 
     def distance(self, host):
-        rack = self._rack(host)
         dc = self._dc(host)
-        if rack == self.local_rack and dc == self.local_dc:
-            return HostDistance.LOCAL_RACK
-
         if dc == self.local_dc:
+            if self._rack(host) == self.local_rack:
+                return HostDistance.LOCAL_RACK
             return HostDistance.LOCAL
 
-        if not self.used_hosts_per_remote_dc:
-            return HostDistance.IGNORED
-
-        dc_hosts = self._dc_live_hosts.get(dc, ())
-        if not dc_hosts:
-            return HostDistance.IGNORED
-        if host in dc_hosts and dc_hosts.index(host) < self.used_hosts_per_remote_dc:
+        remote_hosts = self._remote_hosts
+        if host in remote_hosts:
             return HostDistance.REMOTE
-        else:
-            return HostDistance.IGNORED
+        return HostDistance.IGNORED
 
     def make_query_plan(self, working_keyspace=None, query=None):
         pos = self._position
         self._position += 1
 
         local_rack_live = self._live_hosts.get((self.local_dc, self.local_rack), ())
-        pos = (pos % len(local_rack_live)) if local_rack_live else 0
-        # Slice the cyclic iterator to start from pos and include the next len(local_live) elements
-        # This ensures we get exactly one full cycle starting from pos
-        for host in islice(cycle(local_rack_live), pos, pos + len(local_rack_live)):
+        length = len(local_rack_live)
+        if length:
+            p = pos % length
+            for i in range(length):
+                yield local_rack_live[(p + i) % length]
+
+        local_non_rack = self._non_local_rack_hosts
+        length = len(local_non_rack)
+        if length:
+            p = pos % length
+            for i in range(length):
+                yield local_non_rack[(p + i) % length]
+
+        # Read _remote_hosts late so topology changes during local
+        # iteration are visible.
+        for host in self._remote_hosts:
             yield host
 
-        local_live = [host for host in self._dc_live_hosts.get(self.local_dc, ()) if host.rack != self.local_rack]
-        pos = (pos % len(local_live)) if local_live else 0
-        for host in islice(cycle(local_live), pos, pos + len(local_live)):
-            yield host
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        pos = self._position
+        self._position += 1
 
-        # the dict can change, so get candidate DCs iterating over keys of a copy
-        for dc, remote_live in self._dc_live_hosts.copy().items():
-            if dc != self.local_dc:
-                for host in remote_live[:self.used_hosts_per_remote_dc]:
-                    yield host
+        local_rack_live = self._live_hosts.get((self.local_dc, self.local_rack), ())
+        length = len(local_rack_live)
+        if not excluded:
+            if length:
+                p = pos % length
+                for i in range(length):
+                    yield local_rack_live[(p + i) % length]
+
+            local_non_rack = self._non_local_rack_hosts
+            length = len(local_non_rack)
+            if length:
+                p = pos % length
+                for i in range(length):
+                    yield local_non_rack[(p + i) % length]
+
+            # Read _remote_hosts late so topology changes during local
+            # iteration are visible.
+            for host in self._remote_hosts:
+                yield host
+            return
+
+        if not isinstance(excluded, set):
+            excluded = set(excluded)
+
+        if length:
+            p = pos % length
+            for i in range(length):
+                host = local_rack_live[(p + i) % length]
+                if host in excluded:
+                    continue
+                yield host
+
+        local_non_rack = self._non_local_rack_hosts
+        length = len(local_non_rack)
+        if length:
+            p = pos % length
+            for i in range(length):
+                host = local_non_rack[(p + i) % length]
+                if host in excluded:
+                    continue
+                yield host
+
+        # Read _remote_hosts late so topology changes during local
+        # iteration are visible.
+        for host in self._remote_hosts:
+            if host in excluded:
+                continue
+            yield host
 
     def on_up(self, host):
         dc = self._dc(host)
         rack = self._rack(host)
         with self._hosts_lock:
-            current_rack_hosts = self._live_hosts.get((dc, rack), ())
-            if host not in current_rack_hosts:
-                self._live_hosts[(dc, rack)] = current_rack_hosts + (host, )
             current_dc_hosts = self._dc_live_hosts.get(dc, ())
             if host not in current_dc_hosts:
                 self._dc_live_hosts[dc] = current_dc_hosts + (host, )
+
+                if dc != self.local_dc:
+                    self._refresh_remote_hosts()
+                else:
+                    self._refresh_non_local_rack_hosts()
+
+            current_rack_hosts = self._live_hosts.get((dc, rack), ())
+            if host not in current_rack_hosts:
+                self._live_hosts[(dc, rack)] = current_rack_hosts + (host, )
 
     def on_down(self, host):
         dc = self._dc(host)
         rack = self._rack(host)
         with self._hosts_lock:
-            current_rack_hosts = self._live_hosts.get((dc, rack), ())
-            if host in current_rack_hosts:
-                hosts = tuple(h for h in current_rack_hosts if h != host)
-                if hosts:
-                    self._live_hosts[(dc, rack)] = hosts
-                else:
-                    del self._live_hosts[(dc, rack)]
             current_dc_hosts = self._dc_live_hosts.get(dc, ())
             if host in current_dc_hosts:
                 hosts = tuple(h for h in current_dc_hosts if h != host)
@@ -442,6 +603,19 @@ class RackAwareRoundRobinPolicy(LoadBalancingPolicy):
                     self._dc_live_hosts[dc] = hosts
                 else:
                     del self._dc_live_hosts[dc]
+
+                if dc != self.local_dc:
+                    self._refresh_remote_hosts()
+                else:
+                    self._refresh_non_local_rack_hosts()
+
+            current_rack_hosts = self._live_hosts.get((dc, rack), ())
+            if host in current_rack_hosts:
+                hosts = tuple(h for h in current_rack_hosts if h != host)
+                if hosts:
+                    self._live_hosts[(dc, rack)] = hosts
+                else:
+                    del self._live_hosts[(dc, rack)]
 
     def on_add(self, host):
         self.on_up(host)
@@ -464,6 +638,11 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
     If no :attr:`~.Statement.routing_key` is set on the query, the child
     policy's query plan will be used as is.
+
+    An LRU cache of size :attr:`cache_replicas_size` (default 1024) avoids
+    repeated token-to-replica lookups for the same (keyspace, routing_key)
+    pair.  Set to 0 to disable caching.  The cache is automatically
+    invalidated when the cluster topology changes.
     """
 
     _child_policy = None
@@ -473,9 +652,15 @@ class TokenAwarePolicy(LoadBalancingPolicy):
     Yield local replicas in a random order.
     """
 
-    def __init__(self, child_policy, shuffle_replicas=True):
+    def __init__(self, child_policy, shuffle_replicas=True, cache_replicas_size=1024):
+        super().__init__()
         self._child_policy = child_policy
         self.shuffle_replicas = shuffle_replicas
+        self._cluster_metadata = None
+        self._cache_replicas_size = max(0, cache_replicas_size)
+        self._replica_cache = OrderedDict()
+        self._replica_cache_token_map_ref = None
+        self._cache_lock = Lock()
 
     def populate(self, cluster, hosts):
         self._cluster_metadata = cluster.metadata
@@ -493,40 +678,168 @@ class TokenAwarePolicy(LoadBalancingPolicy):
     def distance(self, *args, **kwargs):
         return self._child_policy.distance(*args, **kwargs)
 
+    def _get_cached_replicas(self, keyspace, table, routing_key_bytes, token_map):
+        """
+        Return cached replicas for the given keyspace, table, and routing key,
+        or None on cache miss.  The cache is invalidated when:
+        - the token_map object identity changes (full topology rebuild), or
+        - the keyspace's replica map has been rebuilt in-place (e.g. ALTER
+          KEYSPACE), detected via object identity of the per-keyspace map.
+
+        The table is part of the cache key so that tablet-backed and
+        non-tablet tables in the same keyspace don't collide.
+        """
+        if not self._cache_replicas_size:
+            return None
+        with self._cache_lock:
+            if token_map is not self._replica_cache_token_map_ref:
+                # Token map was rebuilt -- entire cache is stale.
+                self._replica_cache = OrderedDict()
+                self._replica_cache_token_map_ref = token_map
+            cache_key = (keyspace, table, routing_key_bytes)
+            entry = self._replica_cache.get(cache_key)
+            if entry is not None:
+                replicas, ks_map_ref = entry
+                # Validate the keyspace replica map hasn't been rebuilt
+                # in-place (e.g. ALTER KEYSPACE changes replication).
+                current_ks_map = token_map.tokens_to_hosts_by_ks.get(keyspace)
+                if ks_map_ref is not current_ks_map:
+                    del self._replica_cache[cache_key]
+                    return None
+                # Promote to most-recently-used.
+                self._replica_cache.move_to_end(cache_key)
+                return replicas
+            return None
+
+    def _put_cached_replicas(self, keyspace, table, routing_key_bytes, replicas, token_map):
+        """
+        Store replicas in the LRU cache, evicting the oldest entry if
+        the cache exceeds its configured size.  The keyspace's current
+        replica-map object reference is stored alongside so that in-place
+        rebuilds (ALTER KEYSPACE) are detected on lookup via identity check.
+        """
+        if not self._cache_replicas_size:
+            return
+        with self._cache_lock:
+            if token_map is not self._replica_cache_token_map_ref:
+                self._replica_cache = OrderedDict()
+                self._replica_cache_token_map_ref = token_map
+            cache_key = (keyspace, table, routing_key_bytes)
+            ks_map_ref = token_map.tokens_to_hosts_by_ks.get(keyspace)
+            self._replica_cache[cache_key] = (replicas, ks_map_ref)
+            self._replica_cache.move_to_end(cache_key)
+            if len(self._replica_cache) > self._cache_replicas_size:
+                self._replica_cache.popitem(last=False)
+
     def make_query_plan(self, working_keyspace=None, query=None):
         keyspace = query.keyspace if query and query.keyspace else working_keyspace
 
         child = self._child_policy
         if query is None or query.routing_key is None or keyspace is None:
-            for host in child.make_query_plan(keyspace, query):
-                yield host
+            yield from child.make_query_plan(keyspace, query)
             return
 
+        cluster_metadata = self._cluster_metadata
+        token_map = cluster_metadata.token_map
         replicas = []
-        tablet = self._cluster_metadata._tablets.get_tablet_for_key(
-            keyspace, query.table, self._cluster_metadata.token_map.token_class.from_key(query.routing_key))
+        if token_map:
+            try:
+                # Check the LRU cache first -- avoids the hash (from_key)
+                # and token-map lookup on repeated routing keys.
+                cached = self._get_cached_replicas(keyspace, query.table, query.routing_key, token_map)
+                if cached is not None:
+                    replicas = cached
+                else:
+                    token = token_map.token_class.from_key(query.routing_key)
 
-        if tablet is not None:
-            replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
-            child_plan = child.make_query_plan(keyspace, query)
+                    # Only check tablets if any exist -- avoids the method
+                    # call + dict lookup when tablets are not in use.
+                    if cluster_metadata._tablets:
+                        tablet = cluster_metadata._tablets.get_tablet_for_key(
+                            keyspace, query.table, token)
+                        if tablet is not None:
+                            replicas_mapped = {r[0] for r in tablet.replicas}
+                            child_plan = child.make_query_plan(keyspace, query)
+                            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
 
-            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+                    if not replicas:
+                        try:
+                            replicas = token_map.get_replicas(keyspace, token)
+                        except Exception:
+                            log.debug(
+                                "Failed to get replicas from token_map, "
+                                "falling back to cluster metadata"
+                            )
+                            replicas = cluster_metadata.get_replicas(keyspace, query.routing_key)
+                        self._put_cached_replicas(
+                            keyspace, query.table, query.routing_key, replicas, token_map
+                        )
+            except Exception:
+                log.debug(
+                    "Failed to resolve token or tablet for query plan, "
+                    "falling back to child policy",
+                    exc_info=True,
+                )
+
+        if self.shuffle_replicas:
+            if not query.is_lwt():
+                replicas = list(replicas)
+                shuffle(replicas)
+
+        local_rack = []
+        local = []
+        remote = []
+
+        child_distance = child.distance
+
+        for replica in replicas:
+            if replica.is_up:
+                d = child_distance(replica)
+                if d == HostDistance.LOCAL_RACK:
+                    local_rack.append(replica)
+                elif d == HostDistance.LOCAL:
+                    local.append(replica)
+                elif d == HostDistance.REMOTE:
+                    remote.append(replica)
+
+        if local_rack or local or remote:
+            yielded = set()
+
+            for replica in local_rack:
+                yielded.add(replica)
+                yield replica
+
+            for replica in local:
+                yielded.add(replica)
+                yield replica
+
+            for replica in remote:
+                yielded.add(replica)
+                yield replica
+
+            # Yield the rest of the cluster (non-replica hosts).
+            # DCAware and RackAware already yield in distance order
+            # (local_rack -> local -> remote), so we can stream directly.
+            # For other child policies we must re-sort by distance.
+            if isinstance(child, (DCAwareRoundRobinPolicy, RackAwareRoundRobinPolicy)):
+                yield from child.make_query_plan_with_exclusion(keyspace, query, yielded)
+            else:
+                remaining_local_rack = []
+                remaining_local = []
+                remaining_remote = []
+                for host in child.make_query_plan_with_exclusion(keyspace, query, yielded):
+                    d = child_distance(host)
+                    if d == HostDistance.LOCAL_RACK:
+                        remaining_local_rack.append(host)
+                    elif d == HostDistance.LOCAL:
+                        remaining_local.append(host)
+                    elif d == HostDistance.REMOTE:
+                        remaining_remote.append(host)
+                yield from remaining_local_rack
+                yield from remaining_local
+                yield from remaining_remote
         else:
-            replicas = self._cluster_metadata.get_replicas(keyspace, query.routing_key)
-
-        if self.shuffle_replicas and not query.is_lwt():
-            shuffle(replicas)
-
-        def yield_in_order(hosts):
-            for distance in [HostDistance.LOCAL_RACK, HostDistance.LOCAL, HostDistance.REMOTE]:
-                for replica in hosts:
-                    if replica.is_up and child.distance(replica) == distance:
-                        yield replica
-
-        # yield replicas: local_rack, local, remote
-        yield from yield_in_order(replicas)
-        # yield rest of the cluster: local_rack, local, remote
-        yield from yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas])
+            yield from child.make_query_plan(keyspace, query)
 
     def on_up(self, *args, **kwargs):
         return self._child_policy.on_up(*args, **kwargs)
@@ -697,6 +1010,16 @@ class HostFilterPolicy(LoadBalancingPolicy):
         """
         child_qp = self._child_policy.make_query_plan(
             working_keyspace=working_keyspace, query=query
+        )
+        for host in child_qp:
+            if self.predicate(host):
+                yield host
+
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        if excluded and not isinstance(excluded, set):
+            excluded = set(excluded)
+        child_qp = self._child_policy.make_query_plan_with_exclusion(
+            working_keyspace=working_keyspace, query=query, excluded=excluded
         )
         for host in child_qp:
             if self.predicate(host):
@@ -1355,6 +1678,28 @@ class DefaultLoadBalancingPolicy(WrapperPolicy):
         else:
             for h in child.make_query_plan(keyspace, query):
                 yield h
+
+    def make_query_plan_with_exclusion(self, working_keyspace=None, query=None, excluded=()):
+        if query and query.keyspace:
+            keyspace = query.keyspace
+        else:
+            keyspace = working_keyspace
+
+        addr = getattr(query, 'target_host', None) if query else None
+        target_host = self._cluster_metadata.get_host(addr)
+
+        if excluded and not isinstance(excluded, set):
+            excluded = set(excluded)
+
+        child = self._child_policy
+        if target_host and target_host.is_up and target_host not in excluded:
+            yield target_host
+            # Include target_host in the exclusion set so the child policy
+            # can skip it early rather than yielding it for us to filter.
+            child_excluded = excluded | {target_host} if excluded else {target_host}
+            yield from child.make_query_plan_with_exclusion(keyspace, query, child_excluded)
+        else:
+            yield from child.make_query_plan_with_exclusion(keyspace, query, excluded)
 
 
 # TODO for backward compatibility, remove in next major

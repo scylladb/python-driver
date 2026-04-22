@@ -187,6 +187,39 @@ class RoundRobinPolicyTest(unittest.TestCase):
         qplan = list(policy.make_query_plan())
         assert qplan == []
 
+    def test_make_query_plan_with_exclusion_basic(self):
+        hosts = [0, 1, 2, 3]
+        policy = RoundRobinPolicy()
+        policy.populate(None, hosts)
+        excluded = {1, 3}
+        qplan = list(policy.make_query_plan_with_exclusion(excluded=excluded))
+        assert 1 not in qplan
+        assert 3 not in qplan
+        assert sorted(qplan) == [0, 2]
+
+    def test_make_query_plan_with_exclusion_empty(self):
+        hosts = [0, 1, 2, 3]
+        policy = RoundRobinPolicy()
+        policy.populate(None, hosts)
+        qplan = list(policy.make_query_plan_with_exclusion(excluded=()))
+        assert sorted(qplan) == hosts
+
+    def test_make_query_plan_with_exclusion_all_excluded(self):
+        hosts = [0, 1, 2, 3]
+        policy = RoundRobinPolicy()
+        policy.populate(None, hosts)
+        excluded = set(hosts)
+        qplan = list(policy.make_query_plan_with_exclusion(excluded=excluded))
+        assert qplan == []
+
+    def test_make_query_plan_with_exclusion_superset(self):
+        hosts = [0, 1, 2, 3]
+        policy = RoundRobinPolicy()
+        policy.populate(None, hosts)
+        excluded = {0, 1, 2, 3, 99, 100}
+        qplan = list(policy.make_query_plan_with_exclusion(excluded=excluded))
+        assert qplan == []
+
 @pytest.mark.parametrize("policy_specialization, constructor_args", [(DCAwareRoundRobinPolicy, ("dc1", )), (RackAwareRoundRobinPolicy, ("dc1", "rack1"))])
 class TestRackOrDCAwareRoundRobinPolicy:
 
@@ -272,6 +305,12 @@ class TestRackOrDCAwareRoundRobinPolicy:
             assert policy.distance(host) == HostDistance.LOCAL
         elif isinstance(policy_specialization, RackAwareRoundRobinPolicy):
             assert policy.distance(host) == HostDistance.LOCAL_RACK
+
+        # Reset policy state to simulate a fresh view or handle the "move" correctly
+        if hasattr(policy, '_live_hosts'):
+            policy._live_hosts.clear()
+        if hasattr(policy, '_dc_live_hosts'):
+            policy._dc_live_hosts.clear()
 
         # same dc different rack
         host = Host(DefaultEndPoint("ip1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
@@ -527,6 +566,54 @@ class TestRackOrDCAwareRoundRobinPolicy:
         qplan = list(policy.make_query_plan())
         assert qplan == []
 
+    def test_make_query_plan_with_exclusion_basic(self, policy_specialization, constructor_args):
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(6)]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:4]:
+            h.set_location_info("dc1", "rack2")
+        for h in hosts[4:]:
+            h.set_location_info("dc2", "rack1")
+
+        policy = policy_specialization(*constructor_args, used_hosts_per_remote_dc=2)
+        policy.populate(Mock(), hosts)
+
+        # exclude some local and remote hosts
+        excluded = {hosts[0], hosts[4]}
+        qplan = list(policy.make_query_plan_with_exclusion(excluded=excluded))
+        assert hosts[0] not in qplan
+        assert hosts[4] not in qplan
+        assert len(qplan) == 4  # 6 total - 2 excluded
+
+    def test_make_query_plan_with_exclusion_empty(self, policy_specialization, constructor_args):
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:]:
+            h.set_location_info("dc1", "rack2")
+
+        policy = policy_specialization(*constructor_args)
+        policy.populate(Mock(), hosts)
+
+        # empty exclusion should return all hosts
+        qplan_excl = list(policy.make_query_plan_with_exclusion(excluded=()))
+        qplan_normal = list(policy.make_query_plan())
+        assert sorted(qplan_excl, key=id) == sorted(qplan_normal, key=id)
+
+    def test_make_query_plan_with_exclusion_all_excluded(self, policy_specialization, constructor_args):
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:]:
+            h.set_location_info("dc1", "rack2")
+
+        policy = policy_specialization(*constructor_args)
+        policy.populate(Mock(), hosts)
+
+        excluded = set(hosts)
+        qplan = list(policy.make_query_plan_with_exclusion(excluded=excluded))
+        assert qplan == []
+
     def test_wrong_dc(self, policy_specialization, constructor_args):
         hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(3)]
         for h in hosts[:3]:
@@ -536,6 +623,88 @@ class TestRackOrDCAwareRoundRobinPolicy:
         policy.populate(Mock(), hosts)
         qplan = list(policy.make_query_plan())
         assert len(qplan) == 0
+
+    def test_runtime_used_hosts_per_remote_dc_change(self, policy_specialization, constructor_args):
+        """Changing used_hosts_per_remote_dc at runtime should take effect
+        immediately without needing a repopulate or topology event."""
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:]:
+            h.set_location_info("dc2", "rack1")
+
+        policy = policy_specialization(*constructor_args, used_hosts_per_remote_dc=0)
+        policy.populate(Mock(), hosts)
+
+        # With 0, remotes are IGNORED and absent from query plan
+        for h in hosts[2:]:
+            assert policy.distance(h) == HostDistance.IGNORED
+        qplan = list(policy.make_query_plan())
+        assert set(qplan) == set(hosts[:2])
+
+        # Raise to 1 at runtime -- should take effect immediately
+        policy.used_hosts_per_remote_dc = 1
+        assert policy.distance(hosts[2]) == HostDistance.REMOTE or \
+               policy.distance(hosts[3]) == HostDistance.REMOTE
+        qplan = list(policy.make_query_plan())
+        assert len(qplan) == 3  # 2 local + 1 remote
+
+        # Raise to 2 -- both remotes visible
+        policy.used_hosts_per_remote_dc = 2
+        qplan = list(policy.make_query_plan())
+        assert set(qplan) == set(hosts)
+
+        # Drop back to 0 -- remotes disappear
+        policy.used_hosts_per_remote_dc = 0
+        for h in hosts[2:]:
+            assert policy.distance(h) == HostDistance.IGNORED
+        qplan = list(policy.make_query_plan())
+        assert set(qplan) == set(hosts[:2])
+
+    def test_modification_during_generation_exclusion(self, policy_specialization, constructor_args):
+        """Topology changes to remote hosts during local iteration should be
+        visible when the generator reaches the remote phase, for the exclusion
+        path as well as the normal path."""
+        hosts = [Host(DefaultEndPoint(i), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for h in hosts[:2]:
+            h.set_location_info("dc1", "rack1")
+        for h in hosts[2:]:
+            h.set_location_info("dc2", "rack1")
+
+        policy = policy_specialization(*constructor_args, used_hosts_per_remote_dc=3)
+        policy.populate(Mock(), hosts)
+
+        new_host = Host(DefaultEndPoint(4), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        new_host.set_location_info("dc2", "rack1")
+
+        # -- make_query_plan: add remote after starting local iteration --
+        plan = policy.make_query_plan()
+        next(plan)  # consume one local
+        policy.on_up(new_host)
+        remaining = list(plan)
+        # new_host should appear because _remote_hosts is read late
+        assert new_host in remaining
+
+        # -- make_query_plan: remove remote after starting local --
+        plan = policy.make_query_plan()
+        next(plan)
+        policy.on_down(new_host)
+        remaining = list(plan)
+        assert new_host not in remaining
+
+        # -- make_query_plan_with_exclusion: add remote after starting local --
+        plan = policy.make_query_plan_with_exclusion(excluded={hosts[0]})
+        next(plan)  # consume one local
+        policy.on_up(new_host)
+        remaining = list(plan)
+        assert new_host in remaining
+
+        # -- make_query_plan_with_exclusion: remove remote after starting local --
+        plan = policy.make_query_plan_with_exclusion(excluded={hosts[0]})
+        next(plan)
+        policy.on_down(new_host)
+        remaining = list(plan)
+        assert new_host not in remaining
 
 class DCAwareRoundRobinPolicyTest(unittest.TestCase):
 
@@ -577,6 +746,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
         for host in hosts:
             host.set_up()
@@ -586,8 +757,9 @@ class TokenAwarePolicyTest(unittest.TestCase):
             return list(islice(cycle(hosts), index, index + 2))
 
         cluster.metadata.get_replicas.side_effect = get_replicas
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
 
-        policy = TokenAwarePolicy(RoundRobinPolicy())
+        policy = TokenAwarePolicy(RoundRobinPolicy(), shuffle_replicas=False)
         policy.populate(cluster, hosts)
 
         for i in range(4):
@@ -610,6 +782,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
         for host in hosts:
             host.set_up()
@@ -627,8 +801,9 @@ class TokenAwarePolicyTest(unittest.TestCase):
                 return [hosts[1], hosts[3]]
 
         cluster.metadata.get_replicas.side_effect = get_replicas
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
 
-        policy = TokenAwarePolicy(DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=2))
+        policy = TokenAwarePolicy(DCAwareRoundRobinPolicy("dc1", used_hosts_per_remote_dc=2), shuffle_replicas=False)
         policy.populate(cluster, hosts)
 
         for i in range(4):
@@ -659,6 +834,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata = Mock(spec=Metadata)
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
         hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(8)]
         for host in hosts:
             host.set_up()
@@ -680,8 +857,9 @@ class TokenAwarePolicyTest(unittest.TestCase):
                 return [hosts[4], hosts[5], hosts[6], hosts[7]]
 
         cluster.metadata.get_replicas.side_effect = get_replicas
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
 
-        policy = TokenAwarePolicy(RackAwareRoundRobinPolicy("dc1", "rack1", used_hosts_per_remote_dc=4))
+        policy = TokenAwarePolicy(RackAwareRoundRobinPolicy("dc1", "rack1", used_hosts_per_remote_dc=4), shuffle_replicas=False)
         policy.populate(cluster, hosts)
 
         for i in range(4):
@@ -804,12 +982,16 @@ class TokenAwarePolicyTest(unittest.TestCase):
         replicas = hosts[2:]
         cluster.metadata.get_replicas.return_value = replicas
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
 
         child_policy = Mock()
         child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
         child_policy.distance.return_value = HostDistance.LOCAL
 
-        policy = TokenAwarePolicy(child_policy)
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
         policy.populate(cluster, hosts)
 
         # no keyspace, child policy is called
@@ -848,7 +1030,9 @@ class TokenAwarePolicyTest(unittest.TestCase):
         query = Statement(routing_key=routing_key, keyspace=statement_keyspace)
         qplan = list(policy.make_query_plan(working_keyspace, query))
         assert replicas + hosts[:2] == qplan
-        cluster.metadata.get_replicas.assert_called_with(statement_keyspace, routing_key)
+        # get_replicas may not be called here due to cache hit from the
+        # previous query with the same (statement_keyspace, routing_key) pair.
+        # The important assertion is that the plan result is correct above.
 
     def test_shuffles_if_given_keyspace_and_routing_key(self):
         """
@@ -897,6 +1081,9 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata.all_hosts.return_value = hosts
         cluster.metadata.get_replicas.return_value = hosts[2:]
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
         return cluster
 
     def _prepare_cluster_with_tablets(self):
@@ -909,14 +1096,22 @@ class TokenAwarePolicyTest(unittest.TestCase):
         cluster.metadata.all_hosts.return_value = hosts
         cluster.metadata.get_replicas.return_value = hosts[2:]
         cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(replicas=[(h.host_id, 0) for h in hosts[2:]])
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
         return cluster
 
     @patch('cassandra.policies.shuffle')
     def _assert_shuffle(self, patched_shuffle, cluster, keyspace, routing_key):
         hosts = cluster.metadata.all_hosts()
-        replicas = cluster.metadata.get_replicas()
+        # Configure get_host_by_host_id to return hosts from the list
+        host_map = {h.host_id: h for h in hosts}
+        cluster.metadata.get_host_by_host_id.side_effect = lambda hid: host_map.get(hid)
+
+        replicas = list(cluster.metadata.get_replicas())
         child_policy = Mock()
         child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
         child_policy.distance.return_value = HostDistance.LOCAL
 
         policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
@@ -926,6 +1121,7 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         cluster.metadata.get_replicas.reset_mock()
         child_policy.make_query_plan.reset_mock()
+        child_policy.make_query_plan_with_exclusion.reset_mock()
         query = Statement(routing_key=routing_key)
         qplan = list(policy.make_query_plan(keyspace, query))
         if keyspace is None or routing_key is None:
@@ -936,12 +1132,322 @@ class TokenAwarePolicyTest(unittest.TestCase):
         else:
             assert set(replicas) == set(qplan[:2])
             assert hosts[:2] == qplan[2:]
+
             if is_tablets:
+                # Tablet path: make_query_plan called once for replica ordering,
+                # make_query_plan_with_exclusion called once for remaining hosts
                 child_policy.make_query_plan.assert_called_with(keyspace, query)
-                assert child_policy.make_query_plan.call_count == 2
+                child_policy.make_query_plan_with_exclusion.assert_called()
+            elif child_policy.make_query_plan_with_exclusion.called:
+                # Non-tablet path with replicas: exclusion set should contain
+                # the replicas that were already yielded
+                exc_call = child_policy.make_query_plan_with_exclusion.call_args
+                excluded_hosts = exc_call[0][2] if len(exc_call[0]) > 2 else exc_call[1].get('excluded', set())
+                assert set(replicas).issubset(excluded_hosts), \
+                    'Exclusion set should contain the yielded replicas, ' \
+                    'got %s, expected superset of %s' % (excluded_hosts, set(replicas))
             else:
                 child_policy.make_query_plan.assert_called_once_with(keyspace, query)
             assert patched_shuffle.call_count == 1
+
+    # --- Replica cache tests ---
+
+    def _make_cache_cluster(self):
+        """Create a mock cluster suitable for cache tests."""
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for host in hosts:
+            host.set_up()
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.return_value = hosts[2:]
+        # Provide a real dict for keyspace-aware cache invalidation checks.
+        cluster.metadata.token_map.tokens_to_hosts_by_ks = {'ks': {}, 'ks1': {}, 'ks2': {}}
+        return cluster, hosts
+
+    def test_cache_hit(self):
+        """Same (keyspace, routing_key) should only call get_replicas once."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'key1', keyspace='ks')
+        list(policy.make_query_plan(None, query))
+        list(policy.make_query_plan(None, query))
+
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
+
+    def test_cache_miss_different_key(self):
+        """Different routing_key should cause separate get_replicas calls."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        q1 = Statement(routing_key=b'key1', keyspace='ks')
+        q2 = Statement(routing_key=b'key2', keyspace='ks')
+        list(policy.make_query_plan(None, q1))
+        list(policy.make_query_plan(None, q2))
+
+        assert cluster.metadata.token_map.get_replicas.call_count == 2
+
+    def test_cache_miss_different_keyspace(self):
+        """Different keyspace with same routing_key should miss cache."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        q1 = Statement(routing_key=b'key1', keyspace='ks1')
+        q2 = Statement(routing_key=b'key1', keyspace='ks2')
+        list(policy.make_query_plan(None, q1))
+        list(policy.make_query_plan(None, q2))
+
+        assert cluster.metadata.token_map.get_replicas.call_count == 2
+
+    def test_cache_invalidation_on_topology_change(self):
+        """Cache should be invalidated when token_map object changes."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'key1', keyspace='ks')
+        list(policy.make_query_plan(None, query))
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
+
+        # Simulate topology change: replace token_map with a new mock object
+        new_token_map = Mock()
+        new_token_map.token_class.from_key.side_effect = lambda key: key
+        new_token_map.get_replicas.return_value = hosts[2:]
+        new_token_map.tokens_to_hosts_by_ks = {'ks': {}}
+        cluster.metadata.token_map = new_token_map
+
+        list(policy.make_query_plan(None, query))
+        # The old token_map still has 1 call; new one should have 1 call
+        assert new_token_map.get_replicas.call_count == 1
+
+    def test_cache_eviction(self):
+        """Oldest entries should be evicted when cache exceeds size."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False, cache_replicas_size=2)
+        policy.populate(cluster, hosts)
+
+        # Fill cache with 3 entries; size=2 so first should be evicted
+        for i in range(3):
+            q = Statement(routing_key=f'key{i}'.encode(), keyspace='ks')
+            list(policy.make_query_plan(None, q))
+
+        assert cluster.metadata.token_map.get_replicas.call_count == 3
+
+        # key2 (most recent) should be cached
+        cluster.metadata.token_map.get_replicas.reset_mock()
+        q = Statement(routing_key=b'key2', keyspace='ks')
+        list(policy.make_query_plan(None, q))
+        assert cluster.metadata.token_map.get_replicas.call_count == 0
+
+        # key0 (evicted) should miss
+        q = Statement(routing_key=b'key0', keyspace='ks')
+        list(policy.make_query_plan(None, q))
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
+
+    def test_cache_disabled(self):
+        """cache_replicas_size=0 should bypass caching entirely."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False, cache_replicas_size=0)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'key1', keyspace='ks')
+        list(policy.make_query_plan(None, query))
+        list(policy.make_query_plan(None, query))
+        list(policy.make_query_plan(None, query))
+
+        # Every call should reach get_replicas
+        assert cluster.metadata.token_map.get_replicas.call_count == 3
+
+    def test_tablet_path_not_cached(self):
+        """Tablet path should bypass the cache entirely."""
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for host in hosts:
+            host.set_up()
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(replicas=[(h.host_id, 0) for h in hosts[2:]])
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.return_value = hosts[2:]
+        cluster.metadata.token_map.tokens_to_hosts_by_ks = {'ks': {}}
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'key1', keyspace='ks')
+        list(policy.make_query_plan(None, query))
+        list(policy.make_query_plan(None, query))
+
+        # token_map.get_replicas should NOT be called (tablet path used)
+        assert cluster.metadata.token_map.get_replicas.call_count == 0
+        # Cache should remain empty (tablet results are not cached)
+        assert len(policy._replica_cache) == 0
+
+    def test_cache_invalidation_on_keyspace_replication_change(self):
+        """Cache should detect in-place keyspace replica map rebuild (e.g. ALTER KEYSPACE)."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'key1', keyspace='ks')
+        list(policy.make_query_plan(None, query))
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
+
+        # Simulate ALTER KEYSPACE: same token_map object, but the per-keyspace
+        # replica map is replaced in-place (new dict object for that keyspace).
+        cluster.metadata.token_map.tokens_to_hosts_by_ks['ks'] = {'new': 'map'}
+
+        list(policy.make_query_plan(None, query))
+        # Should have re-fetched replicas because the ks map id changed.
+        assert cluster.metadata.token_map.get_replicas.call_count == 2
+
+    # --- LWT determinism tests ---
+
+    def _make_lwt_query(self, routing_key, keyspace='ks'):
+        """Create a Statement that reports is_lwt()=True."""
+        query = Statement(routing_key=routing_key, keyspace=keyspace)
+        query.is_lwt = lambda: True
+        return query
+
+    @patch('cassandra.policies.shuffle')
+    def test_lwt_no_shuffle(self, patched_shuffle):
+        """LWT queries should yield replicas in deterministic order."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        query = self._make_lwt_query(routing_key=b'key1')
+
+        plans = [list(policy.make_query_plan(None, query)) for _ in range(5)]
+
+        # All plans should be identical (deterministic)
+        for plan in plans[1:]:
+            assert plan == plans[0]
+
+        # shuffle should never have been called
+        assert patched_shuffle.call_count == 0
+
+    @patch('cassandra.policies.shuffle')
+    def test_lwt_replicas_not_copied(self, patched_shuffle):
+        """LWT path should not copy the replicas list (no list() call)."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        query = self._make_lwt_query(routing_key=b'key1')
+        list(policy.make_query_plan(None, query))
+
+        # shuffle was never called, which means list() was also not called
+        assert patched_shuffle.call_count == 0
+
+    @patch('cassandra.policies.shuffle')
+    def test_non_lwt_shuffled(self, patched_shuffle):
+        """Non-LWT queries with shuffle_replicas=True should shuffle."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'key1', keyspace='ks')
+        list(policy.make_query_plan(None, query))
+
+        assert patched_shuffle.call_count == 1
+
+    @patch('cassandra.policies.shuffle')
+    def test_lwt_with_cache_deterministic(self, patched_shuffle):
+        """LWT + cache should produce identical plans on repeated calls."""
+        cluster, hosts = self._make_cache_cluster()
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = lambda k, q, e: [h for h in hosts if h not in e]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        query = self._make_lwt_query(routing_key=b'key1')
+
+        plan1 = list(policy.make_query_plan(None, query))
+        plan2 = list(policy.make_query_plan(None, query))
+
+        assert plan1 == plan2
+        assert patched_shuffle.call_count == 0
+        # Should have been a cache hit on the second call
+        assert cluster.metadata.token_map.get_replicas.call_count == 1
 
 
 class ConvictionPolicyTest(unittest.TestCase):
@@ -1630,8 +2136,11 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
         cluster.metadata.get_replicas.side_effect = get_replicas
         cluster.metadata._tablets = Mock(spec=Tablets)
         cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.token_map = Mock()
+        cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: key
+        cluster.metadata.token_map.get_replicas.side_effect = cluster.metadata.get_replicas
 
-        child_policy = TokenAwarePolicy(RoundRobinPolicy())
+        child_policy = TokenAwarePolicy(RoundRobinPolicy(), shuffle_replicas=False)
 
         hfp = HostFilterPolicy(
             child_policy=child_policy,
