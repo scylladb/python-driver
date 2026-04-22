@@ -69,6 +69,12 @@ _message_types_by_opcode = {}
 
 _UNSET_VALUE = object()
 
+# Inline constants for has_checksumming_support check, avoiding
+# ProtocolVersion.has_checksumming_support() classmethod call overhead
+# (~94 ns per call) on the encode/decode hot path.
+_CHECKSUMMING_MIN_VERSION = ProtocolVersion.V5
+_CHECKSUMMING_MAX_VERSION = ProtocolVersion.DSE_V1
+
 
 def register_class(cls):
     _message_types_by_opcode[cls.opcode] = cls
@@ -1098,32 +1104,33 @@ class _ProtocolHandler(object):
             flags |= USE_BETA_FLAG
 
         buff = io.BytesIO()
-        buff.seek(9)
 
         # With checksumming, the compression is done at the segment frame encoding
-        if (compressor and not ProtocolVersion.has_checksumming_support(protocol_version)):
-            body = io.BytesIO()
+        if (compressor and not (_CHECKSUMMING_MIN_VERSION <= protocol_version < _CHECKSUMMING_MAX_VERSION)):
             if msg.custom_payload:
-                write_bytesmap(body, msg.custom_payload)
-            msg.send_body(body, protocol_version)
-            body = body.getvalue()
+                write_bytesmap(buff, msg.custom_payload)
+            msg.send_body(buff, protocol_version)
+            body = buff.getvalue()
 
             if len(body) > 0:
                 body = compressor(body)
                 flags |= COMPRESSED_FLAG
 
-            buff.write(body)
             length = len(body)
+            header = v3_header_pack(protocol_version, flags, stream_id, msg.opcode) + int32_pack(length)
+            return header + body
         else:
+            buff.seek(9)
+
             if msg.custom_payload:
                 write_bytesmap(buff, msg.custom_payload)
             msg.send_body(buff, protocol_version)
 
             length = buff.tell() - 9
 
-        buff.seek(0)
-        cls._write_header(buff, protocol_version, flags, stream_id, msg.opcode, length)
-        return buff.getvalue()
+            buff.seek(0)
+            cls._write_header(buff, protocol_version, flags, stream_id, msg.opcode, length)
+            return buff.getvalue()
 
     @staticmethod
     def _write_header(f, version, flags, stream_id, opcode, length):
@@ -1148,7 +1155,7 @@ class _ProtocolHandler(object):
         :param decompressor: optional decompression function to inflate the body
         :return: a message decoded from the body and frame attributes
         """
-        if (not ProtocolVersion.has_checksumming_support(protocol_version) and
+        if (not (_CHECKSUMMING_MIN_VERSION <= protocol_version < _CHECKSUMMING_MAX_VERSION) and
                 flags & COMPRESSED_FLAG):
             if decompressor is None:
                 raise RuntimeError("No de-compressor available for compressed frame!")
