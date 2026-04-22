@@ -22,23 +22,24 @@ import pytest
 
 
 class _TimestampTestMixin(object):
-
-    @mock.patch('cassandra.timestamps.time')
-    def _call_and_check_results(self,
-                                patched_time_module,
-                                system_time_expected_stamp_pairs,
-                                timestamp_generator=None):
+    @mock.patch("cassandra.timestamps.time")
+    def _call_and_check_results(
+        self,
+        patched_time_module,
+        system_time_expected_stamp_pairs,
+        timestamp_generator=None,
+    ):
         """
-        For each element in an iterable of (system_time, expected_timestamp)
+        For each element in an iterable of (system_time_ns, expected_timestamp)
         pairs, call a :class:`cassandra.timestamps.MonotonicTimestampGenerator`
-        with system_times as the underlying time.time() result, then assert
+        with system_times as the underlying time.time_ns() result, then assert
         that the result is expected_timestamp. Skips the check if
         expected_timestamp is None.
         """
-        patched_time_module.time = mock.Mock()
+        patched_time_module.time_ns = mock.Mock()
         system_times, expected_timestamps = zip(*system_time_expected_stamp_pairs)
 
-        patched_time_module.time.side_effect = system_times
+        patched_time_module.time_ns.side_effect = system_times
         tsg = timestamp_generator or timestamps.MonotonicTimestampGenerator()
 
         for expected in expected_timestamps:
@@ -46,14 +47,14 @@ class _TimestampTestMixin(object):
             if expected is not None:
                 assert actual == expected
 
-        # assert we patched timestamps.time.time correctly
+        # assert we patched timestamps.time.time_ns correctly
         with pytest.raises(StopIteration):
             tsg()
 
 
 class TestTimestampGeneratorOutput(unittest.TestCase, _TimestampTestMixin):
     """
-    Mock time.time and test the output of MonotonicTimestampGenerator.__call__
+    Mock time.time_ns and test the output of MonotonicTimestampGenerator.__call__
     given different patterns of changing results.
     """
 
@@ -71,10 +72,11 @@ class TestTimestampGeneratorOutput(unittest.TestCase, _TimestampTestMixin):
         """
         self._call_and_check_results(
             system_time_expected_stamp_pairs=(
-                (15.0, 15 * 1e6),
-                (15.0, 15 * 1e6 + 1),
-                (15.0, 15 * 1e6 + 2),
-                (15.01, 15.01 * 1e6))
+                (15_000_000_000, 15_000_000),
+                (15_000_000_000, 15_000_001),
+                (15_000_000_000, 15_000_002),
+                (15_010_000_000, 15_010_000),
+            )
         )
 
     def test_timestamps_during_and_after_backwards_system_time(self):
@@ -87,18 +89,18 @@ class TestTimestampGeneratorOutput(unittest.TestCase, _TimestampTestMixin):
         """
         self._call_and_check_results(
             system_time_expected_stamp_pairs=(
-                (15.0, 15 * 1e6),
-                (13.0, 15 * 1e6 + 1),
-                (14.0, 15 * 1e6 + 2),
-                (13.5, 15 * 1e6 + 3),
-                (15.01, 15.01 * 1e6))
+                (15_000_000_000, 15_000_000),
+                (13_000_000_000, 15_000_001),
+                (14_000_000_000, 15_000_002),
+                (13_500_000_000, 15_000_003),
+                (15_010_000_000, 15_010_000),
+            )
         )
 
 
 class TestTimestampGeneratorLogging(unittest.TestCase):
-
     def setUp(self):
-        self.log_patcher = mock.patch('cassandra.timestamps.log')
+        self.log_patcher = mock.patch("cassandra.timestamps.log")
         self.addCleanup(self.log_patcher.stop)
         self.patched_timestamp_log = self.log_patcher.start()
 
@@ -119,10 +121,9 @@ class TestTimestampGeneratorLogging(unittest.TestCase):
         @test_category timing
         """
         tsg = timestamps.MonotonicTimestampGenerator(
-            warning_threshold=1e-6,
-            warning_interval=1e-6
+            warning_threshold=1e-6, warning_interval=1e-6
         )
-        #The units of _last_warn is seconds
+        # The units of _last_warn is seconds
         tsg._last_warn = 12
 
         tsg._next_timestamp(20, tsg.last)
@@ -132,7 +133,7 @@ class TestTimestampGeneratorLogging(unittest.TestCase):
         assert len(self.patched_timestamp_log.warning.call_args_list) == 1
         self.assertLastCallArgRegex(
             self.patched_timestamp_log.warning.call_args,
-            r'Clock skew detected:.*\b16\b.*\b4\b.*\b20\b'
+            r"Clock skew detected:.*\b16\b.*\b4\b.*\b20\b",
         )
 
     def test_disable_logging(self):
@@ -179,8 +180,7 @@ class TestTimestampGeneratorLogging(unittest.TestCase):
         @test_category timing
         """
         tsg = timestamps.MonotonicTimestampGenerator(
-            warning_threshold=1e-6,
-            warning_interval=1e-6
+            warning_threshold=1e-6, warning_interval=1e-6
         )
         tsg.last, tsg._last_warn = 100, 97
         tsg._next_timestamp(98, tsg.last)
@@ -197,8 +197,7 @@ class TestTimestampGeneratorLogging(unittest.TestCase):
         @test_category timing
         """
         tsg = timestamps.MonotonicTimestampGenerator(
-            warning_threshold=1e-6,
-            warning_interval=2e-6
+            warning_threshold=1e-6, warning_interval=2e-6
         )
         tsg.last = 100
         tsg._next_timestamp(70, tsg.last)
@@ -231,7 +230,6 @@ class TestTimestampGeneratorLogging(unittest.TestCase):
 
 
 class TestTimestampGeneratorMultipleThreads(unittest.TestCase):
-
     def test_should_generate_incrementing_timestamps_for_all_threads(self):
         """
         Tests when time is "stopped", values are assigned incrementally
@@ -251,13 +249,13 @@ class TestTimestampGeneratorMultipleThreads(unittest.TestCase):
                     generated_timestamps.append(timestamp)
 
         tsg = timestamps.MonotonicTimestampGenerator()
-        fixed_time = 1
+        fixed_time_ns = 1_000_000_000
         num_threads = 5
 
         timestamp_to_generate = 1000
         generated_timestamps = []
 
-        with mock.patch('time.time', new=mock.Mock(return_value=fixed_time)):
+        with mock.patch.object(timestamps.time, "time_ns", return_value=fixed_time_ns):
             threads = []
             for _ in range(num_threads):
                 threads.append(Thread(target=request_time))
@@ -270,4 +268,4 @@ class TestTimestampGeneratorMultipleThreads(unittest.TestCase):
 
             assert len(generated_timestamps) == num_threads * timestamp_to_generate
             for i, timestamp in enumerate(sorted(generated_timestamps)):
-                assert int(i + 1e6) == timestamp
+                assert i + 1_000_000 == timestamp
