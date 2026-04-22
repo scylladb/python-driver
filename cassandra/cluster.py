@@ -4463,8 +4463,8 @@ class ResponseFuture(object):
         self._make_query_plan()
         self._event = Event()
         self._errors = {}
-        self._callbacks = []
-        self._errbacks = []
+        self._callbacks = None
+        self._errbacks = None
         self.attempted_hosts = []
         self._start_timer()
         self._continuous_paging_state = continuous_paging_state
@@ -4977,7 +4977,7 @@ class ResponseFuture(object):
             # registered callback
             to_call = tuple(
                 partial(fn, response, *args, **kwargs)
-                for (fn, args, kwargs) in self._callbacks
+                for (fn, args, kwargs) in self._callbacks or ()
             )
 
         self._event.set()
@@ -4999,7 +4999,7 @@ class ResponseFuture(object):
             # registered errback
             to_call = tuple(
                 partial(fn, response, *args, **kwargs)
-                for (fn, args, kwargs) in self._errbacks
+                for (fn, args, kwargs) in self._errbacks or ()
             )
         self._event.set()
 
@@ -5175,6 +5175,8 @@ class ResponseFuture(object):
             # Always add fn to self._callbacks, even when we're about to
             # execute it, to prevent races with functions like
             # start_fetching_next_page that reset _final_result
+            if self._callbacks is None:
+                self._callbacks = []
             self._callbacks.append((fn, args, kwargs))
             if self._final_result is not _NOT_SET:
                 run_now = True
@@ -5193,6 +5195,8 @@ class ResponseFuture(object):
             # Always add fn to self._errbacks, even when we're about to execute
             # it, to prevent races with functions like start_fetching_next_page
             # that reset _final_exception
+            if self._errbacks is None:
+                self._errbacks = []
             self._errbacks.append((fn, args, kwargs))
             if self._final_exception:
                 run_now = True
@@ -5230,8 +5234,8 @@ class ResponseFuture(object):
 
     def clear_callbacks(self):
         with self._callback_lock:
-            self._callbacks = []
-            self._errbacks = []
+            self._callbacks = None
+            self._errbacks = None
 
     def __str__(self):
         result = "(no result yet)" if self._final_result is _NOT_SET else self._final_result
