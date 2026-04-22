@@ -54,7 +54,7 @@ class TestUseKeyspace(unittest.TestCase):
             return original_set_keyspace_blocking(*args, **kwargs)
 
         with patch.object(Connection, "set_keyspace_blocking", patched_set_keyspace_blocking):
-            self.session.execute("CREATE KEYSPACE test_set_keyspace WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
+            self.session.execute("CREATE KEYSPACE test_set_keyspace WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
             self.session.execute("CREATE TABLE test_set_keyspace.set_keyspace_slow_connection(pk int, PRIMARY KEY(pk))")
 
             session2 = self.cluster.connect()

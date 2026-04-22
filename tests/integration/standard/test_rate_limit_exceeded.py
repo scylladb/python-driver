@@ -33,7 +33,7 @@ class TestRateLimitExceededException(unittest.TestCase):
         self.session.execute(
             """
             CREATE KEYSPACE IF NOT EXISTS ratetests
-            WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1}
+            WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1}
             """)
 
         self.session.execute("USE ratetests")

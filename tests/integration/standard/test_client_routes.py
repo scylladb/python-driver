@@ -729,7 +729,7 @@ class TestPrivateLinkConnectivity(unittest.TestCase):
             session = cluster.connect()
             session.execute(
                 "CREATE KEYSPACE IF NOT EXISTS test_cr_ks "
-                "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}"
+                "WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor': 3}"
             )
             session.execute(
                 "CREATE TABLE IF NOT EXISTS test_cr_ks.t (k int PRIMARY KEY, v text)"

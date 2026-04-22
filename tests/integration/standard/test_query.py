@@ -1359,12 +1359,12 @@ class BaseKeyspaceTests():
         cls.table_name = "table_query_keyspace_tests"
 
         ddl = """CREATE KEYSPACE {0} WITH replication =
-                        {{'class': 'SimpleStrategy',
+                        {{'class': 'NetworkTopologyStrategy',
                         'replication_factor': '{1}'}}""".format(cls.ks_name, 1)
         cls.session.execute(ddl)
 
         ddl = """CREATE KEYSPACE {0} WITH replication =
-                                {{'class': 'SimpleStrategy',
+                                {{'class': 'NetworkTopologyStrategy',
                                 'replication_factor': '{1}'}}""".format(cls.alternative_ks, 1)
         cls.session.execute(ddl)
 

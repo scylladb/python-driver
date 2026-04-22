@@ -30,7 +30,7 @@ class ColumnEncryptionPolicyTest(unittest.TestCase):
 
     def _recreate_keyspace(self, session):
         session.execute("drop keyspace if exists foo")
-        session.execute("CREATE KEYSPACE foo WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}")
+        session.execute("CREATE KEYSPACE foo WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}")
         session.execute("CREATE TABLE foo.bar(encrypted blob, unencrypted int, primary key(unencrypted))")
 
     def _create_policy(self, key, iv = None):
