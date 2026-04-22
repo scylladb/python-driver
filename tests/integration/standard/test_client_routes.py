@@ -1137,7 +1137,7 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
     def test_should_survive_full_node_replacement_through_nlb(self):
         """
         1. Start with 3 nodes behind the NLB
-        2. Bootstrap 2 new nodes, add to NLB, update routes
+        2. Bootstrap 3 new nodes, add to NLB, update routes
         3. Decommission the original 3 nodes one-by-one, updating NLB/routes
         4. Verify the session survives with only new nodes
         """
@@ -1173,7 +1173,7 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
                          len(original_node_ids))
 
                 # ---- Stage 3: Bootstrap new nodes ----
-                new_node_ids = [max(original_node_ids) + 1, max(original_node_ids) + 2]
+                new_node_ids = [max(original_node_ids) + 1, max(original_node_ids) + 2, max(original_node_ids) + 3]
                 log.info("Stage 3: Adding nodes %s", new_node_ids)
                 ccm_cluster = get_cluster()
 
