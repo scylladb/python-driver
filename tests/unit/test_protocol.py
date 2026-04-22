@@ -12,16 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import io
 import unittest
 
 from unittest.mock import Mock
 
-from cassandra import ProtocolVersion, UnsupportedOperation
+from cassandra import DriverException, ProtocolVersion, UnsupportedOperation, type_codes
 from cassandra.protocol import (
-    PrepareMessage, QueryMessage, ExecuteMessage, UnsupportedOperation,
+    PrepareMessage, QueryMessage, ExecuteMessage, ResultMessage, UnsupportedOperation,
     _PAGING_OPTIONS_FLAG, _WITH_SERIAL_CONSISTENCY_FLAG,
     _PAGE_SIZE_FLAG, _WITH_PAGING_STATE_FLAG,
-    BatchMessage
+    BatchMessage, RESULT_KIND_ROWS, write_int, write_short, write_string
 )
 from cassandra.query import BatchType
 from cassandra.marshal import uint32_unpack
@@ -30,6 +31,22 @@ import pytest
 
 
 class MessageTest(unittest.TestCase):
+
+    def test_result_message_wraps_inline_decode_errors(self):
+        body = io.BytesIO()
+        write_int(body, RESULT_KIND_ROWS)
+        write_int(body, 0)
+        write_int(body, 1)
+        write_string(body, "ks")
+        write_string(body, "tbl")
+        write_string(body, "v")
+        write_short(body, type_codes.DateType)
+        write_int(body, 1)
+        write_int(body, 1)
+        body.write(b"\x00")
+
+        with pytest.raises(DriverException, match='Failed decoding result column "v"'):
+            ResultMessage.recv_body(io.BytesIO(body.getvalue()), ProtocolVersion.V4, 0, {}, None, None)
 
     def test_prepare_message(self):
         """
