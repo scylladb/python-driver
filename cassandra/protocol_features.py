@@ -10,6 +10,7 @@ LWT_ADD_METADATA_MARK = "SCYLLA_LWT_ADD_METADATA_MARK"
 LWT_OPTIMIZATION_META_BIT_MASK = "LWT_OPTIMIZATION_META_BIT_MASK"
 RATE_LIMIT_ERROR_EXTENSION = "SCYLLA_RATE_LIMIT_ERROR"
 TABLETS_ROUTING_V1 = "TABLETS_ROUTING_V1"
+USE_METADATA_ID = "SCYLLA_USE_METADATA_ID"
 
 class ProtocolFeatures(object):
     rate_limit_error = None
@@ -17,13 +18,16 @@ class ProtocolFeatures(object):
     sharding_info = None
     tablets_routing_v1 = False
     lwt_info = None
+    use_metadata_id = False
 
-    def __init__(self, rate_limit_error=None, shard_id=0, sharding_info=None, tablets_routing_v1=False, lwt_info=None):
+    def __init__(self, rate_limit_error=None, shard_id=0, sharding_info=None, tablets_routing_v1=False, lwt_info=None,
+                 use_metadata_id=False):
         self.rate_limit_error = rate_limit_error
         self.shard_id = shard_id
         self.sharding_info = sharding_info
         self.tablets_routing_v1 = tablets_routing_v1
         self.lwt_info = lwt_info
+        self.use_metadata_id = use_metadata_id
 
     @staticmethod
     def parse_from_supported(supported):
@@ -31,7 +35,9 @@ class ProtocolFeatures(object):
         shard_id, sharding_info = ProtocolFeatures.parse_sharding_info(supported)
         tablets_routing_v1 = ProtocolFeatures.parse_tablets_info(supported)
         lwt_info = ProtocolFeatures.parse_lwt_info(supported)
-        return ProtocolFeatures(rate_limit_error, shard_id, sharding_info, tablets_routing_v1, lwt_info)
+        use_metadata_id = ProtocolFeatures.parse_use_metadata_id(supported)
+        return ProtocolFeatures(rate_limit_error, shard_id, sharding_info, tablets_routing_v1, lwt_info,
+                                use_metadata_id)
 
     @staticmethod
     def maybe_parse_rate_limit_error(supported):
@@ -57,6 +63,8 @@ class ProtocolFeatures(object):
             options[TABLETS_ROUTING_V1] = ""
         if self.lwt_info is not None:
             options[LWT_ADD_METADATA_MARK] = str(self.lwt_info.lwt_meta_bit_mask)
+        if self.use_metadata_id:
+            options[USE_METADATA_ID] = ""
 
     @staticmethod
     def parse_sharding_info(options):
@@ -80,6 +88,10 @@ class ProtocolFeatures(object):
     @staticmethod
     def parse_tablets_info(options):
         return TABLETS_ROUTING_V1 in options
+
+    @staticmethod
+    def parse_use_metadata_id(options):
+        return USE_METADATA_ID in options
 
     @staticmethod
     def parse_lwt_info(options):

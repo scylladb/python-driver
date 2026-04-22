@@ -23,6 +23,7 @@ from cassandra.cluster import Session, ResponseFuture, NoHostAvailable, Protocol
 from cassandra.connection import Connection, ConnectionException
 from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessage,
                                 UnavailableErrorMessage, ResultMessage, QueryMessage,
+                                ExecuteMessage,
                                 OverloadedErrorMessage, IsBootstrappingErrorMessage,
                                 PreparedQueryNotFound, PrepareMessage, ServerError,
                                 RESULT_KIND_ROWS, RESULT_KIND_SET_KEYSPACE,
@@ -729,3 +730,288 @@ class ResponseFutureTests(unittest.TestCase):
         # Instead, it should set a NoHostAvailable exception
         assert rf._final_exception is not None
         assert isinstance(rf._final_exception, NoHostAvailable)
+
+    # -------------------------------------------------------------------------
+    # Helpers for SCYLLA_USE_METADATA_ID tests
+    # -------------------------------------------------------------------------
+
+    def _make_rows_response(self, result_metadata_id=None, column_metadata=None):
+        """
+        Return a real ResultMessage(kind=RESULT_KIND_ROWS) with all attributes
+        that _set_result accesses pre-set, so it passes isinstance checks and
+        doesn't trigger unexpected code paths.
+        """
+        response = ResultMessage(kind=RESULT_KIND_ROWS)
+        response.paging_state = None
+        response.column_names = ['col']
+        response.parsed_rows = []
+        response.column_types = []
+        response.column_metadata = column_metadata
+        response.result_metadata_id = result_metadata_id
+        response.trace_id = None
+        response.warnings = None
+        response.custom_payload = None
+        return response
+
+    def _make_execute_response_future(self, session, connection, prepared_statement):
+        """
+        Return a ResponseFuture whose message is an ExecuteMessage and which
+        has a prepared_statement set so that _query()'s feature-gating logic
+        is exercised.
+        """
+        execute_msg = ExecuteMessage(b'qid', [], ConsistencyLevel.ONE)
+        query = SimpleStatement("SELECT * FROM foo")
+        rf = ResponseFuture(
+            session, execute_msg, query, timeout=1,
+            prepared_statement=prepared_statement,
+        )
+        pool = session._pools.get.return_value
+        pool.borrow_connection.return_value = (connection, 1)
+        return rf
+
+    # -------------------------------------------------------------------------
+    # _set_result: METADATA_CHANGED update path
+    # -------------------------------------------------------------------------
+
+    def test_set_result_updates_metadata_when_metadata_changed(self):
+        """
+        When the EXECUTE response carries a new result_metadata_id (server
+        detected a schema change), _set_result must update both
+        prepared_statement.result_metadata and prepared_statement.result_metadata_id.
+        """
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Mock(spec=Connection)
+        connection.protocol_version = 4
+        connection.features = Mock()
+        connection.features.use_metadata_id = False
+        pool.borrow_connection.return_value = (connection, 1)
+
+        old_meta = [('ks', 'tb', 'old_col', Mock())]
+        new_meta = [('ks', 'tb', 'new_col', Mock())]
+        ps = Mock()
+        ps.result_metadata = old_meta
+        ps.result_metadata_id = b'old_id'
+
+        rf = self.make_response_future(session)
+        rf.prepared_statement = ps
+        rf.send_request()
+
+        response = self._make_rows_response(
+            result_metadata_id=b'new_id',
+            column_metadata=new_meta,
+        )
+        rf._set_result(None, None, None, response)
+
+        assert ps.result_metadata is new_meta
+        assert ps.result_metadata_id == b'new_id'
+
+    def test_set_result_does_not_update_metadata_when_metadata_id_absent(self):
+        """
+        When the EXECUTE response has no result_metadata_id (normal skip-meta
+        path — server metadata unchanged), _set_result must leave the
+        prepared_statement's cached metadata untouched.
+        """
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Mock(spec=Connection)
+        connection.protocol_version = 4
+        connection.features = Mock()
+        connection.features.use_metadata_id = False
+        pool.borrow_connection.return_value = (connection, 1)
+
+        old_meta = [('ks', 'tb', 'col', Mock())]
+        ps = Mock()
+        ps.result_metadata = old_meta
+        ps.result_metadata_id = b'old_id'
+
+        rf = self.make_response_future(session)
+        rf.prepared_statement = ps
+        rf.send_request()
+
+        # result_metadata_id is None → server sent full metadata, no hash update
+        response = self._make_rows_response(
+            result_metadata_id=None,
+            column_metadata=old_meta,
+        )
+        rf._set_result(None, None, None, response)
+
+        assert ps.result_metadata is old_meta
+        assert ps.result_metadata_id == b'old_id'
+
+    def test_set_result_warns_when_metadata_id_but_no_column_metadata(self):
+        """
+        If the server sends a new result_metadata_id but no column metadata
+        (protocol violation), _set_result must still update result_metadata_id
+        and emit a WARNING log so the inconsistency is visible in logs.
+        """
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Mock(spec=Connection)
+        connection.protocol_version = 4
+        connection.features = Mock()
+        connection.features.use_metadata_id = False
+        pool.borrow_connection.return_value = (connection, 1)
+
+        ps = Mock()
+        ps.result_metadata = [('ks', 'tb', 'col', Mock())]
+        ps.result_metadata_id = b'old_id'
+
+        rf = self.make_response_future(session)
+        rf.prepared_statement = ps
+        rf.send_request()
+
+        # column_metadata is falsy (empty list) but result_metadata_id is set
+        response = self._make_rows_response(
+            result_metadata_id=b'new_id',
+            column_metadata=[],
+        )
+
+        with self.assertLogs('cassandra.cluster', level='WARNING') as log_ctx:
+            rf._set_result(None, None, None, response)
+
+        assert any('result_metadata_id' in msg for msg in log_ctx.output)
+        # metadata_id is still updated even without column metadata
+        assert ps.result_metadata_id == b'new_id'
+
+    # -------------------------------------------------------------------------
+    # _query: per-connection feature gating for skip_meta / result_metadata_id
+    # -------------------------------------------------------------------------
+
+    def test_query_sets_skip_meta_with_scylla_extension(self):
+        """
+        When the borrowed connection has negotiated SCYLLA_USE_METADATA_ID and
+        the prepared statement carries both a result_metadata_id and usable
+        cached result_metadata, _query() must set skip_meta=True and attach
+        the metadata_id to the ExecuteMessage.
+        """
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools.get.return_value = self.make_pool()
+
+        connection = Mock(spec=Connection)
+        connection.protocol_version = 4
+        connection.features = Mock()
+        connection.features.use_metadata_id = True
+        session._pools.get.return_value.borrow_connection.return_value = (connection, 1)
+
+        ps = Mock()
+        ps.result_metadata = [('ks', 'tbl', 'col', Mock())]  # truthy — real cached metadata
+        ps.result_metadata_id = b'meta_hash'
+
+        rf = self._make_execute_response_future(session, connection, ps)
+        rf.send_request()
+
+        assert rf.message.skip_meta is True
+        assert rf.message.result_metadata_id == b'meta_hash'
+
+    def test_query_no_skip_meta_without_extension(self):
+        """
+        When the connection does NOT have SCYLLA_USE_METADATA_ID (and protocol
+        is v4), _query() must leave skip_meta=False and result_metadata_id=None.
+        """
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools.get.return_value = self.make_pool()
+
+        connection = Mock(spec=Connection)
+        connection.protocol_version = 4
+        connection.features = Mock()
+        connection.features.use_metadata_id = False
+        session._pools.get.return_value.borrow_connection.return_value = (connection, 1)
+
+        ps = Mock()
+        ps.result_metadata = []
+        ps.result_metadata_id = b'meta_hash'
+
+        rf = self._make_execute_response_future(session, connection, ps)
+        rf.send_request()
+
+        assert rf.message.skip_meta is False
+        assert rf.message.result_metadata_id is None
+
+    def test_query_no_skip_meta_when_prepared_statement_has_no_metadata_id(self):
+        """
+        Even if the connection supports SCYLLA_USE_METADATA_ID, if the prepared
+        statement was created before the extension was active (result_metadata_id
+        is None), _query() must NOT set skip_meta — the driver has no hash to send.
+        """
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools.get.return_value = self.make_pool()
+
+        connection = Mock(spec=Connection)
+        connection.protocol_version = 4
+        connection.features = Mock()
+        connection.features.use_metadata_id = True   # extension active on this connection
+        session._pools.get.return_value.borrow_connection.return_value = (connection, 1)
+
+        ps = Mock()
+        ps.result_metadata = []
+        ps.result_metadata_id = None   # statement prepared without extension
+
+        rf = self._make_execute_response_future(session, connection, ps)
+        rf.send_request()
+
+        assert rf.message.skip_meta is False
+        assert rf.message.result_metadata_id is None
+
+    def test_query_sets_skip_meta_for_protocol_v5(self):
+        """
+        On a protocol-v5 connection (ProtocolVersion.uses_prepared_metadata),
+        _query() must set skip_meta=True and send result_metadata_id even if
+        the Scylla-specific use_metadata_id flag is False.
+        """
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools.get.return_value = self.make_pool()
+
+        connection = Mock(spec=Connection)
+        connection.protocol_version = 5  # CQL v5 — uses_prepared_metadata() is True
+        connection.features = Mock()
+        connection.features.use_metadata_id = False  # Scylla extension not needed
+        session._pools.get.return_value.borrow_connection.return_value = (connection, 1)
+
+        ps = Mock()
+        ps.result_metadata = [('ks', 'tbl', 'col', Mock())]  # truthy — real cached metadata
+        ps.result_metadata_id = b'v5_hash'
+
+        rf = self._make_execute_response_future(session, connection, ps)
+        rf.send_request()
+
+        assert rf.message.skip_meta is True
+        assert rf.message.result_metadata_id == b'v5_hash'
+
+    def test_query_no_skip_meta_when_result_metadata_is_none(self):
+        """
+        Even when the connection has negotiated SCYLLA_USE_METADATA_ID and the
+        prepared statement carries a result_metadata_id, _query() must NOT set
+        skip_meta=True when result_metadata is None (e.g. LWT / conditional
+        statements such as INSERT ... IF NOT EXISTS).
+
+        For these statements the PREPARE response includes a result_metadata_id
+        but the result metadata section carries NO_METADATA, leaving
+        PreparedStatement.result_metadata as None.  Enabling skip_meta in this
+        case would cause the server to omit column definitions from the EXECUTE
+        response while the driver has no cached metadata to fall back on,
+        resulting in a decode failure.
+        """
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools.get.return_value = self.make_pool()
+
+        connection = Mock(spec=Connection)
+        connection.protocol_version = 4
+        connection.features = Mock()
+        connection.features.use_metadata_id = True
+        session._pools.get.return_value.borrow_connection.return_value = (connection, 1)
+
+        ps = Mock()
+        ps.result_metadata = None        # LWT: PREPARE returned NO_METADATA for result columns
+        ps.result_metadata_id = b'lwt_hash'  # but the server still issued a metadata hash
+
+        rf = self._make_execute_response_future(session, connection, ps)
+        rf.send_request()
+
+        assert rf.message.skip_meta is False
+        assert rf.message.result_metadata_id is None
