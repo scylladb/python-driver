@@ -53,6 +53,9 @@ class MockSession(MagicMock):
             self.futures += [f]
             return f
 
+    def is_shard_aware_disabled(self):
+        return self.cluster.shard_aware_options.disable
+
     def mock_connection_factory(self, *args, **kwargs):
         connection = MagicMock()
         connection.is_shutdown = False
