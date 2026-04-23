@@ -301,6 +301,60 @@ class ControlConnectionTest(unittest.TestCase):
         cc._time = self.time
         assert cc.wait_for_schema_agreement()
 
+    def test_on_down_reconnects_when_current_host_matches_by_host_id(self):
+        self.control_connection._connection.endpoint = DefaultEndPoint("127.254.254.101")
+        self.control_connection._current_host_id = "uuid1"
+        self.control_connection.reconnect = Mock()
+
+        self.control_connection.on_down(self.cluster.metadata.get_host_by_host_id("uuid1"))
+
+        self.control_connection.reconnect.assert_called_once_with()
+
+    def test_on_remove_reconnects_when_current_host_matches_by_host_id(self):
+        self.control_connection._connection.endpoint = DefaultEndPoint("127.254.254.101")
+        self.control_connection._current_host_id = "uuid1"
+        self.control_connection.reconnect = Mock()
+        self.control_connection.refresh_node_list_and_token_map = Mock()
+
+        self.control_connection.on_remove(self.cluster.metadata.get_host_by_host_id("uuid1"))
+
+        self.control_connection.reconnect.assert_called_once_with()
+        self.control_connection.refresh_node_list_and_token_map.assert_not_called()
+
+    def test_signal_error_marks_current_host_down_when_current_host_matches_by_host_id(self):
+        host = self.cluster.metadata.get_host_by_host_id("uuid1")
+        error = RuntimeError("defunct")
+
+        self.connection.endpoint = DefaultEndPoint("127.254.254.101")
+        self.connection.is_defunct = True
+        self.connection.last_error = error
+        self.control_connection._current_host_id = host.host_id
+        self.cluster.signal_connection_failure = Mock()
+        self.control_connection.reconnect = Mock()
+
+        self.control_connection._signal_error()
+
+        self.cluster.signal_connection_failure.assert_called_once_with(
+            host, error, is_host_addition=False)
+        self.control_connection.reconnect.assert_not_called()
+
+    def test_signal_error_reconnects_when_current_host_conviction_is_deferred(self):
+        host = self.cluster.metadata.get_host_by_host_id("uuid1")
+        error = RuntimeError("defunct")
+
+        self.connection.endpoint = DefaultEndPoint("127.254.254.101")
+        self.connection.is_defunct = True
+        self.connection.last_error = error
+        self.control_connection._current_host_id = host.host_id
+        self.cluster.signal_connection_failure = Mock(return_value=False)
+        self.control_connection.reconnect = Mock()
+
+        self.control_connection._signal_error()
+
+        self.cluster.signal_connection_failure.assert_called_once_with(
+            host, error, is_host_addition=False)
+        self.control_connection.reconnect.assert_called_once_with()
+
     def test_refresh_nodes_and_tokens(self):
         self.control_connection.refresh_node_list_and_token_map()
         meta = self.cluster.metadata
