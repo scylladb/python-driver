@@ -17,6 +17,7 @@ import unittest
 
 import logging
 import sys
+import uuid
 from unittest.mock import sentinel
 
 from cassandra import ConsistencyLevel
@@ -37,6 +38,7 @@ from cassandra.policies import (
     DCAwareRoundRobinPolicy,
     TokenAwarePolicy,
     WhiteListRoundRobinPolicy,
+    DynamicWhiteListRoundRobinPolicy,
     HostFilterPolicy,
     ConstantReconnectionPolicy,
     ExponentialReconnectionPolicy,
@@ -202,6 +204,14 @@ class TestConfigAsDict(unittest.TestCase):
         assert insights_registry.serialize(WhiteListRoundRobinPolicy(['127.0.0.3'])) == {'namespace': 'cassandra.policies',
          'options': {'allowed_hosts': ('127.0.0.3',)},
          'type': 'WhiteListRoundRobinPolicy'}
+
+    def test_dynamic_whitelist_round_robin_policy(self):
+        policy = DynamicWhiteListRoundRobinPolicy()
+        host_id = uuid.uuid4()
+        policy._allowed_host_ids = (host_id,)
+        assert insights_registry.serialize(policy) == {'namespace': 'cassandra.policies',
+         'options': {'allowed_host_ids': (str(host_id),)},
+         'type': 'DynamicWhiteListRoundRobinPolicy'}
 
     def test_host_filter_policy(self):
         def my_predicate(s):
