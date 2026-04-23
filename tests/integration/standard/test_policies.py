@@ -104,5 +104,5 @@ class ExponentialRetryPolicyTests(unittest.TestCase):
         self.session.execute(
             """
             CREATE KEYSPACE preparedtests
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
             """)

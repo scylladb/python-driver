@@ -651,17 +651,17 @@ def setup_keyspace(ipformat=None, protocol_version=None, port=9042):
 
         ddl = '''
             CREATE KEYSPACE test3rf
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}'''
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}'''
         execute_with_long_wait_retry(session, ddl)
 
         ddl = '''
             CREATE KEYSPACE test2rf
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '2'}'''
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '2'}'''
         execute_with_long_wait_retry(session, ddl)
 
         ddl = '''
             CREATE KEYSPACE test1rf
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}'''
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'} AND tablets = {'enabled': false}'''
         execute_with_long_wait_retry(session, ddl)
 
         ddl_3f = '''
@@ -779,7 +779,7 @@ class BasicKeyspaceUnitTestCase(unittest.TestCase):
 
     @classmethod
     def create_keyspace(cls, rf):
-        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '{1}'}}".format(cls.ks_name, rf)
+        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '{1}'}} AND tablets = {{'enabled': false}}".format(cls.ks_name, rf)
         execute_with_long_wait_retry(cls.session, ddl)
 
     @classmethod

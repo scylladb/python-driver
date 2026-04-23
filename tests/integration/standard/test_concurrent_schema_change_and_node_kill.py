@@ -27,7 +27,7 @@ class TestConcurrentSchemaChangeAndNodeKill(unittest.TestCase):
             "DROP KEYSPACE IF EXISTS ks_deadlock;")
         self.session.execute(
             "CREATE KEYSPACE IF NOT EXISTS ks_deadlock "
-            "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '2' };")
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '2' };")
         self.session.set_keyspace('ks_deadlock')
         self.session.execute("CREATE TABLE IF NOT EXISTS some_table(k int, c int, v int, PRIMARY KEY (k, v));")
         self.session.execute("INSERT INTO some_table (k, c, v) VALUES (1, 2, 3);")

@@ -42,8 +42,9 @@ class CustomProtocolHandlerTest(unittest.TestCase):
     def setUpClass(cls):
         cls.cluster = TestCluster()
         cls.session = cls.cluster.connect()
-        cls.session.execute("CREATE KEYSPACE custserdes WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
+        cls.session.execute("CREATE KEYSPACE custserdes WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1'}")
         cls.session.set_keyspace("custserdes")
+        cls.session.execute("CREATE TABLE IF NOT EXISTS custserdes.test (k int PRIMARY KEY, v int)")
 
     @classmethod
     def tearDownClass(cls):
@@ -165,7 +166,7 @@ class CustomProtocolHandlerTest(unittest.TestCase):
                                                         int_flag=False)
 
     def _send_query_message(self, session, timeout, **kwargs):
-        query = "SELECT * FROM test3rf.test"
+        query = "SELECT * FROM custserdes.test"
         message = QueryMessage(query=query, **kwargs)
         future = ResponseFuture(session, message, query=None, timeout=timeout)
         future.send_request()
@@ -175,8 +176,8 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         cluster = TestCluster(protocol_version=version, allow_beta_protocol_version=beta)
         session = cluster.connect()
 
-        query_one = SimpleStatement("INSERT INTO test3rf.test (k, v) VALUES (1, 1)")
-        query_two = SimpleStatement("INSERT INTO test3rf.test (k, v) VALUES (2, 2)")
+        query_one = SimpleStatement("INSERT INTO custserdes.test (k, v) VALUES (1, 1)")
+        query_two = SimpleStatement("INSERT INTO custserdes.test (k, v) VALUES (2, 2)")
 
         execute_with_long_wait_retry(session, query_one)
         execute_with_long_wait_retry(session, query_two)
@@ -190,7 +191,7 @@ class CustomProtocolHandlerTest(unittest.TestCase):
             # This means the flag are not handled as they are meant by the server if uses_int=False
             assert response.has_more_pages == uses_int_query_flag
 
-        execute_with_long_wait_retry(session, SimpleStatement("TRUNCATE test3rf.test"))
+        execute_with_long_wait_retry(session, SimpleStatement("TRUNCATE custserdes.test"))
         cluster.shutdown()
 
 

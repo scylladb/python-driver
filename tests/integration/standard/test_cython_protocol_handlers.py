@@ -34,7 +34,7 @@ class CythonProtocolHandlerTest(unittest.TestCase):
         cls.cluster = TestCluster()
         cls.session = cls.cluster.connect()
         cls.session.execute("CREATE KEYSPACE testspace WITH replication = "
-                            "{ 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
+                            "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1'} AND tablets = {'enabled': false}")
         cls.session.set_keyspace("testspace")
         cls.colnames = create_table_with_all_types("test_table", cls.session, cls.N_ITEMS)
 
@@ -225,7 +225,7 @@ class NumpyWideTableTest(unittest.TestCase):
         cls.cluster = TestCluster()
         cls.session = cls.cluster.connect()
         cls.session.execute("CREATE KEYSPACE IF NOT EXISTS test_wide_table WITH replication = "
-                            "{ 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
+                            "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1'}")
         cls.session.set_keyspace("test_wide_table")
 
         # Create a wide table with many int columns

@@ -180,7 +180,7 @@ class ClusterTests(unittest.TestCase):
         result = execute_until_pass(session,
             """
             CREATE KEYSPACE clustertests
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
             """)
         assert not result
 
@@ -1506,7 +1506,7 @@ class DontPrepareOnIgnoredHostsTest(unittest.TestCase):
         hosts = cluster.metadata.all_hosts()
         session.execute("CREATE KEYSPACE clustertests "
                         "WITH replication = "
-                        "{'class': 'SimpleStrategy', 'replication_factor': '1'}")
+                        "{'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}")
         session.execute("CREATE TABLE clustertests.tab (a text, PRIMARY KEY (a))")
         # assign to an unused variable so cluster._prepared_statements retains
         # reference

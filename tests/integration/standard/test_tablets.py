@@ -9,7 +9,7 @@ from tests.unit.test_host_connection_pool import LOGGER
 
 
 def setup_module():
-    use_cluster('tablets', [3], start=True)
+    use_cluster('tablets', [3], start=True, set_keyspace=False)
 
 
 class TestTabletsIntegration:

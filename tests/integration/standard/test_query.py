@@ -26,7 +26,7 @@ from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DE
 from cassandra.policies import HostDistance, RoundRobinPolicy, WhiteListRoundRobinPolicy
 from tests.integration import use_singledc, PROTOCOL_VERSION, BasicSharedKeyspaceUnitTestCase, \
     greaterthanprotocolv3, MockLoggingHandler, get_supported_protocol_versions, local, get_cluster, setup_keyspace, \
-    USE_CASS_EXTERNAL, greaterthanorequalcass40, TestCluster, xfail_scylla
+    USE_CASS_EXTERNAL, greaterthanorequalcass40, TestCluster, xfail_scylla, xfail_scylla_version_lt
 from tests import notwindows
 from tests.integration import greaterthanorequalcass30, get_node
 from tests.util import assertListEqual, wait_until
@@ -804,6 +804,9 @@ class SerialConsistencyTests(unittest.TestCase):
     def tearDown(self):
         self.cluster.shutdown()
 
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#18068 - LWT is not yet supported with tablets',
+                             oss_scylla_version='6.4', ent_scylla_version='2025.4',
+                             raises=InvalidRequest)
     def test_conditional_update(self):
         self.session.execute("INSERT INTO test3rf.test (k, v) VALUES (0, 0)")
         statement = SimpleStatement(
@@ -828,6 +831,9 @@ class SerialConsistencyTests(unittest.TestCase):
         assert result
         assert result.one().applied
 
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#18068 - LWT is not yet supported with tablets',
+                             oss_scylla_version='6.4', ent_scylla_version='2025.4',
+                             raises=InvalidRequest)
     def test_conditional_update_with_prepared_statements(self):
         self.session.execute("INSERT INTO test3rf.test (k, v) VALUES (0, 0)")
         statement = self.session.prepare(
@@ -850,6 +856,9 @@ class SerialConsistencyTests(unittest.TestCase):
         assert result
         assert result.one().applied
 
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#18068 - LWT is not yet supported with tablets',
+                             oss_scylla_version='6.4', ent_scylla_version='2025.4',
+                             raises=InvalidRequest)
     def test_conditional_update_with_batch_statements(self):
         self.session.execute("INSERT INTO test3rf.test (k, v) VALUES (0, 0)")
         statement = BatchStatement(serial_consistency_level=ConsistencyLevel.SERIAL)
@@ -915,6 +924,9 @@ class LightweightTransactionTests(unittest.TestCase):
         self.session.execute("DROP TABLE test3rf.lwt_clustering")
         self.cluster.shutdown()
 
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#18068 - LWT is not yet supported with tablets',
+                             oss_scylla_version='6.4', ent_scylla_version='2025.4',
+                             raises=AttributeError)
     def test_no_connection_refused_on_timeout(self):
         """
         Test for PYTHON-91 "Connection closed after LWT timeout"
@@ -1359,12 +1371,12 @@ class BaseKeyspaceTests():
         cls.table_name = "table_query_keyspace_tests"
 
         ddl = """CREATE KEYSPACE {0} WITH replication =
-                        {{'class': 'SimpleStrategy',
+                        {{'class': 'NetworkTopologyStrategy',
                         'replication_factor': '{1}'}}""".format(cls.ks_name, 1)
         cls.session.execute(ddl)
 
         ddl = """CREATE KEYSPACE {0} WITH replication =
-                                {{'class': 'SimpleStrategy',
+                                {{'class': 'NetworkTopologyStrategy',
                                 'replication_factor': '{1}'}}""".format(cls.alternative_ks, 1)
         cls.session.execute(ddl)
 

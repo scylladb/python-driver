@@ -94,7 +94,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         # use the same UDT name in a different keyspace
         s.execute("""
             CREATE KEYSPACE udt_test_unprepared_registered2
-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
+            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
             """)
         s.set_keyspace("udt_test_unprepared_registered2")
         s.execute("CREATE TYPE user (state text, is_cool boolean)")
@@ -124,14 +124,14 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
 
         s.execute("""
             CREATE KEYSPACE udt_test_register_before_connecting
-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
+            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
             """)
         s.execute("CREATE TYPE udt_test_register_before_connecting.user (age int, name text)")
         s.execute("CREATE TABLE udt_test_register_before_connecting.mytable (a int PRIMARY KEY, b frozen<user>)")
 
         s.execute("""
             CREATE KEYSPACE udt_test_register_before_connecting2
-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
+            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
             """)
         s.execute("CREATE TYPE udt_test_register_before_connecting2.user (state text, is_cool boolean)")
         s.execute("CREATE TABLE udt_test_register_before_connecting2.mytable (a int PRIMARY KEY, b frozen<user>)")
@@ -193,7 +193,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         # use the same UDT name in a different keyspace
         s.execute("""
             CREATE KEYSPACE udt_test_prepared_unregistered2
-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
+            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
             """)
         s.set_keyspace("udt_test_prepared_unregistered2")
         s.execute("CREATE TYPE user (state text, is_cool boolean)")
@@ -240,7 +240,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         # use the same UDT name in a different keyspace
         s.execute("""
             CREATE KEYSPACE udt_test_prepared_registered2
-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
+            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
             """)
         s.set_keyspace("udt_test_prepared_registered2")
         s.execute("CREATE TYPE user (state text, is_cool boolean)")
