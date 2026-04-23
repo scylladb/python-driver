@@ -1967,7 +1967,7 @@ class MD5Token(HashToken):
     def hash_fn(cls, key):
         if isinstance(key, str):
             key = key.encode('UTF-8')
-        return abs(varint_unpack(md5(key).digest()))
+        return abs(varint_unpack(md5(key,usedforsecurity=False).digest()))
 
 
 class BytesToken(Token):
