@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import copy
 from datetime import datetime, timedelta
 from functools import partial
 import time
+from typing import TYPE_CHECKING, TypeVar
 from warnings import warn
 
 from cassandra.query import SimpleStatement, BatchType as CBatchType, BatchStatement
@@ -336,9 +339,13 @@ class ContextQuery(object):
         return
 
 
+if TYPE_CHECKING:
+    from cassandra.cqlengine.models import M
+
+
 class AbstractQuerySet(object):
 
-    def __init__(self, model):
+    def __init__(self, model: type[M]):
         super(AbstractQuerySet, self).__init__()
         self.model = model
 
@@ -528,7 +535,7 @@ class AbstractQuerySet(object):
 
             idx += 1
 
-    def __getitem__(self, s):
+    def __getitem__(self, s: slice | int) -> M | list[M]:
         self._execute_query()
 
         if isinstance(s, slice):
@@ -601,7 +608,7 @@ class AbstractQuerySet(object):
         clone._batch = batch_obj
         return clone
 
-    def first(self):
+    def first(self) -> M | None:
         try:
             return next(iter(self))
         except StopIteration:
@@ -618,7 +625,7 @@ class AbstractQuerySet(object):
         """
         return copy.deepcopy(self)
 
-    def consistency(self, consistency):
+    def consistency(self, consistency: int):
         """
         Sets the consistency level for the operation. See :class:`.ConsistencyLevel`.
 
@@ -742,7 +749,7 @@ class AbstractQuerySet(object):
 
         return clone
 
-    def get(self, *args, **kwargs):
+    def get(self, *args, **kwargs) -> M:
         """
         Returns a single instance matching this query, optionally with additional filter kwargs.
 
@@ -783,7 +790,7 @@ class AbstractQuerySet(object):
 
         return colname, order_type
 
-    def order_by(self, *colnames):
+    def order_by(self, *colnames: str):
         """
         Sets the column(s) to be used for ordering
 
@@ -827,7 +834,7 @@ class AbstractQuerySet(object):
         clone._order.extend(conditions)
         return clone
 
-    def count(self):
+    def count(self) -> int:
         """
         Returns the number of rows matched by this query.
 
@@ -880,7 +887,7 @@ class AbstractQuerySet(object):
 
         return clone
 
-    def limit(self, v):
+    def limit(self, v: int):
         """
         Limits the number of results returned by Cassandra. Use *0* or *None* to disable.
 
@@ -912,7 +919,7 @@ class AbstractQuerySet(object):
         clone._limit = v
         return clone
 
-    def fetch_size(self, v):
+    def fetch_size(self, v: int):
         """
         Sets the number of rows that are fetched at a time.
 
@@ -968,15 +975,15 @@ class AbstractQuerySet(object):
 
         return clone
 
-    def only(self, fields):
+    def only(self, fields: list[str]):
         """ Load only these fields for the returned query """
         return self._only_or_defer('only', fields)
 
-    def defer(self, fields):
+    def defer(self, fields: list[str]):
         """ Don't load these fields for the returned query """
         return self._only_or_defer('defer', fields)
 
-    def create(self, **kwargs):
+    def create(self, **kwargs) -> M:
         return self.model(**kwargs) \
             .batch(self._batch) \
             .ttl(self._ttl) \
@@ -1011,9 +1018,9 @@ class AbstractQuerySet(object):
         return False
 
     def __ne__(self, q):
-        return not (self != q)
+        return not (self == q)
 
-    def timeout(self, timeout):
+    def timeout(self, timeout: float | None):
         """
         :param timeout: Timeout for the query (in seconds)
         :type timeout: float or None
@@ -1156,7 +1163,7 @@ class ModelQuerySet(AbstractQuerySet):
         clone._flat_values_list = flat
         return clone
 
-    def ttl(self, ttl):
+    def ttl(self, ttl: int):
         """
         Sets the ttl (in seconds) for modified data.
 
@@ -1166,7 +1173,7 @@ class ModelQuerySet(AbstractQuerySet):
         clone._ttl = ttl
         return clone
 
-    def timestamp(self, timestamp):
+    def timestamp(self, timestamp: datetime):
         """
         Allows for custom timestamps to be saved with the record.
         """
