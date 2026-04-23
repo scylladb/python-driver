@@ -43,6 +43,7 @@ auth-kerberos = [
 [dependency-groups]
 dev = [
     "pytest~=8.0",
+    "pytest-timeout",
     "PyYAML",
     "pure-sasl",
     "twisted[tls]",
