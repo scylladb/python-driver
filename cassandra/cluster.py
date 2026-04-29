@@ -3241,6 +3241,9 @@ class Session(object):
             return None
 
         def run_add_or_renew_pool():
+            with self._lock:
+                previous = self._pools.get(host)
+
             try:
                new_pool = HostConnection(host, distance, self)
             except AuthenticationFailed as auth_exc:
@@ -3256,7 +3259,6 @@ class Session(object):
                     host, conn_exc, is_host_addition, expect_host_to_be_down=True)
                 return False
 
-            previous = self._pools.get(host)
             with self._lock:
                 while new_pool._keyspace != self.keyspace:
                     self._lock.release()
@@ -3276,7 +3278,20 @@ class Session(object):
                         self._lock.acquire()
                         return False
                     self._lock.acquire()
-                self._pools[host] = new_pool
+
+                pool_unchanged = self._pools.get(host) is previous
+                if not pool_unchanged:
+                    # Another concurrent add_or_renew_pool changed this host
+                    # while we were creating ours. Don't replace the existing
+                    # pool because doing so would kill in-flight queries.
+                    log.debug("Pool for host %s was already replaced by another "
+                              "thread, discarding new pool", host)
+                else:
+                    self._pools[host] = new_pool
+
+            if not pool_unchanged:
+                new_pool.shutdown()
+                return True
 
             log.debug("Added pool for host %s to session", host)
             if previous:
@@ -3287,7 +3302,8 @@ class Session(object):
         return self.submit(run_add_or_renew_pool)
 
     def remove_pool(self, host):
-        pool = self._pools.pop(host, None)
+        with self._lock:
+            pool = self._pools.pop(host, None)
         if pool:
             log.debug("Removed connection pool for %r", host)
             return self.submit(pool.shutdown)
