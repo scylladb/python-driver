@@ -19,9 +19,11 @@ from unittest.mock import Mock, ANY, call
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
-from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
+from cassandra.cluster import (Cluster, ControlConnection, _Scheduler, ProfileManager,
+                               EXEC_PROFILE_DEFAULT, ExecutionProfile)
 from cassandra.pool import Host
-from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
+from cassandra.connection import (EndPoint, DefaultEndPoint,
+                                  DefaultEndPointFactory, SniEndPoint)
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
                                 ConstantReconnectionPolicy, IdentityTranslator)
 
@@ -111,6 +113,7 @@ class MockCluster(object):
         self.profile_manager.profiles[EXEC_PROFILE_DEFAULT] = ExecutionProfile(RoundRobinPolicy())
         self.endpoint_factory = DefaultEndPointFactory().configure(self)
         self.ssl_options = None
+        self.down_expected_endpoint = None
 
     def add_host(self, endpoint, datacenter, rack, signal=False, refresh_nodes=True, host_id=None):
         host = Host(endpoint, SimpleConvictionPolicy, datacenter, rack, host_id=host_id)
@@ -121,11 +124,13 @@ class MockCluster(object):
     def remove_host(self, host):
         pass
 
-    def on_up(self, host):
+    def on_up(self, host, expected_endpoint=None):
         pass
 
-    def on_down(self, host, is_host_addition, expect_host_to_be_down=False):
+    def on_down(self, host, is_host_addition, expect_host_to_be_down=False,
+                expected_endpoint=None):
         self.down_host = host
+        self.down_expected_endpoint = expected_endpoint
 
 
 def _node_meta_results(local_results, peer_results):
@@ -495,7 +500,8 @@ class ControlConnectionTest(unittest.TestCase):
         self.cluster.scheduler.reset_mock()
         self.control_connection._handle_status_change(event)
         host = self.cluster.metadata.get_host(DefaultEndPoint('192.168.1.0'))
-        self.cluster.scheduler.schedule_unique.assert_called_once_with(ANY, self.cluster.on_up, host)
+        self.cluster.scheduler.schedule_unique.assert_called_once_with(
+            ANY, self.cluster.on_up, host, expected_endpoint=host.endpoint)
 
         self.cluster.scheduler.schedule.reset_mock()
         event = {
@@ -513,6 +519,33 @@ class ControlConnectionTest(unittest.TestCase):
         self.control_connection._handle_status_change(event)
         host = self.cluster.metadata.get_host(DefaultEndPoint('192.168.1.0'))
         assert host is self.cluster.down_host
+        assert host.endpoint == self.cluster.down_expected_endpoint
+
+    def test_handle_status_change_preserves_endpoint_identity(self):
+        host = self.cluster.metadata.hosts['uuid1']
+        old_endpoint = SniEndPoint("192.168.1.0", "node-a", 9042)
+        new_endpoint = SniEndPoint("192.168.1.0", "node-b", 9042)
+        host.endpoint = old_endpoint
+
+        event = {
+            'change_type': 'UP',
+            'address': ('192.168.1.0', 9042)
+        }
+        self.cluster.scheduler.reset_mock()
+        self.control_connection._handle_status_change(event)
+
+        # A raw event address would accept the replacement endpoint here.
+        assert Cluster._endpoints_match(new_endpoint, event['address'])
+        assert not Cluster._endpoints_match(new_endpoint, old_endpoint)
+        self.cluster.scheduler.schedule_unique.assert_called_once_with(
+            ANY, self.cluster.on_up, host, expected_endpoint=old_endpoint)
+
+        self.cluster.on_down = Mock()
+        event['change_type'] = 'DOWN'
+        self.control_connection._handle_status_change(event)
+
+        self.cluster.on_down.assert_called_once_with(
+            host, is_host_addition=False, expected_endpoint=old_endpoint)
 
     def test_handle_schema_change(self):
 

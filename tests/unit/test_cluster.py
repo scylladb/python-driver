@@ -25,8 +25,8 @@ from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, R
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
 from cassandra.cluster import _Scheduler, Session, Cluster, default_lbp_factory, \
     ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
-from cassandra.connection import ConnectionException, DefaultEndPoint
-from cassandra.pool import Host
+from cassandra.connection import ClientRoutesEndPoint, ConnectionException, DefaultEndPoint, SniEndPoint
+from cassandra.pool import Host, _HostReconnectionHandler
 from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
 from tests.unit.utils import mock_session_pools
@@ -263,6 +263,27 @@ class ClusterTest(unittest.TestCase):
                 assert factory.call_args.kwargs['compression'] == expected
                 assert cluster.compression == expected
 
+    def test_reconnector_connection_factory_recomputes_authenticator_after_endpoint_swap(self):
+        old_endpoint = DefaultEndPoint('127.0.0.1')
+        new_endpoint = DefaultEndPoint('127.0.0.2')
+        auth_provider = Mock()
+        auth_provider.new_authenticator.side_effect = lambda address: 'auth-%s' % (address,)
+
+        with patch.object(Cluster.connection_class, 'factory', autospec=True, return_value='connection') as factory:
+            cluster = Cluster(auth_provider=auth_provider)
+            host = Host(old_endpoint, SimpleConvictionPolicy)
+            connection_factory = cluster._make_connection_factory(host)
+            handler = _HostReconnectionHandler(
+                host, connection_factory, False, Mock(), Mock(), Mock(), iter([0]),
+                host.get_and_set_reconnection_handler, new_handler=None)
+
+            host.endpoint = new_endpoint
+            conn = handler.try_reconnect()
+
+        assert conn == 'connection'
+        assert factory.call_args.args[0] == new_endpoint
+        assert factory.call_args.kwargs['authenticator'] == 'auth-127.0.0.2'
+
 
 class SchedulerTest(unittest.TestCase):
     # TODO: this suite could be expanded; for now just adding a test covering a ticket
@@ -469,6 +490,32 @@ class SessionPoolRaceTest(unittest.TestCase):
         assert future.result() is False
         assert session._pools == {}
         created_pools[0].shutdown.assert_called_once_with()
+
+    def test_update_created_pools_replaces_pool_after_endpoint_change(self):
+        host = self._make_host("127.0.0.1")
+        old_endpoint = host.endpoint
+        cluster, session, executor = self._make_cluster_and_session([host])
+        stale_pool = self._make_pool(
+            host, HostDistance.LOCAL, session, endpoint=old_endpoint)
+        session._pools[host] = stale_pool
+        created_pools = []
+
+        host.endpoint = DefaultEndPoint("127.0.0.2")
+
+        def make_pool(host, distance, pool_session, endpoint=None):
+            pool = self._make_pool(host, distance, pool_session, endpoint)
+            created_pools.append(pool)
+            return pool
+
+        with patch("cassandra.cluster.HostConnection", side_effect=make_pool):
+            futures = session.update_created_pools()
+
+            assert len(futures) == 1
+            executor.run_next()
+
+        assert created_pools[0].endpoint == host.endpoint
+        assert session._pools[host] is created_pools[0]
+        stale_pool.shutdown.assert_called_once_with()
 
     def test_removed_in_flight_pool_is_not_published(self):
         host = self._make_host("127.0.0.1")
@@ -770,6 +817,25 @@ class SessionPoolRaceTest(unittest.TestCase):
 
 class HostStateRaceTest(unittest.TestCase):
 
+    class _EndpointSwapOnFirstExitLock(object):
+
+        def __init__(self, host, new_endpoint):
+            self._lock = RLock()
+            self._host = host
+            self._new_endpoint = new_endpoint
+            self._exits = 0
+
+        def __enter__(self):
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self._lock.release()
+            self._exits += 1
+            if self._exits == 1:
+                self._host.endpoint = self._new_endpoint
+
+
     @staticmethod
     def _make_host():
         return Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
@@ -867,6 +933,56 @@ class HostStateRaceTest(unittest.TestCase):
         listener.on_down.assert_not_called()
         cluster._start_reconnector.assert_not_called()
         assert self._state(cluster, host).down_epoch is None
+
+    def test_reserved_down_handling_after_endpoint_swap_removes_stale_pool(self):
+        session = Mock()
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        host = self._make_host()
+        host_id = uuid.uuid4()
+        old_endpoint = ClientRoutesEndPoint(
+            host_id, Mock(), "127.0.0.1", original_port=9042)
+        new_endpoint = ClientRoutesEndPoint(
+            host_id, Mock(), "127.0.0.1", original_port=9142)
+        assert old_endpoint == new_endpoint
+        assert not Cluster._endpoints_match(old_endpoint, new_endpoint)
+        host.endpoint = old_endpoint
+        host.set_up()
+        down_epoch = self._reserve_down_handling(cluster, host)
+        host.lock = self._EndpointSwapOnFirstExitLock(host, new_endpoint)
+
+        Cluster.on_down_potentially_blocking(
+            cluster, host, is_host_addition=False, down_epoch=down_epoch)
+
+        cluster.profile_manager.on_down.assert_not_called()
+        cluster.control_connection.on_down.assert_not_called()
+        session.on_down.assert_called_once_with(
+            host, expected_endpoint=old_endpoint)
+        listener.on_down.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
+        assert self._state(cluster, host).down_epoch is None
+
+    def test_endpoint_match_preserves_endpoint_specific_identity(self):
+        proxy_endpoint = SniEndPoint("proxy.example.com", "node-a", port=9042)
+        other_proxy_endpoint = SniEndPoint("proxy.example.com", "node-b", port=9042)
+        assert not Cluster._endpoints_match(proxy_endpoint, other_proxy_endpoint)
+
+        old_endpoint = ClientRoutesEndPoint(
+            uuid.uuid4(), Mock(), "127.0.0.1", original_port=9042)
+        new_endpoint = ClientRoutesEndPoint(
+            uuid.uuid4(), Mock(), "127.0.0.1", original_port=9042)
+        assert not Cluster._endpoints_match(old_endpoint, new_endpoint)
+
+    def test_auth_failure_quarantine_preserves_endpoint_specific_identity(self):
+        host = self._make_host()
+        host.endpoint = ClientRoutesEndPoint(
+            uuid.uuid4(), Mock(), "127.0.0.1", original_port=9042)
+
+        Cluster._set_non_retryable_auth_failure(host, True)
+        host.endpoint = ClientRoutesEndPoint(
+            uuid.uuid4(), Mock(), "127.0.0.1", original_port=9042)
+
+        assert not Cluster._has_non_retryable_auth_failure(host)
 
     def test_noop_down_during_up_handling_does_not_supersede_up(self):
         pool_future = Future()
@@ -1243,6 +1359,24 @@ class HostStateRaceTest(unittest.TestCase):
         assert host.is_up
         assert state.up_epoch is None
 
+    def test_stale_reconnector_success_does_not_clear_newer_reconnector(self):
+        old_endpoint = DefaultEndPoint('127.0.0.1')
+        new_endpoint = DefaultEndPoint('127.0.0.2')
+        cluster = self._make_cluster()
+        host = Host(old_endpoint, SimpleConvictionPolicy)
+        host.endpoint = new_endpoint
+        new_reconnector = Mock()
+        host._reconnection_handler = new_reconnector
+        connection = Mock(endpoint=old_endpoint)
+        handler = _HostReconnectionHandler(
+            host, Mock(return_value=connection), False, Mock(), cluster.on_up, Mock(),
+            iter([0]), host.get_and_set_reconnection_handler, new_handler=None)
+
+        handler.run()
+
+        assert host._reconnection_handler is new_reconnector
+        assert not host.is_up
+
     def test_superseded_up_cleanup_preserves_replacement_host_pool(self):
         stale_host = self._make_host()
         replacement_host = self._make_host()
@@ -1461,6 +1595,32 @@ class HostStateRaceTest(unittest.TestCase):
         assert state.down_epoch is None
         assert state.up_epoch is None
         assert state.pending_up_epoch is None
+
+    def test_later_down_before_worker_runs_does_not_skip_pool_cleanup(self):
+        executor = _QueuedExecutor()
+        host = self._make_host()
+        host.set_up()
+        pool = Mock()
+        pool.host = host
+        pool.endpoint = host.endpoint
+        session = self._make_session_with_pool(host, pool)
+        session._lock = RLock()
+        cluster = self._make_cluster(session=session)
+        cluster.executor = executor
+        cluster.metadata = Mock()
+        cluster.metadata.all_hosts.return_value = [host]
+        session.cluster = cluster
+        session._profile_manager = cluster.profile_manager
+
+        Cluster.on_down(cluster, host, is_host_addition=False)
+        Cluster.on_up(cluster, host)
+        Cluster.on_down(cluster, host, is_host_addition=False)
+
+        future = executor.run_next()
+
+        assert future.exception() is None
+        assert session._pools == {}
+        pool.shutdown.assert_called_once_with()
 
     def test_up_signal_waits_until_submitted_down_handling_finishes(self):
         executor = _QueuedExecutor()

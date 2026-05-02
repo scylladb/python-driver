@@ -25,6 +25,8 @@ from collections import defaultdict
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait as wait_futures
 from copy import copy
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import partial, reduce, wraps
 from itertools import groupby, count, chain
 import json
@@ -194,6 +196,37 @@ log = logging.getLogger(__name__)
 _GRAPH_PAGING_MIN_DSE_VERSION = Version('6.8.0')
 
 _NOT_SET = object()
+_NON_RETRYABLE_AUTH_FAILURE_ATTR = "_cassandra_non_retryable_auth_failure"
+_POOL_CLEANUP_EPOCH = ContextVar("_POOL_CLEANUP_EPOCH", default=None)
+
+
+def _make_connection_kwargs(endpoint, kwargs_dict, auth_provider_callable, port,
+                            compression, sockopts, ssl_options, ssl_context,
+                            cql_version, protocol_version, user_type_map,
+                            allow_beta_protocol_version, no_compact,
+                            application_info):
+    if auth_provider_callable:
+        kwargs_dict.setdefault('authenticator', auth_provider_callable(endpoint.address))
+
+    kwargs_dict.setdefault('port', port)
+    kwargs_dict.setdefault('compression', compression)
+    kwargs_dict.setdefault('sockopts', sockopts)
+    kwargs_dict.setdefault('ssl_options', ssl_options)
+    kwargs_dict.setdefault('ssl_context', ssl_context)
+    kwargs_dict.setdefault('cql_version', cql_version)
+    kwargs_dict.setdefault('protocol_version', protocol_version)
+    kwargs_dict.setdefault('user_type_map', user_type_map)
+    kwargs_dict.setdefault('allow_beta_protocol_version', allow_beta_protocol_version)
+    kwargs_dict.setdefault('no_compact', no_compact)
+    kwargs_dict.setdefault('application_info', application_info)
+
+    return kwargs_dict
+
+
+def _connection_factory_for_endpoint(endpoint, connect_timeout, connection_factory,
+                                     args, kwargs, connection_options):
+    kwargs = _make_connection_kwargs(endpoint, kwargs.copy(), *connection_options)
+    return connection_factory(endpoint, connect_timeout, *args, **kwargs)
 
 
 class NoHostAvailable(Exception):
@@ -301,7 +334,12 @@ class _HostLivenessState(_EventFenceState):
     _DOWN = "down"
     _PENDING_UP = "pending_up"
 
-    __slots__ = ()
+    __slots__ = ("up_endpoint", "pending_up_endpoint")
+
+    def __init__(self):
+        _EventFenceState.__init__(self)
+        self.up_endpoint = None
+        self.pending_up_endpoint = None
 
     @property
     def up_epoch(self):
@@ -1846,26 +1884,23 @@ class Cluster(object):
         return self.connection_class.factory(endpoint, self.connect_timeout, host_conn, *args, **kwargs)
 
     def _make_connection_factory(self, host, *args, **kwargs):
-        kwargs = self._make_connection_kwargs(host.endpoint, kwargs)
-        return partial(self.connection_class.factory, host.endpoint, self.connect_timeout, *args, **kwargs)
+        connection_options = (
+            self._auth_provider_callable, self.port, self.compression,
+            self.sockopts, self.ssl_options, self.ssl_context,
+            self.cql_version, self.protocol_version, self._user_types,
+            self.allow_beta_protocol_version, self.no_compact,
+            self.application_info)
+        return partial(_connection_factory_for_endpoint, host.endpoint,
+                       self.connect_timeout, self.connection_class.factory,
+                       args, kwargs.copy(), connection_options)
 
     def _make_connection_kwargs(self, endpoint, kwargs_dict):
-        if self._auth_provider_callable:
-            kwargs_dict.setdefault('authenticator', self._auth_provider_callable(endpoint.address))
-
-        kwargs_dict.setdefault('port', self.port)
-        kwargs_dict.setdefault('compression', self.compression)
-        kwargs_dict.setdefault('sockopts', self.sockopts)
-        kwargs_dict.setdefault('ssl_options', self.ssl_options)
-        kwargs_dict.setdefault('ssl_context', self.ssl_context)
-        kwargs_dict.setdefault('cql_version', self.cql_version)
-        kwargs_dict.setdefault('protocol_version', self.protocol_version)
-        kwargs_dict.setdefault('user_type_map', self._user_types)
-        kwargs_dict.setdefault('allow_beta_protocol_version', self.allow_beta_protocol_version)
-        kwargs_dict.setdefault('no_compact', self.no_compact)
-        kwargs_dict.setdefault('application_info', self.application_info)
-
-        return kwargs_dict
+        return _make_connection_kwargs(
+            endpoint, kwargs_dict, self._auth_provider_callable, self.port,
+            self.compression, self.sockopts, self.ssl_options, self.ssl_context,
+            self.cql_version, self.protocol_version, self._user_types,
+            self.allow_beta_protocol_version, self.no_compact,
+            self.application_info)
 
     def protocol_downgrade(self, host_endpoint, previous_version):
         if self._protocol_version_explicit:
@@ -2014,14 +2049,21 @@ class Cluster(object):
             for udt_name, klass in type_map.items():
                 session.user_type_registered(keyspace, udt_name, klass)
 
-    def _cleanup_failed_on_up_handling(self, host, start_reconnector=True, expected_endpoint=None):
+    def _cleanup_failed_on_up_handling(self, host, start_reconnector=True,
+                                       expected_endpoint=None, expected_epoch=None):
+        if expected_epoch is not None:
+            with host.lock:
+                if self._get_host_liveness_state(host).epoch != expected_epoch:
+                    log.debug("Ignoring stale failed up cleanup for node %s", host)
+                    return
+
         endpoint_changed = False
         if expected_endpoint is None:
             self.profile_manager.on_down(host)
             self.control_connection.on_down(host)
         else:
             with host.lock:
-                endpoint_changed = host.endpoint != expected_endpoint
+                endpoint_changed = not self._endpoints_match(host.endpoint, expected_endpoint)
                 if endpoint_changed:
                     log.debug("Not signalling down for stale up handling on node %s; endpoint changed from %s",
                               host, expected_endpoint)
@@ -2029,10 +2071,19 @@ class Cluster(object):
                     self.profile_manager.on_down(host)
                     self.control_connection.on_down(host)
         for session in tuple(self.sessions):
-            session.remove_pool(
-                host, expected_host=host, expected_endpoint=expected_endpoint)
+            with self._pool_cleanup_epoch(host, expected_epoch):
+                future = session.remove_pool(
+                    host, expected_host=host, expected_endpoint=expected_endpoint)
+            if future:
+                future.add_done_callback(
+                    lambda f, session=session: session.update_created_pools())
 
-        if start_reconnector and not endpoint_changed:
+        cleanup_is_current = True
+        if expected_epoch is not None:
+            with host.lock:
+                cleanup_is_current = self._get_host_liveness_state(host).epoch == expected_epoch
+
+        if start_reconnector and not endpoint_changed and cleanup_is_current:
             self._start_reconnector(
                 host, is_host_addition=False, expected_endpoint=expected_endpoint)
 
@@ -2043,9 +2094,27 @@ class Cluster(object):
             fences = self._host_liveness = _EventFenceMap(_HostLivenessState)
         return fences.get_state(host)
 
+    @contextmanager
+    def _pool_cleanup_epoch(self, host, expected_epoch=None,
+                            allow_current_down=False):
+        if expected_epoch is None:
+            yield
+            return
+
+        token = _POOL_CLEANUP_EPOCH.set(
+            (host, expected_epoch, allow_current_down))
+        try:
+            yield
+        finally:
+            _POOL_CLEANUP_EPOCH.reset(token)
+
     def _up_handling_was_superseded(self, host, up_epoch):
         state = self._get_host_liveness_state(host)
-        return not state.event_is_current(_HostLivenessState._UP, up_epoch)
+        if not state.event_is_current(_HostLivenessState._UP, up_epoch):
+            return True
+
+        expected_endpoint = state.up_endpoint
+        return expected_endpoint is not None and not self._endpoints_match(host.endpoint, expected_endpoint)
 
     def _up_handling_is_superseded(self, host, up_epoch):
         with host.lock:
@@ -2054,9 +2123,17 @@ class Cluster(object):
             log.debug("Ignoring superseded up handling for node %s", host)
         return superseded
 
-    def _get_reconnector_for_current_up_handling(self, host, up_epoch):
+    def _get_reconnector_for_current_up_handling(self, host, up_epoch,
+                                                 expected_reconnector=_NOT_SET):
         with host.lock:
             if self._up_handling_was_superseded(host, up_epoch):
+                reconnector = host._reconnection_handler
+                # Only cancel the handler observed when up handling started.
+                # A newer down event may already have installed its own reconnector.
+                if expected_reconnector is _NOT_SET or reconnector is expected_reconnector:
+                    host._reconnection_handler = None
+                    if reconnector:
+                        reconnector.cancel()
                 log.debug("Ignoring superseded up handling for node %s", host)
                 return None, True
             reconnector = host._reconnection_handler
@@ -2065,32 +2142,54 @@ class Cluster(object):
 
     def _clear_up_handling(self, host, up_epoch=None):
         state = self._get_host_liveness_state(host)
-        return state.clear_event(_HostLivenessState._UP, up_epoch)
+        if state.clear_event(_HostLivenessState._UP, up_epoch):
+            state.up_endpoint = None
+            return True
+        return False
 
-    def _cleanup_superseded_up_handling(self, host, expected_endpoint=None):
+    def _cleanup_superseded_up_handling(self, host, expected_endpoint=None, expected_epoch=None):
+        if expected_epoch is not None:
+            with host.lock:
+                if self._get_host_liveness_state(host).epoch != expected_epoch:
+                    log.debug("Ignoring stale superseded up cleanup for node %s", host)
+                    return
+
         for session in tuple(self.sessions):
-            session.remove_pool(
-                host, expected_host=host, expected_endpoint=expected_endpoint)
+            with self._pool_cleanup_epoch(host, expected_epoch):
+                future = session.remove_pool(
+                    host, expected_host=host, expected_endpoint=expected_endpoint)
+            if future:
+                future.add_done_callback(
+                    lambda f, session=session: session.update_created_pools())
 
     def _pop_pending_node_up_if_ready(self, host):
         state = self._get_host_liveness_state(host)
         if state.pending_up_epoch is None:
+            state.pending_up_endpoint = None
             return None
         if host.is_up:
             state.pending_up_epoch = None
+            state.pending_up_endpoint = None
             return None
         if state.up_epoch is not None or state.down_epoch is not None:
             return None
 
         pending_up_epoch = state.pending_up_epoch
+        pending_up_endpoint = state.pending_up_endpoint
         # Leave the pending marker in place until on_up() reacquires host.lock so
         # a newer down signal can still invalidate this replay.
-        return pending_up_epoch
+        return pending_up_epoch, pending_up_endpoint
 
-    def _handle_pending_node_up(self, host, pending_up_epoch):
-        if pending_up_epoch is not None:
+    def _handle_pending_node_up(self, host, pending_up):
+        if pending_up is not None:
+            if isinstance(pending_up, tuple):
+                pending_up_epoch, pending_up_endpoint = pending_up
+            else:
+                pending_up_epoch = pending_up
+                pending_up_endpoint = None
             log.debug("Handling queued up status of node %s", host)
-            self._on_up(host, expected_epoch=pending_up_epoch)
+            self._on_up(host, expected_epoch=pending_up_epoch,
+                        expected_endpoint=pending_up_endpoint)
 
     def _clear_down_handling(self, host, down_epoch=None):
         state = self._get_host_liveness_state(host)
@@ -2098,7 +2197,7 @@ class Cluster(object):
 
     def _finish_superseded_up_handling(self, host, up_epoch, expected_endpoint=None):
         self._cleanup_superseded_up_handling(
-            host, expected_endpoint=expected_endpoint)
+            host, expected_endpoint=expected_endpoint, expected_epoch=up_epoch)
 
         pending_up_epoch = None
         with host.lock:
@@ -2139,19 +2238,22 @@ class Cluster(object):
                         host, up_handling_revision, expected_endpoint=up_handling_endpoint):
                     return
                 self._cleanup_failed_on_up_handling(
-                    host, expected_endpoint=up_handling_endpoint)
+                    host, expected_endpoint=up_handling_endpoint,
+                    expected_epoch=up_handling_revision)
                 return
 
             if not all(results):
                 log.debug("Connection pool could not be created, not marking node %s up", host)
                 with host.lock:
-                    start_reconnector = host.is_up is not None
+                    # Only suppress retries for the auth-failure quarantine.
+                    start_reconnector = not self._has_non_retryable_auth_failure(host)
                 if self._finish_up_if_superseded(
                         host, up_handling_revision, expected_endpoint=up_handling_endpoint):
                     return
                 self._cleanup_failed_on_up_handling(
                     host, start_reconnector=start_reconnector,
-                    expected_endpoint=up_handling_endpoint)
+                    expected_endpoint=up_handling_endpoint,
+                    expected_epoch=up_handling_revision)
                 return
 
             log.info("Connection pools established for node %s", host)
@@ -2180,12 +2282,15 @@ class Cluster(object):
         # see if there are any pools to add or remove now that the host is marked up
         for session in tuple(self.sessions):
             session.update_created_pools()
+        self._set_non_retryable_auth_failure(host, False)
         return
 
-    def on_up(self, host):
-        return self._on_up(host)
+    def on_up(self, host, expected_endpoint=None, expected_reconnector=None):
+        return self._on_up(host, expected_endpoint=expected_endpoint,
+                           expected_reconnector=expected_reconnector)
 
-    def _on_up(self, host, expected_epoch=None):
+    def _on_up(self, host, expected_epoch=None, expected_endpoint=None,
+               expected_reconnector=None):
         """
         Intended for internal use only.
         """
@@ -2193,16 +2298,31 @@ class Cluster(object):
             return
 
         log.debug("Waiting to acquire lock for handling up status of node %s", host)
+
+        def _clear_stale_reconnector():
+            # Stale callbacks can outlive the reconnector callback path.
+            if (expected_reconnector is not None and
+                    host._reconnection_handler is expected_reconnector):
+                host._reconnection_handler = None
+
         with host.lock:
             state = self._get_host_liveness_state(host)
+            if expected_endpoint is not None and not self._endpoints_match(host.endpoint, expected_endpoint):
+                log.debug("Ignoring stale queued up handling for node %s; endpoint changed from %s",
+                          host, expected_endpoint)
+                _clear_stale_reconnector()
+                return
+
             if (expected_epoch is not None and
                     (state.epoch != expected_epoch or state.pending_up_epoch != expected_epoch)):
                 log.debug("Ignoring stale queued up handling for node %s", host)
+                _clear_stale_reconnector()
                 return
 
             if state.down_epoch is not None:
                 log.debug("Down status is being handled for node %s; queueing up handling", host)
                 state.pending_up_epoch = state.epoch
+                state.pending_up_endpoint = expected_endpoint
                 return
 
             if state.up_epoch is not None:
@@ -2210,7 +2330,12 @@ class Cluster(object):
                 if self._up_handling_was_superseded(host, up_handling_revision):
                     log.debug("Superseded up handling is still finishing for node %s; "
                               "queueing up handling", host)
+                    # Endpoint swap without an epoch bump needs a fresh epoch so
+                    # the replayed up handling is not cleared by the stale finish.
+                    if state.epoch == up_handling_revision:
+                        state.advance()
                     state.pending_up_epoch = state.epoch
+                    state.pending_up_endpoint = expected_endpoint
                 else:
                     log.debug("Another thread is already handling up status of node %s", host)
                 return
@@ -2218,12 +2343,16 @@ class Cluster(object):
             if host.is_up:
                 log.debug("Host %s was already marked up", host)
                 state.pending_up_epoch = None
+                state.pending_up_endpoint = None
                 return
 
             state.pending_up_epoch = None
+            state.pending_up_endpoint = None
             up_handling_revision = state.epoch
-            up_handling_endpoint = host.endpoint
+            up_handling_endpoint = expected_endpoint if expected_endpoint is not None else host.endpoint
             state.up_epoch = up_handling_revision
+            state.up_endpoint = up_handling_endpoint
+            up_handling_reconnector = host._reconnection_handler
         log.debug("Starting to handle up status of node %s", host)
 
         have_future = False
@@ -2232,7 +2361,7 @@ class Cluster(object):
             log.info("Host %s may be up; will prepare queries and open connection pool", host)
 
             reconnector, superseded = self._get_reconnector_for_current_up_handling(
-                host, up_handling_revision)
+                host, up_handling_revision, expected_reconnector=up_handling_reconnector)
             if superseded:
                 self._finish_superseded_up_handling(
                     host, up_handling_revision, expected_endpoint=up_handling_endpoint)
@@ -2249,8 +2378,9 @@ class Cluster(object):
                 log.debug("Done preparing all queries for host %s, ", host)
 
             for session in tuple(self.sessions):
-                session.remove_pool(
-                    host, expected_host=host, expected_endpoint=up_handling_endpoint)
+                with self._pool_cleanup_epoch(host, expected_epoch=up_handling_revision):
+                    session.remove_pool(
+                        host, expected_host=host, expected_endpoint=up_handling_endpoint)
 
             if self._finish_up_if_superseded(
                     host, up_handling_revision, expected_endpoint=up_handling_endpoint):
@@ -2277,7 +2407,8 @@ class Cluster(object):
                                up_handling_endpoint,
                                futures, futures_results, futures_lock)
             for session in tuple(self.sessions):
-                future = session.add_or_renew_pool(host, is_host_addition=False)
+                future = session.add_or_renew_pool(
+                    host, is_host_addition=False, allow_retry_after_auth_failure=True)
                 if future is not None:
                     have_future = True
                     future.add_done_callback(callback)
@@ -2288,7 +2419,8 @@ class Cluster(object):
                 future.cancel()
 
             self._cleanup_failed_on_up_handling(
-                host, expected_endpoint=up_handling_endpoint)
+                host, expected_endpoint=up_handling_endpoint,
+                expected_epoch=up_handling_revision)
 
             pending_up_epoch = None
             with host.lock:
@@ -2309,6 +2441,15 @@ class Cluster(object):
                 if superseded:
                     self._finish_superseded_up_handling(
                         host, up_handling_revision, expected_endpoint=up_handling_endpoint)
+                    return futures
+
+                for listener in self.listeners:
+                    listener.on_up(host)
+
+                for session in tuple(self.sessions):
+                    session.update_created_pools()
+
+                self._set_non_retryable_auth_failure(host, False)
 
         # for testing purposes
         return futures
@@ -2321,7 +2462,7 @@ class Cluster(object):
         schedule = self.reconnection_policy.new_schedule()
 
         with host.lock:
-            if expected_endpoint is not None and host.endpoint != expected_endpoint:
+            if expected_endpoint is not None and not self._endpoints_match(host.endpoint, expected_endpoint):
                 log.debug("Not starting reconnector for host %s; endpoint changed from %s",
                           host, expected_endpoint)
                 return
@@ -2337,7 +2478,7 @@ class Cluster(object):
                     log.debug("Not starting reconnector for host %s; down handling is no longer current", host)
                     return
 
-            if expected_endpoint is not None and host.endpoint != expected_endpoint:
+            if expected_endpoint is not None and not self._endpoints_match(host.endpoint, expected_endpoint):
                 log.debug("Not starting reconnector for host %s; endpoint changed from %s",
                           host, expected_endpoint)
                 return
@@ -2363,6 +2504,7 @@ class Cluster(object):
             expected_endpoint: Optional[EndPoint] = None) -> Any:
         pending_up_epoch = None
         try:
+            down_endpoint = None
             with host.lock:
                 state = self._get_host_liveness_state(host)
                 owns_reserved_down_handling = down_epoch is not None and state.down_epoch == down_epoch
@@ -2375,30 +2517,31 @@ class Cluster(object):
                 elif not owns_reserved_down_handling:
                     log.debug("Ignoring stale down handling for host %s", host)
                     return
-                endpoint_matches = expected_endpoint is None or host.endpoint == expected_endpoint
+                down_endpoint = host.endpoint
+                endpoint_matches = expected_endpoint is None or self._endpoints_match(
+                    down_endpoint, expected_endpoint)
 
             if endpoint_matches:
-                if expected_endpoint is None:
-                    self.profile_manager.on_down(host)
-                    self.control_connection.on_down(host)
-                else:
-                    with host.lock:
-                        if host.endpoint != expected_endpoint:
-                            log.debug("Ignoring stale down handling for host %s; endpoint changed from %s",
-                                      host, expected_endpoint)
-                            endpoint_matches = False
-                        else:
-                            self.profile_manager.on_down(host)
-                            self.control_connection.on_down(host)
+                with host.lock:
+                    if not self._endpoints_match(host.endpoint, down_endpoint):
+                        log.debug("Ignoring stale down handling for host %s; endpoint changed from %s",
+                                  host, down_endpoint)
+                        endpoint_matches = False
+                    else:
+                        self.profile_manager.on_down(host)
+                        self.control_connection.on_down(host)
             else:
                 log.debug("Not signalling down for stale down handling on node %s; endpoint changed from %s",
                           host, expected_endpoint)
 
             for session in tuple(self.sessions):
-                if expected_endpoint is None:
-                    session.on_down(host)
-                else:
-                    session.on_down(host, expected_endpoint=expected_endpoint)
+                with self._pool_cleanup_epoch(
+                        host, expected_epoch=down_epoch,
+                        allow_current_down=True):
+                    if expected_endpoint is None:
+                        session.on_down(host, expected_endpoint=down_endpoint)
+                    else:
+                        session.on_down(host, expected_endpoint=expected_endpoint)
 
             if endpoint_matches:
                 if expected_endpoint is None:
@@ -2406,7 +2549,7 @@ class Cluster(object):
                         listener.on_down(host)
                 else:
                     with host.lock:
-                        if host.endpoint != expected_endpoint:
+                        if not self._endpoints_match(host.endpoint, expected_endpoint):
                             log.debug("Ignoring stale down handling for host %s; endpoint changed from %s",
                                       host, expected_endpoint)
                             endpoint_matches = False
@@ -2418,7 +2561,7 @@ class Cluster(object):
                 start_reconnector = (endpoint_matches and
                                      self._get_host_liveness_state(host).down_epoch == down_epoch)
                 if (start_reconnector and expected_endpoint is not None and
-                        host.endpoint != expected_endpoint):
+                        not self._endpoints_match(host.endpoint, expected_endpoint)):
                     log.debug("Not starting reconnector for host %s; endpoint changed from %s",
                               host, expected_endpoint)
                     start_reconnector = False
@@ -2448,7 +2591,7 @@ class Cluster(object):
             return
 
         with host.lock:
-            if expected_endpoint is not None and host.endpoint != expected_endpoint:
+            if expected_endpoint is not None and not self._endpoints_match(host.endpoint, expected_endpoint):
                 log.debug("Ignoring stale down signal for host %s; endpoint changed from %s",
                           host, expected_endpoint)
                 return
@@ -2458,13 +2601,19 @@ class Cluster(object):
 
             # ignore down signals if we have open pools to the host
             # this is to avoid closing pools when a control connection host became isolated
-            if self._discount_down_events and self.profile_manager.distance(host) != HostDistance.IGNORED:
+            # endpoint-aware cleanup still needs to run
+            if (self._discount_down_events and expected_endpoint is None and
+                    self.profile_manager.distance(host) != HostDistance.IGNORED):
+                host_endpoint = host.endpoint
                 connected = False
                 for session in tuple(self.sessions):
-                    pool_states = session.get_pool_state()
-                    pool_state = pool_states.get(host)
-                    if pool_state:
-                        connected |= pool_state['open_count'] > 0
+                    # Host equality is endpoint-based; scan by identity to avoid
+                    # hiding the live pool behind a stale equal key.
+                    pool = session._get_pool_by_host_identity(
+                        host, expected_endpoint=host_endpoint)
+                    if pool is not None and pool.open_count > 0:
+                        connected = True
+                        break
                 if connected:
                     return
 
@@ -2473,11 +2622,13 @@ class Cluster(object):
                     if state.pending_up_epoch is not None:
                         state.advance()
                         state.pending_up_epoch = None
+                        state.pending_up_endpoint = None
                         host.set_down()
                     return
 
             state.advance()
             state.pending_up_epoch = None
+            state.pending_up_endpoint = None
             host.set_down()
             down_epoch = state.epoch
             if state.down_epoch is not None:
@@ -2568,6 +2719,9 @@ class Cluster(object):
         for session in tuple(self.sessions):
             session.update_created_pools()
 
+        if set_up:
+            self._set_non_retryable_auth_failure(host, False)
+
     def on_remove(self, host):
         if self.is_shutdown:
             return
@@ -2577,8 +2731,12 @@ class Cluster(object):
             state = self._get_host_liveness_state(host)
             state.advance()
             state.pending_up_epoch = None
+            state.pending_up_endpoint = None
+            state.up_epoch = None
+            state.up_endpoint = None
             state.down_epoch = None
             host.set_down()
+            self._set_non_retryable_auth_failure(host, False)
         self.profile_manager.on_remove(host)
         for session in tuple(self.sessions):
             session.on_remove(host)
@@ -2595,22 +2753,91 @@ class Cluster(object):
         return (isinstance(connection_exc, AuthenticationFailed) or
                 isinstance(getattr(connection_exc, "__cause__", None), AuthenticationFailed))
 
+    @staticmethod
+    def _endpoint_address_key(endpoint):
+        if endpoint is None:
+            return None
+        if isinstance(endpoint, tuple):
+            return endpoint[:2]
+        address = getattr(endpoint, "address", None)
+        port = getattr(endpoint, "port", None)
+        if address is not None or port is not None:
+            return address, port
+        return endpoint
+
+    @classmethod
+    def _endpoint_key(cls, endpoint):
+        if endpoint is None:
+            return None
+        if isinstance(endpoint, tuple):
+            return endpoint[:2]
+        address_key = cls._endpoint_address_key(endpoint)
+        if not isinstance(address_key, tuple):
+            return endpoint
+        if endpoint.__class__ is DefaultEndPoint:
+            return address_key
+        # Non-default endpoint classes can carry connection identity that
+        # address/port alone does not preserve, e.g. SNI or client-routes IDs.
+        endpoint_key = (endpoint.__class__,) + address_key
+        server_name = getattr(endpoint, "_server_name", None)
+        if server_name is not None:
+            return endpoint_key + (server_name,)
+        host_id = getattr(endpoint, "host_id", None)
+        if host_id is not None:
+            return endpoint_key + (host_id,)
+        if isinstance(endpoint, EndPoint):
+            return endpoint_key + (endpoint,)
+        return endpoint
+
+    @classmethod
+    def _endpoints_match(cls, endpoint, expected_endpoint):
+        if isinstance(endpoint, tuple) or isinstance(expected_endpoint, tuple):
+            return (cls._endpoint_address_key(endpoint) ==
+                    cls._endpoint_address_key(expected_endpoint))
+        return cls._endpoint_key(endpoint) == cls._endpoint_key(expected_endpoint)
+
+    @classmethod
+    def _set_non_retryable_auth_failure(cls, host, enabled):
+        if enabled:
+            setattr(host, _NON_RETRYABLE_AUTH_FAILURE_ATTR, cls._endpoint_key(host.endpoint))
+        elif hasattr(host, _NON_RETRYABLE_AUTH_FAILURE_ATTR):
+            delattr(host, _NON_RETRYABLE_AUTH_FAILURE_ATTR)
+
+    @classmethod
+    def _has_non_retryable_auth_failure(cls, host):
+        failure_endpoint = getattr(host, _NON_RETRYABLE_AUTH_FAILURE_ATTR, None)
+        return failure_endpoint is not None and failure_endpoint == cls._endpoint_key(host.endpoint)
+
     def signal_connection_failure(self, host, connection_exc, is_host_addition,
                                   expect_host_to_be_down=False, expected_endpoint=None):
         with host.lock:
-            if expected_endpoint is not None and host.endpoint != expected_endpoint:
+            if expected_endpoint is not None and not self._endpoints_match(host.endpoint, expected_endpoint):
                 log.debug("Ignoring stale connection failure for host %s; endpoint changed from %s",
                           host, expected_endpoint)
                 return False
 
+            if expected_endpoint is not None:
+                if isinstance(expected_endpoint, tuple):
+                    current_host = self.metadata.get_host(*expected_endpoint[:2])
+                else:
+                    current_host = self.metadata.get_host(expected_endpoint)
+                if current_host is not None and current_host is not host:
+                    log.debug("Ignoring stale connection failure for host %s; endpoint reassigned to %s",
+                              host, current_host)
+                    return False
+
+            is_auth_failure = self._is_authentication_failure(connection_exc)
             is_down = host.signal_connection_failure(connection_exc)
+            if host.is_up is None and is_auth_failure:
+                # Never-up auth failures are terminal for the endpoint even if conviction policy
+                # has not yet decided the host is down. Do not run normal down handling
+                # for a host that was never marked up.
+                self._set_non_retryable_auth_failure(host, True)
+                return is_down
             if is_down:
-                if host.is_up is None and self._is_authentication_failure(connection_exc):
-                    return is_down
-        if is_down:
-            self.on_down(
-                host, is_host_addition, expect_host_to_be_down,
-                expected_endpoint=expected_endpoint)
+                self.on_down(
+                    host, is_host_addition, expect_host_to_be_down,
+                    expected_endpoint=expected_endpoint)
         return is_down
 
     def add_host(self, endpoint, datacenter=None, rack=None, signal=True, refresh_nodes=True, host_id=None):
@@ -3716,6 +3943,18 @@ class Session(object):
             fences = self._pool_creation_fences = _EventFenceMap(_PoolCreationState)
         return fences.get_state(host)
 
+    def _endpoints_match(self, endpoint, expected_endpoint):
+        matches = self.cluster._endpoints_match(endpoint, expected_endpoint)
+        if isinstance(matches, bool):
+            return matches
+        return endpoint == expected_endpoint
+
+    def _has_non_retryable_auth_failure(self, host):
+        return self.cluster._has_non_retryable_auth_failure(host)
+
+    def _get_host_liveness_state(self, host):
+        return self.cluster._get_host_liveness_state(host)
+
     def _pool_creation_is_current(self, host, creation_epoch):
         state = self._get_pool_creation_state(host)
         return state.event_is_current(_PoolCreationState._CREATE, creation_epoch)
@@ -3731,7 +3970,7 @@ class Session(object):
     def _invalidate_pool_creation(self, host, expected_endpoint=None):
         state = self._get_pool_creation_state(host)
         if state.creation_epoch is not None:
-            if expected_endpoint is not None and state.endpoint != expected_endpoint:
+            if expected_endpoint is not None and not self._endpoints_match(state.endpoint, expected_endpoint):
                 return False
             state.advance()
             state.creation_epoch = None
@@ -3740,12 +3979,17 @@ class Session(object):
             return True
         return False
 
-    def add_or_renew_pool(self, host, is_host_addition):
+    def add_or_renew_pool(self, host, is_host_addition, allow_retry_after_auth_failure=False):
         """
         For internal use only.
         """
         distance = self._profile_manager.distance(host)
         if distance == HostDistance.IGNORED:
+            return None
+        if (not is_host_addition and not allow_retry_after_auth_failure and
+                self._has_non_retryable_auth_failure(host)):
+            # Auth failure quarantine is endpoint-scoped; same endpoint survives later
+            # down events until a successful add/up clears it.
             return None
 
         creation_epoch = None
@@ -3790,9 +4034,10 @@ class Session(object):
             pool_endpoint = self._get_pool_endpoint(new_pool, creation_endpoint)
             new_pool.endpoint = pool_endpoint
 
-            previous = None
+            previous_pools = []
             discard_pool = False
             signal_down = False
+            reuse_existing_pool = False
             with self._lock:
                 while new_pool._keyspace != self.keyspace:
                     if not self._pool_creation_is_current(host, creation_epoch):
@@ -3820,12 +4065,58 @@ class Session(object):
                         break
 
                 if not discard_pool and not signal_down:
-                    if self._pool_creation_is_current(host, creation_epoch):
-                        previous = self._pools.get(host)
-                        self._pools[host] = new_pool
-                        self._clear_pool_creation(host, creation_epoch)
-                    else:
+                    if not self._pool_creation_is_current(host, creation_epoch):
                         discard_pool = True
+                    else:
+                        with host.lock:
+                            endpoint_changed = not self._endpoints_match(host.endpoint, creation_endpoint)
+                        if endpoint_changed:
+                            log.debug(
+                                "Discarding stale connection pool for host %s; endpoint changed from %s",
+                                host, creation_endpoint)
+                            self._invalidate_pool_creation(host, expected_endpoint=creation_endpoint)
+                            discard_pool = True
+                        else:
+                            # Rebuild by identity so endpoint hash changes do not
+                            # leave stale pool entries behind.
+                            retained_pools = {}
+                            for pool_host, host_pool in self._pools.items():
+                                if pool_host is host:
+                                    previous_pools.append(host_pool)
+                                else:
+                                    retained_pools[pool_host] = host_pool
+
+                            # Keep the current metadata host keyed by identity.
+                            metadata_host = host
+                            if isinstance(self.cluster.metadata, Metadata):
+                                metadata_host = self.cluster.metadata.get_host_by_host_id(host.host_id)
+
+                            target_host = metadata_host if metadata_host is not None else host
+                            target_host_matches = False
+                            for pool_host in tuple(retained_pools):
+                                if pool_host is target_host:
+                                    target_host_matches = True
+                                elif pool_host == target_host:
+                                    previous_pools.append(retained_pools.pop(pool_host))
+
+                            if target_host_matches:
+                                reuse_existing_pool = True
+                            else:
+                                source_host = new_pool.host
+                                if (source_host is not target_host and
+                                        target_host.sharding_info is None):
+                                    target_host.sharding_info = source_host.sharding_info
+                                new_pool.host = target_host
+                                retained_pools[target_host] = new_pool
+                            self._pools = retained_pools
+                            self._clear_pool_creation(host, creation_epoch)
+
+            if reuse_existing_pool:
+                log.debug("Reusing existing connection pool for host %s", host)
+                new_pool.shutdown()
+                for previous in previous_pools:
+                    previous.shutdown()
+                return True
 
             if signal_down:
                 self.cluster.on_down(
@@ -3839,7 +4130,7 @@ class Session(object):
                 return False
 
             log.debug("Added pool for host %s to session", host)
-            if previous:
+            for previous in previous_pools:
                 previous.shutdown()
 
             return True
@@ -3864,39 +4155,72 @@ class Session(object):
 
     def remove_pool(self, host, expected_host=None, expected_endpoint=None):
         removed_pools = []
+        cleanup_context = _POOL_CLEANUP_EPOCH.get()
         with self._lock:
-            pool = self._get_pool_by_host_identity(
-                host, expected_host=expected_host, expected_endpoint=expected_endpoint)
-            remove_by_identity = pool is not None
-            if pool is None:
-                pool = self._pools.get(host)
-            if pool is not None and not self._pool_matches_expected(
-                    pool, expected_host=expected_host, expected_endpoint=expected_endpoint):
-                self._invalidate_pool_creation(
-                    host, expected_endpoint=expected_endpoint)
-                return None
-            self._invalidate_pool_creation(
-                host, expected_endpoint=expected_endpoint)
-            if pool is not None:
-                if remove_by_identity:
-                    retained_pools = {}
-                    for pool_host, host_pool in self._pools.items():
-                        if (pool_host is host and self._pool_matches_expected(
-                                host_pool, expected_host=expected_host,
-                                expected_endpoint=expected_endpoint)):
-                            removed_pools.append(host_pool)
-                        else:
-                            retained_pools[pool_host] = host_pool
-                    self._pools = retained_pools
+            with host.lock:
+                if cleanup_context is not None:
+                    cleanup_host, cleanup_epoch = cleanup_context[:2]
+                    allow_current_down = (
+                        len(cleanup_context) > 2 and cleanup_context[2])
+                    if cleanup_host is host:
+                        # Stale cleanup can outlive an A->B->A flip; preserve the
+                        # pool that belongs to the current epoch.
+                        state = self._get_host_liveness_state(host)
+                        cleanup_still_owns_down = (
+                            allow_current_down and
+                            state.down_epoch == cleanup_epoch)
+                        if (state.epoch != cleanup_epoch and
+                                not cleanup_still_owns_down):
+                            log.debug(
+                                "Ignoring stale pool cleanup for host %s; epoch moved from %s to %s",
+                                host, cleanup_epoch, state.epoch)
+                            return None
+
+                # Keep the endpoint snapshot stable until the removal pass
+                # finishes; migration can otherwise flip the branch mid-flight.
+                # Host hashes track endpoint, so endpoint swaps can hide stale
+                # entries behind normal dict lookups. Scan by identity instead.
+                remove_all = expected_endpoint is None
+                if expected_endpoint is not None:
+                    remove_all = self._endpoints_match(host.endpoint, expected_endpoint)
+
+                if remove_all:
+                    self._invalidate_pool_creation(host)
                 else:
-                    removed_pool = self._pools.pop(host, None)
-                    if removed_pool is not None:
-                        removed_pools.append(removed_pool)
+                    self._invalidate_pool_creation(
+                        host, expected_endpoint=expected_endpoint)
+
+                retained_pools = {}
+                for pool_host, host_pool in self._pools.items():
+                    if pool_host is not host:
+                        retained_pools[pool_host] = host_pool
+                        continue
+
+                    matches = self._pool_matches_expected(
+                        host_pool, expected_host=expected_host,
+                        expected_endpoint=None if remove_all else expected_endpoint)
+                    if matches:
+                        removed_pools.append(host_pool)
+                    else:
+                        retained_pools[pool_host] = host_pool
+                self._pools = retained_pools
         if removed_pools:
             log.debug("Removed connection pool for %r", host)
             return self.submit(self._shutdown_removed_pools, removed_pools)
         else:
             return None
+
+    @contextmanager
+    def _pool_cleanup_epoch(self, host, expected_epoch=None):
+        if expected_epoch is None:
+            yield
+            return
+
+        token = _POOL_CLEANUP_EPOCH.set((host, expected_epoch))
+        try:
+            yield
+        finally:
+            _POOL_CLEANUP_EPOCH.reset(token)
 
     @staticmethod
     def _shutdown_removed_pools(pools):
@@ -3910,7 +4234,7 @@ class Session(object):
             pool_endpoint = getattr(pool, 'endpoint', None)
             if pool_endpoint is None:
                 pool_endpoint = pool.host.endpoint
-            if pool_endpoint != expected_endpoint:
+            if not self._endpoints_match(pool_endpoint, expected_endpoint):
                 return False
         return True
 
@@ -3918,7 +4242,7 @@ class Session(object):
     def _get_pool_endpoint(pool, default_endpoint):
         endpoint = getattr(pool, 'endpoint', None)
         connections = getattr(pool, '_connections', None)
-        if connections:
+        if isinstance(connections, Mapping):
             for connection in connections.values():
                 if getattr(connection, 'original_endpoint', None) is None:
                     connection_endpoint = getattr(connection, 'endpoint', None)
@@ -3929,10 +4253,16 @@ class Session(object):
         return endpoint if endpoint is not None else default_endpoint
 
     def _get_pool_by_host_identity(self, host, expected_host=None, expected_endpoint=None):
-        for pool_host, pool in self._pools.items():
-            if (pool_host is host and self._pool_matches_expected(
-                    pool, expected_host=expected_host, expected_endpoint=expected_endpoint)):
-                return pool
+        pool = self._pools.get(host)
+        if (pool is not None and pool.host is host and self._pool_matches_expected(
+                pool, expected_host=expected_host, expected_endpoint=expected_endpoint)):
+            return pool
+
+        with self._lock:
+            for pool_host, pool in self._pools.items():
+                if (pool_host is host and self._pool_matches_expected(
+                        pool, expected_host=expected_host, expected_endpoint=expected_endpoint)):
+                    return pool
         return None
 
     def _reuse_or_invalidate_pool_creation(self, host, pool_creation_future):
@@ -3942,7 +4272,7 @@ class Session(object):
             if (pool_creation_state.creation_epoch is not None and
                     pool_creation_state.future is pool_creation_future):
                 with host.lock:
-                    endpoint_changed = host.endpoint != pool_creation_state.endpoint
+                    endpoint_changed = not self._endpoints_match(host.endpoint, pool_creation_state.endpoint)
                 if endpoint_changed:
                     self._invalidate_pool_creation(
                         host, expected_endpoint=pool_creation_state.endpoint)
@@ -3968,7 +4298,11 @@ class Session(object):
         for host in self.cluster.metadata.all_hosts():
             distance = self._profile_manager.distance(host)
             with self._lock:
-                pool = self._pools.get(host)
+                with host.lock:
+                    host_endpoint = host.endpoint
+                pool = self._get_pool_by_host_identity(
+                    host, expected_endpoint=host_endpoint)
+                any_pool = pool or self._get_pool_by_host_identity(host)
                 pool_creation_state = self._get_pool_creation_state(host)
                 pool_creation_future = (
                     pool_creation_state.future
@@ -3988,6 +4322,8 @@ class Session(object):
                 elif pool_creation_future is not None:
                     future = self._reuse_or_invalidate_pool_creation(
                         host, pool_creation_future)
+                elif any_pool is not None:
+                    future = self.remove_pool(host)
             elif distance != pool.host_distance:
                 # the distance has changed
                 if distance == HostDistance.IGNORED:
@@ -4698,13 +5034,15 @@ class ControlConnection(object):
         change_type = event["change_type"]
         addr, port = event["address"]
         host = self._cluster.metadata.get_host(addr, port)
+        expected_endpoint = host.endpoint if host is not None else event["address"]
         if change_type == "UP":
             delay = self._delay_for_event_type('status_change', self._status_event_refresh_window)
             if host is None:
                 # this is the first time we've seen the node
                 self._cluster.scheduler.schedule_unique(delay, self.refresh_node_list_and_token_map)
             else:
-                self._cluster.scheduler.schedule_unique(delay, self._cluster.on_up, host)
+                self._cluster.scheduler.schedule_unique(
+                    delay, self._cluster.on_up, host, expected_endpoint=expected_endpoint)
         elif change_type == "DOWN":
             # Note that there is a slight risk we can receive the event late and thus
             # mark the host down even though we already had reconnected successfully.
@@ -4712,7 +5050,7 @@ class ControlConnection(object):
             # right away, so we favor the detection to make the Host.is_up more accurate.
             if host is not None:
                 # this will be run by the scheduler
-                self._cluster.on_down(host, is_host_addition=False)
+                self._cluster.on_down(host, is_host_addition=False, expected_endpoint=expected_endpoint)
 
     def _handle_client_routes_change(self, event: Dict[str, Any]) -> None:
         """
@@ -4969,6 +5307,7 @@ class _Scheduler(Thread):
     def __init__(self, executor):
         self._queue = queue.PriorityQueue()
         self._scheduled_tasks = set()
+        self._scheduled_tasks_lock = Lock()
         self._count = count()
         self._executor = executor
 
@@ -4983,26 +5322,54 @@ class _Scheduler(Thread):
             # this can happen on interpreter shutdown
             pass
         self.is_shutdown = True
-        self._queue.put_nowait((0, 0, None))
+        self._queue.put_nowait((0, 0, None, None))
         self.join()
 
     def schedule(self, delay, fn, *args, **kwargs):
-        self._insert_task(delay, (fn, args, tuple(kwargs.items())))
+        task = (fn, args, tuple(kwargs.items()))
+        self._insert_task(delay, self._task_key(fn, args, kwargs), task)
 
     def schedule_unique(self, delay, fn, *args, **kwargs):
         task = (fn, args, tuple(kwargs.items()))
-        if task not in self._scheduled_tasks:
-            self._insert_task(delay, task)
-        else:
-            log.debug("Ignoring schedule_unique for already-scheduled task: %r", task)
+        task_key = self._task_key(fn, args, kwargs)
+        self._insert_task(delay, task_key, task, unique=True)
 
-    def _insert_task(self, delay, task):
-        if not self.is_shutdown:
+    @staticmethod
+    def _freeze_task_arg(value):
+        if isinstance(value, Host):
+            return (Host, id(value))
+        if isinstance(value, tuple):
+            return tuple(_Scheduler._freeze_task_arg(item) for item in value)
+        if isinstance(value, list):
+            return ('list', tuple(_Scheduler._freeze_task_arg(item) for item in value))
+        if isinstance(value, Mapping):
+            return (
+                'dict',
+                tuple((key, _Scheduler._freeze_task_arg(val)) for key, val in value.items())
+            )
+        return value
+
+    @classmethod
+    def _task_key(cls, fn, args, kwargs):
+        return (
+            fn,
+            tuple(cls._freeze_task_arg(arg) for arg in args),
+            tuple((key, cls._freeze_task_arg(val)) for key, val in kwargs.items()),
+        )
+
+    def _insert_task(self, delay, task_key, task, unique=False):
+        with self._scheduled_tasks_lock:
+            if self.is_shutdown:
+                log.debug("Ignoring scheduled task after shutdown: %r", task)
+                return
+
+            if unique and task_key in self._scheduled_tasks:
+                log.debug("Ignoring schedule_unique for already-scheduled task: %r", task)
+                return
+
             run_at = time.time() + delay
-            self._scheduled_tasks.add(task)
-            self._queue.put_nowait((run_at, next(self._count), task))
-        else:
-            log.debug("Ignoring scheduled task after shutdown: %r", task)
+            self._scheduled_tasks.add(task_key)
+            self._queue.put_nowait((run_at, next(self._count), task_key, task))
 
     def run(self):
         while True:
@@ -5011,19 +5378,20 @@ class _Scheduler(Thread):
 
             try:
                 while True:
-                    run_at, i, task = self._queue.get(block=True, timeout=None)
+                    run_at, i, task_key, task = self._queue.get(block=True, timeout=None)
                     if self.is_shutdown:
                         if task:
                             log.debug("Not executing scheduled task due to Scheduler shutdown")
                         return
                     if run_at <= time.time():
-                        self._scheduled_tasks.discard(task)
+                        with self._scheduled_tasks_lock:
+                            self._scheduled_tasks.discard(task_key)
                         fn, args, kwargs = task
                         kwargs = dict(kwargs)
                         future = self._executor.submit(fn, *args, **kwargs)
                         future.add_done_callback(self._log_if_failed)
                     else:
-                        self._queue.put_nowait((run_at, i, task))
+                        self._queue.put_nowait((run_at, i, task_key, task))
                         break
             except queue.Empty:
                 pass
@@ -5204,7 +5572,7 @@ class ResponseFuture(object):
             # Capture connection stats before pool.return_connection() can alter state
             conn_in_flight = self._connection.in_flight
 
-            pool = self.session._pools.get(self._current_host)
+            pool = self.session._get_pool_by_host_identity(self._current_host)
             if pool and not pool.is_shutdown:
                 # Do not return the stream ID to the pool yet. We cannot reuse it
                 # because the node might still be processing the query and will
@@ -5287,7 +5655,7 @@ class ResponseFuture(object):
         if message is None:
             message = self.message
 
-        pool = self.session._pools.get(host)
+        pool = self.session._get_pool_by_host_identity(host)
         if not pool:
             self._errors[host] = ConnectionException("Host has been marked down or removed")
             return None
