@@ -251,6 +251,105 @@ def _discard_cluster_shutdown(cluster):
     _clusters_for_shutdown.discard(cluster)
 
 
+class _EventFenceState(object):
+    """
+    Tracks a monotonically increasing epoch and named in-flight events.
+
+    The caller owns any domain-specific locking around this state.  The epoch
+    represents the latest observed event for a key, while named events record
+    which epoch currently owns a deferred side effect.
+    """
+
+    __slots__ = ("epoch", "_events")
+
+    def __init__(self):
+        self.epoch = 0
+        self._events = {}
+
+    def advance(self):
+        self.epoch += 1
+        return self.epoch
+
+    def get_event(self, event):
+        return self._events.get(event)
+
+    def set_event(self, event, epoch=None):
+        if epoch is None:
+            epoch = self.epoch
+        self._events[event] = epoch
+        return epoch
+
+    def clear_event(self, event, epoch=None):
+        if epoch is not None and self._events.get(event) != epoch:
+            return False
+        self._events.pop(event, None)
+        return True
+
+    def event_is_current(self, event, epoch):
+        return self._events.get(event) == epoch and self.epoch == epoch
+
+    def _set_or_clear_event(self, event, epoch):
+        if epoch is None:
+            self.clear_event(event)
+        else:
+            self.set_event(event, epoch)
+
+
+class _IdentityWeakKeyDictionary(object):
+    """
+    Weak mapping that uses object identity instead of ``__hash__``/``__eq__``.
+    Host hashes are endpoint-based, and endpoints can change during ring refresh.
+    """
+
+    def __init__(self):
+        self._items = {}
+
+    def get(self, key, default=None):
+        key_id = id(key)
+        item = self._items.get(key_id)
+        if item is None:
+            return default
+
+        key_ref, value = item
+        if key_ref() is key:
+            return value
+
+        self._items.pop(key_id, None)
+        return default
+
+    def __setitem__(self, key, value):
+        key_id = id(key)
+        self_ref = weakref.ref(self)
+
+        def remove(ref):
+            self = self_ref()
+            if self is not None:
+                item = self._items.get(key_id)
+                if item is not None and item[0] is ref:
+                    self._items.pop(key_id, None)
+
+        self._items[key_id] = (weakref.ref(key, remove), value)
+
+
+class _EventFenceMap(object):
+    """
+    Identity-keyed store for per-object event fence state.
+    """
+
+    def __init__(self, state_factory=_EventFenceState):
+        self._lock = Lock()
+        self._states = _IdentityWeakKeyDictionary()
+        self._state_factory = state_factory
+
+    def get_state(self, key):
+        with self._lock:
+            state = self._states.get(key)
+            if state is None:
+                state = self._state_factory()
+                self._states[key] = state
+            return state
+
+
 def _shutdown_clusters():
     clusters = _clusters_for_shutdown.copy()  # copy because shutdown modifies the global set "discard"
     for cluster in clusters:
