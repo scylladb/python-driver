@@ -4092,6 +4092,10 @@ class ControlConnection(object):
             if self._is_shutdown:
                 return
 
+            # Track whether a specific connection was requested (e.g. after DDL,
+            # we must query the coordinator node). If not, we use (and can refresh)
+            # the control connection.
+            explicit_connection = bool(connection)
             if not connection:
                 connection = self._connection
 
@@ -4130,6 +4134,20 @@ class ControlConnection(object):
                     if self._is_shutdown:
                         log.debug("[control connection] Aborting wait for schema match due to shutdown")
                         return None
+                    elif not explicit_connection:
+                        # The control connection was closed (e.g. the node was stopped).
+                        # Wait briefly and try again with whatever connection the control
+                        # connection has by now (it may have reconnected to another node).
+                        log.debug("[control connection] Connection closed during schema agreement "
+                                  "check; will retry with a new control connection")
+                        self._time.sleep(0.2)
+                        elapsed = self._time.time() - start
+                        new_conn = self._connection
+                        if new_conn is not None and new_conn is not connection:
+                            connection = new_conn
+                            select_peers_query = self._get_peers_query(
+                                self.PeersQueryType.PEERS_SCHEMA, connection)
+                        continue
                     else:
                         raise
 
