@@ -15,6 +15,8 @@ import unittest
 
 import logging
 import socket
+from concurrent.futures import Future
+from threading import RLock
 
 from unittest.mock import patch, Mock
 import uuid
@@ -338,6 +340,224 @@ class SessionTest(unittest.TestCase):
         query = s.execute.call_args[0][0]
         assert query == 'USE simple_ks', (
             "Simple keyspace names should not be quoted, got: %r" % query)
+
+
+class PoolRenewalRaceTest(unittest.TestCase):
+    """
+    Regression tests for scylladb/python-driver#317: connection pool renewal
+    after concurrent node bootstraps causes double statement execution.
+    """
+
+    def _make_session(self):
+        """
+        Return a minimal Session with the attributes needed to exercise
+        add_or_renew_pool / remove_pool, without actually opening any network
+        connections.
+        """
+        s = object.__new__(Session)
+        s._lock = RLock()
+        s._pools = {}
+        s._pending_pool_futures = {}
+        s.is_shutdown = False
+        s.keyspace = None
+        s._profile_manager = Mock()
+        s._profile_manager.distance.return_value = HostDistance.LOCAL
+        s.cluster = Mock()
+        s.cluster.executor = Mock()
+        # submit() delegates to cluster.executor.submit; return a done future
+        # by default so callers that inspect the result don't hang.
+        done_future = Future()
+        done_future.set_result(True)
+        s.cluster.executor.submit.return_value = done_future
+        return s
+
+    def test_add_or_renew_pool_reuses_inflight_future(self):
+        """
+        When add_or_renew_pool is called for a host that already has an
+        in-flight pool creation (tracked in _pending_pool_futures), it must
+        return the existing future instead of submitting a duplicate task.
+        Without this fix, a concurrent call from update_created_pools would
+        create a second HostConnection pool, then shut down the first one
+        while requests were still in-flight, causing those requests to be
+        retried and executed twice on the server side.
+        """
+        s = self._make_session()
+        host = Mock()
+        host.is_up = True
+
+        # Simulate an in-flight pool creation by placing a pending (not-yet-
+        # resolved) future directly in _pending_pool_futures using the
+        # dict-based entry format introduced by the coalescing fix.
+        inflight_future = Future()  # not set_result yet → still in-flight
+        s._pending_pool_futures[host] = {
+            'future': inflight_future,
+            'creation_id': object(),
+            'distance': HostDistance.LOCAL,
+            'is_host_addition_cell': [False],
+        }
+
+        returned = s.add_or_renew_pool(host, is_host_addition=False)
+
+        # The call must reuse the existing in-flight future, not submit a new one.
+        assert returned is inflight_future, (
+            "add_or_renew_pool should return the existing in-flight future, "
+            "not create a duplicate pool creation task"
+        )
+        s.cluster.executor.submit.assert_not_called()
+
+    def test_add_or_renew_pool_discards_duplicate_when_live_pool_exists(self):
+        """
+        Defense-in-depth for scylladb/python-driver#317.
+
+        When run_add_or_renew_pool finishes creating a new pool but finds that
+        a live pool has already been installed for the host by a concurrent
+        creation, the new pool must be discarded (shut down) rather than
+        replacing the live one.  Replacing a live pool would close it while
+        requests are still in-flight, causing server-side double execution.
+
+        This test exercises the real production code path by stubbing
+        HostConnection and running the submitted callable synchronously.
+        """
+        s = self._make_session()
+        host = Mock()
+        host.is_up = True
+
+        # Pre-install a live pool for this host to simulate the state left by
+        # a concurrent add_or_renew_pool that finished first.
+        live_pool = Mock()
+        live_pool.is_shutdown = False
+        s._pools[host] = live_pool
+
+        # Make the executor run the submitted callable synchronously so the
+        # test does not need threads.
+        def sync_submit(fn, *args, **kwargs):
+            result = fn(*args, **kwargs)
+            f = Future()
+            f.set_result(result)
+            return f
+        s.cluster.executor.submit = sync_submit
+
+        # Stub HostConnection so no real TCP connection is opened.
+        # _keyspace must equal s.keyspace (None) so the keyspace-sync loop
+        # inside run_add_or_renew_pool is skipped.
+        stub_pool = Mock()
+        stub_pool._keyspace = None
+
+        with patch('cassandra.cluster.HostConnection', return_value=stub_pool):
+            s.add_or_renew_pool(host, is_host_addition=False)
+
+        # The pre-installed live pool must not have been replaced.
+        assert s._pools[host] is live_pool, (
+            "add_or_renew_pool must not replace a live pool that is already "
+            "present when the new connection finishes"
+        )
+        # The newly created pool stub must have been shut down.
+        stub_pool.shutdown.assert_called_once()
+
+    def test_remove_pool_clears_pending_future(self):
+        """
+        remove_pool must clear _pending_pool_futures for the host so that a
+        subsequent update_created_pools call can schedule a fresh pool
+        creation if needed (instead of reusing a now-stale in-flight future
+        for a host that has been removed and re-added).
+        """
+        s = self._make_session()
+        host = Mock()
+
+        stale_future = Future()
+        s._pending_pool_futures[host] = {
+            'future': stale_future,
+            'creation_id': object(),
+            'distance': HostDistance.LOCAL,
+            'is_host_addition_cell': [False],
+        }
+
+        pool = Mock()
+        s._pools[host] = pool
+
+        s.remove_pool(host)
+
+        assert host not in s._pending_pool_futures, (
+            "remove_pool must clear _pending_pool_futures so the next "
+            "add_or_renew_pool call submits a fresh task"
+        )
+
+    def test_done_callback_clears_pending_future(self):
+        """
+        The done-callback registered by add_or_renew_pool must remove the host
+        entry from _pending_pool_futures once the future completes, so that
+        update_created_pools can schedule a fresh creation on the next call
+        rather than treating a stale done future as in-flight.
+        """
+        s = self._make_session()
+        host = Mock()
+        host.is_up = True
+
+        returned = s.add_or_renew_pool(host, is_host_addition=False)
+        assert returned is not None
+
+        # The future submitted by add_or_renew_pool is already done (our mock
+        # executor returns a pre-resolved future), so the done-callback has
+        # already fired.
+        assert host not in s._pending_pool_futures, (
+            "done-callback should have cleared _pending_pool_futures once "
+            "the future completed"
+        )
+
+    def test_done_callback_does_not_clear_newer_future(self):
+        """
+        The done-callback must only clear _pending_pool_futures[host] if the
+        entry still points at the *same* future it was registered on.  If a
+        newer future has been installed in the meantime (e.g. after remove_pool
+        + add_or_renew_pool), the callback must leave the new entry alone.
+        """
+        s = self._make_session()
+        host = Mock()
+        host.is_up = True
+
+        # Place an entry manually and register the callback as the real code
+        # would, but keep the future pending so the callback has not fired yet.
+        old_future = Future()
+        new_future = Future()
+        old_creation_id = object()
+        new_creation_id = object()
+
+        with s._lock:
+            s._pending_pool_futures[host] = {
+                'future': old_future,
+                'creation_id': old_creation_id,
+                'distance': HostDistance.LOCAL,
+                'is_host_addition_cell': [False],
+            }
+
+            def _clear_pending(f, _host=host, _creation_id=old_creation_id):
+                with s._lock:
+                    e = s._pending_pool_futures.get(_host)
+                    if e is not None and e['creation_id'] is _creation_id:
+                        s._pending_pool_futures.pop(_host, None)
+
+            old_future.add_done_callback(_clear_pending)
+
+        # Simulate remove_pool + a new add_or_renew_pool: replace with a newer
+        # entry (new creation_id) before old_future completes.
+        with s._lock:
+            s._pending_pool_futures[host] = {
+                'future': new_future,
+                'creation_id': new_creation_id,
+                'distance': HostDistance.LOCAL,
+                'is_host_addition_cell': [False],
+            }
+
+        # Now complete the old future — its callback must not evict new entry.
+        old_future.set_result(True)
+
+        with s._lock:
+            entry = s._pending_pool_futures.get(host)
+            assert entry is not None and entry['future'] is new_future, (
+                "done-callback of an old future must not remove a newer "
+                "pending entry from _pending_pool_futures"
+            )
+
 
 class ProtocolVersionTests(unittest.TestCase):
 
