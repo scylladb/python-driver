@@ -108,6 +108,7 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
 
             original = cassandra.deserializers.DesBytesType
             cassandra.deserializers.DesBytesType = cassandra.deserializers.DesBytesTypeByteArray
+            cassandra.deserializers.clear_deserializer_caches()
             s = self.session
 
             s.execute("CREATE TABLE blobbytes2 (a ascii PRIMARY KEY, b blob)")
@@ -121,6 +122,7 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         finally:
             if original is not None:
                 cassandra.deserializers.DesBytesType=original
+                cassandra.deserializers.clear_deserializer_caches()
 
     def test_can_insert_primitive_datatypes(self):
         """
