@@ -481,7 +481,15 @@ cpdef Deserializer find_deserializer(cqltype):
 
 
 def obj_array(list objs):
-    """Create a (Cython) array of objects given a list of objects"""
+    """Create a (Cython) array of objects given a list of objects.
+
+    Returns the plain list for empty input since ``cython_array`` does
+    not support zero-length shapes.  Callers that use
+    ``cdef Deserializer[::1]`` typed memoryviews must guard against
+    empty input before assignment.
+    """
+    if not objs:
+        return objs
     cdef object[:] arr
     cdef Py_ssize_t i
     arr = cython_array(shape=(len(objs),), itemsize=sizeof(void *), format="O")
