@@ -551,7 +551,11 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         return self._child_policy.on_remove(*args, **kwargs)
 
     def on_control_connection_host(self, host):
-        return self._child_policy.on_control_connection_host(host)
+        on_control_connection_host = getattr(
+            self._child_policy, 'on_control_connection_host', None)
+        if on_control_connection_host is not None:
+            return on_control_connection_host(host)
+        return None
 
 
 class WhiteListRoundRobinPolicy(RoundRobinPolicy):
@@ -720,7 +724,11 @@ class HostFilterPolicy(LoadBalancingPolicy):
         return self._child_policy.on_remove(host, *args, **kwargs)
 
     def on_control_connection_host(self, host):
-        return self._child_policy.on_control_connection_host(host)
+        on_control_connection_host = getattr(
+            self._child_policy, 'on_control_connection_host', None)
+        if on_control_connection_host is not None:
+            return on_control_connection_host(host)
+        return None
 
     @property
     def predicate(self):
@@ -1391,7 +1399,11 @@ class WrapperPolicy(LoadBalancingPolicy):
         return self._child_policy.on_remove(*args, **kwargs)
 
     def on_control_connection_host(self, host):
-        return self._child_policy.on_control_connection_host(host)
+        on_control_connection_host = getattr(
+            self._child_policy, 'on_control_connection_host', None)
+        if on_control_connection_host is not None:
+            return on_control_connection_host(host)
+        return None
 
 
 class DefaultLoadBalancingPolicy(WrapperPolicy):

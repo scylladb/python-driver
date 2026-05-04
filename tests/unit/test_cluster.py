@@ -16,6 +16,7 @@ import unittest
 import logging
 import socket
 from concurrent.futures import Future
+from functools import total_ordering
 from unittest.mock import patch, Mock
 import uuid
 
@@ -36,6 +37,7 @@ import pytest
 log = logging.getLogger(__name__)
 
 
+@total_ordering
 class _HostAwareProxyEndPoint(EndPoint):
     def __init__(self, address, affinity_key, port=9042):
         self._address = address
@@ -358,6 +360,9 @@ class ClusterTest(unittest.TestCase):
         cluster.metadata.add_or_return_host(host)
 
         session = Mock()
+        add_future = Future()
+        add_future.set_result(True)
+        session.add_or_renew_pool.return_value = add_future
         cluster.sessions.add(session)
 
         listener = _RecordingHostStateListener()
@@ -369,6 +374,31 @@ class ClusterTest(unittest.TestCase):
         assert listener.events == [("down", "127.0.0.1"), ("up", "127.0.0.2")]
         session.remove_pool.assert_called_once_with(host)
         session.add_or_renew_pool.assert_called_once_with(host, is_host_addition=False)
+
+    def test_update_host_endpoint_restarts_reconnector_when_replacement_pool_fails(self):
+        cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), protocol_version=4)
+        self.addCleanup(cluster.shutdown)
+
+        host = Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host.set_up()
+        cluster.metadata.add_or_return_host(host)
+
+        add_future = Future()
+        add_future.set_result(False)
+
+        session = Mock()
+        session.add_or_renew_pool.return_value = add_future
+        cluster.sessions.add(session)
+        cluster._start_reconnector = Mock()
+
+        new_endpoint = DefaultEndPoint("127.0.0.2")
+        cluster._update_host_endpoint(host, new_endpoint)
+
+        assert host.endpoint == new_endpoint
+        assert cluster.metadata.get_host(new_endpoint) is host
+        assert host.is_up is False
+        session.add_or_renew_pool.assert_called_once_with(host, is_host_addition=False)
+        cluster._start_reconnector.assert_called_once_with(host, is_host_addition=False)
 
     def test_is_shard_aware_ignores_non_shard_aware_pools(self):
         cluster = Cluster(contact_points=['127.0.0.1'])
@@ -636,6 +666,7 @@ class SessionTest(unittest.TestCase):
 
     @mock_session_pools
     def test_session_preserves_down_event_discounting_after_endpoint_update(self, *_):
+        @total_ordering
         class _DeterministicHashEndPoint(EndPoint):
             def __init__(self, address, hash_value, port=9042):
                 self._address = address

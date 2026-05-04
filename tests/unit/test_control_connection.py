@@ -23,6 +23,7 @@ from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXE
 from cassandra.pool import Host
 from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
+                                DynamicWhiteListRoundRobinPolicy,
                                 ConstantReconnectionPolicy, IdentityTranslator)
 
 PEER_IP = "foobar"
@@ -404,6 +405,39 @@ class ControlConnectionTest(unittest.TestCase):
         self.control_connection.refresh_node_list_and_token_map()
 
         assert self.control_connection._current_host_id == "uuid1"
+        session.update_created_pools.assert_called_once_with()
+
+    def test_candidate_refresh_keeps_dynamic_whitelist_on_active_connection_until_adopted(self):
+        policy = DynamicWhiteListRoundRobinPolicy()
+        self.cluster.profile_manager = ProfileManager()
+        self.cluster.profile_manager.profiles[EXEC_PROFILE_DEFAULT] = ExecutionProfile(policy)
+        policy.populate(self.cluster, self.cluster.metadata.all_hosts())
+
+        active_host = self.cluster.metadata.get_host_by_host_id("uuid2")
+        policy.on_control_connection_host(active_host)
+
+        active_connection = MockConnection()
+        active_connection.endpoint = active_host.endpoint
+        active_connection.original_endpoint = active_host.endpoint
+        active_connection.close = Mock()
+        self.control_connection._connection = active_connection
+        self.control_connection._current_host_id = active_host.host_id
+
+        session = Mock()
+        self.cluster.sessions = (session,)
+
+        candidate_connection = MockConnection()
+        self.control_connection._refresh_node_list_and_token_map(candidate_connection)
+
+        assert self.control_connection._current_host_id == active_host.host_id
+        assert list(policy.make_query_plan()) == [active_host]
+        session.update_created_pools.assert_not_called()
+
+        self.control_connection._set_new_connection(candidate_connection)
+
+        candidate_host = self.cluster.metadata.get_host_by_host_id("uuid1")
+        assert self.control_connection._current_host_id == candidate_host.host_id
+        assert list(policy.make_query_plan()) == [candidate_host]
         session.update_created_pools.assert_called_once_with()
 
     def test_refresh_nodes_and_tokens_skips_intermediate_endpoint_for_current_host(self):

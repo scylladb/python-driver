@@ -1945,12 +1945,29 @@ class Cluster(object):
         host.endpoint = endpoint
         self.metadata.update_host(host, old_endpoint)
         if was_up:
-            host.set_up()
             self.profile_manager.on_up(host)
+            futures_lock = Lock()
+            futures_results = []
+            futures = set()
+            callback = partial(self._on_up_future_completed, host, futures, futures_results, futures_lock)
+            callback_futures = []
             for session in tuple(self.sessions):
-                session.add_or_renew_pool(host, is_host_addition=False)
-            for listener in self.listeners:
-                listener.on_up(host)
+                future = session.add_or_renew_pool(host, is_host_addition=False)
+                if future is not None:
+                    futures.add(future)
+                    callback_futures.append(future)
+
+            if callback_futures:
+                with host.lock:
+                    host._currently_handling_node_up = True
+                for future in callback_futures:
+                    future.add_done_callback(callback)
+            else:
+                host.set_up()
+                for listener in self.listeners:
+                    listener.on_up(host)
+                for session in tuple(self.sessions):
+                    session.update_created_pools()
         else:
             self._start_reconnector(host, is_host_addition=False)
 
@@ -3669,6 +3686,7 @@ class ControlConnection(object):
         self._reconnection_handler = None
         self._reconnection_lock = RLock()
         self._current_host_id = None
+        self._pending_control_connection_hosts = {}
 
         self._event_schedule_times = {}
 
@@ -3691,7 +3709,13 @@ class ControlConnection(object):
 
         if old:
             log.debug("[control connection] Closing old connection %r, replacing with %r", old, conn)
+            self._pending_control_connection_hosts.pop(id(old), None)
             old.close()
+
+        current_host_info = self._pending_control_connection_hosts.pop(id(conn), None)
+        if current_host_info is not None:
+            current_host, current_host_id = current_host_info
+            self._set_current_control_connection_host(current_host, current_host_id, update_sessions=False)
 
         for session in tuple(getattr(self._cluster, "sessions", ())):
             session.update_created_pools()
@@ -3825,6 +3849,7 @@ class ControlConnection(object):
             self._refresh_node_list_and_token_map(connection, preloaded_results=shared_results)
             self._refresh_schema(connection, preloaded_results=shared_results, schema_agreement_wait=-1)
         except Exception:
+            self._pending_control_connection_hosts.pop(id(connection), None)
             connection.close()
             raise
 
@@ -3898,10 +3923,11 @@ class ControlConnection(object):
                 self._connection.close()
                 self._connection = None
             self._current_host_id = None
+            self._pending_control_connection_hosts.clear()
         try:
             self._cluster.profile_manager.on_control_connection_host(None)
         except ReferenceError:
-            pass
+            pass  # our weak reference to the Cluster is no good
 
     def refresh_schema(self, force=False, **kwargs):
         try:
@@ -4069,15 +4095,22 @@ class ControlConnection(object):
                 self._maybe_rebind_control_connection_host_endpoint(current_host, connection.endpoint)
                 current_host = self._cluster.metadata.get_host_by_host_id(local_host_id)
 
-        previous_current_host_id = self._current_host_id
-        self._current_host_id = local_host_id if current_host is not None else None
-        self._cluster.profile_manager.on_control_connection_host(current_host)
-        if connection is self._connection and self._current_host_id != previous_current_host_id:
-            for session in tuple(getattr(self._cluster, "sessions", ())):
-                session.update_created_pools()
+        current_host_id = local_host_id if current_host is not None else None
+        if connection is self._connection:
+            self._set_current_control_connection_host(current_host, current_host_id)
+        else:
+            self._pending_control_connection_hosts[id(connection)] = (current_host, current_host_id)
         if partitioner and should_rebuild_token_map:
             log.debug("[control connection] Rebuilding token map due to topology changes")
             self._cluster.metadata.rebuild_token_map(partitioner, token_map)
+
+    def _set_current_control_connection_host(self, current_host, current_host_id, update_sessions=True):
+        previous_current_host_id = self._current_host_id
+        self._current_host_id = current_host_id
+        self._cluster.profile_manager.on_control_connection_host(current_host)
+        if update_sessions and self._current_host_id != previous_current_host_id:
+            for session in tuple(getattr(self._cluster, "sessions", ())):
+                session.update_created_pools()
 
     @staticmethod
     def _is_valid_peer(row):
