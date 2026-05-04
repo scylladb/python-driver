@@ -13,9 +13,9 @@
 # limitations under the License.
 
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 
-from cassandra.connection import DefaultEndPoint
+from cassandra.connection import DefaultEndPoint, SSLSessionCache
 
 try:
     from twisted.test import proto_helpers
@@ -197,3 +197,91 @@ class TestTwistedConnection(unittest.TestCase):
         self.obj_ut.push('123 pickup')
         self.mock_reactor_cft.assert_called_with(
             transport_mock.write, '123 pickup')
+
+
+class TestSSLCreatorInfoCallback(unittest.TestCase):
+    """Verify that _SSLCreator.info_callback does not cache TLS sessions
+    when hostname verification fails."""
+
+    def setUp(self):
+        if twistedreactor is None:
+            raise unittest.SkipTest("Twisted libraries not available")
+        from OpenSSL import SSL
+        self.SSL = SSL
+
+    def _make_creator(self, check_hostname, endpoint_address, cert_cn,
+                      ssl_session_cache=None):
+        from cassandra.io.twistedreactor import _SSLCreator
+        endpoint = Mock()
+        endpoint.address = endpoint_address
+        endpoint.tls_session_cache_key = (endpoint_address, 9042)
+        ssl_ctx = Mock()
+        creator = _SSLCreator(
+            endpoint=endpoint,
+            ssl_context=ssl_ctx,
+            ssl_options=None,
+            check_hostname=check_hostname,
+            timeout=5,
+            ssl_session_cache=ssl_session_cache,
+        )
+
+        # Build a mock OpenSSL connection
+        connection = Mock()
+        subject = Mock()
+        subject.commonName = cert_cn
+        cert = Mock()
+        cert.get_subject.return_value = subject
+        connection.get_peer_certificate.return_value = cert
+        session = Mock()
+        connection.get_session.return_value = session
+        connection.session_reused.return_value = False
+        transport = Mock()
+        connection.get_app_data.return_value = transport
+
+        return creator, connection, transport, session
+
+    def test_hostname_mismatch_does_not_cache(self):
+        """When hostname verification fails, the session must NOT be cached."""
+        cache = SSLSessionCache()
+        creator, connection, transport, session = self._make_creator(
+            check_hostname=True,
+            endpoint_address='good.example.com',
+            cert_cn='evil.example.com',
+            ssl_session_cache=cache,
+        )
+
+        creator.info_callback(connection, self.SSL.SSL_CB_HANDSHAKE_DONE, 0)
+
+        transport.failVerification.assert_called_once()
+        assert cache.size() == 0, "Session was cached despite hostname mismatch"
+
+    def test_hostname_match_caches_session(self):
+        """When hostname matches, the session should be cached."""
+        cache = SSLSessionCache()
+        creator, connection, transport, session = self._make_creator(
+            check_hostname=True,
+            endpoint_address='good.example.com',
+            cert_cn='good.example.com',
+            ssl_session_cache=cache,
+        )
+
+        creator.info_callback(connection, self.SSL.SSL_CB_HANDSHAKE_DONE, 0)
+
+        transport.failVerification.assert_not_called()
+        assert cache.size() == 1
+        assert cache.get(('good.example.com', 9042)) is session
+
+    def test_no_check_hostname_caches_session(self):
+        """When check_hostname is False, always cache regardless of CN."""
+        cache = SSLSessionCache()
+        creator, connection, transport, session = self._make_creator(
+            check_hostname=False,
+            endpoint_address='good.example.com',
+            cert_cn='evil.example.com',
+            ssl_session_cache=cache,
+        )
+
+        creator.info_callback(connection, self.SSL.SSL_CB_HANDSHAKE_DONE, 0)
+
+        transport.failVerification.assert_not_called()
+        assert cache.size() == 1

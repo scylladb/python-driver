@@ -139,11 +139,12 @@ class TwistedLoop(object):
 
 @implementer(IOpenSSLClientConnectionCreator)
 class _SSLCreator(object):
-    def __init__(self, endpoint, ssl_context, ssl_options, check_hostname, timeout):
+    def __init__(self, endpoint, ssl_context, ssl_options, check_hostname, timeout, ssl_session_cache=None):
         self.endpoint = endpoint
         self.ssl_options = ssl_options
         self.check_hostname = check_hostname
         self.timeout = timeout
+        self.ssl_session_cache = ssl_session_cache
 
         if ssl_context:
             self.context = ssl_context
@@ -170,12 +171,36 @@ class _SSLCreator(object):
             if self.check_hostname and self.endpoint.address != connection.get_peer_certificate().get_subject().commonName:
                 transport = connection.get_app_data()
                 transport.failVerification(Failure(ConnectionException("Hostname verification failed", self.endpoint)))
+                return
+            # Store TLS session after successful handshake (PyOpenSSL)
+            if self.ssl_session_cache is not None:
+                try:
+                    session = connection.get_session()
+                    if session:
+                        self.ssl_session_cache.set(
+                            self.endpoint.tls_session_cache_key, session)
+                        if connection.session_reused():
+                            log.debug("TLS session was reused for %s", self.endpoint)
+                except Exception:
+                    log.debug("Could not cache TLS session for %s", self.endpoint)
 
     def clientConnectionForTLS(self, tlsProtocol):
         connection = SSL.Connection(self.context, None)
         connection.set_app_data(tlsProtocol)
         if self.ssl_options and "server_hostname" in self.ssl_options:
             connection.set_tlsext_host_name(self.ssl_options['server_hostname'].encode('ascii'))
+
+        # Apply cached TLS session for resumption (PyOpenSSL)
+        if self.ssl_session_cache is not None:
+            cached_session = self.ssl_session_cache.get(
+                self.endpoint.tls_session_cache_key)
+            if cached_session:
+                try:
+                    connection.set_session(cached_session)
+                    log.debug("Using cached TLS session for %s", self.endpoint)
+                except Exception:
+                    log.debug("Could not restore TLS session for %s", self.endpoint)
+
         return connection
 
 
@@ -241,6 +266,7 @@ class TwistedConnection(Connection):
                 self.ssl_options,
                 self._check_hostname,
                 self.connect_timeout,
+                ssl_session_cache=self._ssl_session_cache,
             )
 
             endpoint = SSL4ClientEndpoint(
