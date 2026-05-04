@@ -2411,8 +2411,9 @@ class Cluster(object):
                     host, is_host_addition=False, allow_retry_after_auth_failure=True)
                 if future is not None:
                     have_future = True
-                    future.add_done_callback(callback)
                     futures.add(future)
+            for future in tuple(futures):
+                future.add_done_callback(callback)
         except Exception:
             log.exception("Unexpected failure handling node %s being marked up:", host)
             for future in futures:
