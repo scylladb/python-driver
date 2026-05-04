@@ -15,11 +15,11 @@
 import unittest
 
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import Mock, ANY, call
+from unittest.mock import Mock, ANY, call, patch
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
-from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
+from cassandra.cluster import Cluster, ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.pool import Host
 from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
@@ -439,6 +439,65 @@ class ControlConnectionTest(unittest.TestCase):
         assert self.control_connection._current_host_id == candidate_host.host_id
         assert list(policy.make_query_plan()) == [candidate_host]
         session.update_created_pools.assert_called_once_with()
+
+    def test_initial_dynamic_whitelist_control_host_down_event_is_handled(self):
+        policy = DynamicWhiteListRoundRobinPolicy()
+        cluster = Cluster(load_balancing_policy=policy, protocol_version=4)
+        self.addCleanup(cluster.shutdown)
+
+        connection = MockConnection()
+        connection.endpoint = DefaultEndPoint("127.254.254.101")
+        connection.original_endpoint = connection.endpoint
+        connection.close = Mock()
+
+        with patch.object(cluster, "_get_control_connection_host_endpoint",
+                          return_value=connection.endpoint):
+            cluster.control_connection._refresh_node_list_and_token_map(connection)
+            cluster.control_connection._set_new_connection(connection)
+            cluster._populate_hosts()
+
+        current_host = cluster.metadata.get_host_by_host_id("uuid1")
+        assert current_host.is_up is True
+        cluster.on_down_potentially_blocking = Mock()
+
+        cluster.on_down(current_host, is_host_addition=False)
+
+        cluster.on_down_potentially_blocking.assert_called_once_with(
+            current_host, False)
+
+    def test_dynamic_whitelist_reconnected_control_host_is_marked_up(self):
+        policy = DynamicWhiteListRoundRobinPolicy()
+        cluster = Cluster(load_balancing_policy=policy, protocol_version=4)
+        self.addCleanup(cluster.shutdown)
+
+        connection = MockConnection()
+        connection.endpoint = DefaultEndPoint("127.254.254.101")
+        connection.original_endpoint = connection.endpoint
+        connection.close = Mock()
+
+        with patch.object(cluster, "_get_control_connection_host_endpoint",
+                          return_value=connection.endpoint):
+            cluster.control_connection._refresh_node_list_and_token_map(connection)
+            cluster.control_connection._set_new_connection(connection)
+            cluster._populate_hosts()
+
+        current_host = cluster.metadata.get_host_by_host_id("uuid1")
+        current_host.set_down()
+        policy.on_down(current_host)
+        assert list(policy.make_query_plan()) == []
+
+        new_connection = MockConnection()
+        new_connection.endpoint = connection.endpoint
+        new_connection.original_endpoint = new_connection.endpoint
+        new_connection.close = Mock()
+
+        with patch.object(cluster, "_get_control_connection_host_endpoint",
+                          return_value=new_connection.endpoint):
+            cluster.control_connection._refresh_node_list_and_token_map(new_connection)
+            cluster.control_connection._set_new_connection(new_connection)
+
+        assert current_host.is_up is True
+        assert list(policy.make_query_plan()) == [current_host]
 
     def test_refresh_nodes_and_tokens_skips_intermediate_endpoint_for_current_host(self):
         proxy_endpoint = DefaultEndPoint("127.254.254.101")
