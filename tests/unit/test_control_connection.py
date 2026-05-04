@@ -396,6 +396,16 @@ class ControlConnectionTest(unittest.TestCase):
         assert self.control_connection._current_host_id == "uuid1"
         self.cluster.profile_manager.on_control_connection_host.assert_called_once_with(current_host)
 
+    def test_refresh_nodes_and_tokens_updates_sessions_when_current_host_changes(self):
+        session = Mock()
+        self.cluster.sessions = (session,)
+        self.control_connection._current_host_id = "uuid2"
+
+        self.control_connection.refresh_node_list_and_token_map()
+
+        assert self.control_connection._current_host_id == "uuid1"
+        session.update_created_pools.assert_called_once_with()
+
     def test_refresh_nodes_and_tokens_skips_intermediate_endpoint_for_current_host(self):
         proxy_endpoint = DefaultEndPoint("127.254.254.101")
         self.connection.endpoint = proxy_endpoint

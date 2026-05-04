@@ -4073,7 +4073,7 @@ class ControlConnection(object):
         self._current_host_id = local_host_id if current_host is not None else None
         self._cluster.profile_manager.on_control_connection_host(current_host)
         if connection is self._connection and self._current_host_id != previous_current_host_id:
-            for session in tuple(getattr(self, "sessions", ())):
+            for session in tuple(getattr(self._cluster, "sessions", ())):
                 session.update_created_pools()
         if partitioner and should_rebuild_token_map:
             log.debug("[control connection] Rebuilding token map due to topology changes")
