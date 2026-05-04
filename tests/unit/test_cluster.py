@@ -287,7 +287,6 @@ class SessionTest(unittest.TestCase):
         distance_map = {}
         if distances is None:
             distances = [HostDistance.LOCAL] * len(schema_versions)
-
         for index, schema_version in enumerate(schema_versions):
             host = Host("127.0.0.%d" % (index + 1), SimpleConvictionPolicy, host_id=uuid.uuid4())
             host.set_up()
@@ -493,7 +492,6 @@ class SessionTest(unittest.TestCase):
 
         with pytest.raises(ValueError):
             session.wait_for_schema_agreement(wait_time=1, scope='planet')
-
 class ProtocolVersionTests(unittest.TestCase):
 
     def test_protocol_downgrade_test(self):

@@ -21,7 +21,7 @@ from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
 from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.pool import Host
-from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
+from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory, ConnectionShutdown
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
                                 ConstantReconnectionPolicy, IdentityTranslator)
 
@@ -253,6 +253,15 @@ class ControlConnectionTest(unittest.TestCase):
         assert not self.control_connection._wait_for_schema_agreement()
         # the control connection should have slept until it hit the limit
         assert self.time.clock >= self.cluster.max_schema_agreement_wait
+
+    def test_wait_for_schema_agreement_falls_back_to_session_when_connection_closes(self):
+        session = Mock(is_shutdown=False)
+        session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [session]
+        self.connection.wait_for_responses.side_effect = ConnectionShutdown("closed")
+
+        assert self.control_connection.wait_for_schema_agreement()
+        session.wait_for_schema_agreement.assert_called_once_with(wait_time=self.cluster.max_schema_agreement_wait)
 
     def test_wait_for_schema_agreement_skipping(self):
         """

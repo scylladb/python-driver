@@ -4274,6 +4274,11 @@ class ControlConnection(object):
 
             if not connection:
                 connection = self._connection
+                if not connection:
+                    fallback = self._wait_for_schema_agreement_through_session(total_timeout)
+                    if fallback is not None:
+                        return fallback
+                    return None
 
             if preloaded_results:
                 log.debug("[control connection] Attempting to use preloaded results for schema agreement")
@@ -4311,6 +4316,10 @@ class ControlConnection(object):
                         log.debug("[control connection] Aborting wait for schema match due to shutdown")
                         return None
                     else:
+                        fallback_wait = total_timeout - elapsed
+                        fallback = self._wait_for_schema_agreement_through_session(fallback_wait)
+                        if fallback is not None:
+                            return fallback
                         raise
 
                 schema_mismatches = self._get_schema_mismatches(peers_result, local_result, connection.endpoint)
@@ -4321,9 +4330,28 @@ class ControlConnection(object):
                 self._time.sleep(0.2)
                 elapsed = self._time.time() - start
 
+            fallback = self._wait_for_schema_agreement_through_session(total_timeout)
+            if fallback is not None:
+                return fallback
+
             log.warning("Node %s is reporting a schema disagreement: %s",
                         connection.endpoint, schema_mismatches)
             return False
+
+    def _wait_for_schema_agreement_through_session(self, wait_time):
+        if wait_time <= 0:
+            return None
+
+        try:
+            sessions = tuple(self._cluster.sessions)
+        except (AttributeError, ReferenceError):
+            return None
+
+        for session in sessions:
+            if not getattr(session, 'is_shutdown', False):
+                log.debug("[control connection] Falling back to session schema agreement check")
+                return session.wait_for_schema_agreement(wait_time=wait_time)
+        return None
 
     def _get_schema_mismatches(self, peers_result, local_result, local_address):
         peers_result = dict_factory(peers_result.column_names, peers_result.parsed_rows)
@@ -4540,12 +4568,25 @@ class _Scheduler(Thread):
 
 def refresh_schema_and_set_result(control_conn, response_future, connection, **kwargs):
     try:
-        log.debug("Refreshing schema in response to schema change. "
-                  "%s", kwargs)
-        response_future.is_schema_agreed = control_conn._refresh_schema(connection, **kwargs)
-    except Exception:
-        log.exception("Exception refreshing schema in response to schema change:")
-        response_future.session.submit(control_conn.refresh_schema, **kwargs)
+        log.debug("Refreshing schema in response to schema change. %s", kwargs)
+        try:
+            response_future.is_schema_agreed = control_conn._refresh_schema(connection, **kwargs)
+        except Exception:
+            log.exception("Exception refreshing schema in response to schema change:")
+            response_future.is_schema_agreed = False
+
+        if not response_future.is_schema_agreed:
+            log.debug("Falling back to session schema agreement check")
+            try:
+                response_future.is_schema_agreed = response_future.session.wait_for_schema_agreement()
+            except Exception:
+                log.exception("Exception waiting for schema agreement through session:")
+                response_future.is_schema_agreed = False
+
+            if response_future.is_schema_agreed:
+                control_conn.refresh_schema(schema_agreement_wait=0, **kwargs)
+            else:
+                response_future.session.submit(control_conn.refresh_schema, **kwargs)
     finally:
         response_future._set_final_result(None)
 

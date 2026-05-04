@@ -19,7 +19,7 @@ from threading import RLock
 from unittest.mock import Mock, MagicMock, ANY
 
 from cassandra import ConsistencyLevel, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
-from cassandra.cluster import Session, ResponseFuture, NoHostAvailable, ProtocolVersion
+from cassandra.cluster import Session, ResponseFuture, NoHostAvailable, ProtocolVersion, refresh_schema_and_set_result
 from cassandra.connection import Connection, ConnectionException
 from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessage,
                                 UnavailableErrorMessage, ResultMessage, QueryMessage,
@@ -122,6 +122,24 @@ class ResponseFutureTests(unittest.TestCase):
         connection = Mock()
         rf._set_result(None, connection, None, result)
         session.submit.assert_called_once_with(ANY, ANY, rf, connection, **event_results)
+
+    def test_schema_change_refresh_falls_back_to_session_agreement(self):
+        session = self.make_session()
+        session.wait_for_schema_agreement.return_value = True
+        control_conn = Mock()
+        control_conn._refresh_schema.return_value = False
+        rf = self.make_response_future(session)
+        connection = Mock()
+        event_results = {'target_type': SchemaTargetType.TABLE, 'change_type': SchemaChangeType.CREATED,
+                         'keyspace': "keyspace1", "table": "table1"}
+
+        refresh_schema_and_set_result(control_conn, rf, connection, **event_results)
+
+        control_conn._refresh_schema.assert_called_once_with(connection, **event_results)
+        session.wait_for_schema_agreement.assert_called_once_with()
+        control_conn.refresh_schema.assert_called_once_with(schema_agreement_wait=0, **event_results)
+        assert rf.is_schema_agreed
+        assert not rf.result()
 
     def test_other_result_message_kind(self):
         session = self.make_session()
