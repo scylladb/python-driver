@@ -449,7 +449,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.check_create_statement(tablemeta, create_statement)
 
     @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Counters are not yet supported with tablets',
-                             oss_scylla_version="7.0", ent_scylla_version="2026.1")
+                             scylla_version="2026.1")
     def test_counter(self):
         create_statement = (
             "CREATE TABLE {keyspace}.{table} ("
@@ -725,7 +725,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
     @greaterthanorequalcass30
     @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
-                             oss_scylla_version="7.0", ent_scylla_version="2026.1")
+                             scylla_version="2026.1")
     def test_refresh_metadata_for_mv(self):
         """
         test for synchronously refreshing materialized view metadata
@@ -936,7 +936,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
     @greaterthanorequalcass30
     @requires_collection_indexes
     @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
-                             oss_scylla_version="7.0", ent_scylla_version="2026.1")
+                             scylla_version="2026.1")
     def test_multiple_indices(self):
         """
         test multiple indices on the same column.
@@ -971,7 +971,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
     @greaterthanorequalcass30
     @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
-                             oss_scylla_version="7.0", ent_scylla_version="2026.1")
+                             scylla_version="2026.1")
     def test_table_extensions(self):
         s = self.session
         ks = self.keyspace_name
@@ -1204,8 +1204,8 @@ CREATE TABLE export_udts.users (
         cluster.shutdown()
 
     @greaterthancass21
-    @xfail_scylla_version_lt(reason='scylladb/scylladb#10707 - Column name in CREATE INDEX is not quoted',
-                             scylla_version="2023.1.1")
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
+                             scylla_version="2026.1")
     def test_case_sensitivity(self):
         """
         Test that names that need to be escaped in CREATE statements are
@@ -1465,6 +1465,8 @@ class IndexMapTests(unittest.TestCase):
     def drop_basic_table(self):
         self.session.execute("DROP TABLE %s" % self.table_name)
 
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
+                             scylla_version="2026.1")
     def test_index_updates(self):
         self.create_basic_table()
 
@@ -1506,6 +1508,8 @@ class IndexMapTests(unittest.TestCase):
         assert 'a_idx' not in ks_meta.indexes
         assert 'b_idx' not in ks_meta.indexes
 
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
+                             scylla_version="2026.1")
     def test_index_follows_alter(self):
         self.create_basic_table()
 
@@ -2047,6 +2051,8 @@ class BadMetaTest(unittest.TestCase):
             assert m._exc_info[0] is self.BadMetaException
             assert "/*\nWarning:" in m.export_as_string()
 
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
+                             scylla_version="2026.1")
     def test_bad_index(self):
         self.session.execute('CREATE TABLE %s (k int PRIMARY KEY, v int)' % self.function_name)
         self.session.execute('CREATE INDEX ON %s(v)' % self.function_name)
@@ -2138,6 +2144,8 @@ class DynamicCompositeTypeTest(BasicSharedKeyspaceUnitTestCase):
 
 
 @greaterthanorequalcass30
+@xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
+                         scylla_version="2026.1")
 class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
 
     def setUp(self):
@@ -2226,6 +2234,8 @@ class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
 
 
 @greaterthanorequalcass30
+@xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
+                             scylla_version="2026.1")
 class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
     def test_create_view_metadata(self):
         """

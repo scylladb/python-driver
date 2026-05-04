@@ -1166,6 +1166,8 @@ class BatchStatementDefaultRoutingKeyTests(unittest.TestCase):
 
 
 @greaterthanorequalcass30
+@xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Materialized views and secondary indexes are not supported on base tables with tablets.',
+                         scylla_version='2026.1')
 class MaterializedViewQueryTest(BasicSharedKeyspaceUnitTestCase):
 
     def test_mv_filtering(self):

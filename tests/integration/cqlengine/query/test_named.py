@@ -27,7 +27,7 @@ from tests.integration.cqlengine.base import BaseCassEngTestCase
 from tests.integration.cqlengine.query.test_queryset import BaseQuerySetUsage
 
 
-from tests.integration import BasicSharedKeyspaceUnitTestCase, greaterthanorequalcass30, requires_collection_indexes
+from tests.integration import BasicSharedKeyspaceUnitTestCase, greaterthanorequalcass30, requires_collection_indexes, xfail_scylla_version_lt
 import pytest
 
 
@@ -292,6 +292,8 @@ class TestNamedWithMV(BasicSharedKeyspaceUnitTestCase):
         super(TestNamedWithMV, cls).tearDownClass()
 
     @greaterthanorequalcass30
+    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Materialized views and secondary indexes are not supported on base tables with tablets.',
+                             scylla_version='2026.1')
     @execute_count(5)
     def test_named_table_with_mv(self):
         """
