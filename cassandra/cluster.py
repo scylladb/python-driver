@@ -5362,10 +5362,10 @@ class ControlConnection(object):
                 # host may be None if it's already been removed, but that indicates
                 # that errors have already been reported, so we're fine
                 if host:
-                    self._cluster.signal_connection_failure(
+                    if self._cluster.signal_connection_failure(
                         host, self._connection.last_error, is_host_addition=False,
-                        expected_endpoint=self._connection.endpoint)
-                    return
+                        expected_endpoint=self._connection.endpoint):
+                        return
 
         # if the connection is not defunct or the host already left, reconnect
         # manually

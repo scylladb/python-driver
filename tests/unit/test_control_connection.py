@@ -455,6 +455,34 @@ class ControlConnectionTest(unittest.TestCase):
             host, self.connection.last_error, is_host_addition=False,
             expected_endpoint=old_endpoint)
 
+    def test_stale_control_connection_failure_reconnects_when_cluster_ignores_signal(self):
+        host_id = uuid.uuid4()
+        old_endpoint = ClientRoutesEndPoint(
+            host_id, Mock(), "127.0.0.1", original_port=9042)
+        new_endpoint = ClientRoutesEndPoint(
+            host_id, Mock(), "127.0.0.1", original_port=9142)
+
+        host = Host(old_endpoint, SimpleConvictionPolicy, host_id=host_id)
+        host.set_up()
+        self.cluster.metadata = Metadata()
+        self.cluster.metadata.add_or_return_host(host)
+        host.endpoint = new_endpoint
+        self.cluster.metadata.update_host(host, old_endpoint)
+
+        self.connection.endpoint = old_endpoint
+        self.connection.is_defunct = True
+        self.connection.last_error = ConnectionException(
+            "stale control connection failed", endpoint=old_endpoint)
+        self.cluster.signal_connection_failure = Mock(return_value=False)
+        self.control_connection.reconnect = Mock()
+
+        self.control_connection._signal_error()
+
+        self.cluster.signal_connection_failure.assert_called_once_with(
+            host, self.connection.last_error, is_host_addition=False,
+            expected_endpoint=old_endpoint)
+        self.control_connection.reconnect.assert_called_once_with()
+
     def test_refresh_nodes_and_tokens_uses_preloaded_results_if_given(self):
         """
         refresh_nodes_and_tokens uses preloaded results if given for shared table queries
