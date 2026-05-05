@@ -11,13 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import unittest
-
+from concurrent.futures import Future
 import logging
 import socket
+import unittest
+import uuid
 
 from unittest.mock import patch, Mock
-import uuid
 
 from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, RequestExecutionException, ReadTimeout, WriteTimeout, CoordinationFailure, ReadFailure, WriteFailure, FunctionFailure, AlreadyExists,\
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
@@ -100,6 +100,29 @@ class ClusterTest(unittest.TestCase):
             else:
                 assert cp.address == '127.0.0.3'
                 assert cp.port == 9999
+
+    def test_on_add_clears_in_progress_flag_when_later_session_add_fails(self):
+        cluster = Cluster(protocol_version=4)
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        successful_session = Mock()
+        successful_session.add_or_renew_pool.return_value = Future()
+        successful_session.update_created_pools.return_value = set()
+        failing_session = Mock()
+        failing_session.add_or_renew_pool.side_effect = RuntimeError("pool add failed")
+        cluster.sessions = [successful_session, failing_session]
+
+        try:
+            with pytest.raises(RuntimeError):
+                cluster.on_add(host, refresh_nodes=False)
+
+            assert not host._currently_handling_node_addition
+
+            with pytest.raises(RuntimeError):
+                cluster.on_add(host, refresh_nodes=False)
+
+            assert successful_session.add_or_renew_pool.call_count == 2
+        finally:
+            cluster.shutdown()
 
     def test_invalid_contact_point_types(self):
         with pytest.raises(ValueError):

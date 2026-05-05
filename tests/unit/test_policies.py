@@ -900,6 +900,40 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         assert list(policy.make_query_plan(None, query)) == [host]
 
+    def test_ignores_zero_token_hosts_with_legacy_child_policy(self):
+        host = make_host("127.0.0.1")
+        zero_token_host = make_host("127.0.0.2", is_zero_token=True)
+
+        class LegacyChildPolicy(object):
+            def populate(self, cluster, hosts):
+                pass
+
+            def distance(self, host):
+                return HostDistance.LOCAL
+
+            def make_query_plan(self, working_keyspace=None, query=None):
+                return [zero_token_host, host]
+
+            def on_up(self, host):
+                pass
+
+            def on_down(self, host):
+                pass
+
+            def on_add(self, host):
+                pass
+
+            def on_remove(self, host):
+                pass
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+
+        policy = TokenAwarePolicy(LegacyChildPolicy())
+        policy.populate(cluster, [host, zero_token_host])
+
+        assert list(policy.make_query_plan()) == [host]
+
     def test_shuffles_if_given_keyspace_and_routing_key(self):
         """
         Test to validate the hosts are shuffled when `shuffle_replicas` is truthy

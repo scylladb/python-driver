@@ -133,7 +133,10 @@ class LoadBalancingPolicy(HostStateListener):
         child_policy = getattr(self, '_child_policy', None)
         if child_policy is not None:
             # Preserve child opt-outs through wrapper layers.
-            return bool(child_policy._is_ignored_zero_token_host(host))
+            child_filter = getattr(child_policy, '_is_ignored_zero_token_host', None)
+            if child_filter is not None:
+                return bool(child_filter(host))
+            return bool(getattr(child_policy, '_ignore_zero_token_hosts', self._ignore_zero_token_hosts))
 
         return bool(self._ignore_zero_token_hosts)
 

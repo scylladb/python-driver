@@ -2059,6 +2059,8 @@ class Cluster(object):
             host._currently_handling_node_addition = True
 
         have_future = False
+        add_aborted = False
+        futures = set()
         try:
             self.profile_manager.on_add(host)
             self.control_connection.on_add(host, refresh_nodes)
@@ -2076,11 +2078,13 @@ class Cluster(object):
 
             futures_lock = Lock()
             futures_results = []
-            futures = set()
 
             def future_completed(future):
                 with futures_lock:
                     futures.discard(future)
+
+                    if add_aborted:
+                        return
 
                     try:
                         futures_results.append(future.result())
@@ -2116,9 +2120,11 @@ class Cluster(object):
             if not have_future:
                 self._finalize_add(host)
         except Exception:
-            if not have_future:
-                with host.lock:
-                    host._currently_handling_node_addition = False
+            add_aborted = True
+            for future in tuple(futures):
+                future.cancel()
+            with host.lock:
+                host._currently_handling_node_addition = False
             raise
 
     def _finalize_add(self, host, set_up=True):
