@@ -27,7 +27,7 @@ from cassandra.cluster import _Scheduler, Session, Cluster, default_lbp_factory,
 from cassandra.connection import DefaultEndPoint, EndPoint
 from cassandra.pool import Host
 from cassandra.policies import RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, \
-    DynamicWhiteListRoundRobinPolicy, HostStateListener, SimpleConvictionPolicy
+    DynamicWhiteListRoundRobinPolicy, HostDistance, HostStateListener, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
 from tests.unit.utils import mock_session_pools
 from tests import connection_class
@@ -86,6 +86,33 @@ class _RecordingHostStateListener(HostStateListener):
 
     def on_remove(self, host):
         self.events.append(("remove", host.address))
+
+
+class _DuckTypedLoadBalancingPolicy(object):
+
+    def populate(self, cluster, hosts):
+        self.hosts = tuple(hosts)
+
+    def check_supported(self):
+        pass
+
+    def distance(self, host):
+        return HostDistance.IGNORED
+
+    def make_query_plan(self, working_keyspace=None, query=None):
+        return iter(getattr(self, "hosts", ()))
+
+    def on_up(self, host):
+        pass
+
+    def on_down(self, host):
+        pass
+
+    def on_add(self, host):
+        pass
+
+    def on_remove(self, host):
+        pass
 
 
 class ExceptionTypeTest(unittest.TestCase):
@@ -262,6 +289,16 @@ class ClusterTest(unittest.TestCase):
     def test_compression_type_validation(self):
         with pytest.raises(TypeError):
             Cluster(compression=123)
+
+    def test_shutdown_before_connect_tolerates_policy_without_control_host_hook(self):
+        policy = _DuckTypedLoadBalancingPolicy()
+        cluster = Cluster(
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(load_balancing_policy=policy)
+            },
+            protocol_version=4)
+
+        cluster.shutdown()
 
     def test_connection_factory_passes_compression_kwarg(self):
         endpoint = Mock(address='127.0.0.1')
@@ -642,7 +679,7 @@ class SessionTest(unittest.TestCase):
         target_host = Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
         target_host.set_up()
 
-        with patch.object(Session, "_add_or_renew_pool_for_distance",
+        with patch.object(Session, "add_or_renew_pool",
                           return_value=self._completed_future(True)):
             session = Session(cluster, [target_host])
 

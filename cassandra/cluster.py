@@ -550,7 +550,10 @@ class ProfileManager(object):
 
     def on_control_connection_host(self, host):
         for p in self.profiles.values():
-            p.load_balancing_policy.on_control_connection_host(host)
+            on_control_connection_host = getattr(
+                p.load_balancing_policy, 'on_control_connection_host', None)
+            if on_control_connection_host is not None:
+                on_control_connection_host(host)
 
     @property
     def default(self):
@@ -1677,7 +1680,10 @@ class Cluster(object):
 
         self.profile_manager.profiles[name] = profile
         profile.load_balancing_policy.populate(self, self.metadata.all_hosts())
-        profile.load_balancing_policy.on_control_connection_host(self.get_control_connection_host())
+        on_control_connection_host = getattr(
+            profile.load_balancing_policy, 'on_control_connection_host', None)
+        if on_control_connection_host is not None:
+            on_control_connection_host(self.get_control_connection_host())
         # on_up after populate allows things like DCA LBP to choose default local dc
         for host in filter(lambda h: h.is_up, self.metadata.all_hosts()):
             profile.load_balancing_policy.on_up(host)
@@ -3714,8 +3720,14 @@ class ControlConnection(object):
 
         current_host_info = self._pending_control_connection_hosts.pop(id(conn), None)
         if current_host_info is not None:
-            current_host, current_host_id = current_host_info
+            current_host, current_host_id, refreshed_endpoints = current_host_info
+            displaced_host_info = self._stage_displaced_control_host_endpoint(
+                current_host_id, refreshed_endpoints)
+            if current_host is not None:
+                self._maybe_rebind_control_connection_host_endpoint(current_host, conn.endpoint)
+                current_host = self._cluster.metadata.get_host_by_host_id(current_host_id)
             self._set_current_control_connection_host(current_host, current_host_id, update_sessions=False)
+            self._finish_displaced_control_host_endpoint(displaced_host_info)
 
         for session in tuple(getattr(self._cluster, "sessions", ())):
             session.update_created_pools()
@@ -4006,8 +4018,10 @@ class ControlConnection(object):
 
         found_host_ids = set()
         found_endpoints = set()
+        refreshed_endpoints = {}
 
         local_host_id = None
+        refreshing_active_connection = connection is self._connection
         if local_result.parsed_rows:
             local_rows = dict_factory(local_result.column_names, local_result.parsed_rows)
             local_row = local_rows[0]
@@ -4041,6 +4055,7 @@ class ControlConnection(object):
 
             found_host_ids.add(host_id)
             found_endpoints.add(endpoint)
+            refreshed_endpoints[host_id] = endpoint
             host = self._cluster.metadata.get_host(endpoint)
             datacenter = row.get("data_center")
             rack = row.get("rack")
@@ -4050,9 +4065,14 @@ class ControlConnection(object):
                 if host:
                     target_endpoint = endpoint
                     if host_id == local_host_id:
-                        target_endpoint = self._cluster._get_control_connection_host_endpoint(host, connection.endpoint)
-                        if target_endpoint is None:
-                            target_endpoint = endpoint
+                        if refreshing_active_connection:
+                            target_endpoint = self._cluster._get_control_connection_host_endpoint(host, connection.endpoint)
+                            if target_endpoint is None:
+                                target_endpoint = endpoint
+                        else:
+                            target_endpoint = host.endpoint
+                    elif not refreshing_active_connection and host_id == self._current_host_id:
+                        target_endpoint = host.endpoint
 
                     if host.endpoint != target_endpoint:
                         log.debug("[control connection] Updating host endpoint from %s to %s for (%s)",
@@ -4091,7 +4111,7 @@ class ControlConnection(object):
         current_host = None
         if local_host_id in found_host_ids:
             current_host = self._cluster.metadata.get_host_by_host_id(local_host_id)
-            if current_host is not None:
+            if current_host is not None and refreshing_active_connection:
                 self._maybe_rebind_control_connection_host_endpoint(current_host, connection.endpoint)
                 current_host = self._cluster.metadata.get_host_by_host_id(local_host_id)
 
@@ -4099,10 +4119,54 @@ class ControlConnection(object):
         if connection is self._connection:
             self._set_current_control_connection_host(current_host, current_host_id)
         else:
-            self._pending_control_connection_hosts[id(connection)] = (current_host, current_host_id)
+            self._pending_control_connection_hosts[id(connection)] = (
+                current_host, current_host_id, refreshed_endpoints)
         if partitioner and should_rebuild_token_map:
             log.debug("[control connection] Rebuilding token map due to topology changes")
             self._cluster.metadata.rebuild_token_map(partitioner, token_map)
+
+    def _stage_displaced_control_host_endpoint(self, current_host_id, refreshed_endpoints):
+        if current_host_id is None:
+            return None
+
+        previous_host_id = self._current_host_id
+        if previous_host_id is None or previous_host_id == current_host_id:
+            return None
+
+        previous_host = self._cluster.metadata.get_host_by_host_id(previous_host_id)
+        previous_endpoint = refreshed_endpoints.get(previous_host_id)
+        if previous_host is None or previous_endpoint is None or previous_host.endpoint == previous_endpoint:
+            return None
+
+        was_up = previous_host.is_up
+        reconnector = previous_host.get_and_set_reconnection_handler(None)
+        if reconnector:
+            reconnector.cancel()
+
+        if was_up:
+            previous_host.set_down()
+        self._cluster.profile_manager.on_down(previous_host)
+        for session in tuple(getattr(self._cluster, "sessions", ())):
+            session.remove_pool(previous_host)
+        if was_up:
+            for listener in self._cluster.listeners:
+                listener.on_down(previous_host)
+
+        old_endpoint = previous_host.endpoint
+        previous_host.endpoint = previous_endpoint
+        self._cluster.metadata.update_host(previous_host, old_endpoint)
+        return previous_host, was_up
+
+    def _finish_displaced_control_host_endpoint(self, displaced_host_info):
+        if displaced_host_info is None:
+            return
+
+        displaced_host, was_up = displaced_host_info
+        if was_up:
+            self._cluster.profile_manager.on_up(displaced_host)
+            displaced_host.set_up()
+            for listener in self._cluster.listeners:
+                listener.on_up(displaced_host)
 
     def _set_current_control_connection_host(self, current_host, current_host_id, update_sessions=True):
         previous_current_host_id = self._current_host_id
