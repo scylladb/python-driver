@@ -5818,6 +5818,8 @@ class ResponseFuture(object):
                         host.endpoint, expected_endpoint)
                 if endpoint_changed:
                     try:
+                        with connection.lock:
+                            connection.request_ids.append(request_id)
                         pool.return_connection(connection)
                     finally:
                         connection = None
