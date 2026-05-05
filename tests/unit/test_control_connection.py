@@ -341,6 +341,17 @@ class ControlConnectionTest(unittest.TestCase):
         session.wait_for_schema_agreement.assert_not_called()
         assert self.connection.wait_for_responses.call_count == 3
 
+    def test_wait_for_schema_agreement_raises_connection_error_after_mismatch(self):
+        peer_columns = self.connection.peer_results[0]
+        mismatching_peer_rows = [list(row) for row in self.connection.peer_results[1]]
+        mismatching_peer_rows[1][2] = 'b'
+        self.connection.wait_for_responses.side_effect = [
+            _node_meta_results(self.connection.local_results, (peer_columns, mismatching_peer_rows)),
+            ConnectionShutdown("closed")]
+
+        with self.assertRaises(ConnectionShutdown):
+            self.control_connection.wait_for_schema_agreement()
+
     def test_wait_for_schema_agreement_does_not_exceed_configured_wait_with_session_fallback(self):
         session = Mock(is_shutdown=False)
 

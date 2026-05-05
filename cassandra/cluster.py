@@ -4333,12 +4333,12 @@ class ControlConnection(object):
                         log.debug("[control connection] Aborting wait for schema match due to shutdown")
                         return None
 
-                    if schema_mismatches is not None:
-                        log.warning("Node %s is reporting a schema disagreement: %s",
-                                    connection.endpoint, schema_mismatches)
-                        return False
-
                     elapsed = self._time.time() - start
+                    if schema_mismatches is not None:
+                        log.debug("[control connection] Error during schema agreement check after mismatch: %s",
+                                  exc)
+                        raise
+
                     fallback_wait = total_timeout - elapsed
                     fallback = self._wait_for_schema_agreement_through_session(fallback_wait)
                     if fallback is not None:
