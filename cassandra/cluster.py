@@ -2550,7 +2550,8 @@ class Cluster(object):
             self, host: Host, is_host_addition: bool,
             down_epoch: Optional[int] = None,
             expected_endpoint: Optional[EndPoint] = None,
-            profile_manager_already_notified: bool = False) -> Any:
+            profile_manager_already_notified: bool = False,
+            control_connection_already_notified: bool = False) -> Any:
         pending_up_epoch = None
         try:
             down_endpoint = None
@@ -2580,7 +2581,8 @@ class Cluster(object):
                     else:
                         if not profile_manager_already_notified:
                             self.profile_manager.on_down(host)
-                        self.control_connection.on_down(host)
+                        if not control_connection_already_notified:
+                            self.control_connection.on_down(host)
             else:
                 log.debug("Not signalling down for stale down handling on node %s; endpoint changed from %s",
                           host, expected_endpoint)
@@ -2640,7 +2642,8 @@ class Cluster(object):
                 self._handle_pending_node_up(host, pending_up_epoch)
 
     def on_down(self, host, is_host_addition, expect_host_to_be_down=False,
-                expected_endpoint=None, profile_manager_already_notified=False):
+                expected_endpoint=None, profile_manager_already_notified=False,
+                control_connection_already_notified=False):
         """
         Intended for internal use only.
         """
@@ -2725,7 +2728,8 @@ class Cluster(object):
 
         future = self.on_down_potentially_blocking(
             host, is_host_addition, down_epoch, expected_endpoint,
-            profile_manager_already_notified)
+            profile_manager_already_notified,
+            control_connection_already_notified)
         if future is None:
             pending_down = None
             pending_up_epoch = None
@@ -5024,10 +5028,13 @@ class ControlConnection(object):
                     reconnector.cancel()
                 with host.lock:
                     old_endpoint = host.endpoint
+                    self._cluster.profile_manager.on_down(host)
+                    self.on_down(host)
                 self._cluster.on_down(
                     host, is_host_addition=False, expect_host_to_be_down=True,
                     expected_endpoint=old_endpoint,
-                    profile_manager_already_notified=True)
+                    profile_manager_already_notified=True,
+                    control_connection_already_notified=True)
 
                 with host.lock:
                     if not self._cluster._endpoints_match(host.endpoint, old_endpoint):
@@ -5035,7 +5042,6 @@ class ControlConnection(object):
                                   "endpoint changed to %s",
                                   old_endpoint, endpoint, host_id, host.endpoint)
                         continue
-                    self._cluster.profile_manager.on_down(host)
                     host.endpoint = endpoint
                     self._cluster.metadata.update_host(host, old_endpoint)
                 self._cluster.on_up(host, expected_endpoint=endpoint)

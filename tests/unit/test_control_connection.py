@@ -134,7 +134,8 @@ class MockCluster(object):
         pass
 
     def on_down(self, host, is_host_addition, expect_host_to_be_down=False,
-                expected_endpoint=None, profile_manager_already_notified=False):
+                expected_endpoint=None, profile_manager_already_notified=False,
+                control_connection_already_notified=False):
         self.down_host = host
         self.down_expected_endpoint = expected_endpoint
 
@@ -463,7 +464,8 @@ class ControlConnectionTest(unittest.TestCase):
         self.cluster.on_down.assert_called_once_with(
             host, is_host_addition=False, expect_host_to_be_down=True,
             expected_endpoint=old_endpoint,
-            profile_manager_already_notified=True)
+            profile_manager_already_notified=True,
+            control_connection_already_notified=True)
         self.cluster.on_up.assert_called_once_with(
             host, expected_endpoint=new_endpoint)
 
@@ -501,6 +503,44 @@ class ControlConnectionTest(unittest.TestCase):
             assert list(policy._live_hosts) == [host]
             assert host in policy._live_hosts
         finally:
+            cluster.executor = original_executor
+            cluster.shutdown()
+
+    def test_endpoint_change_reconnects_control_connection_when_down_handler_runs_late(self):
+        old_endpoint = DefaultEndPoint("127.0.0.1")
+        new_endpoint = DefaultEndPoint("127.0.0.2")
+        host_id = uuid.uuid4()
+        cluster = Cluster(contact_points=[])
+        original_executor = cluster.executor
+        cluster.executor = RunOnResultExecutor()
+        cluster._start_reconnector = Mock()
+        cluster.control_connection._connection = Mock(endpoint=old_endpoint)
+        cluster.control_connection.reconnect = Mock()
+
+        try:
+            host = Host(
+                old_endpoint, SimpleConvictionPolicy,
+                datacenter="dc1", rack="rack1", host_id=host_id)
+            host.set_up()
+            cluster.metadata.add_or_return_host(host)
+            cluster.profile_manager.populate(cluster, [host])
+            cluster.endpoint_factory = Mock()
+            cluster.endpoint_factory.create.return_value = new_endpoint
+            cluster.control_connection._token_meta_enabled = False
+
+            preloaded_results = _node_meta_results(
+                local_results=([], []),
+                peer_results=(
+                    ["rpc_address", "peer", "data_center", "rack", "host_id"],
+                    [["127.0.0.2", "127.0.0.2", "dc1", "rack1", host_id]]))
+
+            cluster.control_connection._refresh_node_list_and_token_map(
+                Mock(), preloaded_results=preloaded_results)
+            cluster.executor.run_all()
+
+            cluster.control_connection.reconnect.assert_called_once_with()
+        finally:
+            cluster.control_connection._connection = None
             cluster.executor = original_executor
             cluster.shutdown()
 

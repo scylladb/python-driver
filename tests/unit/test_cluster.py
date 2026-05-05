@@ -1199,7 +1199,7 @@ class HostStateRaceTest(unittest.TestCase):
 
         assert not host.is_up
         cluster.on_down_potentially_blocking.assert_called_once_with(
-            host, False, ANY, endpoint)
+            host, False, ANY, endpoint, False, False)
 
     @staticmethod
     def _state(cluster, host):
