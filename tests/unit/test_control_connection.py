@@ -21,7 +21,7 @@ from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
 from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.pool import Host
-from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory, ConnectionShutdown
+from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory, ConnectionShutdown, ConnectionBusy
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
                                 ConstantReconnectionPolicy, IdentityTranslator)
 
@@ -262,6 +262,56 @@ class ControlConnectionTest(unittest.TestCase):
 
         assert self.control_connection.wait_for_schema_agreement()
         session.wait_for_schema_agreement.assert_called_once_with(wait_time=self.cluster.max_schema_agreement_wait)
+
+    def test_wait_for_schema_agreement_falls_back_to_session_when_connection_is_busy(self):
+        session = Mock(is_shutdown=False)
+        session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [session]
+        self.connection.wait_for_responses.side_effect = ConnectionBusy("overloaded")
+
+        assert self.control_connection.wait_for_schema_agreement()
+        session.wait_for_schema_agreement.assert_called_once_with(wait_time=self.cluster.max_schema_agreement_wait)
+
+    def test_wait_for_schema_agreement_subtracts_elapsed_time_before_session_fallback(self):
+        session = Mock(is_shutdown=False)
+
+        def wait_for_responses(*args, **kwargs):
+            self.time.sleep(3)
+            raise ConnectionShutdown("closed")
+
+        def wait_for_schema_agreement(wait_time=None):
+            self.time.sleep(wait_time)
+            return False
+
+        self.cluster.sessions = [session]
+        self.connection.wait_for_responses.side_effect = wait_for_responses
+        session.wait_for_schema_agreement.side_effect = wait_for_schema_agreement
+
+        assert not self.control_connection.wait_for_schema_agreement()
+        assert self.time.clock == self.cluster.max_schema_agreement_wait
+
+    def test_wait_for_schema_agreement_does_not_accept_session_fallback_after_known_mismatch(self):
+        session = Mock(is_shutdown=False)
+        session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [session]
+        self.connection.peer_results[1][1][2] = 'b'
+
+        assert not self.control_connection.wait_for_schema_agreement()
+        session.wait_for_schema_agreement.assert_not_called()
+
+    def test_wait_for_schema_agreement_does_not_exceed_configured_wait_with_session_fallback(self):
+        session = Mock(is_shutdown=False)
+
+        def wait_for_schema_agreement(wait_time=None):
+            self.time.sleep(wait_time)
+            return False
+
+        session.wait_for_schema_agreement.side_effect = wait_for_schema_agreement
+        self.cluster.sessions = [session]
+        self.connection.peer_results[1][1][2] = 'b'
+
+        assert not self.control_connection.wait_for_schema_agreement()
+        assert self.time.clock < self.cluster.max_schema_agreement_wait + 0.2
 
     def test_wait_for_schema_agreement_skipping(self):
         """

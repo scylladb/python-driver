@@ -4311,16 +4311,17 @@ class ControlConnection(object):
                               "response during schema agreement check: %s", timeout)
                     elapsed = self._time.time() - start
                     continue
-                except ConnectionShutdown:
-                    if self._is_shutdown:
+                except (ConnectionShutdown, ConnectionBusy) as exc:
+                    if isinstance(exc, ConnectionShutdown) and self._is_shutdown:
                         log.debug("[control connection] Aborting wait for schema match due to shutdown")
                         return None
-                    else:
-                        fallback_wait = total_timeout - elapsed
-                        fallback = self._wait_for_schema_agreement_through_session(fallback_wait)
-                        if fallback is not None:
-                            return fallback
-                        raise
+
+                    elapsed = self._time.time() - start
+                    fallback_wait = total_timeout - elapsed
+                    fallback = self._wait_for_schema_agreement_through_session(fallback_wait)
+                    if fallback is not None:
+                        return fallback
+                    raise
 
                 schema_mismatches = self._get_schema_mismatches(peers_result, local_result, connection.endpoint)
                 if schema_mismatches is None:
@@ -4329,10 +4330,6 @@ class ControlConnection(object):
                 log.debug("[control connection] Schemas mismatched, trying again")
                 self._time.sleep(0.2)
                 elapsed = self._time.time() - start
-
-            fallback = self._wait_for_schema_agreement_through_session(total_timeout)
-            if fallback is not None:
-                return fallback
 
             log.warning("Node %s is reporting a schema disagreement: %s",
                         connection.endpoint, schema_mismatches)
@@ -4569,13 +4566,15 @@ class _Scheduler(Thread):
 def refresh_schema_and_set_result(control_conn, response_future, connection, **kwargs):
     try:
         log.debug("Refreshing schema in response to schema change. %s", kwargs)
+        use_session_fallback = False
         try:
             response_future.is_schema_agreed = control_conn._refresh_schema(connection, **kwargs)
         except Exception:
             log.exception("Exception refreshing schema in response to schema change:")
             response_future.is_schema_agreed = False
+            use_session_fallback = True
 
-        if not response_future.is_schema_agreed:
+        if use_session_fallback:
             log.debug("Falling back to session schema agreement check")
             try:
                 response_future.is_schema_agreed = response_future.session.wait_for_schema_agreement()
