@@ -1195,27 +1195,35 @@ class ClusterTests(unittest.TestCase):
         Then using HostFilterPolicy the replica is excluded from the considered hosts.
         By checking the trace we verify that there are no more replicas.
 
+        Requires tablets feature disabled.
+
         @since 3.5
         @jira_ticket PYTHON-653
         @expected_result the replicas are queried for HostFilterPolicy
 
         @test_category metadata
         """
+        ks_name = 'test_replicas_queried_ks'
         queried_hosts = set()
         tap_profile = ExecutionProfile(
             load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy())
         )
         with TestCluster(execution_profiles={EXEC_PROFILE_DEFAULT: tap_profile}) as cluster:
             session = cluster.connect(wait_for_all_pools=True)
+            session.execute("DROP KEYSPACE IF EXISTS {}".format(ks_name))
+            session.execute(
+                "CREATE KEYSPACE {} WITH replication = {{'class': 'NetworkTopologyStrategy', "
+                "'replication_factor': '1'}} AND tablets = {{'enabled': false}}".format(ks_name)
+            )
             session.execute('''
-                    CREATE TABLE test1rf.table_with_big_key (
+                    CREATE TABLE {}.table_with_big_key (
                         k1 int,
                         k2 int,
                         k3 int,
                         k4 int,
-                        PRIMARY KEY((k1, k2, k3), k4))''')
-            prepared = session.prepare("""SELECT * from test1rf.table_with_big_key
-                                          WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""")
+                        PRIMARY KEY((k1, k2, k3), k4))'''.format(ks_name))
+            prepared = session.prepare("""SELECT * from {}.table_with_big_key
+                                          WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""".format(ks_name))
             for i in range(10):
                 result = session.execute(prepared, (i, i, i, i), trace=True)
                 trace = result.response_future.get_query_trace(query_cl=ConsistencyLevel.ALL)
@@ -1234,14 +1242,14 @@ class ClusterTests(unittest.TestCase):
                          execution_profiles={EXEC_PROFILE_DEFAULT: hfp_profile}) as cluster:
 
             session = cluster.connect(wait_for_all_pools=True)
-            prepared = session.prepare("""SELECT * from test1rf.table_with_big_key
-                                          WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""")
+            prepared = session.prepare("""SELECT * from {}.table_with_big_key
+                                          WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""".format(ks_name))
             for _ in range(10):
                 result = session.execute(prepared, (last_i, last_i, last_i, last_i), trace=True)
                 trace = result.response_future.get_query_trace(query_cl=ConsistencyLevel.ALL)
                 self._assert_replica_queried(trace, only_replicas=False)
 
-            session.execute('''DROP TABLE test1rf.table_with_big_key''')
+            session.execute('DROP KEYSPACE {}'.format(ks_name))
 
     @greaterthanorequalcass30
     @lessthanorequalcass40
