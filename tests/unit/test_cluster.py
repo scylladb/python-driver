@@ -412,6 +412,22 @@ class ClusterTest(unittest.TestCase):
         session.remove_pool.assert_called_once_with(host)
         session.add_or_renew_pool.assert_called_once_with(host, is_host_addition=False)
 
+    def test_on_up_without_pool_futures_notifies_listeners(self):
+        cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), protocol_version=4)
+        self.addCleanup(cluster.shutdown)
+
+        host = Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host.set_down()
+        cluster.metadata.add_or_return_host(host)
+
+        listener = _RecordingHostStateListener()
+        cluster.register_listener(listener)
+
+        cluster.on_up(host)
+
+        assert host.is_up is True
+        assert listener.events == [("up", "127.0.0.1")]
+
     def test_update_host_endpoint_restarts_reconnector_when_replacement_pool_fails(self):
         cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), protocol_version=4)
         self.addCleanup(cluster.shutdown)

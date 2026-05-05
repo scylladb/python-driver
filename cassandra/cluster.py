@@ -2104,6 +2104,10 @@ class Cluster(object):
                 with host.lock:
                     host.set_up()
                     host._currently_handling_node_up = False
+                for listener in self.listeners:
+                    listener.on_up(host)
+                for session in tuple(self.sessions):
+                    session.update_created_pools()
 
         # for testing purposes
         return futures
