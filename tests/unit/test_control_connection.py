@@ -15,7 +15,7 @@
 import unittest
 import uuid
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from unittest.mock import Mock, ANY, call
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
@@ -134,7 +134,7 @@ class MockCluster(object):
         pass
 
     def on_down(self, host, is_host_addition, expect_host_to_be_down=False,
-                expected_endpoint=None):
+                expected_endpoint=None, profile_manager_already_notified=False):
         self.down_host = host
         self.down_expected_endpoint = expected_endpoint
 
@@ -152,6 +152,45 @@ def _node_meta_results(local_results, peer_results):
     peer_response.parsed_rows = peer_results[1]
 
     return peer_response, local_response
+
+
+class RunOnResultFuture(Future):
+
+    def __init__(self, fn, args, kwargs):
+        Future.__init__(self)
+        self._fn = fn
+        self._args = args
+        self._kwargs = kwargs
+
+    def _run_once(self):
+        if self.done():
+            return
+        try:
+            self.set_result(self._fn(*self._args, **self._kwargs))
+        except Exception as exc:
+            self.set_exception(exc)
+
+    def result(self, timeout=None):
+        self._run_once()
+        return Future.result(self, timeout)
+
+
+class RunOnResultExecutor(object):
+
+    def __init__(self):
+        self.futures = []
+
+    def submit(self, fn, *args, **kwargs):
+        future = RunOnResultFuture(fn, args, kwargs)
+        self.futures.append(future)
+        return future
+
+    def run_all(self):
+        for future in tuple(self.futures):
+            future._run_once()
+
+    def shutdown(self):
+        self.run_all()
 
 
 class MockConnection(object):
@@ -423,8 +462,47 @@ class ControlConnectionTest(unittest.TestCase):
         assert Cluster._endpoints_match(host.endpoint, new_endpoint)
         self.cluster.on_down.assert_called_once_with(
             host, is_host_addition=False, expect_host_to_be_down=True,
-            expected_endpoint=old_endpoint)
-        self.cluster.on_up.assert_called_once_with(host)
+            expected_endpoint=old_endpoint,
+            profile_manager_already_notified=True)
+        self.cluster.on_up.assert_called_once_with(
+            host, expected_endpoint=new_endpoint)
+
+    def test_endpoint_change_preserves_live_policy_hosts_when_down_handler_runs_late(self):
+        old_endpoint = DefaultEndPoint("127.0.0.1")
+        new_endpoint = DefaultEndPoint("127.0.0.2")
+        host_id = uuid.uuid4()
+        policy = RoundRobinPolicy()
+        cluster = Cluster(contact_points=[], load_balancing_policy=policy)
+        original_executor = cluster.executor
+        cluster.executor = RunOnResultExecutor()
+        cluster._start_reconnector = Mock()
+
+        try:
+            host = Host(
+                old_endpoint, SimpleConvictionPolicy,
+                datacenter="dc1", rack="rack1", host_id=host_id)
+            host.set_up()
+            cluster.metadata.add_or_return_host(host)
+            cluster.profile_manager.populate(cluster, [host])
+            cluster.endpoint_factory = Mock()
+            cluster.endpoint_factory.create.return_value = new_endpoint
+            cluster.control_connection._token_meta_enabled = False
+
+            preloaded_results = _node_meta_results(
+                local_results=([], []),
+                peer_results=(
+                    ["rpc_address", "peer", "data_center", "rack", "host_id"],
+                    [["127.0.0.2", "127.0.0.2", "dc1", "rack1", host_id]]))
+
+            cluster.control_connection._refresh_node_list_and_token_map(
+                Mock(), preloaded_results=preloaded_results)
+            cluster.executor.run_all()
+
+            assert list(policy._live_hosts) == [host]
+            assert host in policy._live_hosts
+        finally:
+            cluster.executor = original_executor
+            cluster.shutdown()
 
     def test_stale_control_connection_failure_is_endpoint_fenced(self):
         host_id = uuid.uuid4()
