@@ -1069,6 +1069,28 @@ class HostStateRaceTest(unittest.TestCase):
         assert not runner.is_alive()
         assert blocked_on_host == [False]
 
+    def test_discount_down_event_applies_to_current_expected_endpoint(self):
+        host = self._make_host()
+        host.set_up()
+        endpoint = host.endpoint
+        pool = Mock()
+        pool.host = host
+        pool.endpoint = endpoint
+        pool.open_count = 1
+        session = self._make_session_with_pool(host, pool)
+        cluster = self._make_cluster(session=session)
+        cluster._discount_down_events = True
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.on_down_potentially_blocking = Mock(return_value=None)
+        session.cluster = cluster
+
+        Cluster.on_down(
+            cluster, host, is_host_addition=False,
+            expected_endpoint=endpoint)
+
+        assert host.is_up
+        cluster.on_down_potentially_blocking.assert_not_called()
+
     @staticmethod
     def _state(cluster, host):
         return cluster._get_host_liveness_state(host)
