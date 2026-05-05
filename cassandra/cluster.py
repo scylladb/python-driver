@@ -2686,11 +2686,11 @@ class Cluster(object):
 
             was_up = host.is_up
             state = self._get_host_liveness_state(host)
+            down_endpoint = expected_endpoint if expected_endpoint is not None else host.endpoint
             pending_down_endpoint = None
             if state.down_endpoint is not None:
-                target_endpoint = expected_endpoint if expected_endpoint is not None else host.endpoint
-                if not self._endpoints_match(state.down_endpoint, target_endpoint):
-                    pending_down_endpoint = target_endpoint
+                if not self._endpoints_match(state.down_endpoint, down_endpoint):
+                    pending_down_endpoint = down_endpoint
 
             if pending_down_endpoint is not None:
                 state.advance()
@@ -2723,11 +2723,11 @@ class Cluster(object):
                     state.up_epoch is None):
                 return
             state.down_epoch = down_epoch
-            state.down_endpoint = expected_endpoint
+            state.down_endpoint = down_endpoint
         log.warning("Host %s has been marked down", host)
 
         future = self.on_down_potentially_blocking(
-            host, is_host_addition, down_epoch, expected_endpoint,
+            host, is_host_addition, down_epoch, down_endpoint,
             profile_manager_already_notified,
             control_connection_already_notified)
         if future is None:
