@@ -2592,10 +2592,10 @@ class Cluster(object):
                     else:
                         session.on_down(host, expected_endpoint=expected_endpoint)
 
+            notify_listeners = False
             if endpoint_matches:
                 if expected_endpoint is None:
-                    for listener in self.listeners:
-                        listener.on_down(host)
+                    notify_listeners = True
                 else:
                     with host.lock:
                         if not self._endpoints_match(host.endpoint, expected_endpoint):
@@ -2603,8 +2603,10 @@ class Cluster(object):
                                       host, expected_endpoint)
                             endpoint_matches = False
                         else:
-                            for listener in self.listeners:
-                                listener.on_down(host)
+                            notify_listeners = True
+            if notify_listeners:
+                for listener in self.listeners:
+                    listener.on_down(host)
 
             with host.lock:
                 start_reconnector = (endpoint_matches and

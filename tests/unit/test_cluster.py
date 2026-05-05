@@ -1301,6 +1301,36 @@ class HostStateRaceTest(unittest.TestCase):
         cluster._start_reconnector.assert_not_called()
         assert self._state(cluster, host).down_epoch is None
 
+    def test_expected_endpoint_down_listener_is_not_called_under_host_lock(self):
+        session = Mock()
+        cluster = self._make_cluster(session=session)
+        host = self._make_host()
+        host.set_up()
+        expected_endpoint = host.endpoint
+        down_epoch = self._reserve_down_handling(cluster, host)
+        blocked_on_host = []
+
+        class Listener(object):
+
+            def on_down(self, _host):
+                def try_host_lock():
+                    acquired = host.lock.acquire(timeout=0.2)
+                    blocked_on_host.append(not acquired)
+                    if acquired:
+                        host.lock.release()
+
+                worker = Thread(target=try_host_lock)
+                worker.start()
+                worker.join(1)
+
+        cluster._listeners = set([Listener()])
+
+        Cluster.on_down_potentially_blocking(
+            cluster, host, is_host_addition=False, down_epoch=down_epoch,
+            expected_endpoint=expected_endpoint)
+
+        self.assertEqual(blocked_on_host, [False])
+
     def test_endpoint_match_preserves_endpoint_specific_identity(self):
         proxy_endpoint = SniEndPoint("proxy.example.com", "node-a", port=9042)
         other_proxy_endpoint = SniEndPoint("proxy.example.com", "node-b", port=9042)
