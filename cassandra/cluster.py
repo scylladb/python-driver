@@ -3963,9 +3963,8 @@ class ControlConnection(object):
 
         if "tokens" in row and not row.get("tokens"):
             log.debug(
-                "Found a zero-token node - tokens is None (broadcast_rpc: %s, host_id: %s). Ignoring host." %
+                "Found a zero-token node - tokens is None (broadcast_rpc: %s, host_id: %s). Adding host without tokens." %
                 (broadcast_rpc, host_id))
-            return False
 
         return True
 
