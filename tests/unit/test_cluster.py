@@ -1069,6 +1069,65 @@ class HostStateRaceTest(unittest.TestCase):
         assert not runner.is_alive()
         assert blocked_on_host == [False]
 
+    def test_signal_connection_failure_does_not_hold_host_lock_while_scanning_pools(self):
+        host = self._make_host()
+        host.set_up()
+        old_endpoint = host.endpoint
+        pool = Mock()
+        pool.host = host
+        pool.endpoint = old_endpoint
+        pool.open_count = 1
+        session = self._make_session_with_pool(host, pool)
+        session._lock = RLock()
+        cluster = self._make_cluster(session=session)
+        cluster._discount_down_events = True
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.on_down_potentially_blocking = Mock(return_value=None)
+        session.cluster = cluster
+
+        # Mutating the endpoint after insertion forces an identity scan under
+        # session._lock. signal_connection_failure() must not keep host.lock
+        # held while it delegates to the down path that performs that scan.
+        host.endpoint = DefaultEndPoint("127.0.0.2")
+        entered_distance = Event()
+        release_distance = Event()
+        blocked_on_host = []
+        thread_errors = []
+
+        def distance(_host):
+            entered_distance.set()
+            release_distance.wait(1)
+            return HostDistance.LOCAL
+
+        def hold_session_then_try_host():
+            with session._lock:
+                entered_distance.wait(1)
+                acquired = host.lock.acquire(timeout=0.2)
+                blocked_on_host.append(not acquired)
+                if acquired:
+                    host.lock.release()
+                release_distance.set()
+
+        def run_signal_connection_failure():
+            try:
+                Cluster.signal_connection_failure(
+                    cluster, host, ConnectionException("failed"),
+                    is_host_addition=False)
+            except Exception as exc:
+                thread_errors.append(exc)
+
+        cluster.profile_manager.distance.side_effect = distance
+        worker = Thread(target=hold_session_then_try_host)
+        runner = Thread(target=run_signal_connection_failure)
+        worker.start()
+        runner.start()
+        worker.join(2)
+        runner.join(2)
+
+        assert not thread_errors
+        assert not runner.is_alive()
+        assert blocked_on_host == [False]
+
     def test_discount_down_event_applies_to_current_expected_endpoint(self):
         host = self._make_host()
         host.set_up()
