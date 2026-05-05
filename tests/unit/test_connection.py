@@ -22,7 +22,7 @@ from cassandra import ConsistencyLevel, OperationTimedOut
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, _Frame, Timer, TimerManager,
-                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
+                                  ConnectionException, ConnectionShutdown, ConnectionBusy, DefaultEndPoint, ShardAwarePortGenerator)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 SupportedMessage, ProtocolHandler, ResultMessage, QueryMessage,
@@ -385,6 +385,26 @@ class ConnectionTest(unittest.TestCase):
         with pytest.raises(ConnectionException):
             c.wait_for_responses(QueryMessage("SELECT * FROM system.local", ConsistencyLevel.ONE))
 
+        assert c.in_flight == initial_in_flight
+        assert len(c.request_ids) == initial_request_ids
+        assert not c._requests
+
+    def test_set_keyspace_async_reports_send_failure_and_releases_request_id(self):
+        c = self.make_connection()
+        c.push = Mock(side_effect=ConnectionException("write failed"))
+        initial_in_flight = c.in_flight
+        initial_request_ids = len(c.request_ids)
+        callback_errors = []
+
+        def callback(conn, error):
+            callback_errors.append(error)
+            with conn.lock:
+                conn.in_flight -= 1
+
+        c.set_keyspace_async("ks", callback)
+
+        assert len(callback_errors) == 1
+        assert isinstance(callback_errors[0], ConnectionException)
         assert c.in_flight == initial_in_flight
         assert len(c.request_ids) == initial_request_ids
         assert not c._requests

@@ -1745,7 +1745,13 @@ class Connection(object):
         # acquire a new request id
         request_id = self.get_request_id()
 
-        self.send_msg(query, request_id, process_result)
+        try:
+            self.send_msg(query, request_id, process_result)
+        except Exception as exc:
+            with self.lock:
+                if request_id not in self._requests and request_id not in self.request_ids:
+                    self.request_ids.append(request_id)
+            callback(self, exc)
 
     @property
     def is_idle(self):
