@@ -4280,6 +4280,8 @@ class ControlConnection(object):
                         return fallback
                     return None
 
+            schema_mismatches = None
+
             if preloaded_results:
                 log.debug("[control connection] Attempting to use preloaded results for schema agreement")
 
@@ -4293,7 +4295,6 @@ class ControlConnection(object):
             start = self._time.time()
             elapsed = 0
             cl = ConsistencyLevel.ONE
-            schema_mismatches = None
             select_peers_query = self._get_peers_query(self.PeersQueryType.PEERS_SCHEMA, connection)
 
             while elapsed < total_timeout:
@@ -4315,6 +4316,11 @@ class ControlConnection(object):
                     if isinstance(exc, ConnectionShutdown) and self._is_shutdown:
                         log.debug("[control connection] Aborting wait for schema match due to shutdown")
                         return None
+
+                    if schema_mismatches is not None:
+                        log.warning("Node %s is reporting a schema disagreement: %s",
+                                    connection.endpoint, schema_mismatches)
+                        return False
 
                     elapsed = self._time.time() - start
                     fallback_wait = total_timeout - elapsed
