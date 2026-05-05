@@ -19,7 +19,9 @@ from unittest.mock import Mock, ANY, call, patch
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
-from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
+from cassandra.cluster import (ControlConnection, _Scheduler, ProfileManager,
+                               EXEC_PROFILE_DEFAULT, ExecutionProfile,
+                               refresh_schema_and_set_result)
 from cassandra.pool import Host
 from cassandra.connection import (EndPoint, DefaultEndPoint, DefaultEndPointFactory,
                                   ConnectionException, ConnectionShutdown, ConnectionBusy)
@@ -351,6 +353,31 @@ class ControlConnectionTest(unittest.TestCase):
 
         with self.assertRaises(ConnectionShutdown):
             self.control_connection.wait_for_schema_agreement()
+
+    def test_schema_change_refresh_does_not_session_fallback_after_mismatch_then_connection_error(self):
+        session = Mock(is_shutdown=False)
+        session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [session]
+        self.cluster.metadata.refresh = Mock()
+
+        peer_columns = self.connection.peer_results[0]
+        mismatching_peer_rows = [list(row) for row in self.connection.peer_results[1]]
+        mismatching_peer_rows[1][2] = 'b'
+        self.connection.wait_for_responses.side_effect = [
+            _node_meta_results(self.connection.local_results, (peer_columns, mismatching_peer_rows)),
+            ConnectionShutdown("closed")]
+
+        response_future = Mock()
+        response_future.session = session
+        event = {'target_type': SchemaTargetType.TABLE, 'change_type': SchemaChangeType.CREATED,
+                 'keyspace': "keyspace1", "table": "table1"}
+
+        refresh_schema_and_set_result(self.control_connection, response_future, self.connection, **event)
+
+        session.wait_for_schema_agreement.assert_not_called()
+        self.cluster.metadata.refresh.assert_not_called()
+        assert not response_future.is_schema_agreed
+        response_future._set_final_result.assert_called_once_with(None)
 
     def test_wait_for_schema_agreement_does_not_exceed_configured_wait_with_session_fallback(self):
         session = Mock(is_shutdown=False)

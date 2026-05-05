@@ -194,6 +194,7 @@ log = logging.getLogger(__name__)
 _GRAPH_PAGING_MIN_DSE_VERSION = Version('6.8.0')
 
 _NOT_SET = object()
+_SCHEMA_AGREEMENT_MISMATCHES_ATTR = '_schema_agreement_mismatches'
 
 
 class NoHostAvailable(Exception):
@@ -4337,6 +4338,7 @@ class ControlConnection(object):
                     if schema_mismatches is not None:
                         log.debug("[control connection] Error during schema agreement check after mismatch: %s",
                                   exc)
+                        setattr(exc, _SCHEMA_AGREEMENT_MISMATCHES_ATTR, schema_mismatches)
                         raise
 
                     fallback_wait = total_timeout - elapsed
@@ -4601,10 +4603,17 @@ def refresh_schema_and_set_result(control_conn, response_future, connection, **k
         use_session_fallback = False
         try:
             response_future.is_schema_agreed = control_conn._refresh_schema(connection, **kwargs)
-        except Exception:
+        except Exception as exc:
             log.exception("Exception refreshing schema in response to schema change:")
             response_future.is_schema_agreed = False
-            use_session_fallback = True
+            schema_mismatches = getattr(exc, _SCHEMA_AGREEMENT_MISMATCHES_ATTR, _NOT_SET)
+            if schema_mismatches is not _NOT_SET:
+                log.debug("Skipping session schema agreement fallback after control connection "
+                          "reported a schema disagreement: %s",
+                          schema_mismatches)
+                response_future.session.submit(control_conn.refresh_schema, **kwargs)
+            else:
+                use_session_fallback = True
 
         if use_session_fallback:
             log.debug("Falling back to session schema agreement check")
