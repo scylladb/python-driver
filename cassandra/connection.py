@@ -1219,15 +1219,19 @@ class Connection(object):
         # queue the decoder function with the request
         # this allows us to inject custom functions per request to encode, decode messages
         self._requests[request_id] = (cb, decoder, result_metadata)
-        msg = encoder(msg, request_id, self.protocol_version, compressor=self.compressor,
-                      allow_beta_protocol_version=self.allow_beta_protocol_version)
+        try:
+            msg = encoder(msg, request_id, self.protocol_version, compressor=self.compressor,
+                          allow_beta_protocol_version=self.allow_beta_protocol_version)
 
-        if self._is_checksumming_enabled:
-            buffer = io.BytesIO()
-            self._segment_codec.encode(buffer, msg)
-            msg = buffer.getvalue()
+            if self._is_checksumming_enabled:
+                buffer = io.BytesIO()
+                self._segment_codec.encode(buffer, msg)
+                msg = buffer.getvalue()
 
-        self.push(msg)
+            self.push(msg)
+        except Exception:
+            self._requests.pop(request_id, None)
+            raise
         return len(msg)
 
     def wait_for_response(self, msg, timeout=None, **kwargs):
@@ -1262,9 +1266,16 @@ class Connection(object):
                 self.in_flight += available
 
             for i, request_id in enumerate(request_ids):
-                self.send_msg(msgs[messages_sent + i],
-                              request_id,
-                              partial(waiter.got_response, index=messages_sent + i))
+                try:
+                    self.send_msg(msgs[messages_sent + i],
+                                  request_id,
+                                  partial(waiter.got_response, index=messages_sent + i))
+                except Exception:
+                    unsent_request_ids = request_ids[i:]
+                    with self.lock:
+                        self.in_flight -= len(unsent_request_ids)
+                        self.request_ids.extend(unsent_request_ids)
+                    raise
             messages_sent += available
 
             if messages_sent == len(msgs):
