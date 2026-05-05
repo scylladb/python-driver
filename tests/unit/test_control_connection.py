@@ -245,6 +245,137 @@ class ControlConnectionTest(unittest.TestCase):
         # the control connection should have slept until it hit the limit
         assert self.time.clock >= self.cluster.max_schema_agreement_wait
 
+<<<<<<< HEAD
+=======
+    def test_wait_for_schema_agreement_falls_back_to_session_when_connection_closes(self):
+        session = Mock(is_shutdown=False)
+        session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [session]
+        self.connection.wait_for_responses.side_effect = ConnectionShutdown("closed")
+
+        assert self.control_connection.wait_for_schema_agreement()
+        session.wait_for_schema_agreement.assert_called_once_with(wait_time=self.cluster.max_schema_agreement_wait)
+
+    def test_wait_for_schema_agreement_falls_back_to_session_when_connection_is_busy(self):
+        session = Mock(is_shutdown=False)
+        session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [session]
+        self.connection.wait_for_responses.side_effect = ConnectionBusy("overloaded")
+
+        assert self.control_connection.wait_for_schema_agreement()
+        session.wait_for_schema_agreement.assert_called_once_with(wait_time=self.cluster.max_schema_agreement_wait)
+
+    def test_wait_for_schema_agreement_falls_back_to_session_when_connection_errors(self):
+        session = Mock(is_shutdown=False)
+        session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [session]
+        self.connection.wait_for_responses.side_effect = ConnectionException("write failed")
+
+        assert self.control_connection.wait_for_schema_agreement()
+        session.wait_for_schema_agreement.assert_called_once_with(wait_time=self.cluster.max_schema_agreement_wait)
+
+    def test_wait_for_schema_agreement_session_fallback_skips_failing_sessions(self):
+        failing_session = Mock(is_shutdown=False)
+        failing_session.wait_for_schema_agreement.side_effect = ConnectionException("session broken")
+        healthy_session = Mock(is_shutdown=False)
+        healthy_session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [failing_session, healthy_session]
+        self.connection.wait_for_responses.side_effect = ConnectionBusy("overloaded")
+
+        assert self.control_connection.wait_for_schema_agreement()
+        failing_session.wait_for_schema_agreement.assert_called_once_with(
+            wait_time=self.cluster.max_schema_agreement_wait)
+        healthy_session.wait_for_schema_agreement.assert_called_once_with(
+            wait_time=self.cluster.max_schema_agreement_wait)
+
+    def test_wait_for_schema_agreement_subtracts_elapsed_time_before_session_fallback(self):
+        session = Mock(is_shutdown=False)
+
+        def wait_for_responses(*args, **kwargs):
+            self.time.sleep(3)
+            raise ConnectionShutdown("closed")
+
+        def wait_for_schema_agreement(wait_time=None):
+            self.time.sleep(wait_time)
+            return False
+
+        self.cluster.sessions = [session]
+        self.connection.wait_for_responses.side_effect = wait_for_responses
+        session.wait_for_schema_agreement.side_effect = wait_for_schema_agreement
+
+        assert not self.control_connection.wait_for_schema_agreement()
+        assert self.time.clock == self.cluster.max_schema_agreement_wait
+
+    def test_wait_for_schema_agreement_does_not_accept_session_fallback_after_known_mismatch(self):
+        session = Mock(is_shutdown=False)
+        session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [session]
+        self.connection.peer_results[1][1][2] = 'b'
+
+        assert not self.control_connection.wait_for_schema_agreement()
+        session.wait_for_schema_agreement.assert_not_called()
+
+    def test_wait_for_schema_agreement_retries_control_connection_after_mismatch_then_busy(self):
+        session = Mock(is_shutdown=False)
+        session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [session]
+
+        peer_columns = self.connection.peer_results[0]
+        mismatching_peer_rows = [list(row) for row in self.connection.peer_results[1]]
+        mismatching_peer_rows[1][2] = 'b'
+        matching_peer_rows = [list(row) for row in self.connection.peer_results[1]]
+        self.connection.wait_for_responses.side_effect = [
+            _node_meta_results(self.connection.local_results, (peer_columns, mismatching_peer_rows)),
+            ConnectionBusy("overloaded"),
+            _node_meta_results(self.connection.local_results, (peer_columns, matching_peer_rows))]
+
+        assert self.control_connection.wait_for_schema_agreement()
+        session.wait_for_schema_agreement.assert_not_called()
+        assert self.connection.wait_for_responses.call_count == 3
+
+    def test_wait_for_schema_agreement_raises_connection_error_after_mismatch(self):
+        peer_columns = self.connection.peer_results[0]
+        mismatching_peer_rows = [list(row) for row in self.connection.peer_results[1]]
+        mismatching_peer_rows[1][2] = 'b'
+        self.connection.wait_for_responses.side_effect = [
+            _node_meta_results(self.connection.local_results, (peer_columns, mismatching_peer_rows)),
+            ConnectionShutdown("closed")]
+
+        with self.assertRaises(ConnectionShutdown):
+            self.control_connection.wait_for_schema_agreement()
+
+    def test_schema_change_refresh_does_not_session_fallback_after_mismatch_then_connection_error(self):
+        session = Mock(is_shutdown=False)
+        session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [session]
+        self.cluster.metadata.refresh = Mock()
+
+        peer_columns = self.connection.peer_results[0]
+        mismatching_peer_rows = [list(row) for row in self.connection.peer_results[1]]
+        mismatching_peer_rows[1][2] = 'b'
+        self.connection.wait_for_responses.side_effect = [
+            _node_meta_results(self.connection.local_results, (peer_columns, mismatching_peer_rows)),
+            ConnectionShutdown("closed")]
+
+        response_future = Mock()
+        response_future.session = session
+        event = {'target_type': SchemaTargetType.TABLE, 'change_type': SchemaChangeType.CREATED,
+                 'keyspace': "keyspace1", "table": "table1"}
+
+        refresh_schema_and_set_result(self.control_connection, response_future, self.connection, **event)
+
+        session.wait_for_schema_agreement.assert_not_called()
+        self.cluster.metadata.refresh.assert_not_called()
+        assert not response_future.is_schema_agreed
+        response_future._set_final_result.assert_called_once_with(None)
+
+    def test_wait_for_schema_agreement_does_not_sleep_past_deadline_after_mismatch(self):
+        self.cluster.max_schema_agreement_wait = 0.1
+        self.connection.peer_results[1][1][2] = 'b'
+
+        assert not self.control_connection.wait_for_schema_agreement()
+        assert self.time.clock == self.cluster.max_schema_agreement_wait
+
     def test_wait_for_schema_agreement_skipping(self):
         """
         If rpc_address or schema_version isn't set, the host should be skipped
