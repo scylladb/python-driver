@@ -25,6 +25,7 @@ from unittest.mock import Mock, NonCallableMagicMock, MagicMock
 
 from cassandra.cluster import Cluster, Session, ShardAwareOptions
 from cassandra.connection import ClientRoutesEndPoint, Connection, DefaultEndPoint
+from cassandra.metadata import Metadata
 from cassandra.pool import HostConnection
 from cassandra.pool import Host, NoConnectionsAvailable
 from cassandra.policies import HostDistance, SimpleConvictionPolicy
@@ -260,6 +261,38 @@ class _PoolTests(unittest.TestCase):
         host.signal_connection_failure.assert_not_called()
         session.cluster.on_down.assert_not_called()
         session.submit.assert_not_called()
+        conn.close.assert_called_once_with()
+        assert not pool.is_shutdown
+
+    def test_return_defunct_connection_after_endpoint_reassignment_is_ignored(self):
+        endpoint = DefaultEndPoint('127.0.0.1')
+        stale_host = Host(endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        replacement_host = Host(endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        stale_host.signal_connection_failure = Mock(return_value=True)
+
+        session = self.make_session()
+        session.remove_pool.return_value = None
+        session.cluster.metadata = Metadata()
+        session.cluster.metadata.add_or_return_host(replacement_host)
+        session.cluster._endpoints_match.side_effect = Cluster._endpoints_match
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                            is_closed=False, max_request_id=100,
+                            signaled_error=False,
+                            orphaned_threshold_reached=False)
+        session.cluster.connection_factory.return_value = conn
+
+        pool = self.PoolImpl(stale_host, HostDistance.LOCAL, session)
+
+        pool.borrow_connection(timeout=0.01)
+        conn.is_defunct = True
+        pool.return_connection(conn)
+
+        stale_host.signal_connection_failure.assert_not_called()
+        session.cluster.on_down.assert_not_called()
+        session.submit.assert_not_called()
+        session.remove_pool.assert_called_once_with(
+            stale_host, expected_host=stale_host,
+            expected_endpoint=endpoint, expected_pool=pool)
         conn.close.assert_called_once_with()
         assert not pool.is_shutdown
 
