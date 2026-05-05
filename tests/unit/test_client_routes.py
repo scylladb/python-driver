@@ -435,6 +435,24 @@ class TestClientRoutesEndPoint(unittest.TestCase):
         self.assertNotEqual(first, second)
         self.assertEqual(len({first, second}), 2)
 
+    def test_endpoint_ordering_handles_missing_original_port(self):
+        host_id = uuid.uuid4()
+        without_port = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+            original_port=None,
+        )
+        with_port = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+            original_port=9042,
+        )
+
+        self.assertCountEqual(
+            sorted([without_port, with_port]), [without_port, with_port])
+
 
 class TestClientRoutesEndPointFactory(unittest.TestCase):
 

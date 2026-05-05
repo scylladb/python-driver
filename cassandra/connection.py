@@ -474,9 +474,12 @@ class ClientRoutesEndPoint(EndPoint):
     def __hash__(self):
         return hash((self._host_id, self._original_address, self._original_port))
 
+    def _comparison_key(self):
+        return (self._host_id, self._original_address,
+                self._original_port is None, self._original_port)
+
     def __lt__(self, other):
-        return ((self._host_id, self._original_address, self._original_port) <
-                (other._host_id, other._original_address, other._original_port))
+        return self._comparison_key() < other._comparison_key()
 
     def __str__(self):
         return str("%s (host_id=%s)" % (self._original_address, self._host_id))
