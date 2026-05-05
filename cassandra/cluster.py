@@ -4180,9 +4180,7 @@ class ControlConnection(object):
         self._current_host_id = current_host_id
         self._cluster.profile_manager.on_control_connection_host(current_host)
         if current_host is not None:
-            if current_host.is_up is None:
-                current_host.set_up()
-            elif current_host.is_up is False:
+            if current_host.is_up is not True:
                 self._cluster.on_up(current_host)
         if update_sessions and self._current_host_id != previous_current_host_id:
             for session in tuple(getattr(self._cluster, "sessions", ())):
