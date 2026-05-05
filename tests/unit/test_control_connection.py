@@ -273,6 +273,15 @@ class ControlConnectionTest(unittest.TestCase):
         assert self.control_connection.wait_for_schema_agreement()
         session.wait_for_schema_agreement.assert_called_once_with(wait_time=self.cluster.max_schema_agreement_wait)
 
+    def test_wait_for_schema_agreement_falls_back_to_session_when_connection_errors(self):
+        session = Mock(is_shutdown=False)
+        session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [session]
+        self.connection.wait_for_responses.side_effect = ConnectionException("write failed")
+
+        assert self.control_connection.wait_for_schema_agreement()
+        session.wait_for_schema_agreement.assert_called_once_with(wait_time=self.cluster.max_schema_agreement_wait)
+
     def test_wait_for_schema_agreement_session_fallback_skips_failing_sessions(self):
         failing_session = Mock(is_shutdown=False)
         failing_session.wait_for_schema_agreement.side_effect = ConnectionException("session broken")

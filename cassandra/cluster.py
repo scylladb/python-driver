@@ -4312,7 +4312,7 @@ class ControlConnection(object):
                               "response during schema agreement check: %s", timeout)
                     elapsed = self._time.time() - start
                     continue
-                except (ConnectionShutdown, ConnectionBusy) as exc:
+                except (ConnectionException, ConnectionBusy) as exc:
                     if isinstance(exc, ConnectionShutdown) and self._is_shutdown:
                         log.debug("[control connection] Aborting wait for schema match due to shutdown")
                         return None
