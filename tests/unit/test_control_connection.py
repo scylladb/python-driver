@@ -323,17 +323,23 @@ class ControlConnectionTest(unittest.TestCase):
         assert not self.control_connection.wait_for_schema_agreement()
         session.wait_for_schema_agreement.assert_not_called()
 
-    def test_wait_for_schema_agreement_does_not_accept_session_fallback_after_mismatch_then_busy(self):
+    def test_wait_for_schema_agreement_retries_control_connection_after_mismatch_then_busy(self):
         session = Mock(is_shutdown=False)
         session.wait_for_schema_agreement.return_value = True
         self.cluster.sessions = [session]
-        self.connection.peer_results[1][1][2] = 'b'
-        self.connection.wait_for_responses.side_effect = [
-            _node_meta_results(self.connection.local_results, self.connection.peer_results),
-            ConnectionBusy("overloaded")]
 
-        assert not self.control_connection.wait_for_schema_agreement()
+        peer_columns = self.connection.peer_results[0]
+        mismatching_peer_rows = [list(row) for row in self.connection.peer_results[1]]
+        mismatching_peer_rows[1][2] = 'b'
+        matching_peer_rows = [list(row) for row in self.connection.peer_results[1]]
+        self.connection.wait_for_responses.side_effect = [
+            _node_meta_results(self.connection.local_results, (peer_columns, mismatching_peer_rows)),
+            ConnectionBusy("overloaded"),
+            _node_meta_results(self.connection.local_results, (peer_columns, matching_peer_rows))]
+
+        assert self.control_connection.wait_for_schema_agreement()
         session.wait_for_schema_agreement.assert_not_called()
+        assert self.connection.wait_for_responses.call_count == 3
 
     def test_wait_for_schema_agreement_does_not_exceed_configured_wait_with_session_fallback(self):
         session = Mock(is_shutdown=False)

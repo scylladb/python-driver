@@ -4312,7 +4312,23 @@ class ControlConnection(object):
                               "response during schema agreement check: %s", timeout)
                     elapsed = self._time.time() - start
                     continue
-                except (ConnectionException, ConnectionBusy) as exc:
+                except ConnectionBusy as exc:
+                    elapsed = self._time.time() - start
+                    if schema_mismatches is None:
+                        fallback_wait = total_timeout - elapsed
+                        fallback = self._wait_for_schema_agreement_through_session(fallback_wait)
+                        if fallback is not None:
+                            return fallback
+                        raise
+
+                    log.debug("[control connection] Connection busy during schema agreement check: %s",
+                              exc)
+                    remaining = total_timeout - elapsed
+                    if remaining > 0:
+                        self._time.sleep(min(0.2, remaining))
+                        elapsed = self._time.time() - start
+                    continue
+                except ConnectionException as exc:
                     if isinstance(exc, ConnectionShutdown) and self._is_shutdown:
                         log.debug("[control connection] Aborting wait for schema match due to shutdown")
                         return None
