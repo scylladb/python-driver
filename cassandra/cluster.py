@@ -1916,8 +1916,9 @@ class Cluster(object):
 
         log.debug("Waiting to acquire lock for handling up status of node %s", host)
         with host.lock:
-            if host._currently_handling_node_up:
-                log.debug("Another thread is already handling up status of node %s", host)
+            if (host._currently_handling_node_up or
+                    getattr(host, "_currently_handling_node_addition", False)):
+                log.debug("Another thread is already handling up/add status of node %s", host)
                 return
 
             if host.is_up:
@@ -2050,69 +2051,90 @@ class Cluster(object):
 
         log.debug("Handling new host %r and notifying listeners", host)
 
-        self.profile_manager.on_add(host)
-        self.control_connection.on_add(host, refresh_nodes)
-
-        distance = self.profile_manager.distance(host)
-        if distance != HostDistance.IGNORED:
-            self._prepare_all_queries(host)
-            log.debug("Done preparing queries for new host %r", host)
-
-        if distance == HostDistance.IGNORED:
-            log.debug("Not adding connection pool for new host %r because the "
-                      "load balancing policy has marked it as IGNORED", host)
-            self._finalize_add(host, set_up=False)
-            return
-
-        futures_lock = Lock()
-        futures_results = []
-        futures = set()
-
-        def future_completed(future):
-            with futures_lock:
-                futures.discard(future)
-
-                try:
-                    futures_results.append(future.result())
-                except Exception as exc:
-                    futures_results.append(exc)
-
-                if futures:
-                    return
-
-            log.debug('All futures have completed for added host %s', host)
-
-            for exc in [f for f in futures_results if isinstance(f, Exception)]:
-                log.error("Unexpected failure while adding node %s, will not mark up:", host, exc_info=exc)
+        # Keep refresh-time pool rebuilds from racing this host's pool creation.
+        with host.lock:
+            if getattr(host, "_currently_handling_node_addition", False):
+                log.debug("Another thread is already handling add status of node %s", host)
                 return
-
-            if not all(futures_results):
-                log.warning("Connection pool could not be created, not marking node %s up", host)
-                return
-
-            self._finalize_add(host)
+            host._currently_handling_node_addition = True
 
         have_future = False
-        for session in tuple(self.sessions):
-            future = session.add_or_renew_pool(host, is_host_addition=True)
-            if future is not None:
-                have_future = True
-                futures.add(future)
-                future.add_done_callback(future_completed)
+        try:
+            self.profile_manager.on_add(host)
+            self.control_connection.on_add(host, refresh_nodes)
 
-        if not have_future:
-            self._finalize_add(host)
+            distance = self.profile_manager.distance(host)
+            if distance != HostDistance.IGNORED:
+                self._prepare_all_queries(host)
+                log.debug("Done preparing queries for new host %r", host)
+
+            if distance == HostDistance.IGNORED:
+                log.debug("Not adding connection pool for new host %r because the "
+                          "load balancing policy has marked it as IGNORED", host)
+                self._finalize_add(host, set_up=False)
+                return
+
+            futures_lock = Lock()
+            futures_results = []
+            futures = set()
+
+            def future_completed(future):
+                with futures_lock:
+                    futures.discard(future)
+
+                    try:
+                        futures_results.append(future.result())
+                    except Exception as exc:
+                        futures_results.append(exc)
+
+                    if futures:
+                        return
+
+                log.debug('All futures have completed for added host %s', host)
+
+                for exc in [f for f in futures_results if isinstance(f, Exception)]:
+                    log.error("Unexpected failure while adding node %s, will not mark up:", host, exc_info=exc)
+                    with host.lock:
+                        host._currently_handling_node_addition = False
+                    return
+
+                if not all(futures_results):
+                    log.warning("Connection pool could not be created, not marking node %s up", host)
+                    with host.lock:
+                        host._currently_handling_node_addition = False
+                    return
+
+                self._finalize_add(host)
+
+            for session in tuple(self.sessions):
+                future = session.add_or_renew_pool(host, is_host_addition=True)
+                if future is not None:
+                    have_future = True
+                    futures.add(future)
+                    future.add_done_callback(future_completed)
+
+            if not have_future:
+                self._finalize_add(host)
+        except Exception:
+            if not have_future:
+                with host.lock:
+                    host._currently_handling_node_addition = False
+            raise
 
     def _finalize_add(self, host, set_up=True):
-        if set_up:
-            host.set_up()
+        try:
+            if set_up:
+                host.set_up()
 
-        for listener in self.listeners:
-            listener.on_add(host)
+            for listener in self.listeners:
+                listener.on_add(host)
 
-        # see if there are any pools to add or remove now that the host is marked up
-        for session in tuple(self.sessions):
-            session.update_created_pools()
+            # see if there are any pools to add or remove now that the host is marked up
+            for session in tuple(self.sessions):
+                session.update_created_pools()
+        finally:
+            with host.lock:
+                host._currently_handling_node_addition = False
 
     def on_remove(self, host):
         if self.is_shutdown:
@@ -2137,7 +2159,8 @@ class Cluster(object):
             self.on_down(host, is_host_addition, expect_host_to_be_down)
         return is_down
 
-    def add_host(self, endpoint, datacenter=None, rack=None, signal=True, refresh_nodes=True, host_id=None):
+    def add_host(self, endpoint, datacenter=None, rack=None, signal=True, refresh_nodes=True, host_id=None,
+                 is_zero_token=None):
         """
         Called when adding initial contact points and when the control
         connection subsequently discovers a new node.
@@ -2147,8 +2170,16 @@ class Cluster(object):
         """
         with self.metadata._hosts_lock:
             if endpoint in self.metadata._host_id_by_endpoint:
-                return self.metadata._hosts[self.metadata._host_id_by_endpoint[endpoint]], False
-        host, new = self.metadata.add_or_return_host(Host(endpoint, self.conviction_policy_factory, datacenter, rack, host_id=host_id))
+                host = self.metadata._hosts[self.metadata._host_id_by_endpoint[endpoint]]
+                if is_zero_token is not None:
+                    host.is_zero_token = is_zero_token
+                return host, False
+        host = Host(endpoint, self.conviction_policy_factory, datacenter, rack, host_id=host_id)
+        if is_zero_token is not None:
+            host.is_zero_token = is_zero_token
+        host, new = self.metadata.add_or_return_host(host)
+        if not new and is_zero_token is not None:
+            host.is_zero_token = is_zero_token
         if new and signal:
             log.info("New Cassandra host %r discovered", host)
             self.on_add(host, refresh_nodes)
@@ -3315,7 +3346,10 @@ class Session(object):
                 # we don't eagerly set is_up on previously ignored hosts. None is included here
                 # to allow us to attempt connections to hosts that have gone from ignored to something
                 # else.
-                if distance != HostDistance.IGNORED and host.is_up in (True, None):
+                # on_up() and on_add() already own pool creation for hosts in flight.
+                if (distance != HostDistance.IGNORED and host.is_up in (True, None) and
+                        not host._currently_handling_node_up and
+                        not getattr(host, "_currently_handling_node_addition", False)):
                     future = self.add_or_renew_pool(host, False)
             elif distance != pool.host_distance:
                 # the distance has changed
@@ -3864,6 +3898,8 @@ class ControlConnection(object):
         # every node in the cluster was in the contact points, we won't discover
         # any new nodes, so we need this additional check.  (See PYTHON-90)
         should_rebuild_token_map = force_token_rebuild or self._cluster.metadata.partitioner is None
+        zero_token_status_changed = False
+        promoted_zero_token_hosts = []
         for row in peers_result:
             if not self._is_valid_peer(row):
                 continue
@@ -3884,10 +3920,20 @@ class ControlConnection(object):
             host = self._cluster.metadata.get_host(endpoint)
             datacenter = row.get("data_center")
             rack = row.get("rack")
+            tokens = row.get("tokens", None)
+            has_token_status = "tokens" in row
+            is_zero_token = has_token_status and not tokens
+            token_status = is_zero_token if has_token_status else None
 
             if host is None:
                 host = self._cluster.metadata.get_host_by_host_id(host_id)
                 if host and host.endpoint != endpoint:
+                    if has_token_status:
+                        status_changed = self._update_zero_token_info(host, is_zero_token)
+                        zero_token_status_changed |= status_changed
+                        should_rebuild_token_map |= status_changed
+                        if status_changed and not is_zero_token and host.is_up is not True:
+                            promoted_zero_token_hosts.append(host)
                     log.debug("[control connection] Updating host ip from %s to %s for (%s)", host.endpoint, endpoint, host_id)
                     reconnector = host.get_and_set_reconnection_handler(None)
                     if reconnector:
@@ -3901,10 +3947,19 @@ class ControlConnection(object):
 
             if host is None:
                 log.debug("[control connection] Found new host to connect to: %s", endpoint)
-                host, _ = self._cluster.add_host(endpoint, datacenter=datacenter, rack=rack, signal=True, refresh_nodes=False, host_id=host_id)
+                host, _ = self._cluster.add_host(endpoint, datacenter=datacenter, rack=rack, signal=True,
+                                                 refresh_nodes=False, host_id=host_id,
+                                                 is_zero_token=token_status)
                 should_rebuild_token_map = True
             else:
                 should_rebuild_token_map |= self._update_location_info(host, datacenter, rack)
+
+            if has_token_status:
+                status_changed = self._update_zero_token_info(host, is_zero_token)
+                zero_token_status_changed |= status_changed
+                should_rebuild_token_map |= status_changed
+                if status_changed and not is_zero_token and host.is_up is not True:
+                    promoted_zero_token_hosts.append(host)
 
             host.host_id = host_id
             host.broadcast_address = _NodeInfo.get_broadcast_address(row)
@@ -3916,7 +3971,6 @@ class ControlConnection(object):
             host.dse_workload = row.get("workload")
             host.dse_workloads = row.get("workloads")
 
-            tokens = row.get("tokens", None)
             if partitioner and tokens and self._token_meta_enabled:
                 token_map[host] = tokens
             self._cluster.metadata.update_host(host, old_endpoint=endpoint)
@@ -3931,6 +3985,22 @@ class ControlConnection(object):
         if partitioner and should_rebuild_token_map:
             log.debug("[control connection] Rebuilding token map due to topology changes")
             self._cluster.metadata.rebuild_token_map(partitioner, token_map)
+
+        for host in promoted_zero_token_hosts:
+            self._cluster.on_up(host)
+
+        if zero_token_status_changed:
+            for session in tuple(getattr(self._cluster, "sessions", ())):
+                session.update_created_pools()
+
+    @staticmethod
+    def _update_zero_token_info(host, is_zero_token):
+        is_zero_token = bool(is_zero_token)
+        if host.is_zero_token == is_zero_token:
+            return False
+
+        host.is_zero_token = is_zero_token
+        return True
 
     @staticmethod
     def _is_valid_peer(row):
@@ -3963,7 +4033,7 @@ class ControlConnection(object):
 
         if "tokens" in row and not row.get("tokens"):
             log.debug(
-                "Found a zero-token node - tokens is None (broadcast_rpc: %s, host_id: %s). Adding host without tokens." %
+                "Found a zero-token node - tokens are empty (broadcast_rpc: %s, host_id: %s). Adding host without tokens." %
                 (broadcast_rpc, host_id))
 
         return True

@@ -33,11 +33,20 @@ from cassandra.policies import (RackAwareRoundRobinPolicy, RoundRobinPolicy, Whi
                                 RetryPolicy, WriteType,
                                 DowngradingConsistencyRetryPolicy, ConstantReconnectionPolicy,
                                 LoadBalancingPolicy, ConvictionPolicy, ReconnectionPolicy, FallthroughRetryPolicy,
-                                IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy, ExponentialBackoffRetryPolicy)
+                                IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy, ExponentialBackoffRetryPolicy,
+                                DefaultLoadBalancingPolicy)
 from cassandra.connection import DefaultEndPoint, UnixSocketEndPoint
 from cassandra.pool import Host
 from cassandra.query import Statement
 from cassandra.tablets import Tablets, Tablet
+
+
+def make_host(address, datacenter="dc1", rack="rack1", is_zero_token=False):
+    host = Host(DefaultEndPoint(address), SimpleConvictionPolicy, host_id=uuid.uuid4())
+    host.set_location_info(datacenter, rack)
+    host.set_up()
+    host.is_zero_token = is_zero_token
+    return host
 
 
 class LoadBalancingPolicyTest(unittest.TestCase):
@@ -186,6 +195,26 @@ class RoundRobinPolicyTest(unittest.TestCase):
 
         qplan = list(policy.make_query_plan())
         assert qplan == []
+
+
+@pytest.mark.parametrize("policy", [
+    RoundRobinPolicy(),
+    DCAwareRoundRobinPolicy("dc1"),
+    RackAwareRoundRobinPolicy("dc1", "rack1"),
+])
+def test_zero_token_hosts_ignored_by_round_robin_policies(policy):
+    host = make_host("127.0.0.1")
+    zero_token_host = make_host("127.0.0.2", is_zero_token=True)
+
+    policy.populate(Mock(), [host, zero_token_host])
+
+    assert list(policy.make_query_plan()) == [host]
+    assert policy.distance(zero_token_host) == HostDistance.IGNORED
+
+    zero_token_host.is_zero_token = False
+
+    assert set(policy.make_query_plan()) == {host, zero_token_host}
+    assert policy.distance(zero_token_host) != HostDistance.IGNORED
 
 @pytest.mark.parametrize("policy_specialization, constructor_args", [(DCAwareRoundRobinPolicy, ("dc1", )), (RackAwareRoundRobinPolicy, ("dc1", "rack1"))])
 class TestRackOrDCAwareRoundRobinPolicy:
@@ -850,6 +879,27 @@ class TokenAwarePolicyTest(unittest.TestCase):
         assert replicas + hosts[:2] == qplan
         cluster.metadata.get_replicas.assert_called_with(statement_keyspace, routing_key)
 
+    def test_ignores_zero_token_hosts(self):
+        host = make_host("127.0.0.1")
+        zero_token_host = make_host("127.0.0.2", is_zero_token=True)
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.get_replicas.return_value = [zero_token_host, host]
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = [zero_token_host, host]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, [host, zero_token_host])
+
+        query = Statement(routing_key=b"routing_key", keyspace="keyspace_name")
+
+        assert list(policy.make_query_plan(None, query)) == [host]
+
     def test_shuffles_if_given_keyspace_and_routing_key(self):
         """
         Test to validate the hosts are shuffled when `shuffle_replicas` is truthy
@@ -1432,6 +1482,14 @@ class WhiteListRoundRobinPolicyTest(unittest.TestCase):
 
         assert policy.distance(host) == HostDistance.LOCAL
 
+    def test_ignores_zero_token_status(self):
+        policy = WhiteListRoundRobinPolicy(["127.0.0.1"])
+        host = make_host("127.0.0.1", is_zero_token=True)
+        policy.populate(None, [host])
+
+        assert list(policy.make_query_plan()) == [host]
+        assert policy.distance(host) == HostDistance.LOCAL
+
 
 class AddressTranslatorTest(unittest.TestCase):
 
@@ -1567,6 +1625,12 @@ class HostFilterPolicyDistanceTest(unittest.TestCase):
         # second call of _child_policy with count() side effect
         assert self.hfp.distance(self.accepted_host) == distances[1]
 
+    def test_zero_token_host_is_ignored_before_child_policy(self):
+        host = make_host("acceptme", is_zero_token=True)
+
+        assert self.hfp.distance(host) == HostDistance.IGNORED
+        assert self.hfp._child_policy.distance.call_count == 0
+
 
 class HostFilterPolicyPopulateTest(unittest.TestCase):
 
@@ -1617,6 +1681,30 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
             query=query
         )
         assert qp == hfp._child_policy.make_query_plan.return_value
+
+    def test_zero_token_hosts_are_filtered(self):
+        host = make_host("127.0.0.1")
+        zero_token_host = make_host("127.0.0.2", is_zero_token=True)
+        hfp = HostFilterPolicy(
+            child_policy=Mock(name='child_policy', make_query_plan=Mock(return_value=[zero_token_host, host])),
+            predicate=lambda host: True
+        )
+
+        assert list(hfp.make_query_plan()) == [host]
+
+    def test_default_policy_filters_zero_token_target_and_child_hosts(self):
+        host = make_host("127.0.0.1")
+        zero_token_host = make_host("127.0.0.2", is_zero_token=True)
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata.get_host.return_value = zero_token_host
+
+        child_policy = Mock(name='child_policy', make_query_plan=Mock(return_value=[zero_token_host, host]))
+        policy = DefaultLoadBalancingPolicy(child_policy)
+        policy.populate(cluster, [host, zero_token_host])
+        query = Mock(target_host=zero_token_host.address, keyspace=None)
+
+        assert list(policy.make_query_plan(query=query)) == [host]
 
     def test_wrap_token_aware(self):
         cluster = Mock(spec=Cluster)

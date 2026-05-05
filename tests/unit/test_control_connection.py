@@ -112,8 +112,10 @@ class MockCluster(object):
         self.endpoint_factory = DefaultEndPointFactory().configure(self)
         self.ssl_options = None
 
-    def add_host(self, endpoint, datacenter, rack, signal=False, refresh_nodes=True, host_id=None):
+    def add_host(self, endpoint, datacenter, rack, signal=False, refresh_nodes=True, host_id=None,
+                 is_zero_token=False):
         host = Host(endpoint, SimpleConvictionPolicy, datacenter, rack, host_id=host_id)
+        host.is_zero_token = is_zero_token
         host, _ = self.metadata.add_or_return_host(host)
         self.added_hosts.append(host)
         return host, True
@@ -212,6 +214,7 @@ class ControlConnectionTest(unittest.TestCase):
         assert zero_token_host.host_id == host_id
         assert zero_token_host.datacenter == "dc1"
         assert zero_token_host.rack == "rack1"
+        assert zero_token_host.is_zero_token
         assert zero_token_host not in self.cluster.metadata.token_map
         return zero_token_host
 
@@ -455,6 +458,23 @@ class ControlConnectionTest(unittest.TestCase):
             DefaultEndPoint("192.168.1.0"), "uuid1")
         assert [] == self.cluster.added_hosts
         assert [] == self.cluster.metadata.removed_hosts
+
+    def test_refresh_nodes_and_tokens_updates_zero_token_status_when_tokens_change(self):
+        self.connection.peer_results[1].append(
+            ["192.168.1.3", "10.0.0.3", "a", "dc1", "rack1", None, "uuid4"]
+        )
+        self.cluster.scheduler.schedule = lambda delay, f, *args, **kwargs: f(*args, **kwargs)
+
+        self.control_connection.refresh_node_list_and_token_map()
+        zero_token_host = self._assert_zero_token_host_without_token_map_entry(
+            DefaultEndPoint("192.168.1.3"), "uuid4")
+
+        self.connection.peer_results[1][-1][5] = ["3", "103", "203"]
+        self.control_connection.refresh_node_list_and_token_map()
+
+        assert not zero_token_host.is_zero_token
+        assert zero_token_host in self.cluster.metadata.token_map
+        assert self.cluster.metadata.token_map[zero_token_host] == ["3", "103", "203"]
 
     def test_refresh_nodes_and_tokens_remove_host(self):
         del self.connection.peer_results[1][1]

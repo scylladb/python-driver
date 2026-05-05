@@ -127,6 +127,11 @@ class Host(object):
     up or down.
     """
 
+    is_zero_token = False
+    """
+    :const:`True` if the node has no tokens in the system topology tables.
+    """
+
     release_version = None
     """
     release_version as queried from the control connection system tables
@@ -179,6 +184,7 @@ class Host(object):
             raise ValueError("host_id may not be None")
         self.host_id = host_id
         self.set_location_info(datacenter, rack)
+        self.is_zero_token = False
         self.lock = RLock()
 
     @property
@@ -926,5 +932,4 @@ class HostConnection(object):
     @property
     def _excess_connection_limit(self):
         return self.host.sharding_info.shards_count * self.max_excess_connections_per_shard_multiplier
-
 
