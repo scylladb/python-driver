@@ -21,7 +21,8 @@ from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
 from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.pool import Host
-from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory, ConnectionShutdown, ConnectionBusy
+from cassandra.connection import (EndPoint, DefaultEndPoint, DefaultEndPointFactory,
+                                  ConnectionException, ConnectionShutdown, ConnectionBusy)
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
                                 ConstantReconnectionPolicy, IdentityTranslator)
 
@@ -271,6 +272,20 @@ class ControlConnectionTest(unittest.TestCase):
 
         assert self.control_connection.wait_for_schema_agreement()
         session.wait_for_schema_agreement.assert_called_once_with(wait_time=self.cluster.max_schema_agreement_wait)
+
+    def test_wait_for_schema_agreement_session_fallback_skips_failing_sessions(self):
+        failing_session = Mock(is_shutdown=False)
+        failing_session.wait_for_schema_agreement.side_effect = ConnectionException("session broken")
+        healthy_session = Mock(is_shutdown=False)
+        healthy_session.wait_for_schema_agreement.return_value = True
+        self.cluster.sessions = [failing_session, healthy_session]
+        self.connection.wait_for_responses.side_effect = ConnectionBusy("overloaded")
+
+        assert self.control_connection.wait_for_schema_agreement()
+        failing_session.wait_for_schema_agreement.assert_called_once_with(
+            wait_time=self.cluster.max_schema_agreement_wait)
+        healthy_session.wait_for_schema_agreement.assert_called_once_with(
+            wait_time=self.cluster.max_schema_agreement_wait)
 
     def test_wait_for_schema_agreement_subtracts_elapsed_time_before_session_fallback(self):
         session = Mock(is_shutdown=False)

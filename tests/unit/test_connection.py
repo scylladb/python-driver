@@ -22,7 +22,8 @@ from cassandra import OperationTimedOut
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, _Frame, Timer, TimerManager,
-                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
+                                  ConnectionBusy, ConnectionException, ConnectionShutdown, DefaultEndPoint,
+                                  ShardAwarePortGenerator)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 SupportedMessage, ProtocolHandler, ResultMessage,
@@ -362,6 +363,19 @@ class ConnectionTest(unittest.TestCase):
         error_message = str(exc_info.value)
         assert "already closed" in error_message
         assert "Bad file descriptor" in error_message
+
+    def test_wait_for_responses_releases_request_id_when_send_fails(self):
+        c = self.make_connection()
+        c._socket_writable = False
+        initial_in_flight = c.in_flight
+        initial_request_ids = len(c.request_ids)
+
+        with pytest.raises(ConnectionBusy):
+            c.wait_for_responses(Mock())
+
+        assert c.in_flight == initial_in_flight
+        assert len(c.request_ids) == initial_request_ids
+        assert not c._requests
 
 
 @patch('cassandra.connection.ConnectionHeartbeat._raise_if_stopped')

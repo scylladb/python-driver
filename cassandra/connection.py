@@ -1262,9 +1262,16 @@ class Connection(object):
                 self.in_flight += available
 
             for i, request_id in enumerate(request_ids):
-                self.send_msg(msgs[messages_sent + i],
-                              request_id,
-                              partial(waiter.got_response, index=messages_sent + i))
+                try:
+                    self.send_msg(msgs[messages_sent + i],
+                                  request_id,
+                                  partial(waiter.got_response, index=messages_sent + i))
+                except (ConnectionBusy, ConnectionShutdown):
+                    unsent_request_ids = request_ids[i:]
+                    with self.lock:
+                        self.in_flight -= len(unsent_request_ids)
+                        self.request_ids.extend(unsent_request_ids)
+                    raise
             messages_sent += available
 
             if messages_sent == len(msgs):

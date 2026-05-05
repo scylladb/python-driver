@@ -4350,10 +4350,20 @@ class ControlConnection(object):
         except (AttributeError, ReferenceError):
             return None
 
+        deadline = self._time.time() + wait_time
         for session in sessions:
             if not getattr(session, 'is_shutdown', False):
+                remaining = deadline - self._time.time()
+                if remaining <= 0:
+                    return None
                 log.debug("[control connection] Falling back to session schema agreement check")
-                return session.wait_for_schema_agreement(wait_time=wait_time)
+                try:
+                    fallback = session.wait_for_schema_agreement(wait_time=remaining)
+                except Exception:
+                    log.debug("[control connection] Session schema agreement fallback failed", exc_info=True)
+                    continue
+                if fallback is not None:
+                    return fallback
         return None
 
     def _get_schema_mismatches(self, peers_result, local_result, local_address):
