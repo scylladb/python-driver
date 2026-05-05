@@ -15,6 +15,7 @@ import unittest
 
 import logging
 import socket
+from concurrent.futures import Future
 
 from unittest.mock import patch, Mock
 import uuid
@@ -229,6 +230,27 @@ class ClusterTest(unittest.TestCase):
                 assert factory.call_args.kwargs['compression'] == expected
                 assert cluster.compression == expected
 
+    def test_on_up_without_pool_futures_notifies_listeners(self):
+        cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), protocol_version=4)
+        self.addCleanup(cluster.shutdown)
+
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host.set_down()
+        cluster.metadata.add_or_return_host(host)
+
+        session = Mock()
+        session.add_or_renew_pool.return_value = None
+        cluster.sessions.add(session)
+
+        listener = Mock()
+        cluster.register_listener(listener)
+
+        cluster.on_up(host)
+
+        assert host.is_up is True
+        listener.on_up.assert_called_once_with(host)
+        session.update_created_pools.assert_called_once_with()
+
 
 class SchedulerTest(unittest.TestCase):
     # TODO: this suite could be expanded; for now just adding a test covering a ticket
@@ -338,6 +360,28 @@ class SessionTest(unittest.TestCase):
         query = s.execute.call_args[0][0]
         assert query == 'USE simple_ks', (
             "Simple keyspace names should not be quoted, got: %r" % query)
+
+    def test_update_created_pools_skips_host_with_node_up_in_progress(self):
+        cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), protocol_version=4)
+        self.addCleanup(cluster.shutdown)
+
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        cluster.profile_manager.populate(cluster, [host])
+        cluster.profile_manager.on_up(host)
+
+        completed = Future()
+        completed.set_result(True)
+
+        with patch.object(Session, "add_or_renew_pool", return_value=completed) as add_or_renew_pool:
+            session = Session(cluster, [host])
+            add_or_renew_pool.reset_mock()
+
+            session._pools = {}
+            host._currently_handling_node_up = True
+
+            assert session.update_created_pools() == set()
+            add_or_renew_pool.assert_not_called()
 
 class ProtocolVersionTests(unittest.TestCase):
 
