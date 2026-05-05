@@ -632,7 +632,7 @@ class SessionTest(unittest.TestCase):
 
         assert endpoint == source_endpoint
 
-    def test_get_control_connection_host_endpoint_keeps_control_endpoint_when_verification_mismatches(self):
+    def test_get_control_connection_host_endpoint_uses_metadata_endpoint_when_verification_mismatches(self):
         cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), protocol_version=4)
         self.addCleanup(cluster.shutdown)
 
@@ -649,7 +649,7 @@ class SessionTest(unittest.TestCase):
                           return_value=verification_connection) as connection_factory:
             endpoint = cluster._get_control_connection_host_endpoint(source_host, connection_endpoint)
 
-        assert endpoint == connection_endpoint
+        assert endpoint == source_host.endpoint
         assert connection_factory.call_count == 1
         assert verification_connection.close.call_count == 1
 

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import unittest
+import uuid
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from unittest.mock import Mock, ANY, call, patch
@@ -21,7 +22,7 @@ from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
 from cassandra.cluster import Cluster, ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.pool import Host
-from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
+from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory, ConnectionException
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
                                 DynamicWhiteListRoundRobinPolicy,
                                 ConstantReconnectionPolicy, IdentityTranslator)
@@ -364,6 +365,30 @@ class ControlConnectionTest(unittest.TestCase):
         self.cluster.signal_connection_failure.assert_called_once_with(
             host, error, is_host_addition=False)
         self.control_connection.reconnect.assert_called_once_with()
+
+    def test_signal_error_reconnects_when_host_down_signal_is_discounted(self):
+        cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), protocol_version=4)
+        self.addCleanup(cluster.shutdown)
+
+        host = Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host.set_up()
+        cluster.metadata.add_or_return_host(host)
+
+        session = Mock()
+        session.get_pool_state_for_host.return_value = {"open_count": 1}
+        cluster.sessions.add(session)
+
+        connection_error = ConnectionException("control connection failed", endpoint=host.endpoint)
+        cluster.control_connection._connection = Mock(
+            endpoint=host.endpoint,
+            is_defunct=True,
+            last_error=connection_error)
+        cluster.control_connection.reconnect = Mock()
+
+        cluster.control_connection._signal_error()
+
+        assert host.is_up is True
+        cluster.control_connection.reconnect.assert_called_once_with()
 
     def test_refresh_nodes_and_tokens(self):
         self.control_connection.refresh_node_list_and_token_map()

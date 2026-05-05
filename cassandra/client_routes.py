@@ -294,7 +294,7 @@ class _ClientRoutesHandler:
             return
 
         routes = self._query_routes_for_change_event(connection, timeout, pairs)
-        self._routes.merge(routes, affected_host_ids=set(host_uuids))
+        self._routes.merge(routes, affected_host_ids={host_id for _, host_id in pairs})
 
     def _query_all_routes_for_connections(self, connection: 'Connection', timeout: float,
                                           connection_ids: Set[str]) -> List[_Route]:
