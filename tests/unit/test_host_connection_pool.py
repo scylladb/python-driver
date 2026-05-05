@@ -296,6 +296,45 @@ class _PoolTests(unittest.TestCase):
         conn.close.assert_called_once_with()
         assert not pool.is_shutdown
 
+    def test_return_defunct_connection_from_removed_pool_after_endpoint_flip_back_is_ignored(self):
+        endpoint = DefaultEndPoint('127.0.0.1')
+        host = Host(endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host.signal_connection_failure = Mock(return_value=True)
+
+        session = self.make_session()
+        session._lock = Lock()
+        session._pools = {}
+        session.remove_pool.return_value = None
+        session.cluster.metadata = Metadata()
+        session.cluster.metadata.add_or_return_host(host)
+        session.cluster._endpoints_match.side_effect = Cluster._endpoints_match
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                            is_closed=False, max_request_id=100,
+                            signaled_error=False,
+                            orphaned_threshold_reached=False)
+        session.cluster.connection_factory.return_value = conn
+
+        stale_pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        stale_pool.borrow_connection(timeout=0.01)
+
+        # The old pool was already removed, then the host endpoint flipped back
+        # to the same endpoint and a replacement pool became current.
+        current_pool = Mock()
+        current_pool.host = host
+        current_pool.endpoint = endpoint
+        session._pools[host] = current_pool
+
+        conn.is_defunct = True
+        stale_pool.return_connection(conn)
+
+        host.signal_connection_failure.assert_not_called()
+        session.cluster.on_down.assert_not_called()
+        session.remove_pool.assert_called_once_with(
+            host, expected_host=host, expected_endpoint=endpoint,
+            expected_pool=stale_pool)
+        conn.close.assert_called_once_with()
+        assert not stale_pool.is_shutdown
+
     def test_host_instantiations(self):
         """
         Ensure Host fails if not initialized properly
