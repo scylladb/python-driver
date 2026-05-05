@@ -5687,6 +5687,7 @@ class ResponseFuture(object):
         if message is None:
             message = self.message
 
+        expected_endpoint = None
         if isinstance(host, Host):
             with host.lock:
                 expected_endpoint = host.endpoint
@@ -5694,6 +5695,16 @@ class ResponseFuture(object):
                 host, expected_endpoint=expected_endpoint)
         else:
             pool = self.session._get_pool_by_host_identity(host)
+
+        if pool and expected_endpoint is not None:
+            with host.lock:
+                endpoint_changed = not self.session._endpoints_match(
+                    host.endpoint, expected_endpoint)
+            if endpoint_changed:
+                self._errors[host] = ConnectionException(
+                    "Host endpoint changed while borrowing connection")
+                return None
+
         if not pool:
             self._errors[host] = ConnectionException("Host has been marked down or removed")
             return None
@@ -5710,8 +5721,23 @@ class ResponseFuture(object):
                 connection, request_id = pool.borrow_connection(timeout=2.0, routing_key=self.query.routing_key, keyspace=self.query.keyspace, table=self.query.table)
             else:
                 connection, request_id = pool.borrow_connection(timeout=2.0)
+
+            if expected_endpoint is not None:
+                with host.lock:
+                    endpoint_changed = not self.session._endpoints_match(
+                        host.endpoint, expected_endpoint)
+                if endpoint_changed:
+                    try:
+                        pool.return_connection(connection)
+                    finally:
+                        connection = None
+                    self._errors[host] = ConnectionException(
+                        "Host endpoint changed while borrowing connection")
+                    return None
+
             self._connection = connection
             self._connection_pool = pool
+
             result_meta = self.prepared_statement.result_metadata if self.prepared_statement else []
 
             if cb is None:
