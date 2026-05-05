@@ -1957,6 +1957,9 @@ class Cluster(object):
         old_endpoint = host.endpoint
         host.endpoint = endpoint
         self.metadata.update_host(host, old_endpoint)
+        self._finish_host_endpoint_update(host, was_up)
+
+    def _finish_host_endpoint_update(self, host, was_up):
         if was_up:
             self.profile_manager.on_up(host)
             futures_lock = Lock()
@@ -4170,13 +4173,7 @@ class ControlConnection(object):
             return
 
         displaced_host, was_up = displaced_host_info
-        if was_up:
-            self._cluster.profile_manager.on_up(displaced_host)
-            displaced_host.set_up()
-            for listener in self._cluster.listeners:
-                listener.on_up(displaced_host)
-        else:
-            self._cluster._start_reconnector(displaced_host, is_host_addition=False)
+        self._cluster._finish_host_endpoint_update(displaced_host, was_up)
 
     def _set_current_control_connection_host(self, current_host, current_host_id, update_sessions=True):
         previous_current_host_id = self._current_host_id

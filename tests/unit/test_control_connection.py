@@ -632,6 +632,71 @@ class ControlConnectionTest(unittest.TestCase):
         cluster._start_reconnector.assert_called_once_with(
             previous_host, is_host_addition=False)
 
+    def test_adopting_candidate_restarts_displaced_up_host_reconnector_when_pool_renewal_fails(self):
+        cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), protocol_version=4)
+        self.addCleanup(cluster.shutdown)
+
+        proxy_endpoint = DefaultEndPoint("127.254.254.101")
+
+        active_connection = MockConnection()
+        active_connection.endpoint = proxy_endpoint
+        active_connection.original_endpoint = proxy_endpoint
+        active_connection.close = Mock()
+
+        with patch.object(cluster, "_get_control_connection_host_endpoint",
+                          return_value=proxy_endpoint):
+            cluster.control_connection._refresh_node_list_and_token_map(active_connection)
+            cluster.control_connection._set_new_connection(active_connection)
+            cluster._populate_hosts()
+
+        previous_host = cluster.metadata.get_host_by_host_id("uuid1")
+        assert previous_host.is_up is True
+
+        successful_pool_renewal = Future()
+        successful_pool_renewal.set_result(True)
+        failed_pool_renewal = Future()
+        failed_pool_renewal.set_result(False)
+
+        def renew_pool(host, is_host_addition):
+            if host.host_id == "uuid1":
+                return failed_pool_renewal
+            return successful_pool_renewal
+
+        session = Mock()
+        session.add_or_renew_pool.side_effect = renew_pool
+        session.update_created_pools.return_value = set()
+        cluster.sessions.add(session)
+        cluster._start_reconnector = Mock()
+
+        candidate_connection = MockConnection()
+        candidate_connection.endpoint = proxy_endpoint
+        candidate_connection.original_endpoint = proxy_endpoint
+        candidate_connection.close = Mock()
+        candidate_connection.local_results = [
+            ["rpc_address", "schema_version", "cluster_name", "data_center", "rack", "partitioner", "release_version", "tokens", "host_id"],
+            [["192.168.1.1", "a", "foocluster", "dc1", "rack1", "Murmur3Partitioner", "2.2.0", ["1", "101", "201"], "uuid2"]]
+        ]
+        candidate_connection.peer_results = [
+            ["rpc_address", "peer", "schema_version", "data_center", "rack", "tokens", "host_id"],
+            [["192.168.1.0", "10.0.0.0", "a", "dc1", "rack1", ["0", "100", "200"], "uuid1"],
+             ["192.168.1.2", "10.0.0.2", "a", "dc1", "rack1", ["2", "102", "202"], "uuid3"]]
+        ]
+        candidate_connection.wait_for_responses = Mock(
+            return_value=_node_meta_results(candidate_connection.local_results,
+                                            candidate_connection.peer_results))
+
+        with patch.object(cluster, "_get_control_connection_host_endpoint",
+                          return_value=proxy_endpoint):
+            cluster.control_connection._refresh_node_list_and_token_map(candidate_connection)
+            cluster.control_connection._set_new_connection(candidate_connection)
+
+        assert previous_host.endpoint == DefaultEndPoint("192.168.1.0")
+        assert previous_host.is_up is False
+        session.add_or_renew_pool.assert_any_call(
+            previous_host, is_host_addition=False)
+        cluster._start_reconnector.assert_called_once_with(
+            previous_host, is_host_addition=False)
+
     def test_initial_dynamic_whitelist_control_host_down_event_is_handled(self):
         policy = DynamicWhiteListRoundRobinPolicy()
         cluster = Cluster(load_balancing_policy=policy, protocol_version=4)
