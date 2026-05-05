@@ -4156,7 +4156,8 @@ class Session(object):
                 state.future = future
             return future
 
-    def remove_pool(self, host, expected_host=None, expected_endpoint=None):
+    def remove_pool(self, host, expected_host=None, expected_endpoint=None,
+                    expected_pool=None):
         removed_pools = []
         cleanup_context = _POOL_CLEANUP_EPOCH.get()
         with self._lock:
@@ -4187,11 +4188,12 @@ class Session(object):
                 if expected_endpoint is not None:
                     remove_all = self._endpoints_match(host.endpoint, expected_endpoint)
 
-                if remove_all:
-                    self._invalidate_pool_creation(host)
-                else:
-                    self._invalidate_pool_creation(
-                        host, expected_endpoint=expected_endpoint)
+                if expected_pool is None:
+                    if remove_all:
+                        self._invalidate_pool_creation(host)
+                    else:
+                        self._invalidate_pool_creation(
+                            host, expected_endpoint=expected_endpoint)
 
                 retained_pools = {}
                 for pool_host, host_pool in self._pools.items():
@@ -4201,7 +4203,8 @@ class Session(object):
 
                     matches = self._pool_matches_expected(
                         host_pool, expected_host=expected_host,
-                        expected_endpoint=None if remove_all else expected_endpoint)
+                        expected_endpoint=None if remove_all else expected_endpoint,
+                        expected_pool=expected_pool)
                     if matches:
                         removed_pools.append(host_pool)
                     else:
@@ -4230,7 +4233,10 @@ class Session(object):
         for pool in pools:
             pool.shutdown()
 
-    def _pool_matches_expected(self, pool, expected_host=None, expected_endpoint=None):
+    def _pool_matches_expected(self, pool, expected_host=None,
+                               expected_endpoint=None, expected_pool=None):
+        if expected_pool is not None and pool is not expected_pool:
+            return False
         if expected_host is not None and pool.host is not expected_host:
             return False
         if expected_endpoint is not None:

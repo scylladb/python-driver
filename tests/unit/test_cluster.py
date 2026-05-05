@@ -26,7 +26,7 @@ from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, R
 from cassandra.cluster import _Scheduler, Session, Cluster, default_lbp_factory, \
     ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
 from cassandra.connection import ClientRoutesEndPoint, ConnectionException, DefaultEndPoint, SniEndPoint
-from cassandra.pool import Host, _HostReconnectionHandler
+from cassandra.pool import Host, HostConnection, _HostReconnectionHandler
 from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
 from tests.unit.utils import mock_session_pools
@@ -746,6 +746,28 @@ class SessionPoolRaceTest(unittest.TestCase):
         assert session._pools[host] is created_pools[0]
         assert created_pools[0].endpoint == host.endpoint
         created_pools[0].shutdown.assert_not_called()
+
+    def test_stale_host_connection_cleanup_after_endpoint_flip_back_preserves_current_pool(self):
+        host = self._make_host("127.0.0.1")
+        old_endpoint = host.endpoint
+        replacement_endpoint = DefaultEndPoint("127.0.0.2")
+        cluster, session, executor = self._make_cluster_and_session([host])
+
+        host.endpoint = replacement_endpoint
+        host.endpoint = old_endpoint
+        current_pool = self._make_pool(
+            host, HostDistance.LOCAL, session, endpoint=old_endpoint)
+        session._pools[host] = current_pool
+
+        stale_pool = HostConnection.__new__(HostConnection)
+        stale_pool.host = host
+        stale_pool.endpoint = old_endpoint
+        stale_pool._session = session
+
+        stale_pool._remove_stale_pool(old_endpoint)
+
+        assert session._get_pool_by_host_identity(host) is current_pool
+        current_pool.shutdown.assert_not_called()
 
     def test_add_or_renew_pool_tags_pool_with_creation_endpoint(self):
         host = self._make_host("127.0.0.1")

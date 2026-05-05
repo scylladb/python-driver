@@ -597,7 +597,8 @@ class HostConnection(object):
                 # Drop only this stale pool; endpoint reuse may already belong to
                 # a replacement host instance.
                 future = self._session.remove_pool(
-                    self.host, expected_host=self.host, expected_endpoint=self.endpoint)
+                    self.host, expected_host=self.host,
+                    expected_endpoint=self.endpoint, expected_pool=self)
                 if future:
                     future.add_done_callback(lambda f: self._session.update_created_pools())
                 with self._lock:
@@ -645,7 +646,8 @@ class HostConnection(object):
 
     def _remove_stale_pool(self, expected_endpoint):
         future = self._session.remove_pool(
-            self.host, expected_host=self.host, expected_endpoint=expected_endpoint)
+            self.host, expected_host=self.host,
+            expected_endpoint=expected_endpoint, expected_pool=self)
         if future:
             future.add_done_callback(lambda f: self._session.update_created_pools())
 
