@@ -4141,7 +4141,13 @@ class Session(object):
         with self._lock:
             state = self._get_pool_creation_state(host)
             if state.creation_epoch is not None:
-                return state.future
+                with host.lock:
+                    endpoint_changed = not self._endpoints_match(
+                        host.endpoint, state.endpoint)
+                if not endpoint_changed:
+                    return state.future
+                self._invalidate_pool_creation(
+                    host, expected_endpoint=state.endpoint)
 
             creation_epoch = state.advance()
             state.creation_epoch = creation_epoch
