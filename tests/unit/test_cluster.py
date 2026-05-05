@@ -1178,6 +1178,29 @@ class HostStateRaceTest(unittest.TestCase):
         assert host.is_up
         cluster.on_down_potentially_blocking.assert_not_called()
 
+    def test_forced_down_is_not_discounted_by_connected_pool(self):
+        host = self._make_host()
+        host.set_up()
+        endpoint = host.endpoint
+        pool = Mock()
+        pool.host = host
+        pool.endpoint = endpoint
+        pool.open_count = 1
+        session = self._make_session_with_pool(host, pool)
+        cluster = self._make_cluster(session=session)
+        cluster._discount_down_events = True
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.on_down_potentially_blocking = Mock(return_value=None)
+        session.cluster = cluster
+
+        Cluster.on_down(
+            cluster, host, is_host_addition=False,
+            expect_host_to_be_down=True, expected_endpoint=endpoint)
+
+        assert not host.is_up
+        cluster.on_down_potentially_blocking.assert_called_once_with(
+            host, False, ANY, endpoint)
+
     @staticmethod
     def _state(cluster, host):
         return cluster._get_host_liveness_state(host)
@@ -1936,6 +1959,93 @@ class HostStateRaceTest(unittest.TestCase):
         cluster.profile_manager.on_up.assert_called_once_with(host)
         cluster.control_connection.on_up.assert_called_once_with(host)
         assert host.is_up
+        assert state.down_epoch is None
+        assert state.up_epoch is None
+        assert state.pending_up_epoch is None
+
+    def test_down_for_replacement_endpoint_during_pending_old_down_is_handled(self):
+        executor = _QueuedExecutor()
+        session = Mock()
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        cluster.executor = executor
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        host = self._make_host()
+        host.set_up()
+        old_endpoint = host.endpoint
+        new_endpoint = DefaultEndPoint("127.0.0.2")
+
+        Cluster.on_down(
+            cluster, host, is_host_addition=False,
+            expected_endpoint=old_endpoint)
+        state = self._state(cluster, host)
+        assert state.down_epoch == state.epoch
+
+        host.endpoint = new_endpoint
+        Cluster.on_up(cluster, host)
+        assert state.pending_up_epoch == state.epoch
+
+        Cluster.on_down(
+            cluster, host, is_host_addition=False,
+            expected_endpoint=new_endpoint)
+
+        executor.run_next()
+
+        assert len(executor.submissions) == 1
+        executor.run_next()
+
+        session.on_down.assert_any_call(
+            host, expected_endpoint=old_endpoint)
+        session.on_down.assert_any_call(
+            host, expected_endpoint=new_endpoint)
+        listener.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_called_once_with(
+            host, False, expected_down_epoch=ANY,
+            expected_endpoint=new_endpoint)
+        cluster.profile_manager.on_up.assert_not_called()
+        cluster.control_connection.on_up.assert_not_called()
+        assert not host.is_up
+        assert state.down_epoch is None
+        assert state.up_epoch is None
+        assert state.pending_up_epoch is None
+
+    def test_forced_down_for_replacement_endpoint_during_old_down_is_handled(self):
+        executor = _QueuedExecutor()
+        session = Mock()
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        cluster.executor = executor
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        host = self._make_host()
+        host.set_up()
+        old_endpoint = host.endpoint
+        new_endpoint = DefaultEndPoint("127.0.0.2")
+
+        Cluster.on_down(
+            cluster, host, is_host_addition=False,
+            expected_endpoint=old_endpoint)
+        state = self._state(cluster, host)
+        assert state.down_epoch == state.epoch
+
+        host.endpoint = new_endpoint
+        Cluster.on_down(
+            cluster, host, is_host_addition=False,
+            expect_host_to_be_down=True, expected_endpoint=new_endpoint)
+
+        executor.run_next()
+
+        assert len(executor.submissions) == 1
+        executor.run_next()
+
+        session.on_down.assert_any_call(
+            host, expected_endpoint=old_endpoint)
+        session.on_down.assert_any_call(
+            host, expected_endpoint=new_endpoint)
+        listener.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_called_once_with(
+            host, False, expected_down_epoch=ANY,
+            expected_endpoint=new_endpoint)
+        assert not host.is_up
         assert state.down_epoch is None
         assert state.up_epoch is None
         assert state.pending_up_epoch is None
