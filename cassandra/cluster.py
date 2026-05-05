@@ -4583,7 +4583,15 @@ def refresh_schema_and_set_result(control_conn, response_future, connection, **k
                 response_future.is_schema_agreed = False
 
             if response_future.is_schema_agreed:
-                control_conn.refresh_schema(schema_agreement_wait=0, **kwargs)
+                try:
+                    refreshed = control_conn.refresh_schema(schema_agreement_wait=0, **kwargs)
+                except Exception:
+                    log.exception("Exception refreshing schema after session agreement fallback:")
+                    refreshed = False
+
+                if not refreshed:
+                    response_future.is_schema_agreed = False
+                    response_future.session.submit(control_conn.refresh_schema, **kwargs)
             else:
                 response_future.session.submit(control_conn.refresh_schema, **kwargs)
     finally:

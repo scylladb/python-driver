@@ -128,6 +128,7 @@ class ResponseFutureTests(unittest.TestCase):
         session.wait_for_schema_agreement.return_value = True
         control_conn = Mock()
         control_conn._refresh_schema.side_effect = Exception("closed")
+        control_conn.refresh_schema.return_value = True
         rf = self.make_response_future(session)
         connection = Mock()
         event_results = {'target_type': SchemaTargetType.TABLE, 'change_type': SchemaChangeType.CREATED,
@@ -139,6 +140,26 @@ class ResponseFutureTests(unittest.TestCase):
         session.wait_for_schema_agreement.assert_called_once_with()
         control_conn.refresh_schema.assert_called_once_with(schema_agreement_wait=0, **event_results)
         assert rf.is_schema_agreed
+        assert not rf.result()
+
+    def test_schema_change_refresh_marks_disagreed_when_fallback_refresh_fails(self):
+        session = self.make_session()
+        session.wait_for_schema_agreement.return_value = True
+        control_conn = Mock()
+        control_conn._refresh_schema.side_effect = Exception("closed")
+        control_conn.refresh_schema.return_value = False
+        rf = self.make_response_future(session)
+        connection = Mock()
+        event_results = {'target_type': SchemaTargetType.TABLE, 'change_type': SchemaChangeType.CREATED,
+                         'keyspace': "keyspace1", "table": "table1"}
+
+        refresh_schema_and_set_result(control_conn, rf, connection, **event_results)
+
+        control_conn._refresh_schema.assert_called_once_with(connection, **event_results)
+        session.wait_for_schema_agreement.assert_called_once_with()
+        control_conn.refresh_schema.assert_called_once_with(schema_agreement_wait=0, **event_results)
+        session.submit.assert_called_once_with(control_conn.refresh_schema, **event_results)
+        assert not rf.is_schema_agreed
         assert not rf.result()
 
     def test_schema_change_refresh_does_not_fall_back_after_schema_disagreement(self):
