@@ -21,19 +21,19 @@ import time
 from threading import Lock
 from unittest.mock import Mock, ANY, call, patch
 
-from cassandra import AuthenticationFailed, OperationTimedOut
+from cassandra import AuthenticationFailed, ConsistencyLevel, OperationTimedOut
 from cassandra.application_info import ApplicationInfoBase
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, HeartbeatFuture, _Frame, Timer, TimerManager,
-                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator,
+                                  ConnectionException, ConnectionShutdown, ConnectionBusy, DefaultEndPoint, ShardAwarePortGenerator,
                                   DRIVER_NAME, DRIVER_VERSION)
 from cassandra.driver_config import DRIVER_CONFIG_OPTION, SESSION_ID_OPTION
 from cassandra.ssl_session_cache import SSLSessionCache
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 read_stringmap, AuthSuccessMessage, ReadyMessage,
-                                SupportedMessage, ProtocolHandler,
+                                SupportedMessage, ProtocolHandler, QueryMessage,
                                 ResultMessage, RESULT_KIND_SET_KEYSPACE,
                                 BadCredentials, OverloadedErrorMessage)
 
@@ -456,6 +456,31 @@ class ConnectionTest(unittest.TestCase):
         assert "already closed" in error_message
         assert "Bad file descriptor" in error_message
 
+    def test_wait_for_responses_releases_request_id_when_send_fails(self):
+        c = self.make_connection()
+        c._socket_writable = False
+        initial_in_flight = c.in_flight
+        initial_request_ids = len(c.request_ids)
+
+        with pytest.raises(ConnectionBusy):
+            c.wait_for_responses(Mock())
+
+        assert c.in_flight == initial_in_flight
+        assert len(c.request_ids) == initial_request_ids
+        assert not c._requests
+
+    def test_wait_for_responses_releases_request_id_when_send_raises_after_registration(self):
+        c = self.make_connection()
+        c.push = Mock(side_effect=ConnectionException("write failed"))
+        initial_in_flight = c.in_flight
+        initial_request_ids = len(c.request_ids)
+
+        with pytest.raises(ConnectionException):
+            c.wait_for_responses(QueryMessage("SELECT * FROM system.local", ConsistencyLevel.ONE))
+
+        assert c.in_flight == initial_in_flight
+        assert len(c.request_ids) == initial_request_ids
+        assert not c._requests
 
 class DerivedConnectionLimitsTest(unittest.TestCase):
     """
