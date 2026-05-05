@@ -701,6 +701,28 @@ class SessionTest(unittest.TestCase):
         query_future._load_balancer.make_query_plan.assert_not_called()
         query_future.send_request.assert_called_once_with()
 
+    def test_update_created_pools_skips_host_with_node_up_in_progress(self):
+        cluster = Cluster(load_balancing_policy=RoundRobinPolicy(), protocol_version=4)
+        self.addCleanup(cluster.shutdown)
+
+        host = Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        cluster.profile_manager.populate(cluster, [host])
+        cluster.profile_manager.on_up(host)
+
+        completed = Future()
+        completed.set_result(True)
+
+        with patch.object(Session, "add_or_renew_pool", return_value=completed) as add_or_renew_pool:
+            session = Session(cluster, [host])
+            add_or_renew_pool.reset_mock()
+
+            session._pools = {}
+            host._currently_handling_node_up = True
+
+            assert session.update_created_pools() == set()
+            add_or_renew_pool.assert_not_called()
+
     @mock_session_pools
     def test_session_preserves_down_event_discounting_after_endpoint_update(self, *_):
         @total_ordering

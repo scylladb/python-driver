@@ -618,12 +618,14 @@ class TestGetHostPortMapping(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.cluster = TestCluster(client_routes_config=ClientRoutesConfig(
-            proxies=[ClientRouteProxy("conn_id", "127.0.0.1")]))
-        cls.session = cls.cluster.connect()
-
         cls.host_ids = [uuid.uuid4() for _ in range(3)]
         cls.connection_ids = [str(uuid.uuid4()) for _ in range(3)]
+
+        cls.cluster = TestCluster(client_routes_config=ClientRoutesConfig(
+            proxies=[ClientRouteProxy(connection_id, "127.0.0.1")
+                     for connection_id in cls.connection_ids]))
+        cls.session = cls.cluster.connect()
+
         cls.expected = []
 
         for idx, host_id in enumerate(cls.host_ids):
@@ -712,8 +714,8 @@ class TestGetHostPortMapping(unittest.TestCase):
         self._sort_routes(expected)
         self.assertEqual(got, expected)
 
-    def test_get_routes_for_change_event_single_pair(self):
-        """Querying a single (connection_id, host_id) pair returns one route."""
+    def test_get_routes_for_change_event_single_host(self):
+        """Querying a single changed host returns all configured routes for it."""
         cc = self.cluster.control_connection
         target_conn_id = self.connection_ids[0]
         target_host_id = self.host_ids[0]
@@ -723,8 +725,7 @@ class TestGetHostPortMapping(unittest.TestCase):
         got = self._routes_to_dicts(routes)
         self._sort_routes(got)
         filtered = [r for r in self.expected
-                    if r['connection_id'] == target_conn_id
-                    and r['host_id'] == target_host_id]
+                    if r['host_id'] == target_host_id]
         expected = self._expected_dicts(filtered)
         self._sort_routes(expected)
         self.assertEqual(got, expected)

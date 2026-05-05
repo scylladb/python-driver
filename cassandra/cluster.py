@@ -3460,7 +3460,9 @@ class Session(object):
                 # we don't eagerly set is_up on previously ignored hosts. None is included here
                 # to allow us to attempt connections to hosts that have gone from ignored to something
                 # else.
-                if distance != HostDistance.IGNORED and host.is_up in (True, None):
+                if (distance != HostDistance.IGNORED and
+                        host.is_up in (True, None) and
+                        not getattr(host, '_currently_handling_node_up', False)):
                     future = self.add_or_renew_pool(host, False)
             elif distance != pool.host_distance:
                 # the distance has changed
