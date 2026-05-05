@@ -1879,6 +1879,8 @@ class Cluster(object):
             self, host, endpoint, attempts=3):
         for _ in range(attempts):
             connected_host_id = self._get_host_id_for_endpoint(endpoint)
+            if connected_host_id is None:
+                return None
             if connected_host_id != host.host_id:
                 return False
         return True
@@ -1915,9 +1917,14 @@ class Cluster(object):
         if host_endpoint is not None and not isinstance(host_endpoint, DefaultEndPoint):
             return host_endpoint
 
-        if connection_endpoint is not None and self._default_control_connection_endpoint_targets_host(
-                control_host, connection_endpoint):
+        targets_host = None
+        if connection_endpoint is not None:
+            targets_host = self._default_control_connection_endpoint_targets_host(
+                control_host, connection_endpoint)
+        if targets_host:
             return connection_endpoint
+        if targets_host is False and host_endpoint is not None:
+            return host_endpoint
 
         if connection_endpoint is not None:
             return connection_endpoint
