@@ -468,21 +468,25 @@ class ClientRoutesEndPoint(EndPoint):
     def __eq__(self, other):
         return (isinstance(other, ClientRoutesEndPoint) and
                 self._host_id == other._host_id and
-                self._original_address == other._original_address)
+                self._original_address == other._original_address and
+                self._original_port == other._original_port)
 
     def __hash__(self):
-        return hash((self._host_id, self._original_address))
+        return hash((self._host_id, self._original_address, self._original_port))
+
+    def _comparison_key(self):
+        return (self._host_id, self._original_address,
+                self._original_port is None, self._original_port)
 
     def __lt__(self, other):
-        return ((self._host_id, self._original_address) <
-                (other._host_id, other._original_address))
+        return self._comparison_key() < other._comparison_key()
 
     def __str__(self):
         return str("%s (host_id=%s)" % (self._original_address, self._host_id))
 
     def __repr__(self):
-        return "<%s: host_id=%s, original_addr=%s>" % (
-            self.__class__.__name__, self._host_id, self._original_address)
+        return "<%s: host_id=%s, original_addr=%s, original_port=%s>" % (
+            self.__class__.__name__, self._host_id, self._original_address, self._original_port)
 
 
 class _Frame(object):

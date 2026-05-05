@@ -233,6 +233,92 @@ class TestClientRoutesHandler(unittest.TestCase):
         self.assertIsNotNone(handler._routes.get_by_host_id(existing_host))
         self.assertIsNotNone(handler._routes.get_by_host_id(new_host))
 
+    @patch.object(_ClientRoutesHandler, '_query_routes_for_change_event')
+    def test_handle_change_preserves_routes_for_unrelated_connection_ids(self, mock_query):
+        """Routes for unrelated connection_ids in mixed events should not be removed."""
+        handler = _ClientRoutesHandler(self.config)
+        mock_conn = Mock()
+
+        conn_id = str(self.conn_id)
+        changed_host = uuid.uuid4()
+        unrelated_host = uuid.uuid4()
+
+        handler._routes.update([
+            _Route(connection_id=conn_id, host_id=changed_host, address="old.com", port=9042),
+            _Route(connection_id=conn_id, host_id=unrelated_host, address="keep.com", port=9042),
+        ])
+
+        mock_query.return_value = [
+            _Route(connection_id=conn_id, host_id=changed_host, address="new.com", port=9042),
+        ]
+
+        handler.handle_client_routes_change(
+            mock_conn, 5.0,
+            ClientRoutesChangeType.UPDATE_NODES,
+            connection_ids=[conn_id, "unrelated-conn-id"],
+            host_ids=[str(changed_host), str(unrelated_host)],
+        )
+
+        self.assertEqual(handler._routes.get_by_host_id(changed_host).address, "new.com")
+        self.assertEqual(handler._routes.get_by_host_id(unrelated_host).address, "keep.com")
+
+    def test_handle_change_preserves_preferred_route_for_same_host(self):
+        conn_a = str(uuid.uuid4())
+        conn_b = str(uuid.uuid4())
+        host_id = uuid.uuid4()
+        config = ClientRoutesConfig([
+            ClientRouteProxy(conn_a),
+            ClientRouteProxy(conn_b),
+        ])
+        handler = _ClientRoutesHandler(config)
+        handler._routes.update([
+            _Route(connection_id=conn_b, host_id=host_id,
+                   address="current.example.com", port=9042),
+        ])
+
+        table_routes = [
+            _Route(connection_id=conn_a, host_id=host_id,
+                   address="changed.example.com", port=9042),
+            _Route(connection_id=conn_b, host_id=host_id,
+                   address="current.example.com", port=9042),
+        ]
+
+        def wait_for_response(query_msg, timeout):
+            conn_placeholders = query_msg.query.split(
+                "connection_id IN (", 1)[1].split(")", 1)[0].count("?")
+            conn_ids = {
+                param.decode("utf-8")
+                for param in query_msg.query_params[:conn_placeholders]
+            }
+            host_ids = {
+                uuid.UUID(bytes=param)
+                for param in query_msg.query_params[conn_placeholders:]
+            }
+            rows = [
+                (route.connection_id, route.host_id, route.address,
+                 route.port, route.port)
+                for route in table_routes
+                if route.connection_id in conn_ids and route.host_id in host_ids
+            ]
+            return Mock(
+                column_names=["connection_id", "host_id", "address", "port", "tls_port"],
+                parsed_rows=rows,
+            )
+
+        mock_conn = Mock()
+        mock_conn.wait_for_response.side_effect = wait_for_response
+
+        handler.handle_client_routes_change(
+            mock_conn, 5.0,
+            ClientRoutesChangeType.UPDATE_NODES,
+            connection_ids=[conn_a],
+            host_ids=[str(host_id)],
+        )
+
+        route = handler._routes.get_by_host_id(host_id)
+        self.assertEqual(route.connection_id, conn_b)
+        self.assertEqual(route.address, "current.example.com")
+
     @patch.object(_ClientRoutesHandler, '_query_all_routes_for_connections')
     def test_handle_change_updates_when_no_host_ids(self, mock_query):
         """When no host_ids are provided, routes should be fully replaced."""
@@ -387,6 +473,42 @@ class TestClientRoutesEndPoint(unittest.TestCase):
         ])
         with self.assertRaises(ValueError):
             self.handler.resolve_host(host_id)
+
+    def test_endpoint_identity_includes_original_port(self):
+        host_id = uuid.uuid4()
+        first = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+            original_port=9042,
+        )
+        second = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+            original_port=9142,
+        )
+
+        self.assertNotEqual(first, second)
+        self.assertEqual(len({first, second}), 2)
+
+    def test_endpoint_ordering_handles_missing_original_port(self):
+        host_id = uuid.uuid4()
+        without_port = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+            original_port=None,
+        )
+        with_port = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+            original_port=9042,
+        )
+
+        self.assertCountEqual(
+            sorted([without_port, with_port]), [without_port, with_port])
 
 
 class TestClientRoutesEndPointFactory(unittest.TestCase):
