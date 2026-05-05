@@ -4175,6 +4175,8 @@ class ControlConnection(object):
             displaced_host.set_up()
             for listener in self._cluster.listeners:
                 listener.on_up(displaced_host)
+        else:
+            self._cluster._start_reconnector(displaced_host, is_host_addition=False)
 
     def _set_current_control_connection_host(self, current_host, current_host_id, update_sessions=True):
         previous_current_host_id = self._current_host_id
