@@ -579,6 +579,40 @@ class SessionPoolRaceTest(unittest.TestCase):
         created_pools[1].shutdown.assert_not_called()
         assert session._pools[host] is created_pools[1]
 
+    def test_on_up_does_not_publish_replacement_endpoint_pool_after_endpoint_swap(self):
+        host = self._make_host("127.0.0.1")
+        host.set_down()
+        old_endpoint = host.endpoint
+        new_endpoint = DefaultEndPoint("127.0.0.2")
+        cluster, session, executor = self._make_cluster_and_session([host])
+        created_pools = []
+
+        def make_pool(host, distance, pool_session, endpoint=None):
+            pool = self._make_pool(host, distance, pool_session, endpoint)
+            created_pools.append(pool)
+            return pool
+
+        original_add_or_renew_pool = Session.add_or_renew_pool.__get__(
+            session, Session)
+
+        def add_after_endpoint_swap(host, *args, **kwargs):
+            host.endpoint = new_endpoint
+            return original_add_or_renew_pool(host, *args, **kwargs)
+
+        session.add_or_renew_pool = Mock(side_effect=add_after_endpoint_swap)
+
+        with patch("cassandra.cluster.HostConnection", side_effect=make_pool):
+            Cluster.on_up(cluster, host)
+            while executor.submissions:
+                executor.run_next()
+
+        assert created_pools == []
+        assert session._pools == {}
+        session.add_or_renew_pool.assert_called_once_with(
+            host, is_host_addition=False,
+            allow_retry_after_auth_failure=True,
+            expected_endpoint=old_endpoint)
+
     def test_pool_creation_publishes_before_endpoint_lock_is_released(self):
         host = self._make_host("127.0.0.1")
         new_endpoint = DefaultEndPoint("127.0.0.2")
@@ -1750,7 +1784,8 @@ class HostStateRaceTest(unittest.TestCase):
         cluster.control_connection.on_up.assert_called_once_with(host)
         session.add_or_renew_pool.assert_called_once_with(
             host, is_host_addition=False,
-            allow_retry_after_auth_failure=True)
+            allow_retry_after_auth_failure=True,
+            expected_endpoint=host.endpoint)
         assert host.is_up
         assert self._state(cluster, host).up_epoch is None
         assert self._state(cluster, host).pending_up_epoch is None

@@ -2455,7 +2455,9 @@ class Cluster(object):
                                futures, futures_results, futures_lock)
             for session in tuple(self.sessions):
                 future = session.add_or_renew_pool(
-                    host, is_host_addition=False, allow_retry_after_auth_failure=True)
+                    host, is_host_addition=False,
+                    allow_retry_after_auth_failure=True,
+                    expected_endpoint=up_handling_endpoint)
                 if future is not None:
                     have_future = True
                     futures.add(future)
@@ -4076,7 +4078,9 @@ class Session(object):
             return True
         return False
 
-    def add_or_renew_pool(self, host, is_host_addition, allow_retry_after_auth_failure=False):
+    def add_or_renew_pool(self, host, is_host_addition,
+                          allow_retry_after_auth_failure=False,
+                          expected_endpoint=None):
         """
         For internal use only.
         """
@@ -4248,11 +4252,17 @@ class Session(object):
             return True
 
         with self._lock:
+            with host.lock:
+                creation_endpoint = host.endpoint
+                if (expected_endpoint is not None and
+                        not self._endpoints_match(
+                            creation_endpoint, expected_endpoint)):
+                    return None
+
             state = self._get_pool_creation_state(host)
             if state.creation_epoch is not None:
-                with host.lock:
-                    endpoint_changed = not self._endpoints_match(
-                        host.endpoint, state.endpoint)
+                endpoint_changed = not self._endpoints_match(
+                    creation_endpoint, state.endpoint)
                 if not endpoint_changed:
                     return state.future
                 self._invalidate_pool_creation(
@@ -4260,8 +4270,6 @@ class Session(object):
 
             creation_epoch = state.advance()
             state.creation_epoch = creation_epoch
-            with host.lock:
-                creation_endpoint = host.endpoint
             state.endpoint = creation_endpoint
             future = self.submit(run_add_or_renew_pool)
             if future is None:
