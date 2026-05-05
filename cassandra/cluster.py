@@ -1959,8 +1959,10 @@ class Cluster(object):
                 future = session.add_or_renew_pool(host, is_host_addition=False)
                 if future is not None:
                     have_future = True
-                    future.add_done_callback(callback)
                     futures.add(future)
+
+            for future in tuple(futures):
+                future.add_done_callback(callback)
         except Exception:
             log.exception("Unexpected failure handling node %s being marked up:", host)
             for future in futures:
@@ -2115,7 +2117,9 @@ class Cluster(object):
                 if future is not None:
                     have_future = True
                     futures.add(future)
-                    future.add_done_callback(future_completed)
+
+            for future in tuple(futures):
+                future.add_done_callback(future_completed)
 
             if not have_future:
                 self._finalize_add(host)

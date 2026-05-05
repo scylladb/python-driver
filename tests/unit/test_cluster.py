@@ -124,6 +124,68 @@ class ClusterTest(unittest.TestCase):
         finally:
             cluster.shutdown()
 
+    def test_on_add_waits_for_all_session_pool_futures_before_marking_host_up(self):
+        cluster = Cluster(protocol_version=4)
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        completed_future = Future()
+        completed_future.set_result(True)
+        pending_future = Future()
+        first_session = Mock()
+        first_session.add_or_renew_pool.return_value = completed_future
+        second_session = Mock()
+        second_session.add_or_renew_pool.return_value = pending_future
+        listener = Mock()
+        cluster.sessions = [first_session, second_session]
+        cluster.register_listener(listener)
+
+        try:
+            cluster.on_add(host, refresh_nodes=False)
+
+            assert host.is_up is not True
+            listener.on_add.assert_not_called()
+            first_session.update_created_pools.assert_not_called()
+            second_session.update_created_pools.assert_not_called()
+
+            pending_future.set_result(True)
+
+            assert host.is_up is True
+            listener.on_add.assert_called_once_with(host)
+            first_session.update_created_pools.assert_called_once_with()
+            second_session.update_created_pools.assert_called_once_with()
+        finally:
+            cluster.shutdown()
+
+    def test_on_up_waits_for_all_session_pool_futures_before_marking_host_up(self):
+        cluster = Cluster(protocol_version=4)
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        completed_future = Future()
+        completed_future.set_result(True)
+        pending_future = Future()
+        first_session = Mock()
+        first_session.add_or_renew_pool.return_value = completed_future
+        second_session = Mock()
+        second_session.add_or_renew_pool.return_value = pending_future
+        listener = Mock()
+        cluster.sessions = [first_session, second_session]
+        cluster.register_listener(listener)
+
+        try:
+            cluster.on_up(host)
+
+            assert host.is_up is not True
+            listener.on_up.assert_not_called()
+            first_session.update_created_pools.assert_not_called()
+            second_session.update_created_pools.assert_not_called()
+
+            pending_future.set_result(True)
+
+            assert host.is_up is True
+            listener.on_up.assert_called_once_with(host)
+            first_session.update_created_pools.assert_called_once_with()
+            second_session.update_created_pools.assert_called_once_with()
+        finally:
+            cluster.shutdown()
+
     def test_invalid_contact_point_types(self):
         with pytest.raises(ValueError):
             Cluster(contact_points=[None], protocol_version=4, connect_timeout=1)
