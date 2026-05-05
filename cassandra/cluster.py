@@ -4191,10 +4191,18 @@ class Session(object):
                                 metadata_host = host
                                 if isinstance(self.cluster.metadata, Metadata):
                                     metadata_host = self.cluster.metadata.get_host_by_host_id(host.host_id)
+                                    if metadata_host is None:
+                                        log.debug(
+                                            "Discarding stale connection pool for host %s; "
+                                            "host id is no longer present in metadata",
+                                            host)
+                                        self._invalidate_pool_creation(
+                                            host, expected_endpoint=creation_endpoint)
+                                        discard_pool = True
 
                                 target_host = metadata_host if metadata_host is not None else host
                                 target_endpoint_changed = False
-                                if target_host is not host:
+                                if not discard_pool and target_host is not host:
                                     with target_host.lock:
                                         target_endpoint_changed = not self._endpoints_match(
                                             target_host.endpoint, creation_endpoint)
@@ -4207,7 +4215,8 @@ class Session(object):
                                     self._invalidate_pool_creation(
                                         host, expected_endpoint=creation_endpoint)
                                     discard_pool = True
-                                else:
+
+                                if not discard_pool:
                                     target_host_matches = False
                                     for pool_host in tuple(retained_pools):
                                         if pool_host is target_host:

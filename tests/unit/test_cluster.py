@@ -726,6 +726,37 @@ class SessionPoolRaceTest(unittest.TestCase):
         assert session._pools == {}
         created_pools[0].shutdown.assert_called_once_with()
 
+    def test_stale_host_pool_creation_does_not_replace_same_endpoint_host(self):
+        endpoint = DefaultEndPoint("127.0.0.1")
+        stale_host = Host(endpoint, SimpleConvictionPolicy,
+                          host_id=uuid.uuid4())
+        replacement_host = Host(endpoint, SimpleConvictionPolicy,
+                                host_id=uuid.uuid4())
+        cluster, session, executor = self._make_cluster_and_session(
+            [replacement_host])
+        cluster.metadata = Metadata()
+        cluster.metadata.add_or_return_host(replacement_host)
+        replacement_pool = self._make_pool(
+            replacement_host, HostDistance.LOCAL, session)
+        session._pools[replacement_host] = replacement_pool
+        created_pools = []
+
+        def make_pool(host, distance, pool_session, endpoint=None):
+            pool = self._make_pool(host, distance, pool_session, endpoint)
+            created_pools.append(pool)
+            return pool
+
+        with patch("cassandra.cluster.HostConnection", side_effect=make_pool):
+            future = session.add_or_renew_pool(
+                stale_host, is_host_addition=False)
+
+            executor.run_next()
+
+        assert future.result() is False
+        assert session._pools[replacement_host] is replacement_pool
+        replacement_pool.shutdown.assert_not_called()
+        created_pools[0].shutdown.assert_called_once_with()
+
     def test_remove_pool_expected_host_mismatch_invalidates_stale_creation(self):
         stale_host = self._make_host("127.0.0.1")
         replacement_host = self._make_host("127.0.0.1")
@@ -1072,6 +1103,8 @@ class HostStateRaceTest(unittest.TestCase):
         session = Session.__new__(Session)
         session._lock = Lock()
         session._pools = {host: pool}
+        session.cluster = Mock()
+        session.cluster.metadata.all_hosts.return_value = []
         session.submit = _ImmediateExecutor().submit
         return session
 
