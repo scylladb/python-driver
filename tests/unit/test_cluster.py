@@ -155,6 +155,27 @@ class ClusterTest(unittest.TestCase):
         finally:
             cluster.shutdown()
 
+    def test_on_add_excludes_host_from_query_plan_until_pool_futures_complete(self):
+        cluster = Cluster(protocol_version=4)
+        host = Host("127.0.0.1", SimpleConvictionPolicy, datacenter="dc1", rack="rack1", host_id=uuid.uuid4())
+        pending_future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = pending_future
+        session.update_created_pools.return_value = set()
+        cluster.sessions = [session]
+
+        try:
+            cluster.on_add(host, refresh_nodes=False)
+
+            load_balancer = cluster.profile_manager.default.load_balancing_policy
+            assert host not in list(load_balancer.make_query_plan())
+
+            pending_future.set_result(True)
+
+            assert list(load_balancer.make_query_plan()) == [host]
+        finally:
+            cluster.shutdown()
+
     def test_on_up_waits_for_all_session_pool_futures_before_marking_host_up(self):
         cluster = Cluster(protocol_version=4)
         host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
@@ -183,6 +204,28 @@ class ClusterTest(unittest.TestCase):
             listener.on_up.assert_called_once_with(host)
             first_session.update_created_pools.assert_called_once_with()
             second_session.update_created_pools.assert_called_once_with()
+        finally:
+            cluster.shutdown()
+
+    def test_on_up_excludes_host_from_query_plan_until_pool_futures_complete(self):
+        cluster = Cluster(protocol_version=4)
+        host = Host("127.0.0.1", SimpleConvictionPolicy, datacenter="dc1", rack="rack1", host_id=uuid.uuid4())
+        host.set_down()
+        pending_future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = pending_future
+        session.update_created_pools.return_value = set()
+        cluster.sessions = [session]
+
+        try:
+            cluster.on_up(host)
+
+            load_balancer = cluster.profile_manager.default.load_balancing_policy
+            assert host not in list(load_balancer.make_query_plan())
+
+            pending_future.set_result(True)
+
+            assert list(load_balancer.make_query_plan()) == [host]
         finally:
             cluster.shutdown()
 
