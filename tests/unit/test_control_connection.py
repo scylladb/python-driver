@@ -376,6 +376,21 @@ class ControlConnectionTest(unittest.TestCase):
         assert not self.control_connection.wait_for_schema_agreement()
         assert self.time.clock == self.cluster.max_schema_agreement_wait
 
+    def test_wait_for_schema_agreement_counts_query_time_before_mismatch_retry_sleep(self):
+        self.cluster.max_schema_agreement_wait = 0.1
+        peer_columns = self.connection.peer_results[0]
+        mismatching_peer_rows = [list(row) for row in self.connection.peer_results[1]]
+        mismatching_peer_rows[1][2] = 'b'
+
+        def wait_for_responses(*args, **kwargs):
+            self.time.sleep(0.09)
+            return _node_meta_results(self.connection.local_results, (peer_columns, mismatching_peer_rows))
+
+        self.connection.wait_for_responses.side_effect = wait_for_responses
+
+        assert not self.control_connection.wait_for_schema_agreement()
+        self.assertAlmostEqual(self.time.clock, self.cluster.max_schema_agreement_wait)
+
     def test_wait_for_schema_agreement_skipping(self):
         """
         If rpc_address or schema_version isn't set, the host should be skipped
