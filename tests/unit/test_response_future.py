@@ -38,6 +38,24 @@ import pytest
 
 class ResponseFutureTests(unittest.TestCase):
 
+    class _EndpointSwapOnExitLock(object):
+
+        def __init__(self, host, new_endpoint):
+            self._lock = RLock()
+            self._host = host
+            self._new_endpoint = new_endpoint
+            self._exits = 0
+
+        def __enter__(self):
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self._lock.release()
+            self._exits += 1
+            if self._exits == 1:
+                self._host.endpoint = self._new_endpoint
+
     def make_basic_session(self):
         s = Mock(spec=Session)
         s.row_factory = lambda col_names, rows: [(col_names, rows)]
@@ -699,6 +717,103 @@ class ResponseFutureTests(unittest.TestCase):
         replacement_pool.return_connection.assert_not_called()
         old_pool.return_connection.assert_called_once_with(
             connection, stream_was_orphaned=True)
+
+    def test_query_does_not_borrow_stale_pool_after_endpoint_swap(self):
+        session = self.make_basic_session()
+        host = Host(DefaultEndPoint('127.0.0.1'), SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        stale_pool = self.make_pool()
+        stale_pool.host = host
+        stale_pool.endpoint = host.endpoint
+        stale_pool.is_shutdown = False
+        connection = Mock(spec=Connection)
+        stale_pool.borrow_connection.return_value = (connection, 1)
+
+        session._lock = RLock()
+        session._pools = {host: stale_pool}
+        session._endpoints_match = Session._endpoints_match.__get__(session, Session)
+        session._pool_matches_expected = Session._pool_matches_expected.__get__(session, Session)
+        session._get_pool_by_host_identity = Session._get_pool_by_host_identity.__get__(session, Session)
+        session.cluster._endpoints_match.side_effect = Cluster._endpoints_match
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [host]
+        host.endpoint = DefaultEndPoint('127.0.0.2')
+
+        rf = self.make_response_future(session)
+
+        assert not rf.send_request()
+        stale_pool.borrow_connection.assert_not_called()
+        assert isinstance(rf._errors[host], ConnectionException)
+
+    def test_query_rechecks_endpoint_after_pool_lookup_race(self):
+        session = self.make_basic_session()
+        host = Host(DefaultEndPoint('127.0.0.1'), SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        stale_pool = self.make_pool()
+        stale_pool.host = host
+        stale_pool.endpoint = host.endpoint
+        stale_pool.is_shutdown = False
+        connection = Mock(spec=Connection)
+        stale_pool.borrow_connection.return_value = (connection, 1)
+
+        session._lock = RLock()
+        session._pools = {host: stale_pool}
+        session._endpoints_match = Session._endpoints_match.__get__(session, Session)
+        session._pool_matches_expected = Session._pool_matches_expected.__get__(session, Session)
+        session._get_pool_by_host_identity = Session._get_pool_by_host_identity.__get__(session, Session)
+        session.cluster._endpoints_match.side_effect = Cluster._endpoints_match
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [host]
+        host.lock = self._EndpointSwapOnExitLock(
+            host, DefaultEndPoint('127.0.0.2'))
+
+        rf = self.make_response_future(session)
+
+        assert not rf.send_request()
+        stale_pool.borrow_connection.assert_not_called()
+        assert isinstance(rf._errors[host], ConnectionException)
+
+    def test_query_releases_request_id_after_post_borrow_endpoint_swap(self):
+        session = self.make_basic_session()
+        host = Host(DefaultEndPoint('127.0.0.1'), SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        old_endpoint = host.endpoint
+        new_endpoint = DefaultEndPoint('127.0.0.2')
+        stale_pool = self.make_pool()
+        stale_pool.host = host
+        stale_pool.endpoint = old_endpoint
+        stale_pool.is_shutdown = False
+        connection = Mock(spec=Connection, lock=RLock(), request_ids=deque([1]),
+                          in_flight=0)
+
+        def borrow_connection(**kwargs):
+            with connection.lock:
+                connection.in_flight += 1
+                request_id = connection.request_ids.popleft()
+            host.endpoint = new_endpoint
+            return connection, request_id
+
+        def return_connection(returned_connection):
+            with returned_connection.lock:
+                returned_connection.in_flight -= 1
+
+        stale_pool.borrow_connection.side_effect = borrow_connection
+        stale_pool.return_connection.side_effect = return_connection
+
+        session._lock = RLock()
+        session._pools = {host: stale_pool}
+        session._endpoints_match = Session._endpoints_match.__get__(session, Session)
+        session._pool_matches_expected = Session._pool_matches_expected.__get__(session, Session)
+        session._get_pool_by_host_identity = Session._get_pool_by_host_identity.__get__(session, Session)
+        session.cluster._endpoints_match.side_effect = Cluster._endpoints_match
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [host]
+
+        rf = self.make_response_future(session)
+
+        assert not rf.send_request()
+        stale_pool.return_connection.assert_called_once_with(connection)
+        connection.send_msg.assert_not_called()
+        assert list(connection.request_ids) == [1]
+        assert connection.in_flight == 0
+        assert isinstance(rf._errors[host], ConnectionException)
 
     def test_single_host_query_plan_exhausted_after_one_retry(self):
         """
