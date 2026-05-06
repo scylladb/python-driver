@@ -26,6 +26,7 @@ from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, R
 from cassandra.cluster import _Scheduler, Session, Cluster, default_lbp_factory, \
     ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
 from cassandra.connection import ClientRoutesEndPoint, ConnectionException, DefaultEndPoint, SniEndPoint
+from cassandra.metadata import Metadata
 from cassandra.pool import Host, HostConnection, _HostReconnectionHandler
 from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
@@ -657,6 +658,33 @@ class SessionPoolRaceTest(unittest.TestCase):
         with patch("cassandra.cluster.HostConnection", side_effect=make_pool):
             future = session.add_or_renew_pool(host, is_host_addition=True)
             session.remove_pool(host)
+
+            executor.run_next()
+
+        assert future.result() is False
+        assert session._pools == {}
+        created_pools[0].shutdown.assert_called_once_with()
+
+    def test_stale_host_pool_creation_does_not_publish_to_replacement_host(self):
+        host_id = uuid.uuid4()
+        stale_host = Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy,
+                          host_id=host_id)
+        replacement_host = Host(DefaultEndPoint("127.0.0.2"),
+                                SimpleConvictionPolicy, host_id=host_id)
+        cluster, session, executor = self._make_cluster_and_session(
+            [replacement_host])
+        cluster.metadata = Metadata()
+        cluster.metadata.add_or_return_host(replacement_host)
+        created_pools = []
+
+        def make_pool(host, distance, pool_session, endpoint=None):
+            pool = self._make_pool(host, distance, pool_session, endpoint)
+            created_pools.append(pool)
+            return pool
+
+        with patch("cassandra.cluster.HostConnection", side_effect=make_pool):
+            future = session.add_or_renew_pool(
+                stale_host, is_host_addition=False)
 
             executor.run_next()
 
