@@ -17,7 +17,7 @@ import logging
 import socket
 
 from concurrent.futures import Future
-from threading import Lock, RLock
+from threading import Event, Lock, RLock, Thread
 from unittest.mock import patch, Mock, ANY
 import uuid
 
@@ -271,7 +271,7 @@ class ClusterTest(unittest.TestCase):
 
         with patch.object(Cluster.connection_class, 'factory', autospec=True, return_value='connection') as factory:
             cluster = Cluster(auth_provider=auth_provider)
-            host = Host(old_endpoint, SimpleConvictionPolicy)
+            host = Host(old_endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
             connection_factory = cluster._make_connection_factory(host)
             handler = _HostReconnectionHandler(
                 host, connection_factory, False, Mock(), Mock(), Mock(), iter([0]),
@@ -670,11 +670,11 @@ class SessionPoolRaceTest(unittest.TestCase):
 
             executor.run_next()
 
-        assert future.result() is True
+        assert future.result() is False
         host_connection.assert_called_once_with(
             host, HostDistance.LOCAL, session, endpoint=old_endpoint)
         assert created_pools[0].endpoint == old_endpoint
-        created_pools[0].shutdown.assert_not_called()
+        created_pools[0].shutdown.assert_called_once_with()
 
     def test_add_or_renew_pool_auth_failure_reports_creation_endpoint(self):
         host = self._make_host("127.0.0.1")
@@ -862,6 +862,62 @@ class HostStateRaceTest(unittest.TestCase):
         session.submit = _ImmediateExecutor().submit
         return session
 
+    def test_discount_down_event_does_not_hold_host_lock_while_scanning_pools(self):
+        host = self._make_host()
+        host.set_up()
+        old_endpoint = host.endpoint
+        pool = Mock()
+        pool.host = host
+        pool.endpoint = old_endpoint
+        pool.open_count = 1
+        session = self._make_session_with_pool(host, pool)
+        session._lock = RLock()
+        cluster = self._make_cluster(session=session)
+        cluster._discount_down_events = True
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.on_down_potentially_blocking = Mock(return_value=None)
+        session.cluster = cluster
+
+        # Mutating the endpoint after insertion forces an identity scan under
+        # session._lock; the down path must not hold host.lock during that scan.
+        host.endpoint = DefaultEndPoint("127.0.0.2")
+        entered_distance = Event()
+        release_distance = Event()
+        blocked_on_host = []
+        thread_errors = []
+
+        def distance(_host):
+            entered_distance.set()
+            release_distance.wait(1)
+            return HostDistance.LOCAL
+
+        def hold_session_then_try_host():
+            with session._lock:
+                entered_distance.wait(1)
+                acquired = host.lock.acquire(timeout=0.2)
+                blocked_on_host.append(not acquired)
+                if acquired:
+                    host.lock.release()
+                release_distance.set()
+
+        def run_on_down():
+            try:
+                Cluster.on_down(cluster, host, is_host_addition=False)
+            except Exception as exc:
+                thread_errors.append(exc)
+
+        cluster.profile_manager.distance.side_effect = distance
+        worker = Thread(target=hold_session_then_try_host)
+        runner = Thread(target=run_on_down)
+        worker.start()
+        runner.start()
+        worker.join(2)
+        runner.join(2)
+
+        assert not thread_errors
+        assert not runner.is_alive()
+        assert blocked_on_host == [False]
+
     @staticmethod
     def _state(cluster, host):
         return cluster._get_host_liveness_state(host)
@@ -1035,7 +1091,8 @@ class HostStateRaceTest(unittest.TestCase):
 
         cluster.profile_manager.on_down.assert_called_once_with(host)
         cluster.control_connection.on_down.assert_called_once_with(host)
-        session.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(
+            host, expected_endpoint=host.endpoint)
         listener.on_down.assert_called_once_with(host)
         cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
         assert state.epoch > first_up_epoch
@@ -1045,7 +1102,7 @@ class HostStateRaceTest(unittest.TestCase):
         pool_future.set_result(True)
 
         listener.on_up.assert_not_called()
-        assert session.remove_pool.call_count == 2
+        assert session.remove_pool.call_count == 1
         assert not host.is_up
         assert state.up_epoch is None
 
@@ -1068,7 +1125,8 @@ class HostStateRaceTest(unittest.TestCase):
 
         cluster.profile_manager.on_down.assert_called_once_with(host)
         cluster.control_connection.on_down.assert_called_once_with(host)
-        session.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(
+            host, expected_endpoint=host.endpoint)
         listener.on_down.assert_called_once_with(host)
         cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
         listener.on_up.assert_not_called()
@@ -1100,11 +1158,12 @@ class HostStateRaceTest(unittest.TestCase):
 
         cluster.profile_manager.on_down.assert_called_once_with(host)
         cluster.control_connection.on_down.assert_called_once_with(host)
-        session.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(
+            host, expected_endpoint=host.endpoint)
         listener.on_down.assert_called_once_with(host)
         cluster._start_reconnector.assert_called_once_with(
             host, False, expected_down_epoch=ANY)
-        assert session.remove_pool.call_count == 2
+        assert session.remove_pool.call_count == 1
         listener.on_up.assert_not_called()
         assert not host.is_up
         assert state.up_epoch is None
@@ -1146,10 +1205,10 @@ class HostStateRaceTest(unittest.TestCase):
         host._reconnection_handler = old_reconnector
         original_get_reconnector = Cluster._get_reconnector_for_current_up_handling
 
-        def force_down_before_reconnector_is_cleared(h, up_epoch):
+        def force_down_before_reconnector_is_cleared(h, up_epoch, **kwargs):
             Cluster.on_down(
                 cluster, h, is_host_addition=False, expect_host_to_be_down=True)
-            return original_get_reconnector(cluster, h, up_epoch)
+            return original_get_reconnector(cluster, h, up_epoch, **kwargs)
 
         cluster._get_reconnector_for_current_up_handling = Mock(
             side_effect=force_down_before_reconnector_is_cleared)
@@ -1158,12 +1217,13 @@ class HostStateRaceTest(unittest.TestCase):
 
         cluster.profile_manager.on_down.assert_called_once_with(host)
         cluster.control_connection.on_down.assert_called_once_with(host)
-        session.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(
+            host, expected_endpoint=host.endpoint)
         listener.on_down.assert_called_once_with(host)
         cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
         cluster.profile_manager.on_up.assert_not_called()
         cluster.control_connection.on_up.assert_not_called()
-        old_reconnector.cancel.assert_not_called()
+        old_reconnector.cancel.assert_called_once_with()
         assert not host.is_up
         assert self._state(cluster, host).up_epoch is None
         assert self._state(cluster, host).down_epoch is None
@@ -1181,7 +1241,8 @@ class HostStateRaceTest(unittest.TestCase):
 
         cluster.profile_manager.on_down.assert_called_once_with(host)
         cluster.control_connection.on_down.assert_called_once_with(host)
-        session.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(
+            host, expected_endpoint=host.endpoint)
         listener.on_down.assert_called_once_with(host)
         cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
         assert self._state(cluster, host).down_epoch is None
@@ -1252,11 +1313,10 @@ class HostStateRaceTest(unittest.TestCase):
         assert host.is_up
         assert state.up_epoch is None
 
-    def test_superseded_up_cleanup_precedes_replayed_up_pool_creation(self):
+    def test_stale_superseded_up_cleanup_does_not_run_after_newer_down(self):
         first_pool_future = Future()
-        second_pool_future = Future()
         session = Mock()
-        session.add_or_renew_pool.side_effect = [first_pool_future, second_pool_future]
+        session.add_or_renew_pool.return_value = first_pool_future
         cluster = self._make_cluster(session=session)
         cluster._prepare_all_queries = Mock()
         cluster.profile_manager.distance.return_value = HostDistance.LOCAL
@@ -1269,28 +1329,19 @@ class HostStateRaceTest(unittest.TestCase):
 
         cleanup_calls = []
 
-        def signal_up_during_first_cleanup(h, **kwargs):
-            if cleanup_calls:
-                return None
+        def signal_up_during_stale_cleanup(h, **kwargs):
             cleanup_calls.append(h)
-            Cluster.on_up(cluster, h)
-            assert session.add_or_renew_pool.call_count == 1
-            assert self._state(cluster, h).pending_up_epoch == self._state(cluster, h).epoch
             return None
 
-        session.remove_pool.side_effect = signal_up_during_first_cleanup
+        session.remove_pool.side_effect = signal_up_during_stale_cleanup
 
         first_pool_future.set_result(True)
 
-        assert cleanup_calls == [host]
-        assert session.add_or_renew_pool.call_count == 2
-        assert self._state(cluster, host).up_epoch == self._state(cluster, host).epoch
-        assert self._state(cluster, host).pending_up_epoch is None
-
-        second_pool_future.set_result(True)
-
-        assert host.is_up
+        assert cleanup_calls == []
+        assert session.add_or_renew_pool.call_count == 1
         assert self._state(cluster, host).up_epoch is None
+        assert self._state(cluster, host).pending_up_epoch is None
+        assert not host.is_up
 
     def test_sync_up_failure_replays_queued_up(self):
         session = Mock()
@@ -1321,7 +1372,8 @@ class HostStateRaceTest(unittest.TestCase):
         assert cluster.profile_manager.on_up.call_count == 2
         cluster.control_connection.on_up.assert_called_once_with(host)
         session.add_or_renew_pool.assert_called_once_with(
-            host, is_host_addition=False)
+            host, is_host_addition=False,
+            allow_retry_after_auth_failure=True)
         assert host.is_up
         assert self._state(cluster, host).up_epoch is None
         assert self._state(cluster, host).pending_up_epoch is None
@@ -1363,7 +1415,7 @@ class HostStateRaceTest(unittest.TestCase):
         old_endpoint = DefaultEndPoint('127.0.0.1')
         new_endpoint = DefaultEndPoint('127.0.0.2')
         cluster = self._make_cluster()
-        host = Host(old_endpoint, SimpleConvictionPolicy)
+        host = Host(old_endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
         host.endpoint = new_endpoint
         new_reconnector = Mock()
         host._reconnection_handler = new_reconnector
@@ -1424,7 +1476,8 @@ class HostStateRaceTest(unittest.TestCase):
         listener.on_up.assert_called_once_with(host)
         cluster.profile_manager.on_down.assert_called_once_with(host)
         cluster.control_connection.on_down.assert_called_once_with(host)
-        session.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(
+            host, expected_endpoint=host.endpoint)
         listener.on_down.assert_called_once_with(host)
         cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
         assert not host.is_up
@@ -1444,7 +1497,8 @@ class HostStateRaceTest(unittest.TestCase):
 
         cluster.profile_manager.on_down.assert_called_once_with(host)
         cluster.control_connection.on_down.assert_called_once_with(host)
-        session.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(
+            host, expected_endpoint=host.endpoint)
         listener.on_down.assert_called_once_with(host)
         cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
         assert self._state(cluster, host).down_epoch is None
@@ -1546,7 +1600,8 @@ class HostStateRaceTest(unittest.TestCase):
 
         cluster.profile_manager.on_down.assert_called_once_with(host)
         cluster.control_connection.on_down.assert_called_once_with(host)
-        session.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(
+            host, expected_endpoint=host.endpoint)
         listener.on_down.assert_called_once_with(host)
         cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
         cluster.profile_manager.on_up.assert_called_once_with(host)
@@ -1586,7 +1641,8 @@ class HostStateRaceTest(unittest.TestCase):
 
         cluster.profile_manager.on_down.assert_called_once_with(host)
         cluster.control_connection.on_down.assert_called_once_with(host)
-        session.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(
+            host, expected_endpoint=host.endpoint)
         listener.on_down.assert_called_once_with(host)
         cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
         cluster.profile_manager.on_up.assert_called_once_with(host)
@@ -1635,13 +1691,13 @@ class HostStateRaceTest(unittest.TestCase):
 
         cluster.profile_manager.on_down.side_effect = lambda h: events.append("profile_down")
         cluster.control_connection.on_down.side_effect = lambda h: events.append("control_down")
-        session.on_down.side_effect = lambda h: events.append("session_down")
+        session.on_down.side_effect = lambda h, **kwargs: events.append("session_down")
         listener.on_down.side_effect = lambda h: events.append("listener_down")
         cluster._start_reconnector.side_effect = lambda h, is_host_addition, **kwargs: events.append("reconnector")
         session.remove_pool.side_effect = lambda h, **kwargs: events.append("remove_pool")
         cluster.profile_manager.on_up.side_effect = lambda h: events.append("profile_up")
         cluster.control_connection.on_up.side_effect = lambda h: events.append("control_up")
-        session.add_or_renew_pool.side_effect = lambda h, is_host_addition: events.append("add_pool")
+        session.add_or_renew_pool.side_effect = lambda h, is_host_addition, **kwargs: events.append("add_pool")
 
         Cluster.on_down(cluster, host, is_host_addition=False)
         Cluster.on_up(cluster, host)
@@ -1795,7 +1851,7 @@ class HostStateRaceTest(unittest.TestCase):
         with host.lock:
             pending_up_epoch = cluster._pop_pending_node_up_if_ready(host)
 
-        assert pending_up_epoch == 2
+        assert pending_up_epoch == (2, None)
         assert state.pending_up_epoch == 2
 
         Cluster.on_down(cluster, host, is_host_addition=False)

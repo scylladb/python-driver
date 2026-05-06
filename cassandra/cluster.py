@@ -2590,6 +2590,26 @@ class Cluster(object):
         if self.is_shutdown:
             return
 
+        if (self._discount_down_events and expected_endpoint is None and
+                self.profile_manager.distance(host) != HostDistance.IGNORED):
+            with host.lock:
+                host_endpoint = host.endpoint
+            connected = False
+            for session in tuple(self.sessions):
+                # Host equality is endpoint-based; scan by identity to avoid
+                # hiding the live pool behind a stale equal key. Do not hold
+                # host.lock while taking session._lock; update_created_pools()
+                # takes the locks in the opposite order.
+                pool = session._get_pool_by_host_identity(
+                    host, expected_endpoint=host_endpoint)
+                if pool is not None and pool.open_count > 0:
+                    connected = True
+                    break
+            if connected:
+                with host.lock:
+                    if self._endpoints_match(host.endpoint, host_endpoint):
+                        return
+
         with host.lock:
             if expected_endpoint is not None and not self._endpoints_match(host.endpoint, expected_endpoint):
                 log.debug("Ignoring stale down signal for host %s; endpoint changed from %s",
@@ -2598,24 +2618,6 @@ class Cluster(object):
 
             was_up = host.is_up
             state = self._get_host_liveness_state(host)
-
-            # ignore down signals if we have open pools to the host
-            # this is to avoid closing pools when a control connection host became isolated
-            # endpoint-aware cleanup still needs to run
-            if (self._discount_down_events and expected_endpoint is None and
-                    self.profile_manager.distance(host) != HostDistance.IGNORED):
-                host_endpoint = host.endpoint
-                connected = False
-                for session in tuple(self.sessions):
-                    # Host equality is endpoint-based; scan by identity to avoid
-                    # hiding the live pool behind a stale equal key.
-                    pool = session._get_pool_by_host_identity(
-                        host, expected_endpoint=host_endpoint)
-                    if pool is not None and pool.open_count > 0:
-                        connected = True
-                        break
-                if connected:
-                    return
 
             if not expect_host_to_be_down:
                 if was_up is False:
