@@ -323,6 +323,17 @@ class SchedulerTest(unittest.TestCase):
 
 class SessionPoolRaceTest(unittest.TestCase):
 
+    class _DuplicatePoolEntries(object):
+
+        def __init__(self, entries):
+            self._entries = entries
+
+        def __len__(self):
+            return len(self._entries)
+
+        def items(self):
+            return list(self._entries)
+
     @staticmethod
     def _make_host(address):
         return Host(address, SimpleConvictionPolicy, host_id=uuid.uuid4())
@@ -511,6 +522,22 @@ class SessionPoolRaceTest(unittest.TestCase):
         assert session._pools == {}
         created_pools[0].shutdown.assert_called_once_with()
 
+    def test_update_created_pools_removes_stale_pool_for_down_host_after_endpoint_change(self):
+        host = self._make_host("127.0.0.1")
+        host.set_down()
+        cluster, session, executor = self._make_cluster_and_session([host])
+        stale_pool = self._make_pool(host, HostDistance.LOCAL, session)
+        session._pools[host] = stale_pool
+
+        host.endpoint = DefaultEndPoint("127.0.0.2")
+
+        futures = session.update_created_pools()
+
+        assert len(futures) == 1
+        executor.run_next()
+        assert session._pools == {}
+        stale_pool.shutdown.assert_called_once_with()
+
     def test_update_created_pools_replaces_pool_after_endpoint_change(self):
         host = self._make_host("127.0.0.1")
         old_endpoint = host.endpoint
@@ -628,11 +655,13 @@ class SessionPoolRaceTest(unittest.TestCase):
         old_endpoint = host.endpoint
         cluster, session, executor = self._make_cluster_and_session([host])
         stale_pool = self._make_pool(host, HostDistance.LOCAL, session)
-        session._pools[host] = stale_pool
 
         host.endpoint = DefaultEndPoint("127.0.0.2")
         replacement_pool = self._make_pool(host, HostDistance.LOCAL, session)
-        session._pools[host] = replacement_pool
+        session._pools = self._DuplicatePoolEntries([
+            (host, stale_pool),
+            (host, replacement_pool),
+        ])
 
         assert len(session._pools) == 2
 

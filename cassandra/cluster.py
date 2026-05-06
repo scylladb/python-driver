@@ -4303,6 +4303,7 @@ class Session(object):
             with self._lock:
                 with host.lock:
                     host_endpoint = host.endpoint
+                    host_is_up = host.is_up
                 pool = self._get_pool_by_host_identity(
                     host, expected_endpoint=host_endpoint)
                 any_pool = pool or self._get_pool_by_host_identity(host)
@@ -4320,8 +4321,10 @@ class Session(object):
                         # on_up() keeps host.is_up False until this future succeeds.
                         future = self._reuse_or_invalidate_pool_creation(
                             host, pool_creation_future)
-                    elif host.is_up in (True, None):
+                    elif host_is_up in (True, None):
                         future = self.add_or_renew_pool(host, False)
+                    elif any_pool is not None:
+                        future = self.remove_pool(host)
                 elif pool_creation_future is not None:
                     future = self._reuse_or_invalidate_pool_creation(
                         host, pool_creation_future)
@@ -5662,7 +5665,13 @@ class ResponseFuture(object):
         if message is None:
             message = self.message
 
-        pool = self.session._get_pool_by_host_identity(host)
+        if isinstance(host, Host):
+            with host.lock:
+                expected_endpoint = host.endpoint
+            pool = self.session._get_pool_by_host_identity(
+                host, expected_endpoint=expected_endpoint)
+        else:
+            pool = self.session._get_pool_by_host_identity(host)
         if not pool:
             self._errors[host] = ConnectionException("Host has been marked down or removed")
             return None

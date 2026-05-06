@@ -20,7 +20,7 @@ from threading import RLock
 from unittest.mock import Mock, MagicMock, ANY
 
 from cassandra import ConsistencyLevel, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
-from cassandra.cluster import Session, ResponseFuture, NoHostAvailable, ProtocolVersion
+from cassandra.cluster import Cluster, Session, ResponseFuture, NoHostAvailable, ProtocolVersion
 from cassandra.connection import Connection, ConnectionException, DefaultEndPoint
 from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessage,
                                 UnavailableErrorMessage, ResultMessage, QueryMessage,
@@ -699,6 +699,32 @@ class ResponseFutureTests(unittest.TestCase):
         replacement_pool.return_connection.assert_not_called()
         old_pool.return_connection.assert_called_once_with(
             connection, stream_was_orphaned=True)
+
+    def test_query_does_not_borrow_stale_pool_after_endpoint_swap(self):
+        session = self.make_basic_session()
+        host = Host(DefaultEndPoint('127.0.0.1'), SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        stale_pool = self.make_pool()
+        stale_pool.host = host
+        stale_pool.endpoint = host.endpoint
+        stale_pool.is_shutdown = False
+        connection = Mock(spec=Connection)
+        stale_pool.borrow_connection.return_value = (connection, 1)
+
+        session._lock = RLock()
+        session._pools = {host: stale_pool}
+        session._endpoints_match = Session._endpoints_match.__get__(session, Session)
+        session._pool_matches_expected = Session._pool_matches_expected.__get__(session, Session)
+        session._get_pool_by_host_identity = Session._get_pool_by_host_identity.__get__(session, Session)
+        session.cluster._endpoints_match.side_effect = Cluster._endpoints_match
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [host]
+        host.endpoint = DefaultEndPoint('127.0.0.2')
+
+        rf = self.make_response_future(session)
+
+        assert not rf.send_request()
+        stale_pool.borrow_connection.assert_not_called()
+        assert isinstance(rf._errors[host], ConnectionException)
 
     def test_single_host_query_plan_exhausted_after_one_retry(self):
         """
