@@ -16,13 +16,16 @@ import unittest
 import logging
 import socket
 
-from unittest.mock import patch, Mock
+from concurrent.futures import Future
+from threading import Lock
+from unittest.mock import patch, Mock, ANY
 import uuid
 
 from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, RequestExecutionException, ReadTimeout, WriteTimeout, CoordinationFailure, ReadFailure, WriteFailure, FunctionFailure, AlreadyExists,\
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
 from cassandra.cluster import _Scheduler, Session, Cluster, default_lbp_factory, \
     ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
+from cassandra.connection import ConnectionException, DefaultEndPoint
 from cassandra.pool import Host
 from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
@@ -32,6 +35,37 @@ import pytest
 
 
 log = logging.getLogger(__name__)
+
+
+class _ImmediateExecutor(object):
+
+    def submit(self, fn, *args, **kwargs):
+        future = Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except Exception as exc:
+            future.set_exception(exc)
+        return future
+
+
+class _QueuedExecutor(object):
+
+    def __init__(self):
+        self.submissions = []
+
+    def submit(self, fn, *args, **kwargs):
+        future = Future()
+        self.submissions.append((future, fn, args, kwargs))
+        return future
+
+    def run_next(self):
+        future, fn, args, kwargs = self.submissions.pop(0)
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except Exception as exc:
+            future.set_exception(exc)
+        return future
+
 
 class ExceptionTypeTest(unittest.TestCase):
 
@@ -244,6 +278,855 @@ class SchedulerTest(unittest.TestCase):
         sched = _Scheduler(None)
         sched.schedule(0, lambda: None)
         sched.schedule(0, lambda: None)  # pre-473: "TypeError: unorderable types: function() < function()"
+
+
+class HostStateRaceTest(unittest.TestCase):
+
+    @staticmethod
+    def _make_host():
+        return Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+    @staticmethod
+    def _make_cluster(session=None, listener=None):
+        cluster = Cluster.__new__(Cluster)
+        cluster.is_shutdown = False
+        cluster.profile_manager = Mock()
+        cluster.control_connection = Mock()
+        cluster.sessions = set([session] if session else [])
+        cluster._listeners = set([listener] if listener else [])
+        cluster._listener_lock = Lock()
+        cluster.executor = _ImmediateExecutor()
+        cluster._start_reconnector = Mock()
+        cluster._discount_down_events = False
+        return cluster
+
+    @staticmethod
+    def _make_session_with_pool(host, pool):
+        session = Session.__new__(Session)
+        session._lock = Lock()
+        session._pools = {host: pool}
+        session.submit = _ImmediateExecutor().submit
+        return session
+
+    @staticmethod
+    def _state(cluster, host):
+        return cluster._get_host_liveness_state(host)
+
+    @classmethod
+    def _reserve_down_handling(cls, cluster, host):
+        with host.lock:
+            state = cls._state(cluster, host)
+            state.epoch += 1
+            state.pending_up_epoch = None
+            host.set_down()
+            state.down_epoch = state.epoch
+            return state.down_epoch
+
+    def test_stale_down_handling_is_ignored_after_host_is_up(self):
+        session = Mock()
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        host = self._make_host()
+        host.set_up()
+        down_epoch = self._reserve_down_handling(cluster, host)
+        with host.lock:
+            state = self._state(cluster, host)
+            state.down_epoch = None
+            state.epoch += 1
+            host.set_up()
+
+        Cluster.on_down_potentially_blocking(
+            cluster, host, is_host_addition=False, down_epoch=down_epoch)
+
+        cluster.profile_manager.on_down.assert_not_called()
+        cluster.control_connection.on_down.assert_not_called()
+        session.on_down.assert_not_called()
+        listener.on_down.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
+
+    def test_unreserved_down_handling_is_ignored_during_host_up_handling(self):
+        session = Mock()
+        cluster = self._make_cluster(session=session)
+        host = self._make_host()
+        host.set_down()
+        self._state(cluster, host).up_epoch = 0
+
+        Cluster.on_down_potentially_blocking(
+            cluster, host, is_host_addition=False)
+
+        session.on_down.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
+
+    def test_noop_down_during_up_handling_does_not_supersede_up(self):
+        pool_future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = pool_future
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        cluster._prepare_all_queries = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        host = self._make_host()
+        host.set_down()
+
+        Cluster.on_up(cluster, host)
+        state = self._state(cluster, host)
+        up_epoch = state.up_epoch
+
+        Cluster.on_down(cluster, host, is_host_addition=False)
+
+        assert state.epoch == up_epoch
+        cluster.profile_manager.on_down.assert_not_called()
+        cluster.control_connection.on_down.assert_not_called()
+        session.on_down.assert_not_called()
+        listener.on_down.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
+
+        pool_future.set_result(True)
+
+        listener.on_up.assert_called_once_with(host)
+        assert host.is_up
+        assert state.up_epoch is None
+
+    def test_newer_forced_down_during_up_handling_is_preserved(self):
+        pool_future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = pool_future
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        cluster._prepare_all_queries = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        host = self._make_host()
+        host.set_down()
+
+        Cluster.on_up(cluster, host)
+        state = self._state(cluster, host)
+        first_up_epoch = state.up_epoch
+        assert session.remove_pool.call_count == 1
+
+        Cluster.on_down(
+            cluster, host, is_host_addition=False, expect_host_to_be_down=True)
+
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(host)
+        listener.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
+        assert state.epoch > first_up_epoch
+        assert state.up_epoch == first_up_epoch
+        assert not host.is_up
+
+        pool_future.set_result(True)
+
+        listener.on_up.assert_not_called()
+        assert session.remove_pool.call_count == 2
+        assert not host.is_up
+        assert state.up_epoch is None
+
+    def test_stale_failed_up_callback_does_not_cleanup_newer_down(self):
+        pool_future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = pool_future
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        cluster._prepare_all_queries = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        host = self._make_host()
+        host.set_down()
+
+        Cluster.on_up(cluster, host)
+        Cluster.on_down(
+            cluster, host, is_host_addition=False, expect_host_to_be_down=True)
+
+        pool_future.set_exception(RuntimeError("pool failed after newer down"))
+
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(host)
+        listener.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
+        listener.on_up.assert_not_called()
+        assert not host.is_up
+        assert self._state(cluster, host).up_epoch is None
+
+    def test_forced_down_during_up_handling_is_not_hidden_by_reconnector(self):
+        session = Mock()
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        host = self._make_host()
+        host.set_down()
+        old_reconnector = Mock()
+        host._reconnection_handler = old_reconnector
+        original_get_reconnector = Cluster._get_reconnector_for_current_up_handling
+
+        def force_down_before_reconnector_is_cleared(h, up_epoch):
+            Cluster.on_down(
+                cluster, h, is_host_addition=False, expect_host_to_be_down=True)
+            return original_get_reconnector(cluster, h, up_epoch)
+
+        cluster._get_reconnector_for_current_up_handling = Mock(
+            side_effect=force_down_before_reconnector_is_cleared)
+
+        Cluster.on_up(cluster, host)
+
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(host)
+        listener.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
+        cluster.profile_manager.on_up.assert_not_called()
+        cluster.control_connection.on_up.assert_not_called()
+        old_reconnector.cancel.assert_not_called()
+        assert not host.is_up
+        assert self._state(cluster, host).up_epoch is None
+        assert self._state(cluster, host).down_epoch is None
+
+    def test_newer_down_before_up_side_effects_suppresses_stale_up(self):
+        cluster = self._make_cluster()
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        host = self._make_host()
+        host.set_down()
+        original_superseded_check = Cluster._up_handling_was_superseded
+        checked = []
+
+        def force_down_before_first_superseded_check(h, up_epoch):
+            if not checked:
+                checked.append(True)
+                Cluster.on_down(
+                    cluster, h, is_host_addition=False, expect_host_to_be_down=True)
+            return original_superseded_check(cluster, h, up_epoch)
+
+        cluster._up_handling_was_superseded = Mock(
+            side_effect=force_down_before_first_superseded_check)
+
+        Cluster.on_up(cluster, host)
+
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        cluster.profile_manager.on_up.assert_not_called()
+        cluster.control_connection.on_up.assert_not_called()
+        cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
+        assert not host.is_up
+        assert self._state(cluster, host).up_epoch is None
+        assert self._state(cluster, host).down_epoch is None
+
+    def test_up_during_down_superseding_in_flight_up_is_replayed(self):
+        first_pool_future = Future()
+        second_pool_future = Future()
+        session = Mock()
+        session.add_or_renew_pool.side_effect = [first_pool_future, second_pool_future]
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        cluster._prepare_all_queries = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        host = self._make_host()
+        host.set_down()
+
+        Cluster.on_up(cluster, host)
+        state = self._state(cluster, host)
+        first_up_epoch = state.up_epoch
+        listener.on_down.side_effect = lambda h: Cluster.on_up(cluster, h)
+
+        Cluster.on_down(
+            cluster, host, is_host_addition=False, expect_host_to_be_down=True)
+
+        assert state.epoch > first_up_epoch
+        assert state.up_epoch == first_up_epoch
+        assert state.pending_up_epoch == state.epoch
+
+        first_pool_future.set_result(True)
+
+        assert session.add_or_renew_pool.call_count == 2
+        assert state.up_epoch == state.epoch
+        assert state.pending_up_epoch is None
+        listener.on_up.assert_not_called()
+
+        second_pool_future.set_result(True)
+
+        listener.on_up.assert_called_once_with(host)
+        assert host.is_up
+        assert state.up_epoch is None
+
+    def test_superseded_up_cleanup_precedes_replayed_up_pool_creation(self):
+        first_pool_future = Future()
+        second_pool_future = Future()
+        session = Mock()
+        session.add_or_renew_pool.side_effect = [first_pool_future, second_pool_future]
+        cluster = self._make_cluster(session=session)
+        cluster._prepare_all_queries = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        host = self._make_host()
+        host.set_down()
+
+        Cluster.on_up(cluster, host)
+        Cluster.on_down(
+            cluster, host, is_host_addition=False, expect_host_to_be_down=True)
+
+        cleanup_calls = []
+
+        def signal_up_during_first_cleanup(h, **kwargs):
+            if cleanup_calls:
+                return None
+            cleanup_calls.append(h)
+            Cluster.on_up(cluster, h)
+            assert session.add_or_renew_pool.call_count == 1
+            assert self._state(cluster, h).pending_up_epoch == self._state(cluster, h).epoch
+            return None
+
+        session.remove_pool.side_effect = signal_up_during_first_cleanup
+
+        first_pool_future.set_result(True)
+
+        assert cleanup_calls == [host]
+        assert session.add_or_renew_pool.call_count == 2
+        assert self._state(cluster, host).up_epoch == self._state(cluster, host).epoch
+        assert self._state(cluster, host).pending_up_epoch is None
+
+        second_pool_future.set_result(True)
+
+        assert host.is_up
+        assert self._state(cluster, host).up_epoch is None
+
+    def test_sync_up_failure_replays_queued_up(self):
+        session = Mock()
+        session.add_or_renew_pool.return_value = None
+        cluster = self._make_cluster(session=session)
+        cluster._prepare_all_queries = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        host = self._make_host()
+        host.set_down()
+        fail_first_on_up = [True]
+
+        def queue_up_then_fail(h):
+            if not fail_first_on_up[0]:
+                return
+            fail_first_on_up[0] = False
+            Cluster.on_down(
+                cluster, h, is_host_addition=False, expect_host_to_be_down=True)
+            Cluster.on_up(cluster, h)
+            state = self._state(cluster, h)
+            assert state.pending_up_epoch == state.epoch
+            raise RuntimeError("up failed")
+
+        cluster.profile_manager.on_up.side_effect = queue_up_then_fail
+
+        with pytest.raises(RuntimeError):
+            Cluster.on_up(cluster, host)
+
+        assert cluster.profile_manager.on_up.call_count == 2
+        cluster.control_connection.on_up.assert_called_once_with(host)
+        session.add_or_renew_pool.assert_called_once_with(
+            host, is_host_addition=False)
+        assert host.is_up
+        assert self._state(cluster, host).up_epoch is None
+        assert self._state(cluster, host).pending_up_epoch is None
+
+    def test_old_up_callback_does_not_clear_replayed_up_handling(self):
+        first_pool_future = Future()
+        second_pool_future = Future()
+        session = Mock()
+        session.add_or_renew_pool.side_effect = [first_pool_future, second_pool_future]
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        cluster._prepare_all_queries = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        host = self._make_host()
+        host.set_down()
+
+        listener.on_up.side_effect = lambda h: Cluster.on_down(
+            cluster, h, is_host_addition=False)
+        listener.on_down.side_effect = lambda h: Cluster.on_up(cluster, h)
+
+        Cluster.on_up(cluster, host)
+        state = self._state(cluster, host)
+        first_up_epoch = state.up_epoch
+
+        first_pool_future.set_result(True)
+
+        assert session.add_or_renew_pool.call_count == 2
+        assert not host.is_up
+        assert state.up_epoch != first_up_epoch
+
+        listener.on_up.side_effect = None
+        second_pool_future.set_result(True)
+
+        assert listener.on_up.call_count == 2
+        assert host.is_up
+        assert state.up_epoch is None
+
+    def test_superseded_up_cleanup_preserves_replacement_host_pool(self):
+        stale_host = self._make_host()
+        replacement_host = self._make_host()
+        replacement_pool = Mock(host=replacement_host)
+        session = self._make_session_with_pool(replacement_host, replacement_pool)
+        cluster = self._make_cluster(session=session)
+
+        assert stale_host == replacement_host
+        assert stale_host.host_id != replacement_host.host_id
+
+        cluster._cleanup_superseded_up_handling(stale_host)
+
+        assert session._pools.get(replacement_host) is replacement_pool
+        replacement_pool.shutdown.assert_not_called()
+
+    def test_superseded_up_cleanup_removes_matching_host_pool(self):
+        host = self._make_host()
+        pool = Mock(host=host)
+        session = self._make_session_with_pool(host, pool)
+        cluster = self._make_cluster(session=session)
+
+        cluster._cleanup_superseded_up_handling(host)
+
+        assert session._pools == {}
+        pool.shutdown.assert_called_once_with()
+
+    def test_down_during_up_listener_is_handled(self):
+        pool_future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = pool_future
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        cluster._prepare_all_queries = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        host = self._make_host()
+        host.set_down()
+        listener.on_up.side_effect = lambda h: Cluster.on_down(
+            cluster, h, is_host_addition=False)
+
+        Cluster.on_up(cluster, host)
+        assert self._state(cluster, host).up_epoch is not None
+
+        pool_future.set_result(True)
+
+        listener.on_up.assert_called_once_with(host)
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(host)
+        listener.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
+        assert not host.is_up
+        assert self._state(cluster, host).up_epoch is None
+        assert self._state(cluster, host).down_epoch is None
+
+    def test_current_down_handling_still_removes_pools_and_reconnects(self):
+        session = Mock()
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        host = self._make_host()
+        host.set_up()
+        down_epoch = self._reserve_down_handling(cluster, host)
+
+        Cluster.on_down_potentially_blocking(
+            cluster, host, is_host_addition=False, down_epoch=down_epoch)
+
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(host)
+        listener.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
+        assert self._state(cluster, host).down_epoch is None
+
+    def test_remove_during_down_listener_does_not_start_reconnector(self):
+        listener = Mock()
+        cluster = self._make_cluster(listener=listener)
+        cluster.metadata = Mock()
+        cluster.metadata.remove_host.return_value = True
+        host = self._make_host()
+        host.set_up()
+        down_epoch = self._reserve_down_handling(cluster, host)
+
+        listener.on_down.side_effect = lambda h: Cluster.remove_host(cluster, h)
+
+        Cluster.on_down_potentially_blocking(
+            cluster, host, is_host_addition=False, down_epoch=down_epoch)
+
+        cluster.metadata.remove_host.assert_called_once_with(host)
+        listener.on_down.assert_called_once_with(host)
+        listener.on_remove.assert_called_once_with(host)
+        cluster.profile_manager.on_remove.assert_called_once_with(host)
+        cluster._start_reconnector.assert_not_called()
+        assert self._state(cluster, host).down_epoch is None
+
+    def test_queued_down_handling_after_remove_does_not_start_reconnector(self):
+        executor = _QueuedExecutor()
+        session = Mock()
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        cluster.executor = executor
+        cluster.metadata = Mock()
+        cluster.metadata.remove_host.return_value = True
+        host = self._make_host()
+        host.set_up()
+
+        Cluster.on_down(cluster, host, is_host_addition=False)
+        assert len(executor.submissions) == 1
+
+        Cluster.remove_host(cluster, host)
+        executor.run_next()
+
+        cluster.metadata.remove_host.assert_called_once_with(host)
+        cluster.profile_manager.on_remove.assert_called_once_with(host)
+        cluster.profile_manager.on_down.assert_not_called()
+        cluster.control_connection.on_down.assert_not_called()
+        session.on_down.assert_not_called()
+        listener.on_down.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
+        assert self._state(cluster, host).down_epoch is None
+
+    def test_start_reconnector_rechecks_down_epoch_before_installing_handler(self):
+        cluster = self._make_cluster()
+        cluster.reconnection_policy = Mock()
+        cluster.reconnection_policy.new_schedule.return_value = iter([0])
+        cluster.scheduler = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        host = self._make_host()
+        state = self._state(cluster, host)
+        state.down_epoch = 1
+
+        def clear_down_epoch(h):
+            with h.lock:
+                self._state(cluster, h).down_epoch = None
+            return Mock()
+
+        cluster._make_connection_factory = Mock(side_effect=clear_down_epoch)
+        Cluster._start_reconnector(
+            cluster, host, is_host_addition=False, expected_down_epoch=1)
+
+        assert host._reconnection_handler is None
+        cluster.scheduler.schedule.assert_not_called()
+
+    def test_on_up_queues_after_down_is_submitted_before_worker_runs(self):
+        executor = _QueuedExecutor()
+        session = Mock()
+        session.add_or_renew_pool.return_value = None
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        cluster.executor = executor
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        host = self._make_host()
+        host.set_up()
+
+        Cluster.on_down(cluster, host, is_host_addition=False)
+        state = self._state(cluster, host)
+
+        assert len(executor.submissions) == 1
+        assert state.down_epoch == state.epoch
+
+        Cluster.on_up(cluster, host)
+
+        assert state.pending_up_epoch == state.epoch
+        assert state.up_epoch is None
+        cluster.profile_manager.on_up.assert_not_called()
+        cluster.control_connection.on_up.assert_not_called()
+
+        executor.run_next()
+
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(host)
+        listener.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
+        cluster.profile_manager.on_up.assert_called_once_with(host)
+        cluster.control_connection.on_up.assert_called_once_with(host)
+        assert host.is_up
+        assert state.down_epoch is None
+        assert state.up_epoch is None
+        assert state.pending_up_epoch is None
+
+    def test_on_up_stays_queued_after_endpoint_update_before_down_worker_runs(self):
+        executor = _QueuedExecutor()
+        session = Mock()
+        session.add_or_renew_pool.return_value = None
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        cluster.executor = executor
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        host = self._make_host()
+        host.set_up()
+
+        Cluster.on_down(
+            cluster, host, is_host_addition=False, expect_host_to_be_down=True)
+        state = self._state(cluster, host)
+
+        host.endpoint = DefaultEndPoint("127.0.0.2")
+
+        assert self._state(cluster, host) is state
+
+        Cluster.on_up(cluster, host)
+
+        assert state.down_epoch == state.epoch
+        assert state.pending_up_epoch == state.epoch
+        cluster.profile_manager.on_up.assert_not_called()
+        cluster.control_connection.on_up.assert_not_called()
+
+        executor.run_next()
+
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(host)
+        listener.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
+        cluster.profile_manager.on_up.assert_called_once_with(host)
+        cluster.control_connection.on_up.assert_called_once_with(host)
+        assert host.is_up
+        assert state.down_epoch is None
+        assert state.up_epoch is None
+        assert state.pending_up_epoch is None
+
+    def test_up_signal_waits_until_submitted_down_handling_finishes(self):
+        executor = _QueuedExecutor()
+        events = []
+        session = Mock()
+        listener = Mock()
+        cluster = self._make_cluster(session=session, listener=listener)
+        cluster.executor = executor
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        host = self._make_host()
+        host.set_up()
+
+        cluster.profile_manager.on_down.side_effect = lambda h: events.append("profile_down")
+        cluster.control_connection.on_down.side_effect = lambda h: events.append("control_down")
+        session.on_down.side_effect = lambda h: events.append("session_down")
+        listener.on_down.side_effect = lambda h: events.append("listener_down")
+        cluster._start_reconnector.side_effect = lambda h, is_host_addition, **kwargs: events.append("reconnector")
+        session.remove_pool.side_effect = lambda h, **kwargs: events.append("remove_pool")
+        cluster.profile_manager.on_up.side_effect = lambda h: events.append("profile_up")
+        cluster.control_connection.on_up.side_effect = lambda h: events.append("control_up")
+        session.add_or_renew_pool.side_effect = lambda h, is_host_addition: events.append("add_pool")
+
+        Cluster.on_down(cluster, host, is_host_addition=False)
+        Cluster.on_up(cluster, host)
+
+        assert events == []
+
+        executor.run_next()
+
+        assert events == [
+            "profile_down",
+            "control_down",
+            "session_down",
+            "listener_down",
+            "reconnector",
+            "remove_pool",
+            "profile_up",
+            "control_up",
+            "add_pool",
+        ]
+        assert host.is_up
+
+    def test_on_up_queues_when_down_handling_is_active(self):
+        cluster = self._make_cluster()
+        cluster._prepare_all_queries = Mock()
+        host = self._make_host()
+        host.set_down()
+        down_epoch = self._reserve_down_handling(cluster, host)
+
+        Cluster.on_up(cluster, host)
+
+        cluster._prepare_all_queries.assert_not_called()
+        state = self._state(cluster, host)
+        assert state.down_epoch == down_epoch
+        assert state.up_epoch is None
+        assert state.pending_up_epoch == state.epoch
+
+    def test_on_up_during_down_handling_is_replayed_for_ignored_host(self):
+        listener = Mock()
+        cluster = self._make_cluster(listener=listener)
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        host = self._make_host()
+        host.set_up()
+        down_epoch = self._reserve_down_handling(cluster, host)
+        listener.on_down.side_effect = lambda h: Cluster.on_up(cluster, h)
+
+        Cluster.on_down_potentially_blocking(
+            cluster, host, is_host_addition=False, down_epoch=down_epoch)
+
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        listener.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
+        cluster.profile_manager.on_up.assert_called_once_with(host)
+        cluster.control_connection.on_up.assert_called_once_with(host)
+        assert host.is_up
+        assert self._state(cluster, host).down_epoch is None
+        assert self._state(cluster, host).up_epoch is None
+        assert self._state(cluster, host).pending_up_epoch is None
+
+    def test_later_down_during_down_handling_invalidates_queued_up(self):
+        listener = Mock()
+        cluster = self._make_cluster(listener=listener)
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        host = self._make_host()
+        host.set_up()
+        down_epoch = self._reserve_down_handling(cluster, host)
+
+        def queue_up_then_down(h):
+            Cluster.on_up(cluster, h)
+            assert self._state(cluster, h).pending_up_epoch == self._state(cluster, h).epoch
+            Cluster.on_down(cluster, h, is_host_addition=False)
+
+        listener.on_down.side_effect = queue_up_then_down
+
+        Cluster.on_down_potentially_blocking(
+            cluster, host, is_host_addition=False, down_epoch=down_epoch)
+
+        cluster.profile_manager.on_up.assert_not_called()
+        cluster.control_connection.on_up.assert_not_called()
+        assert not host.is_up
+        assert self._state(cluster, host).down_epoch is None
+        assert self._state(cluster, host).up_epoch is None
+        assert self._state(cluster, host).pending_up_epoch is None
+
+    def test_remove_during_down_handling_invalidates_queued_up(self):
+        listener = Mock()
+        cluster = self._make_cluster(listener=listener)
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        host = self._make_host()
+        host.set_up()
+        down_epoch = self._reserve_down_handling(cluster, host)
+
+        def queue_up_then_remove(h):
+            Cluster.on_up(cluster, h)
+            assert self._state(cluster, h).pending_up_epoch == self._state(cluster, h).epoch
+            Cluster.on_remove(cluster, h)
+
+        listener.on_down.side_effect = queue_up_then_remove
+
+        Cluster.on_down_potentially_blocking(
+            cluster, host, is_host_addition=False, down_epoch=down_epoch)
+
+        cluster.profile_manager.on_remove.assert_called_once_with(host)
+        cluster.profile_manager.on_up.assert_not_called()
+        cluster.control_connection.on_up.assert_not_called()
+        assert not host.is_up
+        assert self._state(cluster, host).up_epoch is None
+        assert self._state(cluster, host).pending_up_epoch is None
+
+    def test_stale_queued_up_replay_is_ignored_after_newer_down_event(self):
+        cluster = self._make_cluster()
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        host = self._make_host()
+        host.set_down()
+        state = self._state(cluster, host)
+        state.epoch = 1
+        state.pending_up_epoch = 0
+
+        cluster._handle_pending_node_up(host, 0)
+
+        cluster.profile_manager.on_up.assert_not_called()
+        cluster.control_connection.on_up.assert_not_called()
+        assert not host.is_up
+        assert state.up_epoch is None
+
+    def test_stale_queued_up_replay_preserves_newer_pending_up(self):
+        cluster = self._make_cluster()
+        host = self._make_host()
+        host.set_down()
+        state = self._state(cluster, host)
+        state.epoch = 2
+        state.down_epoch = 2
+        state.pending_up_epoch = 2
+
+        cluster._handle_pending_node_up(host, 1)
+
+        cluster.profile_manager.on_up.assert_not_called()
+        cluster.control_connection.on_up.assert_not_called()
+        assert state.pending_up_epoch == 2
+        assert state.up_epoch is None
+
+    def test_down_after_pending_up_pop_invalidates_replay(self):
+        cluster = self._make_cluster()
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        host = self._make_host()
+        host.set_down()
+        state = self._state(cluster, host)
+        state.epoch = 2
+        state.pending_up_epoch = 2
+
+        with host.lock:
+            pending_up_epoch = cluster._pop_pending_node_up_if_ready(host)
+
+        assert pending_up_epoch == 2
+        assert state.pending_up_epoch == 2
+
+        Cluster.on_down(cluster, host, is_host_addition=False)
+
+        assert state.epoch == 3
+        assert state.pending_up_epoch is None
+
+        cluster._handle_pending_node_up(host, pending_up_epoch)
+
+        cluster.profile_manager.on_up.assert_not_called()
+        cluster.control_connection.on_up.assert_not_called()
+        assert not host.is_up
+
+    def test_down_for_down_host_with_pending_up_only_invalidates_pending_up(self):
+        cluster = self._make_cluster()
+        cluster.executor = Mock()
+        host = self._make_host()
+        host.set_down()
+        state = self._state(cluster, host)
+        state.epoch = 2
+        state.down_epoch = 2
+        state.pending_up_epoch = 2
+
+        Cluster.on_down(cluster, host, is_host_addition=False)
+
+        cluster.executor.submit.assert_not_called()
+        assert state.down_epoch == 2
+        assert state.pending_up_epoch is None
+        assert state.epoch == 3
+
+    def test_auth_failure_for_unknown_host_does_not_start_down_handling(self):
+        cluster = self._make_cluster()
+        host = self._make_host()
+
+        is_down = cluster.signal_connection_failure(
+            host, AuthenticationFailed("bad credentials"), is_host_addition=False)
+
+        assert is_down
+        assert host.is_up is None
+        cluster.profile_manager.on_down.assert_not_called()
+        cluster.control_connection.on_down.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
+
+    def test_wrapped_auth_failure_for_unknown_host_does_not_start_down_handling(self):
+        cluster = self._make_cluster()
+        host = self._make_host()
+        auth_exc = AuthenticationFailed("bad credentials")
+        conn_exc = ConnectionException(str(auth_exc), endpoint=host)
+        conn_exc.__cause__ = auth_exc
+
+        is_down = cluster.signal_connection_failure(
+            host, conn_exc, is_host_addition=False)
+
+        assert is_down
+        assert host.is_up is None
+        cluster.profile_manager.on_down.assert_not_called()
+        cluster.control_connection.on_down.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
+
+    def test_real_down_for_unknown_host_marks_host_down(self):
+        cluster = self._make_cluster()
+        host = self._make_host()
+
+        Cluster.on_down(cluster, host, is_host_addition=False)
+
+        assert host.is_up is False
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
+
+    def test_expected_down_for_unknown_host_marks_host_down(self):
+        cluster = self._make_cluster()
+        host = self._make_host()
+
+        Cluster.on_down(
+            cluster, host, is_host_addition=False, expect_host_to_be_down=True)
+
+        assert host.is_up is False
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_called_once_with(host, False, expected_down_epoch=ANY)
 
 
 class SessionTest(unittest.TestCase):

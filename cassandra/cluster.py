@@ -234,6 +234,7 @@ def run_in_executor(f):
         try:
             future = self.executor.submit(f, self, *args, **kwargs)
             future.add_done_callback(_future_completed)
+            return future
         except Exception:
             log.exception("Failed to submit task to executor")
 
@@ -249,6 +250,137 @@ def _register_cluster_shutdown(cluster):
 
 def _discard_cluster_shutdown(cluster):
     _clusters_for_shutdown.discard(cluster)
+
+
+class _EventFenceState(object):
+    """
+    Tracks a monotonically increasing epoch and named in-flight events.
+
+    The caller owns any domain-specific locking around this state.  The epoch
+    represents the latest observed event for a key, while named events record
+    which epoch currently owns a deferred side effect.
+    """
+
+    __slots__ = ("epoch", "_events")
+
+    def __init__(self):
+        self.epoch = 0
+        self._events = {}
+
+    def advance(self):
+        self.epoch += 1
+        return self.epoch
+
+    def get_event(self, event):
+        return self._events.get(event)
+
+    def set_event(self, event, epoch=None):
+        if epoch is None:
+            epoch = self.epoch
+        self._events[event] = epoch
+        return epoch
+
+    def clear_event(self, event, epoch=None):
+        if epoch is not None and self._events.get(event) != epoch:
+            return False
+        self._events.pop(event, None)
+        return True
+
+    def event_is_current(self, event, epoch):
+        return self._events.get(event) == epoch and self.epoch == epoch
+
+    def _set_or_clear_event(self, event, epoch):
+        if epoch is None:
+            self.clear_event(event)
+        else:
+            self.set_event(event, epoch)
+
+
+class _HostLivenessState(_EventFenceState):
+    _UP = "up"
+    _DOWN = "down"
+    _PENDING_UP = "pending_up"
+
+    __slots__ = ()
+
+    @property
+    def up_epoch(self):
+        return self.get_event(self._UP)
+
+    @up_epoch.setter
+    def up_epoch(self, epoch):
+        self._set_or_clear_event(self._UP, epoch)
+
+    @property
+    def down_epoch(self):
+        return self.get_event(self._DOWN)
+
+    @down_epoch.setter
+    def down_epoch(self, epoch):
+        self._set_or_clear_event(self._DOWN, epoch)
+
+    @property
+    def pending_up_epoch(self):
+        return self.get_event(self._PENDING_UP)
+
+    @pending_up_epoch.setter
+    def pending_up_epoch(self, epoch):
+        self._set_or_clear_event(self._PENDING_UP, epoch)
+
+
+class _IdentityWeakKeyDictionary(object):
+    """
+    Weak mapping that uses object identity instead of ``__hash__``/``__eq__``.
+    Host hashes are endpoint-based, and endpoints can change during ring refresh.
+    """
+
+    def __init__(self):
+        self._items = {}
+
+    def get(self, key, default=None):
+        key_id = id(key)
+        item = self._items.get(key_id)
+        if item is None:
+            return default
+
+        key_ref, value = item
+        if key_ref() is key:
+            return value
+
+        self._items.pop(key_id, None)
+        return default
+
+    def __setitem__(self, key, value):
+        key_id = id(key)
+        self_ref = weakref.ref(self)
+
+        def remove(ref):
+            self = self_ref()
+            if self is not None:
+                item = self._items.get(key_id)
+                if item is not None and item[0] is ref:
+                    self._items.pop(key_id, None)
+
+        self._items[key_id] = (weakref.ref(key, remove), value)
+
+
+class _EventFenceMap(object):
+    """
+    Identity-keyed store for per-object event fence state.
+    """
+
+    def __init__(self, state_factory=_EventFenceState):
+        self._lock = Lock()
+        self._states = _IdentityWeakKeyDictionary()
+        self._state_factory = state_factory
+
+    def get_state(self, key):
+        with self._lock:
+            state = self._states.get(key)
+            if state is None:
+                state = self._state_factory()
+                self._states[key] = state
+            return state
 
 
 def _shutdown_clusters():
@@ -1489,6 +1621,7 @@ class Cluster(object):
         self.sessions = WeakSet()
         self.metadata = Metadata()
         self.control_connection = None
+        self._host_liveness = _EventFenceMap(_HostLivenessState)
         self._prepared_statements = WeakValueDictionary()
         self._prepared_statement_lock = Lock()
 
@@ -1866,11 +1999,86 @@ class Cluster(object):
         self.profile_manager.on_down(host)
         self.control_connection.on_down(host)
         for session in tuple(self.sessions):
-            session.remove_pool(host)
+            session.remove_pool(host, expected_host=host)
 
         self._start_reconnector(host, is_host_addition=False)
 
-    def _on_up_future_completed(self, host, futures, results, lock, finished_future):
+    def _get_host_liveness_state(self, host):
+        try:
+            fences = self._host_liveness
+        except AttributeError:
+            fences = self._host_liveness = _EventFenceMap(_HostLivenessState)
+        return fences.get_state(host)
+
+    def _up_handling_was_superseded(self, host, up_epoch):
+        state = self._get_host_liveness_state(host)
+        return not state.event_is_current(_HostLivenessState._UP, up_epoch)
+
+    def _up_handling_is_superseded(self, host, up_epoch):
+        with host.lock:
+            superseded = self._up_handling_was_superseded(host, up_epoch)
+        if superseded:
+            log.debug("Ignoring superseded up handling for node %s", host)
+        return superseded
+
+    def _get_reconnector_for_current_up_handling(self, host, up_epoch):
+        with host.lock:
+            if self._up_handling_was_superseded(host, up_epoch):
+                log.debug("Ignoring superseded up handling for node %s", host)
+                return None, True
+            reconnector = host._reconnection_handler
+            host._reconnection_handler = None
+            return reconnector, False
+
+    def _clear_up_handling(self, host, up_epoch=None):
+        state = self._get_host_liveness_state(host)
+        return state.clear_event(_HostLivenessState._UP, up_epoch)
+
+    def _cleanup_superseded_up_handling(self, host):
+        for session in tuple(self.sessions):
+            session.remove_pool(host, expected_host=host)
+
+    def _pop_pending_node_up_if_ready(self, host):
+        state = self._get_host_liveness_state(host)
+        if state.pending_up_epoch is None:
+            return None
+        if host.is_up:
+            state.pending_up_epoch = None
+            return None
+        if state.up_epoch is not None or state.down_epoch is not None:
+            return None
+
+        pending_up_epoch = state.pending_up_epoch
+        # Leave the pending marker in place until on_up() reacquires host.lock so
+        # a newer down signal can still invalidate this replay.
+        return pending_up_epoch
+
+    def _handle_pending_node_up(self, host, pending_up_epoch):
+        if pending_up_epoch is not None:
+            log.debug("Handling queued up status of node %s", host)
+            self._on_up(host, expected_epoch=pending_up_epoch)
+
+    def _clear_down_handling(self, host, down_epoch=None):
+        state = self._get_host_liveness_state(host)
+        return state.clear_event(_HostLivenessState._DOWN, down_epoch)
+
+    def _finish_superseded_up_handling(self, host, up_epoch):
+        self._cleanup_superseded_up_handling(host)
+
+        pending_up_epoch = None
+        with host.lock:
+            if self._clear_up_handling(host, up_epoch):
+                pending_up_epoch = self._pop_pending_node_up_if_ready(host)
+
+        self._handle_pending_node_up(host, pending_up_epoch)
+
+    def _finish_up_if_superseded(self, host, up_epoch):
+        if self._up_handling_is_superseded(host, up_epoch):
+            self._finish_superseded_up_handling(host, up_epoch)
+            return True
+        return False
+
+    def _on_up_future_completed(self, host, up_handling_revision, futures, results, lock, finished_future):
         with lock:
             futures.discard(finished_future)
 
@@ -1884,6 +2092,9 @@ class Cluster(object):
 
         try:
             # all futures have completed at this point
+            if self._finish_up_if_superseded(host, up_handling_revision):
+                return
+
             for exc in [f for f in results if isinstance(f, Exception)]:
                 log.error("Unexpected failure while marking node %s up:", host, exc_info=exc)
                 self._cleanup_failed_on_up_handling(host)
@@ -1896,18 +2107,35 @@ class Cluster(object):
 
             log.info("Connection pools established for node %s", host)
             # mark the host as up and notify all listeners
-            host.set_up()
+            superseded = False
+            with host.lock:
+                if self._up_handling_was_superseded(host, up_handling_revision):
+                    log.debug("Ignoring superseded up handling for node %s", host)
+                    superseded = True
+                else:
+                    host.set_up()
+                    self._clear_up_handling(host, up_handling_revision)
+            if superseded:
+                self._finish_superseded_up_handling(host, up_handling_revision)
+                return
             for listener in self.listeners:
                 listener.on_up(host)
         finally:
+            pending_up_epoch = None
             with host.lock:
-                host._currently_handling_node_up = False
+                if self._clear_up_handling(host, up_handling_revision):
+                    pending_up_epoch = self._pop_pending_node_up_if_ready(host)
+            self._handle_pending_node_up(host, pending_up_epoch)
 
         # see if there are any pools to add or remove now that the host is marked up
         for session in tuple(self.sessions):
             session.update_created_pools()
+        return
 
     def on_up(self, host):
+        return self._on_up(host)
+
+    def _on_up(self, host, expected_epoch=None):
         """
         Intended for internal use only.
         """
@@ -1916,15 +2144,35 @@ class Cluster(object):
 
         log.debug("Waiting to acquire lock for handling up status of node %s", host)
         with host.lock:
-            if host._currently_handling_node_up:
-                log.debug("Another thread is already handling up status of node %s", host)
+            state = self._get_host_liveness_state(host)
+            if (expected_epoch is not None and
+                    (state.epoch != expected_epoch or state.pending_up_epoch != expected_epoch)):
+                log.debug("Ignoring stale queued up handling for node %s", host)
+                return
+
+            if state.down_epoch is not None:
+                log.debug("Down status is being handled for node %s; queueing up handling", host)
+                state.pending_up_epoch = state.epoch
+                return
+
+            if state.up_epoch is not None:
+                up_handling_revision = state.up_epoch
+                if self._up_handling_was_superseded(host, up_handling_revision):
+                    log.debug("Superseded up handling is still finishing for node %s; "
+                              "queueing up handling", host)
+                    state.pending_up_epoch = state.epoch
+                else:
+                    log.debug("Another thread is already handling up status of node %s", host)
                 return
 
             if host.is_up:
                 log.debug("Host %s was already marked up", host)
+                state.pending_up_epoch = None
                 return
 
-            host._currently_handling_node_up = True
+            state.pending_up_epoch = None
+            up_handling_revision = state.epoch
+            state.up_epoch = up_handling_revision
         log.debug("Starting to handle up status of node %s", host)
 
         have_future = False
@@ -1932,28 +2180,44 @@ class Cluster(object):
         try:
             log.info("Host %s may be up; will prepare queries and open connection pool", host)
 
-            reconnector = host.get_and_set_reconnection_handler(None)
+            reconnector, superseded = self._get_reconnector_for_current_up_handling(
+                host, up_handling_revision)
+            if superseded:
+                self._finish_superseded_up_handling(host, up_handling_revision)
+                return futures
             if reconnector:
                 log.debug("Now that host %s is up, cancelling the reconnection handler", host)
                 reconnector.cancel()
 
             if self.profile_manager.distance(host) != HostDistance.IGNORED:
                 self._prepare_all_queries(host)
+                if self._finish_up_if_superseded(host, up_handling_revision):
+                    return futures
                 log.debug("Done preparing all queries for host %s, ", host)
 
             for session in tuple(self.sessions):
-                session.remove_pool(host)
+                session.remove_pool(host, expected_host=host)
+
+            if self._finish_up_if_superseded(host, up_handling_revision):
+                return futures
 
             log.debug("Signalling to load balancing policies that host %s is up", host)
             self.profile_manager.on_up(host)
 
+            if self._finish_up_if_superseded(host, up_handling_revision):
+                return futures
+
             log.debug("Signalling to control connection that host %s is up", host)
             self.control_connection.on_up(host)
+
+            if self._finish_up_if_superseded(host, up_handling_revision):
+                return futures
 
             log.debug("Attempting to open new connection pools for host %s", host)
             futures_lock = Lock()
             futures_results = []
-            callback = partial(self._on_up_future_completed, host, futures, futures_results, futures_lock)
+            callback = partial(self._on_up_future_completed, host, up_handling_revision,
+                               futures, futures_results, futures_lock)
             for session in tuple(self.sessions):
                 future = session.add_or_renew_pool(host, is_host_addition=False)
                 if future is not None:
@@ -1967,19 +2231,29 @@ class Cluster(object):
 
             self._cleanup_failed_on_up_handling(host)
 
+            pending_up_epoch = None
             with host.lock:
-                host._currently_handling_node_up = False
+                if self._clear_up_handling(host, up_handling_revision):
+                    pending_up_epoch = self._pop_pending_node_up_if_ready(host)
+            self._handle_pending_node_up(host, pending_up_epoch)
             raise
         else:
             if not have_future:
+                superseded = False
                 with host.lock:
-                    host.set_up()
-                    host._currently_handling_node_up = False
+                    if self._up_handling_was_superseded(host, up_handling_revision):
+                        log.debug("Ignoring superseded up handling for node %s", host)
+                        superseded = True
+                    else:
+                        host.set_up()
+                        self._clear_up_handling(host, up_handling_revision)
+                if superseded:
+                    self._finish_superseded_up_handling(host, up_handling_revision)
 
         # for testing purposes
         return futures
 
-    def _start_reconnector(self, host, is_host_addition):
+    def _start_reconnector(self, host, is_host_addition, expected_down_epoch=None):
         if self.profile_manager.distance(host) == HostDistance.IGNORED:
             return
 
@@ -1995,7 +2269,15 @@ class Cluster(object):
             self.scheduler, schedule, host.get_and_set_reconnection_handler,
             new_handler=None)
 
-        old_reconnector = host.get_and_set_reconnection_handler(reconnector)
+        with host.lock:
+            if expected_down_epoch is not None:
+                state = self._get_host_liveness_state(host)
+                if state.down_epoch != expected_down_epoch:
+                    log.debug("Not starting reconnector for host %s; down handling is no longer current", host)
+                    return
+
+            old_reconnector = host._reconnection_handler
+            host._reconnection_handler = reconnector
         if old_reconnector:
             log.debug("Old host reconnector found for %s, cancelling", host)
             old_reconnector.cancel()
@@ -2004,16 +2286,45 @@ class Cluster(object):
         reconnector.start()
 
     @run_in_executor
-    def on_down_potentially_blocking(self, host, is_host_addition):
-        self.profile_manager.on_down(host)
-        self.control_connection.on_down(host)
-        for session in tuple(self.sessions):
-            session.on_down(host)
+    def on_down_potentially_blocking(
+            self, host: Host, is_host_addition: bool,
+            down_epoch: Optional[int] = None) -> Any:
+        pending_up_epoch = None
+        with host.lock:
+            state = self._get_host_liveness_state(host)
+            owns_reserved_down_handling = down_epoch is not None and state.down_epoch == down_epoch
+            if down_epoch is None:
+                if host.is_up or state.up_epoch is not None or state.down_epoch is not None:
+                    log.debug("Ignoring stale down handling for host %s", host)
+                    return
+                down_epoch = state.epoch
+                state.down_epoch = down_epoch
+            elif not owns_reserved_down_handling:
+                log.debug("Ignoring stale down handling for host %s", host)
+                return
 
-        for listener in self.listeners:
-            listener.on_down(host)
+        try:
+            self.profile_manager.on_down(host)
+            self.control_connection.on_down(host)
+            for session in tuple(self.sessions):
+                session.on_down(host)
 
-        self._start_reconnector(host, is_host_addition)
+            for listener in self.listeners:
+                listener.on_down(host)
+
+            with host.lock:
+                start_reconnector = self._get_host_liveness_state(host).down_epoch == down_epoch
+            if start_reconnector:
+                self._start_reconnector(host, is_host_addition, expected_down_epoch=down_epoch)
+            else:
+                log.debug("Not starting reconnector for removed host %s", host)
+        finally:
+            pending_up_epoch = None
+            with host.lock:
+                if self._clear_down_handling(host, down_epoch):
+                    pending_up_epoch = self._pop_pending_node_up_if_ready(host)
+
+            self._handle_pending_node_up(host, pending_up_epoch)
 
     def on_down(self, host, is_host_addition, expect_host_to_be_down=False):
         """
@@ -2024,6 +2335,7 @@ class Cluster(object):
 
         with host.lock:
             was_up = host.is_up
+            state = self._get_host_liveness_state(host)
 
             # ignore down signals if we have open pools to the host
             # this is to avoid closing pools when a control connection host became isolated
@@ -2037,12 +2349,34 @@ class Cluster(object):
                 if connected:
                     return
 
+            if not expect_host_to_be_down:
+                if was_up is False:
+                    if state.pending_up_epoch is not None:
+                        state.advance()
+                        state.pending_up_epoch = None
+                        host.set_down()
+                    return
+
+            state.advance()
+            state.pending_up_epoch = None
             host.set_down()
-            if (not was_up and not expect_host_to_be_down) or host.is_currently_reconnecting():
+            down_epoch = state.epoch
+            if state.down_epoch is not None:
                 return
+            if (host.is_currently_reconnecting() and
+                    state.up_epoch is None):
+                return
+            state.down_epoch = down_epoch
         log.warning("Host %s has been marked down", host)
 
-        self.on_down_potentially_blocking(host, is_host_addition)
+        future = self.on_down_potentially_blocking(
+            host, is_host_addition, down_epoch)
+        if future is None:
+            pending_up_epoch = None
+            with host.lock:
+                if self._clear_down_handling(host, down_epoch):
+                    pending_up_epoch = self._pop_pending_node_up_if_ready(host)
+            self._handle_pending_node_up(host, pending_up_epoch)
 
     def on_add(self, host, refresh_nodes=True):
         if self.is_shutdown:
@@ -2119,7 +2453,12 @@ class Cluster(object):
             return
 
         log.debug("[cluster] Removing host %s", host)
-        host.set_down()
+        with host.lock:
+            state = self._get_host_liveness_state(host)
+            state.advance()
+            state.pending_up_epoch = None
+            state.down_epoch = None
+            host.set_down()
         self.profile_manager.on_remove(host)
         for session in tuple(self.sessions):
             session.on_remove(host)
@@ -2131,9 +2470,16 @@ class Cluster(object):
         if reconnection_handler:
             reconnection_handler.cancel()
 
+    @staticmethod
+    def _is_authentication_failure(connection_exc):
+        return (isinstance(connection_exc, AuthenticationFailed) or
+                isinstance(getattr(connection_exc, "__cause__", None), AuthenticationFailed))
+
     def signal_connection_failure(self, host, connection_exc, is_host_addition, expect_host_to_be_down=False):
         is_down = host.signal_connection_failure(connection_exc)
         if is_down:
+            if host.is_up is None and self._is_authentication_failure(connection_exc):
+                return is_down
             self.on_down(host, is_host_addition, expect_host_to_be_down)
         return is_down
 
@@ -3245,6 +3591,7 @@ class Session(object):
                new_pool = HostConnection(host, distance, self)
             except AuthenticationFailed as auth_exc:
                 conn_exc = ConnectionException(str(auth_exc), endpoint=host)
+                conn_exc.__cause__ = auth_exc
                 self.cluster.signal_connection_failure(host, conn_exc, is_host_addition)
                 return False
             except Exception as conn_exc:
@@ -3286,8 +3633,13 @@ class Session(object):
 
         return self.submit(run_add_or_renew_pool)
 
-    def remove_pool(self, host):
-        pool = self._pools.pop(host, None)
+    def remove_pool(self, host, expected_host=None):
+        with self._lock:
+            pool = self._pools.get(host)
+            if expected_host is not None and pool is not None and pool.host is not expected_host:
+                return None
+            if pool is not None:
+                self._pools.pop(host, None)
         if pool:
             log.debug("Removed connection pool for %r", host)
             return self.submit(pool.shutdown)

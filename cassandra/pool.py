@@ -163,8 +163,6 @@ class Host(object):
     _reconnection_handler = None
     lock = None
 
-    _currently_handling_node_up = False
-
     sharding_info = None
 
     def __init__(self, endpoint, conviction_policy_factory, datacenter=None, rack=None, host_id=None):
@@ -920,5 +918,3 @@ class HostConnection(object):
     @property
     def _excess_connection_limit(self):
         return self.host.sharding_info.shards_count * self.max_excess_connections_per_shard_multiplier
-
-
