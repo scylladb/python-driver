@@ -4890,32 +4890,32 @@ class ControlConnection(object):
 
             found_host_ids.add(host_id)
             found_endpoints.add(endpoint)
-            host = self._cluster.metadata.get_host(endpoint)
+            host_by_endpoint = self._cluster.metadata.get_host(endpoint)
+            host_by_id = self._cluster.metadata.get_host_by_host_id(host_id)
+            host = host_by_id or host_by_endpoint
             datacenter = row.get("data_center")
             rack = row.get("rack")
 
-            if host is None:
-                host = self._cluster.metadata.get_host_by_host_id(host_id)
-                if host and host.endpoint != endpoint:
-                    log.debug("[control connection] Updating host ip from %s to %s for (%s)", host.endpoint, endpoint, host_id)
-                    reconnector = host.get_and_set_reconnection_handler(None)
-                    if reconnector:
-                        reconnector.cancel()
-                    with host.lock:
-                        old_endpoint = host.endpoint
-                    self._cluster.on_down(
-                        host, is_host_addition=False, expect_host_to_be_down=True,
-                        expected_endpoint=old_endpoint)
+            if host is not None and not self._cluster._endpoints_match(host.endpoint, endpoint):
+                log.debug("[control connection] Updating host ip from %s to %s for (%s)", host.endpoint, endpoint, host_id)
+                reconnector = host.get_and_set_reconnection_handler(None)
+                if reconnector:
+                    reconnector.cancel()
+                with host.lock:
+                    old_endpoint = host.endpoint
+                self._cluster.on_down(
+                    host, is_host_addition=False, expect_host_to_be_down=True,
+                    expected_endpoint=old_endpoint)
 
-                    with host.lock:
-                        if host.endpoint != old_endpoint:
-                            log.debug("[control connection] Not updating host ip from %s to %s for (%s); "
-                                      "endpoint changed to %s",
-                                      old_endpoint, endpoint, host_id, host.endpoint)
-                            continue
-                        host.endpoint = endpoint
-                        self._cluster.metadata.update_host(host, old_endpoint)
-                    self._cluster.on_up(host)
+                with host.lock:
+                    if not self._cluster._endpoints_match(host.endpoint, old_endpoint):
+                        log.debug("[control connection] Not updating host ip from %s to %s for (%s); "
+                                  "endpoint changed to %s",
+                                  old_endpoint, endpoint, host_id, host.endpoint)
+                        continue
+                    host.endpoint = endpoint
+                    self._cluster.metadata.update_host(host, old_endpoint)
+                self._cluster.on_up(host)
 
             if host is None:
                 log.debug("[control connection] Found new host to connect to: %s", endpoint)
@@ -5247,7 +5247,8 @@ class ControlConnection(object):
                 # that errors have already been reported, so we're fine
                 if host:
                     self._cluster.signal_connection_failure(
-                        host, self._connection.last_error, is_host_addition=False)
+                        host, self._connection.last_error, is_host_addition=False,
+                        expected_endpoint=self._connection.endpoint)
                     return
 
         # if the connection is not defunct or the host already left, reconnect
@@ -5340,6 +5341,8 @@ class _Scheduler(Thread):
     def _freeze_task_arg(value):
         if isinstance(value, Host):
             return (Host, id(value))
+        if isinstance(value, EndPoint):
+            return (EndPoint, Cluster._endpoint_key(value))
         if isinstance(value, tuple):
             return tuple(_Scheduler._freeze_task_arg(item) for item in value)
         if isinstance(value, list):

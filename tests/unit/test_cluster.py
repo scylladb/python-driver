@@ -300,6 +300,26 @@ class SchedulerTest(unittest.TestCase):
         sched.schedule(0, lambda: None)
         sched.schedule(0, lambda: None)  # pre-473: "TypeError: unorderable types: function() < function()"
 
+    @patch('cassandra.cluster._Scheduler.run')  # don't actually run the thread
+    def test_schedule_unique_keeps_client_route_events_for_distinct_ports(self, *_):
+        host_id = uuid.uuid4()
+        old_endpoint = ClientRoutesEndPoint(
+            host_id, Mock(), "127.0.0.1", original_port=9042)
+        new_endpoint = ClientRoutesEndPoint(
+            host_id, Mock(), "127.0.0.1", original_port=9142)
+        assert old_endpoint == new_endpoint
+        assert not Cluster._endpoints_match(old_endpoint, new_endpoint)
+        host = Host(new_endpoint, SimpleConvictionPolicy, host_id=host_id)
+        scheduled_fn = Mock()
+
+        sched = _Scheduler(Mock())
+        sched.schedule_unique(
+            30, scheduled_fn, host, expected_endpoint=old_endpoint)
+        sched.schedule_unique(
+            30, scheduled_fn, host, expected_endpoint=new_endpoint)
+
+        assert len(sched._scheduled_tasks) == 2
+
 
 class SessionPoolRaceTest(unittest.TestCase):
 
