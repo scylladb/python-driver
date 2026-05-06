@@ -613,23 +613,8 @@ class HostConnection(object):
             if not connection.signaled_error:
                 log.debug("Defunct or closed connection (%s) returned to pool, potentially "
                           "marking host %s as down", id(connection), self.host)
-                with self.host.lock:
-                    endpoint_matches = _endpoints_match(
-                        self._session.cluster, self.host.endpoint, self.endpoint)
-                    host_is_current = (endpoint_matches and
-                                       _host_is_current_for_endpoint(
-                                           self._session.cluster, self.host,
-                                           self.endpoint))
-                    if not endpoint_matches:
-                        log.debug("Ignoring stale connection failure for host %s; endpoint changed from %s",
-                                  self.host, self.endpoint)
-                        stale_endpoint_failure = True
-                    elif not host_is_current:
-                        log.debug("Ignoring stale connection failure for host %s; endpoint reassigned from %s",
-                                  self.host, self.endpoint)
-                        stale_endpoint_failure = True
-                    else:
-                        is_down = self.host.signal_connection_failure(connection.last_error)
+                is_down, stale_endpoint_failure = \
+                    self._signal_connection_failure_if_current(connection)
                 connection.signaled_error = True
 
             if stale_endpoint_failure:
@@ -682,6 +667,52 @@ class HostConnection(object):
         """
         with self._stream_available_condition:
             self._stream_available_condition.notify()
+
+    def _is_current_pool_for_endpoint_locked(self, expected_endpoint):
+        pools = getattr(self._session, "_pools", None)
+        if not isinstance(pools, dict):
+            return True
+
+        for pool_host, host_pool in pools.items():
+            if pool_host is not self.host or host_pool is not self:
+                continue
+            pool_endpoint = getattr(host_pool, 'endpoint', None)
+            if pool_endpoint is None:
+                pool_endpoint = host_pool.host.endpoint
+            return _endpoints_match(
+                self._session.cluster, pool_endpoint, expected_endpoint)
+        return False
+
+    def _signal_connection_failure_if_current(self, connection):
+        session_lock = getattr(self._session, "_lock", None)
+        if session_lock is None:
+            with self.host.lock:
+                return self._signal_connection_failure_locked(connection)
+
+        with session_lock:
+            with self.host.lock:
+                if not self._is_current_pool_for_endpoint_locked(self.endpoint):
+                    log.debug("Ignoring stale connection failure for host %s; pool was replaced for %s",
+                              self.host, self.endpoint)
+                    return False, True
+                return self._signal_connection_failure_locked(connection)
+
+    def _signal_connection_failure_locked(self, connection):
+        endpoint_matches = _endpoints_match(
+            self._session.cluster, self.host.endpoint, self.endpoint)
+        host_is_current = (endpoint_matches and
+                           _host_is_current_for_endpoint(
+                               self._session.cluster, self.host,
+                               self.endpoint))
+        if not endpoint_matches:
+            log.debug("Ignoring stale connection failure for host %s; endpoint changed from %s",
+                      self.host, self.endpoint)
+            return False, True
+        if not host_is_current:
+            log.debug("Ignoring stale connection failure for host %s; endpoint reassigned from %s",
+                      self.host, self.endpoint)
+            return False, True
+        return self.host.signal_connection_failure(connection.last_error), False
 
     def _remove_stale_pool(self, expected_endpoint):
         future = self._session.remove_pool(
