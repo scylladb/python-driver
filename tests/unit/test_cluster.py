@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import unittest
+from concurrent.futures import Future
 
 import logging
 import socket
@@ -281,19 +282,24 @@ class SessionTest(unittest.TestCase):
         response.parsed_rows = [[schema_version]]
         return response
 
-    def _new_schema_agreement_session(self, schema_versions):
+    def _new_schema_agreement_session(self, schema_versions, distances=None):
         hosts = []
+        distance_map = {}
+        if distances is None:
+            distances = [HostDistance.LOCAL] * len(schema_versions)
+
         for index, schema_version in enumerate(schema_versions):
             host = Host("127.0.0.%d" % (index + 1), SimpleConvictionPolicy, host_id=uuid.uuid4())
             host.set_up()
             hosts.append(host)
+            distance_map[host] = distances[index]
 
         cluster = Cluster(protocol_version=4)
         for host in hosts:
             cluster.metadata.add_or_return_host(host)
 
         session = Session(cluster, hosts)
-        session._profile_manager.distance = Mock(return_value=HostDistance.LOCAL)
+        session._profile_manager.distance = Mock(side_effect=lambda host: distance_map.get(host, HostDistance.LOCAL))
         session._pools = {}
         for host, schema_version in zip(hosts, schema_versions):
             connection = Mock(endpoint=host.endpoint)
@@ -436,6 +442,57 @@ class SessionTest(unittest.TestCase):
 
         assert session.wait_for_schema_agreement(wait_time=1)
         session._pools[hosts[0]].connection.wait_for_response.assert_called()
+
+    @mock_session_pools
+    @patch('cassandra.cluster.wait_futures')
+    def test_wait_for_schema_agreement_limits_parallel_queries_to_default(self, mocked_wait_futures, *_):
+        session, _ = self._new_schema_agreement_session(["a"] * 11)
+        batch_sizes = []
+
+        def submit(fn, host, query, deadline):
+            future = Future()
+            future.set_result(fn(host, query, deadline))
+            return future
+
+        def fake_wait(futures, timeout=None, return_when=None):
+            batch_sizes.append(len(futures))
+            return set(futures), set()
+
+        session.submit = Mock(side_effect=submit)
+        mocked_wait_futures.side_effect = fake_wait
+
+        assert session.wait_for_schema_agreement(wait_time=1)
+        assert batch_sizes == [10, 1]
+
+    @mock_session_pools
+    def test_wait_for_schema_agreement_rack_scope_only_queries_local_rack_connections(self, *_):
+        session, hosts = self._new_schema_agreement_session(
+            ["a", "a", "a"],
+            distances=[HostDistance.LOCAL_RACK, HostDistance.LOCAL, HostDistance.REMOTE])
+
+        assert session.wait_for_schema_agreement(wait_time=1, scope='rack')
+
+        session._pools[hosts[0]].connection.wait_for_response.assert_called_once()
+        session._pools[hosts[1]].connection.wait_for_response.assert_not_called()
+        session._pools[hosts[2]].connection.wait_for_response.assert_not_called()
+
+    @mock_session_pools
+    def test_wait_for_schema_agreement_cluster_scope_queries_all_connected_hosts(self, *_):
+        session, hosts = self._new_schema_agreement_session(
+            ["a", "a", "a"],
+            distances=[HostDistance.LOCAL_RACK, HostDistance.LOCAL, HostDistance.REMOTE])
+
+        assert session.wait_for_schema_agreement(wait_time=1, scope='cluster')
+
+        for host in hosts:
+            session._pools[host].connection.wait_for_response.assert_called_once()
+
+    @mock_session_pools
+    def test_wait_for_schema_agreement_rejects_unknown_scope(self, *_):
+        session, _ = self._new_schema_agreement_session(["a"])
+
+        with pytest.raises(ValueError):
+            session.wait_for_schema_agreement(wait_time=1, scope='planet')
 
 class ProtocolVersionTests(unittest.TestCase):
 

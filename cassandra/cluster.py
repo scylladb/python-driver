@@ -2608,6 +2608,7 @@ class Session(object):
     _request_init_callbacks = None
     _graph_paging_available = False
     _time = time
+    _schema_agreement_parallelism = 10
 
     def __init__(self, cluster, hosts, keyspace=None):
         self.cluster = cluster
@@ -3375,9 +3376,9 @@ class Session(object):
         for pool in tuple(self._pools.values()):
             pool._set_keyspace_for_all_conns(keyspace, pool_finished_setting_keyspace)
 
-    def wait_for_schema_agreement(self, wait_time=None):
+    def wait_for_schema_agreement(self, wait_time=None, scope='dc'):
         """
-        Wait for all local hosts connected to this session to report the same
+        Wait for connected hosts in the selected scope to report the same
         schema version from ``system.local``.
 
         By default, the timeout for this operation is governed by
@@ -3387,16 +3388,34 @@ class Session(object):
         Passing ``wait_time`` here overrides
         :attr:`~.Cluster.max_schema_agreement_wait`. Setting ``wait_time <= 0``
         will bypass schema agreement waits.
+
+        ``scope`` determines which connected hosts participate in the check.
+        Accepted values are ``'rack'``, ``'dc'``, and ``'cluster'``. The
+        default ``'dc'`` scope queries connected hosts in the local rack and
+        local datacenter. ``'rack'`` narrows the check to connected hosts in
+        the local rack only. ``'cluster'`` queries every host this session has
+        a live connection pool for, across all datacenters.
+
+        :param wait_time: Override for
+            :attr:`~.Cluster.max_schema_agreement_wait`.
+        :param scope: Restricts the check to connected hosts in the local rack,
+            local datacenter, or whole connected cluster.
+        :returns: ``True`` when the selected connected hosts agree on schema,
+            otherwise ``False``.
+        :raises ValueError: If ``scope`` is not one of ``'rack'``, ``'dc'``,
+            or ``'cluster'``.
         """
         total_timeout = wait_time if wait_time is not None else self.cluster.max_schema_agreement_wait
         if total_timeout <= 0:
             return True
 
+        scope = self._normalize_schema_agreement_scope(scope)
+
         deadline = self._time.time() + total_timeout
         schema_mismatches = None
 
         while self._time.time() < deadline:
-            schema_mismatches = self._get_local_schema_mismatches(deadline)
+            schema_mismatches = self._get_schema_mismatches_for_scope(deadline, scope)
             if schema_mismatches is None:
                 return True
 
@@ -3408,8 +3427,8 @@ class Session(object):
         log.warning("Local nodes are reporting a schema disagreement: %s", schema_mismatches)
         return False
 
-    def _get_local_schema_mismatches(self, deadline):
-        hosts = self._get_schema_agreement_hosts()
+    def _get_schema_mismatches_for_scope(self, deadline, scope):
+        hosts = self._get_schema_agreement_hosts(scope)
         versions = defaultdict(set)
         errors = {}
 
@@ -3422,33 +3441,52 @@ class Session(object):
             query=maybe_add_timeout_to_query(ControlConnection._SELECT_SCHEMA_LOCAL, metadata_request_timeout),
             consistency_level=cl)
 
-        for host in hosts:
+        parallelism = max(1, min(self._schema_agreement_parallelism, len(hosts)))
+        for offset in range(0, len(hosts), parallelism):
             remaining = deadline - self._time.time()
             if remaining <= 0:
-                errors[host.endpoint] = "Timed out before querying host"
+                for host in hosts[offset:]:
+                    errors[host.endpoint] = "Timed out before querying host"
                 break
 
-            pool = self._pools.get(host)
-            if not pool or pool.is_shutdown:
-                errors[host.endpoint] = "No active connection pool"
+            futures = {}
+            for host in hosts[offset:offset + parallelism]:
+                future = self.submit(self._query_local_schema_version, host, query, deadline)
+                if future is None:
+                    errors[host.endpoint] = "Schema agreement executor unavailable"
+                    continue
+                futures[future] = host
+
+            if not futures:
                 continue
 
-            try:
-                connection = pool._get_connection_for_routing_key()
-                query_timeout = self._schema_agreement_query_timeout(remaining)
-                local_result = connection.wait_for_response(query, timeout=query_timeout)
-            except OperationTimedOut as timeout:
-                log.debug("[session] Timed out waiting for schema version from %s: %s", host, timeout)
-                errors[host.endpoint] = timeout
-                continue
-            except (ConnectionException, NoConnectionsAvailable, ConnectionBusy) as exc:
-                log.debug("[session] Error querying schema version from %s: %s", host, exc)
-                errors[host.endpoint] = exc
-                continue
+            remaining = deadline - self._time.time()
+            if remaining <= 0:
+                for future, host in futures.items():
+                    future.cancel()
+                    errors[host.endpoint] = "Timed out before querying host"
+                for host in hosts[offset + parallelism:]:
+                    errors[host.endpoint] = "Timed out before querying host"
+                break
 
-            rows = dict_factory(local_result.column_names, local_result.parsed_rows)
-            schema_version = rows[0].get("schema_version") if rows else None
-            versions[schema_version].add(host.endpoint)
+            done, not_done = wait_futures(tuple(futures), timeout=remaining)
+            for future in not_done:
+                future.cancel()
+                host = futures[future]
+                errors[host.endpoint] = "Timed out before querying host"
+
+            for future in done:
+                host = futures[future]
+                schema_version, error = future.result()
+                if error is not None:
+                    errors[host.endpoint] = error
+                    continue
+                versions[schema_version].add(host.endpoint)
+
+            if not_done:
+                for host in hosts[offset + parallelism:]:
+                    errors[host.endpoint] = "Timed out before querying host"
+                break
 
         if len(versions) == 1 and None not in versions and not errors:
             log.debug("[session] Local schemas match")
@@ -3459,13 +3497,51 @@ class Session(object):
             mismatches['unavailable'] = dict((endpoint, str(error)) for endpoint, error in errors.items())
         return mismatches
 
-    def _get_schema_agreement_hosts(self):
-        local_distances = (HostDistance.LOCAL_RACK, HostDistance.LOCAL)
+    def _get_schema_agreement_hosts(self, scope):
+        allowed_distances = {
+            'rack': (HostDistance.LOCAL_RACK,),
+            'dc': (HostDistance.LOCAL_RACK, HostDistance.LOCAL),
+        }
         return tuple(
             host for host, pool in tuple(self._pools.items())
             if host.is_up is not False
             and not pool.is_shutdown
-            and self._profile_manager.distance(host) in local_distances)
+            and (scope == 'cluster' or self._profile_manager.distance(host) in allowed_distances[scope]))
+
+    def _normalize_schema_agreement_scope(self, scope):
+        normalized_scope = str(scope).strip().lower().replace('_', '').replace(' ', '')
+        normalized_scope = {
+            'wholecluster': 'cluster',
+            'datacenter': 'dc',
+        }.get(normalized_scope, normalized_scope)
+
+        if normalized_scope not in ('rack', 'dc', 'cluster'):
+            raise ValueError("Invalid schema agreement scope: %s" % (scope,))
+
+        return normalized_scope
+
+    def _query_local_schema_version(self, host, query, deadline):
+        remaining = deadline - self._time.time()
+        if remaining <= 0:
+            return None, "Timed out before querying host"
+
+        pool = self._pools.get(host)
+        if not pool or pool.is_shutdown:
+            return None, "No active connection pool"
+
+        try:
+            connection = pool._get_connection_for_routing_key()
+            query_timeout = self._schema_agreement_query_timeout(remaining)
+            local_result = connection.wait_for_response(query, timeout=query_timeout)
+        except OperationTimedOut as timeout:
+            log.debug("[session] Timed out waiting for schema version from %s: %s", host, timeout)
+            return None, timeout
+        except (ConnectionException, NoConnectionsAvailable, ConnectionBusy) as exc:
+            log.debug("[session] Error querying schema version from %s: %s", host, exc)
+            return None, exc
+
+        rows = dict_factory(local_result.column_names, local_result.parsed_rows)
+        return (rows[0].get("schema_version") if rows else None), None
 
     def _schema_agreement_query_timeout(self, remaining):
         control_timeout = self.cluster.control_connection._timeout
