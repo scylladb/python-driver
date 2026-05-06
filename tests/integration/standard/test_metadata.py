@@ -1197,7 +1197,7 @@ CREATE TABLE export_udts.users (
 
     @greaterthancass21
     @xfail_scylla_version_lt(reason='scylladb/scylladb#10707 - Column name in CREATE INDEX is not quoted',
-                             oss_scylla_version="5.2", ent_scylla_version="2023.1.1")
+                             scylla_version="2023.1.1")
     def test_case_sensitivity(self):
         """
         Test that names that need to be escaped in CREATE statements are

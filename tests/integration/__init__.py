@@ -687,29 +687,24 @@ def is_scylla_enterprise(version: Version) -> bool:
     return version > Version('2000.1.1')
 
 
-def xfail_scylla_version_lt(reason, oss_scylla_version, ent_scylla_version, *args, **kwargs):
+def xfail_scylla_version_lt(reason, scylla_version, *args, **kwargs):
     """
     It is used to mark tests that are going to fail on certain scylla versions.
     :param reason: message to fail test with
-    :param oss_scylla_version: str, oss version from which test supposed to succeed
-    :param ent_scylla_version: str, enterprise version from which test supposed to succeed
+    :param scylla_version: str, version from which test supposed to succeed
     """
     if not (reason.startswith("scylladb/scylladb#") or reason.startswith("scylladb/scylla-enterprise#")):
         raise ValueError('reason should start with scylladb/scylladb#<issue-id> or scylladb/scylla-enterprise#<issue-id> to reference issue in scylla repo')
 
-    if not isinstance(ent_scylla_version, str):
-        raise ValueError('ent_scylla_version should be a str')
+    if not isinstance(scylla_version, str):
+        raise ValueError('scylla_version should be a str')
 
     if SCYLLA_VERSION is None:
         return pytest.mark.skipif(False, reason="It is just a NoOP Decor, should not skip anything")
 
     current_version = Version(get_scylla_version(SCYLLA_VERSION))
 
-    if is_scylla_enterprise(current_version):
-        return pytest.mark.xfail(current_version < Version(ent_scylla_version),
-                                 reason=reason, *args, **kwargs)
-
-    return pytest.mark.xfail(current_version < Version(oss_scylla_version), reason=reason, *args, **kwargs)
+    return pytest.mark.xfail(current_version < Version(scylla_version), reason=reason, *args, **kwargs)
 
 
 def skip_scylla_version_lt(reason, scylla_version):
