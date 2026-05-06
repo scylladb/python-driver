@@ -13,15 +13,20 @@
 # limitations under the License.
 
 import unittest
+import uuid
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from unittest.mock import Mock, ANY, call
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
-from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
+from cassandra.cluster import (Cluster, ControlConnection, _Scheduler, ProfileManager,
+                               EXEC_PROFILE_DEFAULT, ExecutionProfile)
+from cassandra.metadata import Metadata
 from cassandra.pool import Host
-from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
+from cassandra.connection import (ClientRoutesEndPoint, ConnectionException,
+                                  EndPoint, DefaultEndPoint,
+                                  DefaultEndPointFactory, SniEndPoint)
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
                                 ConstantReconnectionPolicy, IdentityTranslator)
 
@@ -111,6 +116,7 @@ class MockCluster(object):
         self.profile_manager.profiles[EXEC_PROFILE_DEFAULT] = ExecutionProfile(RoundRobinPolicy())
         self.endpoint_factory = DefaultEndPointFactory().configure(self)
         self.ssl_options = None
+        self.down_expected_endpoint = None
 
     def add_host(self, endpoint, datacenter, rack, signal=False, refresh_nodes=True, host_id=None):
         host = Host(endpoint, SimpleConvictionPolicy, datacenter, rack, host_id=host_id)
@@ -121,11 +127,17 @@ class MockCluster(object):
     def remove_host(self, host):
         pass
 
-    def on_up(self, host):
+    def _endpoints_match(self, endpoint, expected_endpoint):
+        return Cluster._endpoints_match(endpoint, expected_endpoint)
+
+    def on_up(self, host, expected_endpoint=None):
         pass
 
-    def on_down(self, host, is_host_addition, expect_host_to_be_down=False):
+    def on_down(self, host, is_host_addition, expect_host_to_be_down=False,
+                expected_endpoint=None, profile_manager_already_notified=False,
+                control_connection_already_notified=False):
         self.down_host = host
+        self.down_expected_endpoint = expected_endpoint
 
 
 def _node_meta_results(local_results, peer_results):
@@ -141,6 +153,45 @@ def _node_meta_results(local_results, peer_results):
     peer_response.parsed_rows = peer_results[1]
 
     return peer_response, local_response
+
+
+class RunOnResultFuture(Future):
+
+    def __init__(self, fn, args, kwargs):
+        Future.__init__(self)
+        self._fn = fn
+        self._args = args
+        self._kwargs = kwargs
+
+    def _run_once(self):
+        if self.done():
+            return
+        try:
+            self.set_result(self._fn(*self._args, **self._kwargs))
+        except Exception as exc:
+            self.set_exception(exc)
+
+    def result(self, timeout=None):
+        self._run_once()
+        return Future.result(self, timeout)
+
+
+class RunOnResultExecutor(object):
+
+    def __init__(self):
+        self.futures = []
+
+    def submit(self, fn, *args, **kwargs):
+        future = RunOnResultFuture(fn, args, kwargs)
+        self.futures.append(future)
+        return future
+
+    def run_all(self):
+        for future in tuple(self.futures):
+            future._run_once()
+
+    def shutdown(self):
+        self.run_all()
 
 
 class MockConnection(object):
@@ -378,6 +429,177 @@ class ControlConnectionTest(unittest.TestCase):
 
         assert 3 == len(self.cluster.metadata.all_hosts())
 
+    def test_change_client_route_endpoint_when_only_port_changes(self):
+        host_id = uuid.uuid4()
+        old_endpoint = ClientRoutesEndPoint(
+            host_id, Mock(), "127.0.0.1", original_port=9042)
+        new_endpoint = ClientRoutesEndPoint(
+            host_id, Mock(), "127.0.0.1", original_port=9142)
+        assert old_endpoint == new_endpoint
+        assert not Cluster._endpoints_match(old_endpoint, new_endpoint)
+
+        host = Host(
+            old_endpoint, SimpleConvictionPolicy,
+            datacenter="dc1", rack="rack1", host_id=host_id)
+        host.set_up()
+
+        self.cluster.metadata = Metadata()
+        self.cluster.metadata.add_or_return_host(host)
+        self.cluster.endpoint_factory = Mock()
+        self.cluster.endpoint_factory.create.return_value = new_endpoint
+        self.cluster.on_down = Mock()
+        self.cluster.on_up = Mock()
+        self.control_connection._token_meta_enabled = False
+
+        preloaded_results = _node_meta_results(
+            local_results=([], []),
+            peer_results=(
+                ["rpc_address", "rpc_port", "peer", "data_center", "rack", "host_id"],
+                [["127.0.0.1", 9142, "127.0.0.1", "dc1", "rack1", host_id]]))
+
+        self.control_connection._refresh_node_list_and_token_map(
+            self.connection, preloaded_results=preloaded_results)
+
+        assert Cluster._endpoints_match(host.endpoint, new_endpoint)
+        self.cluster.on_down.assert_called_once_with(
+            host, is_host_addition=False, expect_host_to_be_down=True,
+            expected_endpoint=old_endpoint,
+            profile_manager_already_notified=True,
+            control_connection_already_notified=True)
+        self.cluster.on_up.assert_called_once_with(
+            host, expected_endpoint=new_endpoint)
+
+    def test_endpoint_change_preserves_live_policy_hosts_when_down_handler_runs_late(self):
+        old_endpoint = DefaultEndPoint("127.0.0.1")
+        new_endpoint = DefaultEndPoint("127.0.0.2")
+        host_id = uuid.uuid4()
+        policy = RoundRobinPolicy()
+        cluster = Cluster(contact_points=[], load_balancing_policy=policy)
+        original_executor = cluster.executor
+        cluster.executor = RunOnResultExecutor()
+        cluster._start_reconnector = Mock()
+
+        try:
+            host = Host(
+                old_endpoint, SimpleConvictionPolicy,
+                datacenter="dc1", rack="rack1", host_id=host_id)
+            host.set_up()
+            cluster.metadata.add_or_return_host(host)
+            cluster.profile_manager.populate(cluster, [host])
+            cluster.endpoint_factory = Mock()
+            cluster.endpoint_factory.create.return_value = new_endpoint
+            cluster.control_connection._token_meta_enabled = False
+
+            preloaded_results = _node_meta_results(
+                local_results=([], []),
+                peer_results=(
+                    ["rpc_address", "peer", "data_center", "rack", "host_id"],
+                    [["127.0.0.2", "127.0.0.2", "dc1", "rack1", host_id]]))
+
+            cluster.control_connection._refresh_node_list_and_token_map(
+                Mock(), preloaded_results=preloaded_results)
+            cluster.executor.run_all()
+
+            assert list(policy._live_hosts) == [host]
+            assert host in policy._live_hosts
+        finally:
+            cluster.executor = original_executor
+            cluster.shutdown()
+
+    def test_endpoint_change_reconnects_control_connection_when_down_handler_runs_late(self):
+        old_endpoint = DefaultEndPoint("127.0.0.1")
+        new_endpoint = DefaultEndPoint("127.0.0.2")
+        host_id = uuid.uuid4()
+        cluster = Cluster(contact_points=[])
+        original_executor = cluster.executor
+        cluster.executor = RunOnResultExecutor()
+        cluster._start_reconnector = Mock()
+        cluster.control_connection._connection = Mock(endpoint=old_endpoint)
+        cluster.control_connection.reconnect = Mock()
+
+        try:
+            host = Host(
+                old_endpoint, SimpleConvictionPolicy,
+                datacenter="dc1", rack="rack1", host_id=host_id)
+            host.set_up()
+            cluster.metadata.add_or_return_host(host)
+            cluster.profile_manager.populate(cluster, [host])
+            cluster.endpoint_factory = Mock()
+            cluster.endpoint_factory.create.return_value = new_endpoint
+            cluster.control_connection._token_meta_enabled = False
+
+            preloaded_results = _node_meta_results(
+                local_results=([], []),
+                peer_results=(
+                    ["rpc_address", "peer", "data_center", "rack", "host_id"],
+                    [["127.0.0.2", "127.0.0.2", "dc1", "rack1", host_id]]))
+
+            cluster.control_connection._refresh_node_list_and_token_map(
+                Mock(), preloaded_results=preloaded_results)
+            cluster.executor.run_all()
+
+            cluster.control_connection.reconnect.assert_called_once_with()
+        finally:
+            cluster.control_connection._connection = None
+            cluster.executor = original_executor
+            cluster.shutdown()
+
+    def test_stale_control_connection_failure_is_endpoint_fenced(self):
+        host_id = uuid.uuid4()
+        old_endpoint = ClientRoutesEndPoint(
+            host_id, Mock(), "127.0.0.1", original_port=9042)
+        new_endpoint = ClientRoutesEndPoint(
+            host_id, Mock(), "127.0.0.1", original_port=9142)
+        assert old_endpoint == new_endpoint
+        assert not Cluster._endpoints_match(old_endpoint, new_endpoint)
+
+        host = Host(old_endpoint, SimpleConvictionPolicy, host_id=host_id)
+        host.set_up()
+        self.cluster.metadata = Metadata()
+        self.cluster.metadata.add_or_return_host(host)
+        host.endpoint = new_endpoint
+        self.cluster.metadata.update_host(host, old_endpoint)
+        assert self.cluster.metadata.get_host(old_endpoint) is host
+
+        self.connection.endpoint = old_endpoint
+        self.connection.is_defunct = True
+        self.connection.last_error = ConnectionException(
+            "stale control connection failed", endpoint=old_endpoint)
+        self.cluster.signal_connection_failure = Mock()
+
+        self.control_connection._signal_error()
+
+        self.cluster.signal_connection_failure.assert_called_once_with(
+            host, self.connection.last_error, is_host_addition=False,
+            expected_endpoint=old_endpoint)
+
+    def test_stale_control_connection_failure_reconnects_when_cluster_ignores_signal(self):
+        host_id = uuid.uuid4()
+        old_endpoint = ClientRoutesEndPoint(
+            host_id, Mock(), "127.0.0.1", original_port=9042)
+        new_endpoint = ClientRoutesEndPoint(
+            host_id, Mock(), "127.0.0.1", original_port=9142)
+
+        host = Host(old_endpoint, SimpleConvictionPolicy, host_id=host_id)
+        host.set_up()
+        self.cluster.metadata = Metadata()
+        self.cluster.metadata.add_or_return_host(host)
+        host.endpoint = new_endpoint
+        self.cluster.metadata.update_host(host, old_endpoint)
+
+        self.connection.endpoint = old_endpoint
+        self.connection.is_defunct = True
+        self.connection.last_error = ConnectionException(
+            "stale control connection failed", endpoint=old_endpoint)
+        self.cluster.signal_connection_failure = Mock(return_value=False)
+        self.control_connection.reconnect = Mock()
+
+        self.control_connection._signal_error()
+
+        self.cluster.signal_connection_failure.assert_called_once_with(
+            host, self.connection.last_error, is_host_addition=False,
+            expected_endpoint=old_endpoint)
+        self.control_connection.reconnect.assert_called_once_with()
 
     def test_refresh_nodes_and_tokens_uses_preloaded_results_if_given(self):
         """
@@ -495,7 +717,8 @@ class ControlConnectionTest(unittest.TestCase):
         self.cluster.scheduler.reset_mock()
         self.control_connection._handle_status_change(event)
         host = self.cluster.metadata.get_host(DefaultEndPoint('192.168.1.0'))
-        self.cluster.scheduler.schedule_unique.assert_called_once_with(ANY, self.cluster.on_up, host)
+        self.cluster.scheduler.schedule_unique.assert_called_once_with(
+            ANY, self.cluster.on_up, host, expected_endpoint=host.endpoint)
 
         self.cluster.scheduler.schedule.reset_mock()
         event = {
@@ -513,6 +736,33 @@ class ControlConnectionTest(unittest.TestCase):
         self.control_connection._handle_status_change(event)
         host = self.cluster.metadata.get_host(DefaultEndPoint('192.168.1.0'))
         assert host is self.cluster.down_host
+        assert host.endpoint == self.cluster.down_expected_endpoint
+
+    def test_handle_status_change_preserves_endpoint_identity(self):
+        host = self.cluster.metadata.hosts['uuid1']
+        old_endpoint = SniEndPoint("192.168.1.0", "node-a", 9042)
+        new_endpoint = SniEndPoint("192.168.1.0", "node-b", 9042)
+        host.endpoint = old_endpoint
+
+        event = {
+            'change_type': 'UP',
+            'address': ('192.168.1.0', 9042)
+        }
+        self.cluster.scheduler.reset_mock()
+        self.control_connection._handle_status_change(event)
+
+        # A raw event address would accept the replacement endpoint here.
+        assert Cluster._endpoints_match(new_endpoint, event['address'])
+        assert not Cluster._endpoints_match(new_endpoint, old_endpoint)
+        self.cluster.scheduler.schedule_unique.assert_called_once_with(
+            ANY, self.cluster.on_up, host, expected_endpoint=old_endpoint)
+
+        self.cluster.on_down = Mock()
+        event['change_type'] = 'DOWN'
+        self.control_connection._handle_status_change(event)
+
+        self.cluster.on_down.assert_called_once_with(
+            host, is_host_addition=False, expected_endpoint=old_endpoint)
 
     def test_handle_schema_change(self):
 
