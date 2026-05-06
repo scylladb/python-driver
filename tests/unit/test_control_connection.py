@@ -14,14 +14,16 @@
 
 import unittest
 
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from unittest.mock import Mock, ANY, call
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
 from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.pool import Host
-from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
+from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory, ConnectionShutdown
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
                                 ConstantReconnectionPolicy, IdentityTranslator)
 
@@ -106,6 +108,7 @@ class MockCluster(object):
     def __init__(self):
         self.metadata = MockMetadata()
         self.added_hosts = []
+        self.sessions = []
         self.scheduler = Mock(spec=_Scheduler)
         self.executor = Mock(spec=ThreadPoolExecutor)
         self.profile_manager.profiles[EXEC_PROFILE_DEFAULT] = ExecutionProfile(RoundRobinPolicy())
@@ -146,6 +149,7 @@ def _node_meta_results(local_results, peer_results):
 class MockConnection(object):
 
     is_defunct = False
+    is_closed = False
 
     def __init__(self):
         self.endpoint = DefaultEndPoint("192.168.1.0")
@@ -167,6 +171,29 @@ class MockConnection(object):
              ["192.168.1.2", 9042, "10.0.0.2", 7040, "a", "dc1", "rack1", ["2", "102", "202"], "uuid3"]]
         ]
         self.wait_for_responses = Mock(return_value=_node_meta_results(self.local_results, self.peer_results))
+
+
+class MockBorrowedConnection(MockConnection):
+
+    is_closed = False
+
+    def __init__(self, responses):
+        super(MockBorrowedConnection, self).__init__()
+        self.responses = deque(responses)
+        self.lock = Lock()
+        self.in_flight = 0
+        self._requests = {}
+        self.request_ids = deque()
+        self.orphaned_request_ids = set()
+        self.orphaned_threshold = 100
+        self.orphaned_threshold_reached = False
+        self.send_msg = Mock(side_effect=self._send_msg)
+
+    def _send_msg(self, message, request_id, callback):
+        self._requests[request_id] = callback
+        callback(self.responses.popleft())
+        self._requests.pop(request_id, None)
+        self.request_ids.append(request_id)
 
 
 class FakeTime(object):
@@ -300,6 +327,50 @@ class ControlConnectionTest(unittest.TestCase):
         cc._connection = self.connection
         cc._time = self.time
         assert cc.wait_for_schema_agreement()
+
+    def test_wait_for_schema_agreement_falls_back_to_session_connection(self):
+        """
+        If the control connection is broken, use a session connection from the
+        same host for schema agreement.
+        """
+        self.connection.wait_for_responses.side_effect = ConnectionShutdown("closed")
+        host = self.cluster.metadata.get_host(self.connection.endpoint)
+        borrowed_connection = MockBorrowedConnection(
+            _node_meta_results(self.connection.local_results, self.connection.peer_results))
+
+        pool = Mock()
+        pool.is_shutdown = False
+        pool.borrow_connection.side_effect = [(borrowed_connection, 1), (borrowed_connection, 2)]
+        session = Mock()
+        session._pools = {host: pool}
+        self.cluster.sessions = [session]
+
+        assert self.control_connection.wait_for_schema_agreement()
+        assert pool.borrow_connection.call_count == 2
+        assert pool.return_connection.call_count == 2
+
+    def test_wait_for_schema_agreement_falls_back_when_control_connection_is_gone(self):
+        self.control_connection._last_connection_endpoint = self.connection.endpoint
+        self.control_connection._connection = None
+        host = self.cluster.metadata.get_host(self.connection.endpoint)
+        borrowed_connection = MockBorrowedConnection(
+            _node_meta_results(self.connection.local_results, self.connection.peer_results))
+
+        pool = Mock()
+        pool.is_shutdown = False
+        pool.borrow_connection.side_effect = [(borrowed_connection, 1), (borrowed_connection, 2)]
+        session = Mock()
+        session._pools = {host: pool}
+        self.cluster.sessions = [session]
+
+        assert self.control_connection.wait_for_schema_agreement()
+        assert pool.borrow_connection.call_count == 2
+        assert pool.return_connection.call_count == 2
+
+    def test_wait_for_schema_agreement_tolerates_missing_connection(self):
+        self.control_connection._connection = None
+
+        assert not self.control_connection.wait_for_schema_agreement()
 
     def test_refresh_nodes_and_tokens(self):
         self.control_connection.refresh_node_list_and_token_map()
