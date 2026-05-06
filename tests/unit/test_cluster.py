@@ -26,7 +26,7 @@ from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, R
 from cassandra.cluster import _Scheduler, Session, Cluster, default_lbp_factory, \
     ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
 from cassandra.connection import ClientRoutesEndPoint, ConnectionException, DefaultEndPoint, SniEndPoint
-from cassandra.pool import Host, _HostReconnectionHandler
+from cassandra.pool import Host, HostConnection, _HostReconnectionHandler
 from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
 from tests.unit.utils import mock_session_pools
@@ -323,6 +323,28 @@ class SchedulerTest(unittest.TestCase):
 
 class SessionPoolRaceTest(unittest.TestCase):
 
+    class _EndpointSwapIfPoolUnpublishedOnFirstExitLock(object):
+
+        def __init__(self, host, new_endpoint, pool_is_published):
+            self._lock = RLock()
+            self._host = host
+            self._new_endpoint = new_endpoint
+            self._pool_is_published = pool_is_published
+            self._exits = 0
+            self.pool_was_published_on_first_exit = None
+
+        def __enter__(self):
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self._lock.release()
+            self._exits += 1
+            if self._exits == 1:
+                self.pool_was_published_on_first_exit = self._pool_is_published()
+                if not self.pool_was_published_on_first_exit:
+                    self._host.endpoint = self._new_endpoint
+
     class _DuplicatePoolEntries(object):
 
         def __init__(self, entries):
@@ -522,6 +544,64 @@ class SessionPoolRaceTest(unittest.TestCase):
         assert session._pools == {}
         created_pools[0].shutdown.assert_called_once_with()
 
+    def test_add_or_renew_pool_invalidates_creation_after_endpoint_change(self):
+        host = self._make_host("127.0.0.1")
+        old_endpoint = host.endpoint
+        new_endpoint = DefaultEndPoint("127.0.0.2")
+        _, session, executor = self._make_cluster_and_session([host])
+        created_pools = []
+
+        def make_pool(host, distance, pool_session, endpoint=None):
+            pool = self._make_pool(host, distance, pool_session, endpoint)
+            created_pools.append(pool)
+            return pool
+
+        with patch("cassandra.cluster.HostConnection", side_effect=make_pool):
+            old_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            host.endpoint = new_endpoint
+
+            new_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+
+            assert new_future is not old_future
+            assert len(executor.submissions) == 2
+
+            executor.run_next()
+            executor.run_next()
+
+        assert old_future.result() is False
+        assert new_future.result() is True
+        assert created_pools[0].endpoint == old_endpoint
+        assert created_pools[1].endpoint == new_endpoint
+        created_pools[0].shutdown.assert_called_once_with()
+        created_pools[1].shutdown.assert_not_called()
+        assert session._pools[host] is created_pools[1]
+
+    def test_pool_creation_publishes_before_endpoint_lock_is_released(self):
+        host = self._make_host("127.0.0.1")
+        new_endpoint = DefaultEndPoint("127.0.0.2")
+        cluster, session, executor = self._make_cluster_and_session([host])
+        created_pools = []
+
+        def make_pool(host, distance, pool_session, endpoint=None):
+            pool = self._make_pool(host, distance, pool_session, endpoint)
+            created_pools.append(pool)
+            return pool
+
+        with patch("cassandra.cluster.HostConnection", side_effect=make_pool):
+            future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            host.lock = self._EndpointSwapIfPoolUnpublishedOnFirstExitLock(
+                host, new_endpoint, lambda: bool(session._pools))
+
+            executor.run_next()
+
+        assert host.lock.pool_was_published_on_first_exit is True
+        assert future.result() is True
+        assert session._pools[host] is created_pools[0]
+        created_pools[0].shutdown.assert_not_called()
+
     def test_update_created_pools_removes_stale_pool_for_down_host_after_endpoint_change(self):
         host = self._make_host("127.0.0.1")
         host.set_down()
@@ -700,6 +780,28 @@ class SessionPoolRaceTest(unittest.TestCase):
         assert session._pools[host] is created_pools[0]
         assert created_pools[0].endpoint == host.endpoint
         created_pools[0].shutdown.assert_not_called()
+
+    def test_stale_host_connection_cleanup_after_endpoint_flip_back_preserves_current_pool(self):
+        host = self._make_host("127.0.0.1")
+        old_endpoint = host.endpoint
+        replacement_endpoint = DefaultEndPoint("127.0.0.2")
+        cluster, session, executor = self._make_cluster_and_session([host])
+
+        host.endpoint = replacement_endpoint
+        host.endpoint = old_endpoint
+        current_pool = self._make_pool(
+            host, HostDistance.LOCAL, session, endpoint=old_endpoint)
+        session._pools[host] = current_pool
+
+        stale_pool = HostConnection.__new__(HostConnection)
+        stale_pool.host = host
+        stale_pool.endpoint = old_endpoint
+        stale_pool._session = session
+
+        stale_pool._remove_stale_pool(old_endpoint)
+
+        assert session._get_pool_by_host_identity(host) is current_pool
+        current_pool.shutdown.assert_not_called()
 
     def test_add_or_renew_pool_tags_pool_with_creation_endpoint(self):
         host = self._make_host("127.0.0.1")

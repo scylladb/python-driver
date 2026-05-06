@@ -4073,46 +4073,46 @@ class Session(object):
                     else:
                         with host.lock:
                             endpoint_changed = not self._endpoints_match(host.endpoint, creation_endpoint)
-                        if endpoint_changed:
-                            log.debug(
-                                "Discarding stale connection pool for host %s; endpoint changed from %s",
-                                host, creation_endpoint)
-                            self._invalidate_pool_creation(host, expected_endpoint=creation_endpoint)
-                            discard_pool = True
-                        else:
-                            # Rebuild by identity so endpoint hash changes do not
-                            # leave stale pool entries behind.
-                            retained_pools = {}
-                            for pool_host, host_pool in self._pools.items():
-                                if pool_host is host:
-                                    previous_pools.append(host_pool)
-                                else:
-                                    retained_pools[pool_host] = host_pool
-
-                            # Keep the current metadata host keyed by identity.
-                            metadata_host = host
-                            if isinstance(self.cluster.metadata, Metadata):
-                                metadata_host = self.cluster.metadata.get_host_by_host_id(host.host_id)
-
-                            target_host = metadata_host if metadata_host is not None else host
-                            target_host_matches = False
-                            for pool_host in tuple(retained_pools):
-                                if pool_host is target_host:
-                                    target_host_matches = True
-                                elif pool_host == target_host:
-                                    previous_pools.append(retained_pools.pop(pool_host))
-
-                            if target_host_matches:
-                                reuse_existing_pool = True
+                            if endpoint_changed:
+                                log.debug(
+                                    "Discarding stale connection pool for host %s; endpoint changed from %s",
+                                    host, creation_endpoint)
+                                self._invalidate_pool_creation(host, expected_endpoint=creation_endpoint)
+                                discard_pool = True
                             else:
-                                source_host = new_pool.host
-                                if (source_host is not target_host and
-                                        target_host.sharding_info is None):
-                                    target_host.sharding_info = source_host.sharding_info
-                                new_pool.host = target_host
-                                retained_pools[target_host] = new_pool
-                            self._pools = retained_pools
-                            self._clear_pool_creation(host, creation_epoch)
+                                # Rebuild by identity so endpoint hash changes do not
+                                # leave stale pool entries behind.
+                                retained_pools = {}
+                                for pool_host, host_pool in self._pools.items():
+                                    if pool_host is host:
+                                        previous_pools.append(host_pool)
+                                    else:
+                                        retained_pools[pool_host] = host_pool
+
+                                # Keep the current metadata host keyed by identity.
+                                metadata_host = host
+                                if isinstance(self.cluster.metadata, Metadata):
+                                    metadata_host = self.cluster.metadata.get_host_by_host_id(host.host_id)
+
+                                target_host = metadata_host if metadata_host is not None else host
+                                target_host_matches = False
+                                for pool_host in tuple(retained_pools):
+                                    if pool_host is target_host:
+                                        target_host_matches = True
+                                    elif pool_host == target_host:
+                                        previous_pools.append(retained_pools.pop(pool_host))
+
+                                if target_host_matches:
+                                    reuse_existing_pool = True
+                                else:
+                                    source_host = new_pool.host
+                                    if (source_host is not target_host and
+                                            target_host.sharding_info is None):
+                                        target_host.sharding_info = source_host.sharding_info
+                                    new_pool.host = target_host
+                                    retained_pools[target_host] = new_pool
+                                self._pools = retained_pools
+                                self._clear_pool_creation(host, creation_epoch)
 
             if reuse_existing_pool:
                 log.debug("Reusing existing connection pool for host %s", host)
@@ -4141,7 +4141,13 @@ class Session(object):
         with self._lock:
             state = self._get_pool_creation_state(host)
             if state.creation_epoch is not None:
-                return state.future
+                with host.lock:
+                    endpoint_changed = not self._endpoints_match(
+                        host.endpoint, state.endpoint)
+                if not endpoint_changed:
+                    return state.future
+                self._invalidate_pool_creation(
+                    host, expected_endpoint=state.endpoint)
 
             creation_epoch = state.advance()
             state.creation_epoch = creation_epoch
@@ -4156,7 +4162,8 @@ class Session(object):
                 state.future = future
             return future
 
-    def remove_pool(self, host, expected_host=None, expected_endpoint=None):
+    def remove_pool(self, host, expected_host=None, expected_endpoint=None,
+                    expected_pool=None):
         removed_pools = []
         cleanup_context = _POOL_CLEANUP_EPOCH.get()
         with self._lock:
@@ -4187,11 +4194,12 @@ class Session(object):
                 if expected_endpoint is not None:
                     remove_all = self._endpoints_match(host.endpoint, expected_endpoint)
 
-                if remove_all:
-                    self._invalidate_pool_creation(host)
-                else:
-                    self._invalidate_pool_creation(
-                        host, expected_endpoint=expected_endpoint)
+                if expected_pool is None:
+                    if remove_all:
+                        self._invalidate_pool_creation(host)
+                    else:
+                        self._invalidate_pool_creation(
+                            host, expected_endpoint=expected_endpoint)
 
                 retained_pools = {}
                 for pool_host, host_pool in self._pools.items():
@@ -4201,7 +4209,8 @@ class Session(object):
 
                     matches = self._pool_matches_expected(
                         host_pool, expected_host=expected_host,
-                        expected_endpoint=None if remove_all else expected_endpoint)
+                        expected_endpoint=None if remove_all else expected_endpoint,
+                        expected_pool=expected_pool)
                     if matches:
                         removed_pools.append(host_pool)
                     else:
@@ -4230,7 +4239,10 @@ class Session(object):
         for pool in pools:
             pool.shutdown()
 
-    def _pool_matches_expected(self, pool, expected_host=None, expected_endpoint=None):
+    def _pool_matches_expected(self, pool, expected_host=None,
+                               expected_endpoint=None, expected_pool=None):
+        if expected_pool is not None and pool is not expected_pool:
+            return False
         if expected_host is not None and pool.host is not expected_host:
             return False
         if expected_endpoint is not None:
