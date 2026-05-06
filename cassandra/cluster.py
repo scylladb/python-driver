@@ -2591,25 +2591,32 @@ class Cluster(object):
         if self.is_shutdown:
             return
 
-        if (self._discount_down_events and expected_endpoint is None and
+        if (self._discount_down_events and
                 self.profile_manager.distance(host) != HostDistance.IGNORED):
             with host.lock:
                 host_endpoint = host.endpoint
-            connected = False
-            for session in tuple(self.sessions):
-                # Host equality is endpoint-based; scan by identity to avoid
-                # hiding the live pool behind a stale equal key. Do not hold
-                # host.lock while taking session._lock; update_created_pools()
-                # takes the locks in the opposite order.
-                pool = session._get_pool_by_host_identity(
-                    host, expected_endpoint=host_endpoint)
-                if pool is not None and pool.open_count > 0:
-                    connected = True
-                    break
-            if connected:
-                with host.lock:
-                    if self._endpoints_match(host.endpoint, host_endpoint):
-                        return
+                discount_endpoint = host_endpoint
+                if expected_endpoint is not None:
+                    if self._endpoints_match(host_endpoint, expected_endpoint):
+                        discount_endpoint = expected_endpoint
+                    else:
+                        discount_endpoint = None
+            if discount_endpoint is not None:
+                connected = False
+                for session in tuple(self.sessions):
+                    # Host equality is endpoint-based; scan by identity to avoid
+                    # hiding the live pool behind a stale equal key. Do not hold
+                    # host.lock while taking session._lock; update_created_pools()
+                    # takes the locks in the opposite order.
+                    pool = session._get_pool_by_host_identity(
+                        host, expected_endpoint=discount_endpoint)
+                    if pool is not None and pool.open_count > 0:
+                        connected = True
+                        break
+                if connected:
+                    with host.lock:
+                        if self._endpoints_match(host.endpoint, discount_endpoint):
+                            return
 
         with host.lock:
             if expected_endpoint is not None and not self._endpoints_match(host.endpoint, expected_endpoint):
@@ -2813,6 +2820,7 @@ class Cluster(object):
 
     def signal_connection_failure(self, host, connection_exc, is_host_addition,
                                   expect_host_to_be_down=False, expected_endpoint=None):
+        signal_down = False
         with host.lock:
             if expected_endpoint is not None and not self._endpoints_match(host.endpoint, expected_endpoint):
                 log.debug("Ignoring stale connection failure for host %s; endpoint changed from %s",
@@ -2838,9 +2846,11 @@ class Cluster(object):
                 self._set_non_retryable_auth_failure(host, True)
                 return is_down
             if is_down:
-                self.on_down(
-                    host, is_host_addition, expect_host_to_be_down,
-                    expected_endpoint=expected_endpoint)
+                signal_down = True
+        if signal_down:
+            self.on_down(
+                host, is_host_addition, expect_host_to_be_down,
+                expected_endpoint=expected_endpoint)
         return is_down
 
     def add_host(self, endpoint, datacenter=None, rack=None, signal=True, refresh_nodes=True, host_id=None):
