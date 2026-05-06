@@ -23,6 +23,7 @@ from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, R
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
 from cassandra.cluster import _Scheduler, Session, Cluster, default_lbp_factory, \
     ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
+from cassandra.connection import ConnectionBusy
 from cassandra.pool import Host
 from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
@@ -247,10 +248,59 @@ class SchedulerTest(unittest.TestCase):
 
 
 class SessionTest(unittest.TestCase):
+    class FakeTime(object):
+
+        def __init__(self):
+            self.clock = 0
+
+        def time(self):
+            return self.clock
+
+        def sleep(self, amount):
+            self.clock += amount
+
+    class MockPool(object):
+
+        def __init__(self, host, connection):
+            self.host = host
+            self.host_distance = HostDistance.LOCAL
+            self.is_shutdown = False
+            self.connection = connection
+
+        def _get_connection_for_routing_key(self):
+            return self.connection
+
     def setUp(self):
         if connection_class is None:
             raise unittest.SkipTest('libev does not appear to be installed correctly')
         connection_class.initialize_reactor()
+
+    def _mock_schema_response(self, schema_version):
+        response = Mock()
+        response.column_names = ["schema_version"]
+        response.parsed_rows = [[schema_version]]
+        return response
+
+    def _new_schema_agreement_session(self, schema_versions):
+        hosts = []
+        for index, schema_version in enumerate(schema_versions):
+            host = Host("127.0.0.%d" % (index + 1), SimpleConvictionPolicy, host_id=uuid.uuid4())
+            host.set_up()
+            hosts.append(host)
+
+        cluster = Cluster(protocol_version=4)
+        for host in hosts:
+            cluster.metadata.add_or_return_host(host)
+
+        session = Session(cluster, hosts)
+        session._profile_manager.distance = Mock(return_value=HostDistance.LOCAL)
+        session._pools = {}
+        for host, schema_version in zip(hosts, schema_versions):
+            connection = Mock(endpoint=host.endpoint)
+            connection.wait_for_response.return_value = self._mock_schema_response(schema_version)
+            session._pools[host] = self.MockPool(host, connection)
+
+        return session, hosts
 
     # TODO: this suite could be expanded; for now just adding a test covering a PR
     @mock_session_pools
@@ -338,6 +388,54 @@ class SessionTest(unittest.TestCase):
         query = s.execute.call_args[0][0]
         assert query == 'USE simple_ks', (
             "Simple keyspace names should not be quoted, got: %r" % query)
+
+    @mock_session_pools
+    def test_wait_for_schema_agreement_queries_all_local_hosts(self, *_):
+        session, hosts = self._new_schema_agreement_session(["a", "a"])
+
+        assert session.wait_for_schema_agreement(wait_time=1)
+
+        for host in hosts:
+            connection = session._pools[host].connection
+            connection.wait_for_response.assert_called_once()
+
+    @mock_session_pools
+    def test_wait_for_schema_agreement_retries_until_local_hosts_match(self, *_):
+        session, hosts = self._new_schema_agreement_session(["a", "b"])
+        session._time = self.FakeTime()
+        second_connection = session._pools[hosts[1]].connection
+        second_connection.wait_for_response.side_effect = [
+            self._mock_schema_response("b"),
+            self._mock_schema_response("a")]
+
+        assert session.wait_for_schema_agreement(wait_time=1)
+        assert second_connection.wait_for_response.call_count == 2
+        assert session._time.clock == 0.2
+
+    @mock_session_pools
+    def test_wait_for_schema_agreement_retries_when_local_connection_is_busy(self, *_):
+        session, hosts = self._new_schema_agreement_session(["a", "a"])
+        session._time = self.FakeTime()
+        busy_connection = session._pools[hosts[1]].connection
+        busy_connection.wait_for_response.side_effect = [
+            ConnectionBusy("connection overloaded"),
+            self._mock_schema_response("a")]
+
+        assert session.wait_for_schema_agreement(wait_time=1)
+        assert busy_connection.wait_for_response.call_count == 2
+        assert session._time.clock == 0.2
+
+    @mock_session_pools
+    def test_wait_for_schema_agreement_ignores_local_hosts_without_session_pool(self, *_):
+        session, hosts = self._new_schema_agreement_session(["a"])
+        session._time = self.FakeTime()
+
+        unconnected_host = Host("127.0.0.2", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        unconnected_host.set_up()
+        session.cluster.metadata.add_or_return_host(unconnected_host)
+
+        assert session.wait_for_schema_agreement(wait_time=1)
+        session._pools[hosts[0]].connection.wait_for_response.assert_called()
 
 class ProtocolVersionTests(unittest.TestCase):
 

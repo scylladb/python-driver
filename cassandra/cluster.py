@@ -2607,6 +2607,7 @@ class Session(object):
     _metrics = None
     _request_init_callbacks = None
     _graph_paging_available = False
+    _time = time
 
     def __init__(self, cluster, hosts, keyspace=None):
         self.cluster = cluster
@@ -3374,6 +3375,102 @@ class Session(object):
         for pool in tuple(self._pools.values()):
             pool._set_keyspace_for_all_conns(keyspace, pool_finished_setting_keyspace)
 
+    def wait_for_schema_agreement(self, wait_time=None):
+        """
+        Wait for all local hosts connected to this session to report the same
+        schema version from ``system.local``.
+
+        By default, the timeout for this operation is governed by
+        :attr:`~.Cluster.max_schema_agreement_wait` and
+        :attr:`~.Cluster.control_connection_timeout`.
+
+        Passing ``wait_time`` here overrides
+        :attr:`~.Cluster.max_schema_agreement_wait`. Setting ``wait_time <= 0``
+        will bypass schema agreement waits.
+        """
+        total_timeout = wait_time if wait_time is not None else self.cluster.max_schema_agreement_wait
+        if total_timeout <= 0:
+            return True
+
+        deadline = self._time.time() + total_timeout
+        schema_mismatches = None
+
+        while self._time.time() < deadline:
+            schema_mismatches = self._get_local_schema_mismatches(deadline)
+            if schema_mismatches is None:
+                return True
+
+            log.debug("[session] Local schemas mismatched, trying again")
+            remaining = deadline - self._time.time()
+            if remaining > 0:
+                self._time.sleep(min(0.2, remaining))
+
+        log.warning("Local nodes are reporting a schema disagreement: %s", schema_mismatches)
+        return False
+
+    def _get_local_schema_mismatches(self, deadline):
+        hosts = self._get_schema_agreement_hosts()
+        versions = defaultdict(set)
+        errors = {}
+
+        if not hosts:
+            return {'unavailable': 'No local hosts available'}
+
+        cl = ConsistencyLevel.ONE
+        metadata_request_timeout = self.cluster.control_connection._metadata_request_timeout
+        query = QueryMessage(
+            query=maybe_add_timeout_to_query(ControlConnection._SELECT_SCHEMA_LOCAL, metadata_request_timeout),
+            consistency_level=cl)
+
+        for host in hosts:
+            remaining = deadline - self._time.time()
+            if remaining <= 0:
+                errors[host.endpoint] = "Timed out before querying host"
+                break
+
+            pool = self._pools.get(host)
+            if not pool or pool.is_shutdown:
+                errors[host.endpoint] = "No active connection pool"
+                continue
+
+            try:
+                connection = pool._get_connection_for_routing_key()
+                query_timeout = self._schema_agreement_query_timeout(remaining)
+                local_result = connection.wait_for_response(query, timeout=query_timeout)
+            except OperationTimedOut as timeout:
+                log.debug("[session] Timed out waiting for schema version from %s: %s", host, timeout)
+                errors[host.endpoint] = timeout
+                continue
+            except (ConnectionException, NoConnectionsAvailable, ConnectionBusy) as exc:
+                log.debug("[session] Error querying schema version from %s: %s", host, exc)
+                errors[host.endpoint] = exc
+                continue
+
+            rows = dict_factory(local_result.column_names, local_result.parsed_rows)
+            schema_version = rows[0].get("schema_version") if rows else None
+            versions[schema_version].add(host.endpoint)
+
+        if len(versions) == 1 and None not in versions and not errors:
+            log.debug("[session] Local schemas match")
+            return None
+
+        mismatches = dict((version, list(nodes)) for version, nodes in versions.items())
+        if errors:
+            mismatches['unavailable'] = dict((endpoint, str(error)) for endpoint, error in errors.items())
+        return mismatches
+
+    def _get_schema_agreement_hosts(self):
+        local_distances = (HostDistance.LOCAL_RACK, HostDistance.LOCAL)
+        return tuple(
+            host for host, pool in tuple(self._pools.items())
+            if host.is_up is not False
+            and not pool.is_shutdown
+            and self._profile_manager.distance(host) in local_distances)
+
+    def _schema_agreement_query_timeout(self, remaining):
+        control_timeout = self.cluster.control_connection._timeout
+        return min(control_timeout, remaining) if control_timeout is not None else remaining
+
     def user_type_registered(self, keyspace, user_type, klass):
         """
         Called by the parent Cluster instance when the user registers a new
@@ -3786,9 +3883,9 @@ class ControlConnection(object):
         if self._cluster.is_shutdown:
             return False
 
-        agreed = self.wait_for_schema_agreement(connection,
-                                                preloaded_results=preloaded_results,
-                                                wait_time=schema_agreement_wait)
+        agreed = self._wait_for_schema_agreement(connection,
+                                                 preloaded_results=preloaded_results,
+                                                 wait_time=schema_agreement_wait)
 
         if not self._schema_meta_enabled and not force:
             log.debug("[control connection] Skipping schema refresh because schema metadata is disabled")
@@ -4079,6 +4176,13 @@ class ControlConnection(object):
         self._cluster.scheduler.schedule_unique(delay, self.refresh_schema, **event)
 
     def wait_for_schema_agreement(self, connection=None, preloaded_results=None, wait_time=None):
+        warn("ControlConnection.wait_for_schema_agreement is deprecated and will be removed in 4.0. "
+             "Use Session.wait_for_schema_agreement instead.", DeprecationWarning)
+        return self._wait_for_schema_agreement(connection=connection,
+                                               preloaded_results=preloaded_results,
+                                               wait_time=wait_time)
+
+    def _wait_for_schema_agreement(self, connection=None, preloaded_results=None, wait_time=None):
 
         total_timeout = wait_time if wait_time is not None else self._cluster.max_schema_agreement_wait
         if total_timeout <= 0:

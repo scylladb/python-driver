@@ -169,6 +169,8 @@ Clusters and Sessions
 
    .. automethod:: set_keyspace(keyspace)
 
+   .. automethod:: wait_for_schema_agreement
+
    .. automethod:: get_execution_profile
 
    .. automethod:: execution_profile_clone_update
