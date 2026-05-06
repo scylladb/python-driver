@@ -350,3 +350,35 @@ class HostConnectionTests(_PoolTests):
 
             # Cleanup executor with proper wait
             session.cluster.executor.shutdown(wait=True)
+
+    def test_replace_retries_when_replacement_keyspace_set_fails(self):
+        host = Host(DefaultEndPoint('127.0.0.1'), SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        session = NonCallableMagicMock(spec=Session, keyspace='ks')
+        session.cluster = MagicMock()
+        session.cluster.shard_aware_options = ShardAwareOptions()
+        session.cluster._endpoints_match.side_effect = Cluster._endpoints_match
+        initial_connection = HashableMock(
+            spec=Connection, in_flight=0, is_defunct=False, is_closed=False,
+            max_request_id=100, signaled_error=False,
+            orphaned_threshold_reached=False,
+            features=ProtocolFeatures(shard_id=0))
+        replacement_connection = HashableMock(
+            spec=Connection, in_flight=0, is_defunct=False, is_closed=False,
+            max_request_id=100, signaled_error=False,
+            orphaned_threshold_reached=False,
+            features=ProtocolFeatures(shard_id=0))
+        replacement_connection.set_keyspace_blocking.side_effect = RuntimeError(
+            "keyspace failed")
+        session.cluster.connection_factory.side_effect = [
+            initial_connection, replacement_connection]
+
+        pool = HostConnection(host, HostDistance.LOCAL, session)
+        pool._is_replacing = True
+
+        pool._replace(initial_connection)
+
+        assert session.submit.call_count == 1
+        submitted_fn, submitted_connection = session.submit.call_args.args
+        assert submitted_fn == pool._replace
+        assert submitted_connection is initial_connection

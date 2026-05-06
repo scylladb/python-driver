@@ -705,7 +705,13 @@ class HostConnection(object):
             return
 
         if keyspace:
-            replacement_connection.set_keyspace_blocking(keyspace)
+            try:
+                replacement_connection.set_keyspace_blocking(keyspace)
+            except Exception:
+                log.warning("Failed reconnecting %s. Retrying." % (expected_endpoint,))
+                replacement_connection.close()
+                self._session.submit(self._replace, connection)
+                return
 
         with self._lock:
             if self.is_shutdown:

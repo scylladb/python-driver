@@ -1090,6 +1090,34 @@ class HostStateRaceTest(unittest.TestCase):
         assert host.is_up
         assert state.up_epoch is None
 
+    def test_on_up_waits_for_all_pool_futures_when_one_is_already_done(self):
+        completed_pool_future = Future()
+        completed_pool_future.set_result(True)
+        pending_pool_future = Future()
+        completed_session = Mock()
+        completed_session.add_or_renew_pool.return_value = completed_pool_future
+        pending_session = Mock()
+        pending_session.add_or_renew_pool.return_value = pending_pool_future
+        listener = Mock()
+        cluster = self._make_cluster(listener=listener)
+        cluster.sessions = [completed_session, pending_session]
+        cluster._prepare_all_queries = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        host = self._make_host()
+        host.set_down()
+
+        Cluster.on_up(cluster, host)
+
+        assert not host.is_up
+        listener.on_up.assert_not_called()
+
+        pending_pool_future.set_result(False)
+
+        assert not host.is_up
+        listener.on_up.assert_not_called()
+        cluster._start_reconnector.assert_called_once_with(
+            host, is_host_addition=False, expected_endpoint=host.endpoint)
+
     def test_newer_forced_down_during_up_handling_is_preserved(self):
         pool_future = Future()
         session = Mock()
