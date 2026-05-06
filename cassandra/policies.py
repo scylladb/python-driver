@@ -464,6 +464,11 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
     If no :attr:`~.Statement.routing_key` is set on the query, the child
     policy's query plan will be used as is.
+
+    Token awareness only applies to token-owning nodes. Zero-token CQL
+    proxy or front-layer nodes are not replicas. When those nodes are the
+    intended query front layer, configure a round-robin policy such as
+    :class:`.RoundRobinPolicy` or :class:`.DCAwareRoundRobinPolicy` directly.
     """
 
     _child_policy = None

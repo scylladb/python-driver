@@ -14,14 +14,16 @@
 
 import unittest
 
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from unittest.mock import Mock, ANY, call
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
 from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.pool import Host
-from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
+from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory, ConnectionShutdown
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
                                 ConstantReconnectionPolicy, IdentityTranslator)
 
@@ -106,6 +108,7 @@ class MockCluster(object):
     def __init__(self):
         self.metadata = MockMetadata()
         self.added_hosts = []
+        self.sessions = []
         self.scheduler = Mock(spec=_Scheduler)
         self.executor = Mock(spec=ThreadPoolExecutor)
         self.profile_manager.profiles[EXEC_PROFILE_DEFAULT] = ExecutionProfile(RoundRobinPolicy())
@@ -146,6 +149,7 @@ def _node_meta_results(local_results, peer_results):
 class MockConnection(object):
 
     is_defunct = False
+    is_closed = False
 
     def __init__(self):
         self.endpoint = DefaultEndPoint("192.168.1.0")
@@ -167,6 +171,29 @@ class MockConnection(object):
              ["192.168.1.2", 9042, "10.0.0.2", 7040, "a", "dc1", "rack1", ["2", "102", "202"], "uuid3"]]
         ]
         self.wait_for_responses = Mock(return_value=_node_meta_results(self.local_results, self.peer_results))
+
+
+class MockBorrowedConnection(MockConnection):
+
+    is_closed = False
+
+    def __init__(self, responses):
+        super(MockBorrowedConnection, self).__init__()
+        self.responses = deque(responses)
+        self.lock = Lock()
+        self.in_flight = 0
+        self._requests = {}
+        self.request_ids = deque()
+        self.orphaned_request_ids = set()
+        self.orphaned_threshold = 100
+        self.orphaned_threshold_reached = False
+        self.send_msg = Mock(side_effect=self._send_msg)
+
+    def _send_msg(self, message, request_id, callback):
+        self._requests[request_id] = callback
+        callback(self.responses.popleft())
+        self._requests.pop(request_id, None)
+        self.request_ids.append(request_id)
 
 
 class FakeTime(object):
@@ -301,6 +328,50 @@ class ControlConnectionTest(unittest.TestCase):
         cc._time = self.time
         assert cc.wait_for_schema_agreement()
 
+    def test_wait_for_schema_agreement_falls_back_to_session_connection(self):
+        """
+        If the control connection is broken, use a session connection from the
+        same host for schema agreement.
+        """
+        self.connection.wait_for_responses.side_effect = ConnectionShutdown("closed")
+        host = self.cluster.metadata.get_host(self.connection.endpoint)
+        borrowed_connection = MockBorrowedConnection(
+            _node_meta_results(self.connection.local_results, self.connection.peer_results))
+
+        pool = Mock()
+        pool.is_shutdown = False
+        pool.borrow_connection.side_effect = [(borrowed_connection, 1), (borrowed_connection, 2)]
+        session = Mock()
+        session._pools = {host: pool}
+        self.cluster.sessions = [session]
+
+        assert self.control_connection.wait_for_schema_agreement()
+        assert pool.borrow_connection.call_count == 2
+        assert pool.return_connection.call_count == 2
+
+    def test_wait_for_schema_agreement_falls_back_when_control_connection_is_gone(self):
+        self.control_connection._last_connection_endpoint = self.connection.endpoint
+        self.control_connection._connection = None
+        host = self.cluster.metadata.get_host(self.connection.endpoint)
+        borrowed_connection = MockBorrowedConnection(
+            _node_meta_results(self.connection.local_results, self.connection.peer_results))
+
+        pool = Mock()
+        pool.is_shutdown = False
+        pool.borrow_connection.side_effect = [(borrowed_connection, 1), (borrowed_connection, 2)]
+        session = Mock()
+        session._pools = {host: pool}
+        self.cluster.sessions = [session]
+
+        assert self.control_connection.wait_for_schema_agreement()
+        assert pool.borrow_connection.call_count == 2
+        assert pool.return_connection.call_count == 2
+
+    def test_wait_for_schema_agreement_tolerates_missing_connection(self):
+        self.control_connection._connection = None
+
+        assert not self.control_connection.wait_for_schema_agreement()
+
     def test_refresh_nodes_and_tokens(self):
         self.control_connection.refresh_node_list_and_token_map()
         meta = self.cluster.metadata
@@ -335,7 +406,6 @@ class ControlConnectionTest(unittest.TestCase):
              [None, None, "a", "dc1", "rack1", ["1", "101", "201"], 'uuid1'],
              ["192.168.1.7", "10.0.0.1", "a", None, "rack1", ["1", "101", "201"], 'uuid2'],
              ["192.168.1.6", "10.0.0.1", "a", "dc1", None, ["1", "101", "201"], 'uuid3'],
-             ["192.168.1.5", "10.0.0.1", "a", "dc1", "rack1", None, 'uuid4'],
              ["192.168.1.4", "10.0.0.1", "a", "dc1", "rack1", ["1", "101", "201"], None]]])
         refresh_and_validate_added_hosts()
 
@@ -349,9 +419,56 @@ class ControlConnectionTest(unittest.TestCase):
              [None, 9042, None, 7040, "a", "dc1", "rack1", ["2", "102", "202"], "uuid2"],
              ["192.168.1.5", 9042, "10.0.0.2", 7040, "a", None, "rack1", ["2", "102", "202"], "uuid2"],
              ["192.168.1.5", 9042, "10.0.0.2", 7040, "a", "dc1", None, ["2", "102", "202"], "uuid2"],
-             ["192.168.1.5", 9042, "10.0.0.2", 7040, "a", "dc1", "rack1", None, "uuid2"],
              ["192.168.1.5", 9042, "10.0.0.2", 7040, "a", "dc1", "rack1", ["2", "102", "202"], None]]])
         refresh_and_validate_added_hosts()
+
+    def test_refresh_nodes_and_tokens_keeps_zero_token_peer_for_load_balancing(self):
+        self.connection.peer_results[1].append(
+            ["192.168.1.3", "10.0.0.3", "a", "dc1", "rack1", None, "uuid4"]
+        )
+        self.cluster.scheduler.schedule = lambda delay, f, *args, **kwargs: f(*args, **kwargs)
+
+        self.control_connection.refresh_node_list_and_token_map()
+
+        zero_token_host = self.cluster.metadata.get_host_by_host_id("uuid4")
+        assert zero_token_host is not None
+        assert zero_token_host in self.cluster.metadata.all_hosts()
+        assert zero_token_host not in self.cluster.metadata.token_map
+
+    def test_refresh_nodes_and_tokens_keeps_zero_token_local_host_for_load_balancing(self):
+        self.connection.local_results[1][0][7] = None
+
+        self.control_connection.refresh_node_list_and_token_map()
+
+        local_host = self.cluster.metadata.get_host_by_host_id("uuid1")
+        assert local_host is not None
+        assert local_host in self.cluster.metadata.all_hosts()
+        assert local_host not in self.cluster.metadata.token_map
+
+    def test_refresh_nodes_and_tokens_rebuilds_token_map_when_existing_host_loses_tokens(self):
+        self.control_connection.refresh_node_list_and_token_map()
+
+        zero_token_host = self.cluster.metadata.get_host_by_host_id("uuid2")
+        assert zero_token_host in self.cluster.metadata.token_map
+
+        self.connection.peer_results[1][0][5] = None
+        self.control_connection.refresh_node_list_and_token_map()
+
+        assert zero_token_host in self.cluster.metadata.all_hosts()
+        assert zero_token_host not in self.cluster.metadata.token_map
+
+    def test_refresh_nodes_and_tokens_rebuilds_token_map_when_existing_host_gains_tokens(self):
+        self.connection.peer_results[1][0][5] = None
+        self.control_connection.refresh_node_list_and_token_map()
+
+        token_host = self.cluster.metadata.get_host_by_host_id("uuid2")
+        assert token_host in self.cluster.metadata.all_hosts()
+        assert token_host not in self.cluster.metadata.token_map
+
+        self.connection.peer_results[1][0][5] = ["1", "101", "201"]
+        self.control_connection.refresh_node_list_and_token_map()
+
+        assert token_host in self.cluster.metadata.token_map
 
     def test_change_ip(self):
         """
