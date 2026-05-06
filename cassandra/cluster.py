@@ -3919,8 +3919,10 @@ class ControlConnection(object):
             host.dse_workloads = row.get("workloads")
 
             tokens = row.get("tokens", None)
-            if partitioner and tokens and self._token_meta_enabled:
-                token_map[host] = tokens
+            if partitioner and self._token_meta_enabled:
+                should_rebuild_token_map |= self._tokens_changed(host, tokens)
+                if tokens:
+                    token_map[host] = tokens
             self._cluster.metadata.update_host(host, old_endpoint=endpoint)
 
         for old_host_id, old_host in self._cluster.metadata.all_hosts_items():
@@ -3965,11 +3967,40 @@ class ControlConnection(object):
 
         if "tokens" in row and not row.get("tokens"):
             log.debug(
-                "Found a zero-token node - tokens is None (broadcast_rpc: %s, host_id: %s). Ignoring host." %
+                "Found a zero-token node (broadcast_rpc: %s, host_id: %s). "
+                "Keeping host for load balancing, but omitting it from the token map." %
                 (broadcast_rpc, host_id))
-            return False
 
         return True
+
+    def _tokens_changed(self, host, tokens):
+        current_token_map = self._cluster.metadata.token_map
+        if current_token_map is None:
+            return False
+
+        if isinstance(current_token_map, dict):
+            current_tokens = current_token_map.get(host)
+            return set(current_tokens or ()) != set(tokens or ())
+
+        token_to_host_owner = getattr(current_token_map, 'token_to_host_owner', None)
+        token_class = getattr(current_token_map, 'token_class', None)
+        if token_to_host_owner is None or token_class is None:
+            return False
+
+        current_tokens = set(
+            token for token, owner in token_to_host_owner.items()
+            if owner == host)
+        if not tokens:
+            return bool(current_tokens)
+
+        try:
+            refreshed_tokens = set(token_class.from_string(token) for token in tokens)
+        except Exception:
+            log.debug("[control connection] Unable to compare refreshed tokens for %s",
+                      host, exc_info=True)
+            return True
+
+        return current_tokens != refreshed_tokens
 
     def _update_location_info(self, host, datacenter, rack):
         if host.datacenter == datacenter and host.rack == rack:

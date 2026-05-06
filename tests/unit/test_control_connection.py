@@ -406,7 +406,6 @@ class ControlConnectionTest(unittest.TestCase):
              [None, None, "a", "dc1", "rack1", ["1", "101", "201"], 'uuid1'],
              ["192.168.1.7", "10.0.0.1", "a", None, "rack1", ["1", "101", "201"], 'uuid2'],
              ["192.168.1.6", "10.0.0.1", "a", "dc1", None, ["1", "101", "201"], 'uuid3'],
-             ["192.168.1.5", "10.0.0.1", "a", "dc1", "rack1", None, 'uuid4'],
              ["192.168.1.4", "10.0.0.1", "a", "dc1", "rack1", ["1", "101", "201"], None]]])
         refresh_and_validate_added_hosts()
 
@@ -420,9 +419,56 @@ class ControlConnectionTest(unittest.TestCase):
              [None, 9042, None, 7040, "a", "dc1", "rack1", ["2", "102", "202"], "uuid2"],
              ["192.168.1.5", 9042, "10.0.0.2", 7040, "a", None, "rack1", ["2", "102", "202"], "uuid2"],
              ["192.168.1.5", 9042, "10.0.0.2", 7040, "a", "dc1", None, ["2", "102", "202"], "uuid2"],
-             ["192.168.1.5", 9042, "10.0.0.2", 7040, "a", "dc1", "rack1", None, "uuid2"],
              ["192.168.1.5", 9042, "10.0.0.2", 7040, "a", "dc1", "rack1", ["2", "102", "202"], None]]])
         refresh_and_validate_added_hosts()
+
+    def test_refresh_nodes_and_tokens_keeps_zero_token_peer_for_load_balancing(self):
+        self.connection.peer_results[1].append(
+            ["192.168.1.3", "10.0.0.3", "a", "dc1", "rack1", None, "uuid4"]
+        )
+        self.cluster.scheduler.schedule = lambda delay, f, *args, **kwargs: f(*args, **kwargs)
+
+        self.control_connection.refresh_node_list_and_token_map()
+
+        zero_token_host = self.cluster.metadata.get_host_by_host_id("uuid4")
+        assert zero_token_host is not None
+        assert zero_token_host in self.cluster.metadata.all_hosts()
+        assert zero_token_host not in self.cluster.metadata.token_map
+
+    def test_refresh_nodes_and_tokens_keeps_zero_token_local_host_for_load_balancing(self):
+        self.connection.local_results[1][0][7] = None
+
+        self.control_connection.refresh_node_list_and_token_map()
+
+        local_host = self.cluster.metadata.get_host_by_host_id("uuid1")
+        assert local_host is not None
+        assert local_host in self.cluster.metadata.all_hosts()
+        assert local_host not in self.cluster.metadata.token_map
+
+    def test_refresh_nodes_and_tokens_rebuilds_token_map_when_existing_host_loses_tokens(self):
+        self.control_connection.refresh_node_list_and_token_map()
+
+        zero_token_host = self.cluster.metadata.get_host_by_host_id("uuid2")
+        assert zero_token_host in self.cluster.metadata.token_map
+
+        self.connection.peer_results[1][0][5] = None
+        self.control_connection.refresh_node_list_and_token_map()
+
+        assert zero_token_host in self.cluster.metadata.all_hosts()
+        assert zero_token_host not in self.cluster.metadata.token_map
+
+    def test_refresh_nodes_and_tokens_rebuilds_token_map_when_existing_host_gains_tokens(self):
+        self.connection.peer_results[1][0][5] = None
+        self.control_connection.refresh_node_list_and_token_map()
+
+        token_host = self.cluster.metadata.get_host_by_host_id("uuid2")
+        assert token_host in self.cluster.metadata.all_hosts()
+        assert token_host not in self.cluster.metadata.token_map
+
+        self.connection.peer_results[1][0][5] = ["1", "101", "201"]
+        self.control_connection.refresh_node_list_and_token_map()
+
+        assert token_host in self.cluster.metadata.token_map
 
     def test_change_ip(self):
         """
