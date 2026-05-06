@@ -5482,6 +5482,7 @@ class ResponseFuture(object):
     _errbacks = None
     _current_host = None
     _connection = None
+    _connection_pool = None
     _query_retries = 0
     _start_time = None
     _metrics = None
@@ -5578,7 +5579,7 @@ class ResponseFuture(object):
             # Capture connection stats before pool.return_connection() can alter state
             conn_in_flight = self._connection.in_flight
 
-            pool = self.session._get_pool_by_host_identity(self._current_host)
+            pool = self._connection_pool
             if pool and not pool.is_shutdown:
                 # Do not return the stream ID to the pool yet. We cannot reuse it
                 # because the node might still be processing the query and will
@@ -5661,7 +5662,24 @@ class ResponseFuture(object):
         if message is None:
             message = self.message
 
-        pool = self.session._get_pool_by_host_identity(host)
+        expected_endpoint = None
+        if isinstance(host, Host):
+            with host.lock:
+                expected_endpoint = host.endpoint
+            pool = self.session._get_pool_by_host_identity(
+                host, expected_endpoint=expected_endpoint)
+        else:
+            pool = self.session._get_pool_by_host_identity(host)
+
+        if pool and expected_endpoint is not None:
+            with host.lock:
+                endpoint_changed = not self.session._endpoints_match(
+                    host.endpoint, expected_endpoint)
+            if endpoint_changed:
+                self._errors[host] = ConnectionException(
+                    "Host endpoint changed while borrowing connection")
+                return None
+
         if not pool:
             self._errors[host] = ConnectionException("Host has been marked down or removed")
             return None
@@ -5678,7 +5696,25 @@ class ResponseFuture(object):
                 connection, request_id = pool.borrow_connection(timeout=2.0, routing_key=self.query.routing_key, keyspace=self.query.keyspace, table=self.query.table)
             else:
                 connection, request_id = pool.borrow_connection(timeout=2.0)
+
+            if expected_endpoint is not None:
+                with host.lock:
+                    endpoint_changed = not self.session._endpoints_match(
+                        host.endpoint, expected_endpoint)
+                if endpoint_changed:
+                    try:
+                        with connection.lock:
+                            connection.request_ids.append(request_id)
+                        pool.return_connection(connection)
+                    finally:
+                        connection = None
+                    self._errors[host] = ConnectionException(
+                        "Host endpoint changed while borrowing connection")
+                    return None
+
             self._connection = connection
+            self._connection_pool = pool
+
             result_meta = self.prepared_statement.result_metadata if self.prepared_statement else []
 
             if cb is None:
