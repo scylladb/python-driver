@@ -64,6 +64,35 @@ def _endpoints_match(cluster, endpoint, expected_endpoint):
     return endpoint == expected_endpoint
 
 
+def _host_is_current_for_endpoint(cluster, host, expected_endpoint):
+    metadata = getattr(cluster, "metadata", None)
+    hosts = getattr(metadata, "_hosts", None)
+    host_id_by_endpoint = getattr(metadata, "_host_id_by_endpoint", None)
+    if not isinstance(hosts, dict) or not isinstance(host_id_by_endpoint, dict):
+        return True
+
+    def check_mapping():
+        try:
+            mapped_host_id = host_id_by_endpoint.get(expected_endpoint)
+        except TypeError:
+            return True
+        if mapped_host_id is None:
+            return hosts.get(getattr(host, "host_id", None)) is host
+        return hosts.get(mapped_host_id) is host
+
+    metadata_lock = getattr(metadata, "_hosts_lock", None)
+    if metadata_lock is not None:
+        with metadata_lock:
+            return check_mapping()
+    return check_mapping()
+
+
+def _host_matches_expected_endpoint(cluster, host, expected_endpoint):
+    current_endpoint = _current_host_endpoint(host)
+    return (_endpoints_match(cluster, current_endpoint, expected_endpoint) and
+            _host_is_current_for_endpoint(cluster, host, expected_endpoint))
+
+
 @total_ordering
 class Host(object):
     """
@@ -585,8 +614,18 @@ class HostConnection(object):
                 log.debug("Defunct or closed connection (%s) returned to pool, potentially "
                           "marking host %s as down", id(connection), self.host)
                 with self.host.lock:
-                    if not _endpoints_match(self._session.cluster, self.host.endpoint, self.endpoint):
+                    endpoint_matches = _endpoints_match(
+                        self._session.cluster, self.host.endpoint, self.endpoint)
+                    host_is_current = (endpoint_matches and
+                                       _host_is_current_for_endpoint(
+                                           self._session.cluster, self.host,
+                                           self.endpoint))
+                    if not endpoint_matches:
                         log.debug("Ignoring stale connection failure for host %s; endpoint changed from %s",
+                                  self.host, self.endpoint)
+                        stale_endpoint_failure = True
+                    elif not host_is_current:
+                        log.debug("Ignoring stale connection failure for host %s; endpoint reassigned from %s",
                                   self.host, self.endpoint)
                         stale_endpoint_failure = True
                     else:
@@ -653,8 +692,8 @@ class HostConnection(object):
 
     def _replace(self, connection):
         expected_endpoint = self.endpoint
-        current_endpoint = _current_host_endpoint(self.host)
-        if not _endpoints_match(self._session.cluster, current_endpoint, expected_endpoint):
+        if not _host_matches_expected_endpoint(
+                self._session.cluster, self.host, expected_endpoint):
             log.debug("Ignoring stale connection replacement for host %s; endpoint changed from %s",
                       self.host, expected_endpoint)
             self._remove_stale_pool(expected_endpoint)
@@ -694,8 +733,8 @@ class HostConnection(object):
                     self._stream_available_condition.notify()
                 return
 
-        current_endpoint = _current_host_endpoint(self.host)
-        if not _endpoints_match(self._session.cluster, current_endpoint, expected_endpoint):
+        if not _host_matches_expected_endpoint(
+                self._session.cluster, self.host, expected_endpoint):
             log.debug("Ignoring stale connection replacement for host %s; endpoint changed from %s",
                       self.host, expected_endpoint)
             replacement_connection.close()
@@ -820,8 +859,8 @@ class HostConnection(object):
                 if self.is_shutdown:
                     return
 
-            current_endpoint = _current_host_endpoint(self.host)
-            if not _endpoints_match(self._session.cluster, current_endpoint, expected_endpoint):
+            if not _host_matches_expected_endpoint(
+                    self._session.cluster, self.host, expected_endpoint):
                 log.debug("Ignoring stale shard connection replacement for host %s; endpoint changed from %s",
                           self.host, expected_endpoint)
                 self._remove_stale_pool(expected_endpoint)
@@ -843,8 +882,8 @@ class HostConnection(object):
             else:
                 conn = self._session.cluster.connection_factory(expected_endpoint, host_conn=self, on_orphaned_stream_released=self.on_orphaned_stream_released)
 
-            current_endpoint = _current_host_endpoint(self.host)
-            if not _endpoints_match(self._session.cluster, current_endpoint, expected_endpoint):
+            if not _host_matches_expected_endpoint(
+                    self._session.cluster, self.host, expected_endpoint):
                 log.debug("Ignoring stale shard connection replacement for host %s; endpoint changed from %s",
                           self.host, expected_endpoint)
                 conn.close()
