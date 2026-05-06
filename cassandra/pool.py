@@ -785,13 +785,30 @@ class HostConnection(object):
                 self._session.submit(self._replace, connection)
                 return
 
+        stale_endpoint = False
         with self._lock:
             if self.is_shutdown:
                 replacement_connection.close()
                 self._is_replacing = False
                 return
-            self._connections[replacement_connection.features.shard_id] = replacement_connection
+            with self.host.lock:
+                stale_endpoint = not (
+                    _endpoints_match(
+                        self._session.cluster, self.host.endpoint,
+                        expected_endpoint) and
+                    _host_is_current_for_endpoint(
+                        self._session.cluster, self.host, expected_endpoint))
+                if not stale_endpoint:
+                    self._connections[replacement_connection.features.shard_id] = replacement_connection
             self._is_replacing = False
+        if stale_endpoint:
+            log.debug("Ignoring stale connection replacement for host %s; endpoint changed from %s",
+                      self.host, expected_endpoint)
+            replacement_connection.close()
+            self._remove_stale_pool(expected_endpoint)
+            with self._stream_available_condition:
+                self._stream_available_condition.notify()
+            return
         with self._stream_available_condition:
             self._stream_available_condition.notify()
 
@@ -962,10 +979,27 @@ class HostConnection(object):
                             )
                         if self._keyspace:
                             conn.set_keyspace_blocking(self._keyspace)
-                        self._connections[conn.features.shard_id] = conn
+                        with self.host.lock:
+                            stale_endpoint = not (
+                                _endpoints_match(
+                                    self._session.cluster, self.host.endpoint,
+                                    expected_endpoint) and
+                                _host_is_current_for_endpoint(
+                                    self._session.cluster, self.host,
+                                    expected_endpoint))
+                            if not stale_endpoint:
+                                self._connections[conn.features.shard_id] = conn
 
                 if is_shutdown:
                     conn.close()
+                    return
+                if stale_endpoint:
+                    log.debug("Ignoring stale shard connection replacement for host %s; endpoint changed from %s",
+                              self.host, expected_endpoint)
+                    conn.close()
+                    self._remove_stale_pool(expected_endpoint)
+                    with self._stream_available_condition:
+                        self._stream_available_condition.notify()
                     return
 
                 if old_conn is not None:
