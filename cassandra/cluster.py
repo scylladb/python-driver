@@ -23,7 +23,7 @@ import datetime
 from binascii import hexlify
 from collections import defaultdict
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait as wait_futures
+from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, Future, wait as wait_futures
 from copy import copy
 from functools import partial, reduce, wraps
 from itertools import groupby, count, chain
@@ -1746,6 +1746,45 @@ class Cluster(object):
         established or attempted. Default is `False`, which means it will return when the first
         successful connection is established. Remaining pools are added asynchronously.
         """
+        self._ensure_core_connections_setup()
+
+        session = self._new_session(keyspace)
+        if wait_for_all_pools:
+            wait_futures(session._initial_connect_futures)
+
+        self._set_default_dbaas_consistency(session)
+
+        return session
+
+    def connect_to_control_host(self, keyspace=None, wait_for_all_pools=False):
+        """
+        Creates and returns a new :class:`~.Session` pinned to the current
+        control-connection host.
+
+        This is intended for proxy deployments where the control connection
+        reaches a node through an address that is different from the node's
+        broadcast RPC address. The returned session creates a pool only for
+        that control-connection node and routes all requests through the
+        control connection endpoint instead of the node's broadcast endpoint.
+        If the active control connection is using a shared load-balancer
+        address, this requires the cluster to expose host-specific endpoints
+        (for example through SNI or client routes); otherwise this method
+        raises :class:`~cassandra.DriverException`.
+
+        `keyspace` and `wait_for_all_pools` behave the same way as in
+        :meth:`connect`.
+        """
+        self._ensure_core_connections_setup()
+
+        session = self._new_control_host_session(keyspace)
+        if wait_for_all_pools:
+            wait_futures(session._initial_connect_futures)
+
+        self._set_default_dbaas_consistency(session)
+
+        return session
+
+    def _ensure_core_connections_setup(self):
         with self._lock:
             if self.is_shutdown:
                 raise DriverException("Cluster is already shut down")
@@ -1777,14 +1816,6 @@ class Cluster(object):
                     )
                 self._is_setup = True
 
-        session = self._new_session(keyspace)
-        if wait_for_all_pools:
-            wait_futures(session._initial_connect_futures)
-
-        self._set_default_dbaas_consistency(session)
-
-        return session
-
     def _set_default_dbaas_consistency(self, session):
         if session.cluster.metadata.dbaas:
             for profile in self.profile_manager.profiles.values():
@@ -1805,14 +1836,18 @@ class Cluster(object):
             pools.extend(s.get_pools())
         return pools
 
+    def _get_shard_aware_pools(self):
+        return [pool for pool in self.get_all_pools() if pool.host.sharding_info is not None]
+
     def is_shard_aware(self):
-        return bool(self.get_all_pools()[0].host.sharding_info)
+        return bool(self._get_shard_aware_pools())
 
     def shard_aware_stats(self):
-        if self.is_shard_aware():
+        shard_aware_pools = self._get_shard_aware_pools()
+        if shard_aware_pools:
             return {str(pool.host.endpoint): {'shards_count': pool.host.sharding_info.shards_count,
                                               'connected': len(pool._connections.keys())}
-                    for pool in self.get_all_pools()}
+                    for pool in shard_aware_pools}
 
     def shutdown(self):
         """
@@ -1856,6 +1891,101 @@ class Cluster(object):
         self._session_register_user_types(session)
         self.sessions.add(session)
         return session
+
+    def _new_control_host_session(self, keyspace):
+        connection = self.control_connection._connection
+        if connection is None:
+            raise DriverException("Control connection is not established")
+
+        control_host = self.get_control_connection_host()
+        if control_host is None:
+            raise DriverException(
+                "Unable to resolve the current control connection host from metadata")
+
+        pinned_endpoint = self._get_control_host_session_endpoint(control_host, connection.endpoint)
+        pinned_host = self._clone_host_with_endpoint(control_host, pinned_endpoint, host_cls=_ControlHost)
+        session = _ControlHostSession(self, control_host, pinned_host, keyspace)
+        self._session_register_user_types(session)
+        self.sessions.add(session)
+        return session
+
+    def _control_host_session_can_reuse_endpoint(self, host, endpoint):
+        if endpoint is None:
+            return False
+        if endpoint == host.endpoint:
+            return True
+        if not isinstance(endpoint, DefaultEndPoint):
+            return True
+        return self._control_host_session_default_endpoint_targets_host(
+            host, endpoint)
+
+    def _control_host_session_default_endpoint_targets_host(
+            self, host, endpoint, attempts=3):
+        for _ in range(attempts):
+            connected_host_id = self._get_host_id_for_endpoint(endpoint)
+            if connected_host_id != host.host_id:
+                return False
+        return True
+
+    def _get_host_id_for_endpoint(self, endpoint):
+        connection = None
+        try:
+            connection = self.connection_factory(endpoint)
+            response = connection.wait_for_response(
+                QueryMessage(
+                    query="SELECT host_id FROM system.local WHERE key='local'",
+                    consistency_level=ConsistencyLevel.ONE),
+                timeout=self.connect_timeout)
+            rows = dict_factory(response.column_names, response.parsed_rows)
+            if not rows:
+                return None
+            return rows[0].get("host_id")
+        except Exception:
+            log.debug(
+                "Failed verifying control-host endpoint %s", endpoint,
+                exc_info=True)
+            return None
+        finally:
+            if connection:
+                connection.close()
+
+    def _get_control_host_session_endpoint(self, control_host, connection_endpoint):
+        if connection_endpoint is not None and (
+                connection_endpoint == control_host.endpoint or
+                not isinstance(connection_endpoint, DefaultEndPoint)):
+            return connection_endpoint
+
+        host_endpoint = control_host.endpoint
+        if host_endpoint is not None and not isinstance(host_endpoint, DefaultEndPoint):
+            return host_endpoint
+
+        if self._control_host_session_can_reuse_endpoint(control_host, connection_endpoint):
+            return connection_endpoint
+
+        raise DriverException(
+            "connect_to_control_host() requires a host-specific control endpoint for %s; "
+            "the active control connection is using shared endpoint %s"
+            % (control_host, connection_endpoint))
+
+    def _clone_host_with_endpoint(self, host, endpoint, host_cls=Host):
+        cloned_host = host_cls(
+            endpoint,
+            self.conviction_policy_factory,
+            datacenter=host.datacenter,
+            rack=host.rack,
+            host_id=host.host_id)
+        cloned_host.is_up = host.is_up
+        cloned_host.broadcast_address = host.broadcast_address
+        cloned_host.broadcast_port = host.broadcast_port
+        cloned_host.broadcast_rpc_address = endpoint.address
+        cloned_host.broadcast_rpc_port = endpoint.port
+        cloned_host.listen_address = host.listen_address
+        cloned_host.listen_port = host.listen_port
+        cloned_host.release_version = host.release_version
+        cloned_host.dse_version = host.dse_version
+        cloned_host.dse_workload = host.dse_workload
+        cloned_host.dse_workloads = host.dse_workloads
+        return cloned_host
 
     def _session_register_user_types(self, session):
         for keyspace, type_map in self._user_types.items():
@@ -1954,12 +2084,16 @@ class Cluster(object):
             futures_lock = Lock()
             futures_results = []
             callback = partial(self._on_up_future_completed, host, futures, futures_results, futures_lock)
+            callback_futures = []
             for session in tuple(self.sessions):
                 future = session.add_or_renew_pool(host, is_host_addition=False)
                 if future is not None:
                     have_future = True
-                    future.add_done_callback(callback)
                     futures.add(future)
+                    callback_futures.append(future)
+
+            for future in callback_futures:
+                future.add_done_callback(callback)
         except Exception:
             log.exception("Unexpected failure handling node %s being marked up:", host)
             for future in futures:
@@ -2030,8 +2164,7 @@ class Cluster(object):
             if self._discount_down_events and self.profile_manager.distance(host) != HostDistance.IGNORED:
                 connected = False
                 for session in tuple(self.sessions):
-                    pool_states = session.get_pool_state()
-                    pool_state = pool_states.get(host)
+                    pool_state = session.get_pool_state_for_host(host)
                     if pool_state:
                         connected |= pool_state['open_count'] > 0
                 if connected:
@@ -2220,7 +2353,18 @@ class Cluster(object):
         """
         connection = self.control_connection._connection
         endpoint = connection.endpoint if connection else None
-        return self.metadata.get_host(endpoint) if endpoint else None
+        if not endpoint:
+            return None
+
+        host = self.metadata.get_host(endpoint)
+        if host is not None:
+            return host
+
+        host_id = self.control_connection._current_host_id
+        if host_id is None:
+            return None
+
+        return self.metadata.get_host_by_host_id(host_id)
 
     def refresh_schema_metadata(self, max_schema_agreement_wait=None):
         """
@@ -2382,6 +2526,39 @@ class Cluster(object):
         finally:
             if connection:
                 connection.close()
+
+    def _prepare_query_on_all_hosts(self, query, excluded_host, keyspace=None):
+        excluded_host_id = getattr(excluded_host, "host_id", None)
+        for host in tuple(self.metadata.all_hosts()):
+            if host == excluded_host or (
+                    excluded_host_id is not None and host.host_id == excluded_host_id):
+                continue
+            if not host.is_up:
+                continue
+
+            connection = None
+            try:
+                connection = self.connection_factory(host.endpoint)
+                response = connection.wait_for_response(
+                    PrepareMessage(query=query, keyspace=keyspace),
+                    timeout=5.0)
+                if getattr(response, "query_id", None) is None:
+                    log.debug(
+                        "Got unexpected response when preparing query on host %s: %r",
+                        host, response)
+            except OperationTimedOut as timeout:
+                log.warning(
+                    "Timed out trying to prepare query on host %s: %s",
+                    host, timeout)
+            except (ConnectionException, socket.error) as exc:
+                log.warning(
+                    "Error trying to prepare query on host %s: %r",
+                    host, exc)
+            except Exception:
+                log.exception("Error trying to prepare query on host %s", host)
+            finally:
+                if connection:
+                    connection.close()
 
     def add_prepared(self, query_id, prepared_statement):
         with self._prepared_statement_lock:
@@ -2924,8 +3101,11 @@ class Session(object):
             delimiter_index = addr.rfind(':')  # assumes <ip>:<port> - not robust, but that's what is being provided
             if delimiter_index > 0:
                 addr = addr[:delimiter_index]
-            targeted_query = HostTargetingStatement(query_future.query, addr)
-            query_future.query_plan = query_future._load_balancer.make_query_plan(self.keyspace, targeted_query)
+            if query_future._host is not None:
+                query_future.query_plan = iter([query_future._host])
+            else:
+                targeted_query = HostTargetingStatement(query_future.query, addr)
+                query_future.query_plan = query_future._load_balancer.make_query_plan(self.keyspace, targeted_query)
         except Exception:
             log.debug("Failed querying analytics master (request might not be routed optimally). "
                       "Make sure the session is connecting to a graph analytics datacenter.", exc_info=True)
@@ -3232,11 +3412,7 @@ class Session(object):
             # when cluster.shutdown() is called explicitly.
             pass
 
-    def add_or_renew_pool(self, host, is_host_addition):
-        """
-        For internal use only.
-        """
-        distance = self._profile_manager.distance(host)
+    def _add_or_renew_pool_for_distance(self, host, distance, is_host_addition):
         if distance == HostDistance.IGNORED:
             return None
 
@@ -3245,15 +3421,17 @@ class Session(object):
                new_pool = HostConnection(host, distance, self)
             except AuthenticationFailed as auth_exc:
                 conn_exc = ConnectionException(str(auth_exc), endpoint=host)
-                self.cluster.signal_connection_failure(host, conn_exc, is_host_addition)
+                if self._signal_connection_failure(host, conn_exc):
+                    self._handle_pool_down(host, is_host_addition)
                 return False
             except Exception as conn_exc:
                 log.warning("Failed to create connection pool for new host %s:",
                             host, exc_info=conn_exc)
                 # the host itself will still be marked down, so we need to pass
                 # a special flag to make sure the reconnector is created
-                self.cluster.signal_connection_failure(
-                    host, conn_exc, is_host_addition, expect_host_to_be_down=True)
+                if self._signal_connection_failure(host, conn_exc):
+                    self._handle_pool_down(
+                        host, is_host_addition, expect_host_to_be_down=True)
                 return False
 
             previous = self._pools.get(host)
@@ -3271,7 +3449,7 @@ class Session(object):
                     set_keyspace_event.wait(self.cluster.connect_timeout)
                     if not set_keyspace_event.is_set() or errors_returned:
                         log.warning("Failed setting keyspace for pool after keyspace changed during connect: %s", errors_returned)
-                        self.cluster.on_down(host, is_host_addition)
+                        self._handle_pool_down(host, is_host_addition)
                         new_pool.shutdown()
                         self._lock.acquire()
                         return False
@@ -3285,6 +3463,13 @@ class Session(object):
             return True
 
         return self.submit(run_add_or_renew_pool)
+
+    def add_or_renew_pool(self, host, is_host_addition):
+        """
+        For internal use only.
+        """
+        distance = self._profile_manager.distance(host)
+        return self._add_or_renew_pool_for_distance(host, distance, is_host_addition)
 
     def remove_pool(self, host):
         pool = self._pools.pop(host, None)
@@ -3410,14 +3595,397 @@ class Session(object):
     def get_pool_state(self):
         return dict((host, pool.get_state()) for host, pool in tuple(self._pools.items()))
 
+    def get_pool_state_for_host(self, host):
+        return self.get_pool_state().get(host)
+
     def get_pools(self):
         return self._pools.values()
+
+    def _signal_connection_failure(self, host, connection_exc):
+        return host.signal_connection_failure(connection_exc)
+
+    def _handle_pool_down(self, host, is_host_addition, expect_host_to_be_down=False):
+        self.cluster.on_down(host, is_host_addition, expect_host_to_be_down)
+
+    def is_shard_aware_disabled(self):
+        return self.cluster.shard_aware_options.disable
 
     def _validate_set_legacy_config(self, attr_name, value):
         if self.cluster._config_mode == _ConfigMode.PROFILES:
             raise ValueError("Cannot set Session.%s while using Configuration Profiles. Set this in a profile instead." % (attr_name,))
         setattr(self, '_' + attr_name, value)
         self.cluster._config_mode = _ConfigMode.LEGACY
+
+
+class _ControlHost(Host):
+    """
+    Host clone used by control-host sessions.
+
+    Connection failures on the proxy endpoint should only affect the pinned
+    session pool. The source host remains responsible for global cluster
+    liveness, load-balancing membership, and reconnection handling.
+    """
+
+
+class _ControlHostReconnectionHandler(_ReconnectionHandler):
+    """
+    Reconnects a control-host session pool without notifying the shared
+    cluster state for the source host.
+    """
+
+    def __init__(self, session, host, *args, **kwargs):
+        _ReconnectionHandler.__init__(self, *args, **kwargs)
+        self.session = weakref.proxy(session)
+        self.host = host
+
+    def try_reconnect(self):
+        return self.session.cluster.connection_factory(self.host.endpoint)
+
+    def on_reconnection(self, connection):
+        self.session._on_control_host_reconnection()
+
+    def on_exception(self, exc, next_delay):
+        if isinstance(exc, AuthenticationFailed):
+            return False
+        log.warning("Error attempting to reconnect control-host session to %s, scheduling retry in %s seconds: %s",
+                    self.host, next_delay, exc)
+        log.debug("Control-host session reconnection error details", exc_info=True)
+        return True
+
+
+class _ControlHostSession(Session):
+    """
+    Session variant pinned to a single host and endpoint.
+
+    This is used for proxy deployments where the control connection reaches a
+    node through an endpoint that differs from the node metadata advertised by
+    the cluster. All requests are explicitly targeted to the pinned host so the
+    normal load-balancing query plan does not reintroduce other hosts.
+    """
+
+    def __init__(self, cluster, source_host, pinned_host, keyspace=None):
+        self._source_host = source_host
+        self._pinned_host = pinned_host
+        self._pinned_host_rebind_error = None
+        super(_ControlHostSession, self).__init__(cluster, [pinned_host], keyspace)
+
+    def _ensure_valid_pinned_host(self):
+        if self._pinned_host_rebind_error is not None:
+            raise DriverException(self._pinned_host_rebind_error)
+
+    def _replace_pinned_host(self, source_host, endpoint):
+        stale_pool = None
+        old_pinned_host = None
+        new_pinned_host = self.cluster._clone_host_with_endpoint(
+            source_host, endpoint, host_cls=_ControlHost)
+
+        with self._lock:
+            if self._pinned_host.host_id == source_host.host_id and self._pinned_host.endpoint == endpoint:
+                self._pinned_host_rebind_error = None
+                return
+
+            old_pinned_host = self._pinned_host
+            stale_pool = self._pools.pop(old_pinned_host, None)
+            self._pinned_host = new_pinned_host
+            self._pinned_host_rebind_error = None
+
+        self._cancel_control_host_reconnector(old_pinned_host)
+        if stale_pool is not None:
+            self.submit(stale_pool.shutdown)
+
+    def _invalidate_pinned_host(self, error_message):
+        stale_pool = None
+        with self._lock:
+            self._pinned_host_rebind_error = error_message
+            stale_pool = self._pools.pop(self._pinned_host, None)
+
+        self._cancel_control_host_reconnector()
+        if stale_pool is not None:
+            self.submit(stale_pool.shutdown)
+
+    def _resolve_pinned_host(self, host):
+        if host is None:
+            return self._pinned_host
+        if host == self._pinned_host:
+            return self._pinned_host
+        if isinstance(host, Host) and host.host_id == self._pinned_host.host_id:
+            return self._pinned_host
+        raise ValueError(
+            "This session is pinned to control host %s; explicit host %s is not supported"
+            % (self._pinned_host, host))
+
+    def _resolve_source_host(self, host):
+        control_host = self.cluster.get_control_connection_host()
+        if host is None or host == self._pinned_host:
+            return control_host or self._source_host
+        if host == self._source_host:
+            return control_host or self._source_host
+        if isinstance(host, Host):
+            if control_host is not None and host.host_id == control_host.host_id:
+                return control_host
+            if host.host_id == self._source_host.host_id:
+                return control_host or host
+        raise ValueError(
+            "This session is pinned to control host %s; source host %s is not supported"
+            % (self._source_host, host))
+
+    def _refresh_current_control_endpoint(self, source_host):
+        connection = self.cluster.control_connection._connection
+        endpoint = connection.endpoint if connection else None
+        if not endpoint:
+            return source_host
+        if self._pinned_host.host_id == source_host.host_id and \
+                self._pinned_host.endpoint == endpoint:
+            return source_host
+
+        try:
+            endpoint = self.cluster._get_control_host_session_endpoint(source_host, endpoint)
+        except DriverException as exc:
+            self._invalidate_pinned_host(str(exc))
+            return None
+
+        self._replace_pinned_host(source_host, endpoint)
+
+        return source_host
+
+    def _sync_from_source_host(self, host):
+        if host is not None and not isinstance(host, Host):
+            return None
+        try:
+            source_host = self._resolve_source_host(host)
+        except ValueError:
+            return None
+
+        source_host = self._refresh_current_control_endpoint(source_host)
+        if source_host is None:
+            return None
+        self._source_host = source_host
+        self._pinned_host.set_location_info(source_host.datacenter, source_host.rack)
+        self._pinned_host.release_version = source_host.release_version
+        self._pinned_host.dse_version = source_host.dse_version
+        self._pinned_host.dse_workload = source_host.dse_workload
+        self._pinned_host.dse_workloads = source_host.dse_workloads
+        if source_host.is_up:
+            self._pinned_host.set_up()
+        elif source_host.is_up is False:
+            self._pinned_host.set_down()
+        else:
+            self._pinned_host.is_up = None
+        return source_host
+
+    def _pinned_host_distance(self):
+        distance = self._profile_manager.distance(self._pinned_host)
+        if distance != HostDistance.IGNORED:
+            return distance
+        return self._profile_manager.distance(self._source_host)
+
+    @staticmethod
+    def _completed_future(result):
+        future = Future()
+        future.set_result(result)
+        return future
+
+    def _completed_future_after(self, future):
+        if future is None:
+            return self._completed_future(True)
+
+        completed_future = Future()
+
+        def callback(inner_future):
+            try:
+                inner_future.result()
+            except Exception:
+                log.warning("Unexpected failure while refreshing control-host session pool for %s",
+                            self._pinned_host, exc_info=True)
+            completed_future.set_result(True)
+
+        future.add_done_callback(callback)
+        return completed_future
+
+    def _is_current_pinned_host(self, host):
+        return host is self._pinned_host
+
+    def _is_stale_pinned_host(self, host):
+        return isinstance(host, _ControlHost) and not self._is_current_pinned_host(host)
+
+    def _refresh_pinned_pool_for_source_host(self, is_host_addition):
+        distance = self._pinned_host_distance()
+        pool = self._pools.get(self._pinned_host)
+        future = None
+
+        if not pool or pool.is_shutdown:
+            if distance != HostDistance.IGNORED:
+                future = self._add_or_renew_pool_for_distance(
+                    self._pinned_host, distance, is_host_addition)
+        elif distance != pool.host_distance:
+            if distance == HostDistance.IGNORED:
+                future = super(_ControlHostSession, self).remove_pool(self._pinned_host)
+            else:
+                pool.host_distance = distance
+
+        return self._completed_future_after(future)
+
+    def get_pool_state_for_host(self, host):
+        if not self._is_current_pinned_host(host):
+            return None
+        return super(_ControlHostSession, self).get_pool_state_for_host(self._pinned_host)
+
+    def _create_response_future(self, query, parameters, trace, custom_payload,
+                                timeout, execution_profile=EXEC_PROFILE_DEFAULT,
+                                paging_state=None, host=None):
+        self._ensure_valid_pinned_host()
+        pinned_host = self._resolve_pinned_host(host)
+        return super(_ControlHostSession, self)._create_response_future(
+            query, parameters, trace, custom_payload, timeout,
+            execution_profile=execution_profile,
+            paging_state=paging_state, host=pinned_host)
+
+    def prepare(self, query, custom_payload=None, keyspace=None):
+        self._ensure_valid_pinned_host()
+        message = PrepareMessage(query=query, keyspace=keyspace)
+        future = ResponseFuture(
+            self, message, query=None, timeout=self.default_timeout,
+            host=self._pinned_host)
+        try:
+            future.send_request()
+            response = future.result().one()
+        except Exception:
+            log.exception("Error preparing query:")
+            raise
+
+        prepared_keyspace = keyspace if keyspace else None
+        prepared_statement = PreparedStatement.from_message(
+            response.query_id, response.bind_metadata, response.pk_indexes,
+            self.cluster.metadata, query, prepared_keyspace,
+            self._protocol_version, response.column_metadata,
+            response.result_metadata_id, response.is_lwt,
+            self.cluster.column_encryption_policy)
+        prepared_statement.custom_payload = future.custom_payload
+
+        self.cluster.add_prepared(response.query_id, prepared_statement)
+        # Control-host sessions are intentionally limited to the pinned
+        # endpoint. Fan-out through cluster metadata can reintroduce
+        # unreachable private node addresses in proxy-only deployments.
+
+        return prepared_statement
+
+    def add_or_renew_pool(self, host, is_host_addition):
+        tracked_source_host_id = getattr(self._source_host, "host_id", None)
+        is_pinned_host = self._is_current_pinned_host(host)
+        if not self._sync_from_source_host(host):
+            return None
+        if not is_pinned_host:
+            if getattr(host, "host_id", None) == tracked_source_host_id:
+                # Source-host UP/ADD handling should not be gated on the
+                # control-host pool outcome, but the pinned pool still needs to
+                # be reopened if it was previously removed.
+                return self._refresh_pinned_pool_for_source_host(is_host_addition)
+            return self._completed_future(True)
+        return self._add_or_renew_pool_for_distance(
+            self._pinned_host, self._pinned_host_distance(), is_host_addition)
+
+    def remove_pool(self, host):
+        if not self._sync_from_source_host(host):
+            return None
+        if not self._is_current_pinned_host(host):
+            return None
+        return super(_ControlHostSession, self).remove_pool(self._pinned_host)
+
+    def update_created_pools(self):
+        futures = set()
+        source_host = self._sync_from_source_host(None)
+        if not source_host:
+            return futures
+        distance = self._pinned_host_distance()
+        pool = self._pools.get(self._pinned_host)
+        future = None
+        if not pool or pool.is_shutdown:
+            if distance != HostDistance.IGNORED and source_host.is_up in (True, None):
+                future = self._add_or_renew_pool_for_distance(
+                    self._pinned_host, distance, False)
+        elif distance != pool.host_distance:
+            if distance == HostDistance.IGNORED:
+                future = super(_ControlHostSession, self).remove_pool(self._pinned_host)
+            else:
+                pool.host_distance = distance
+        if future:
+            futures.add(future)
+        return futures
+
+    def _signal_connection_failure(self, host, connection_exc):
+        if self._is_stale_pinned_host(host):
+            return False
+        if not self._is_current_pinned_host(host):
+            return super(_ControlHostSession, self)._signal_connection_failure(host, connection_exc)
+        return self._pinned_host.conviction_policy.add_failure(connection_exc)
+
+    def _handle_pool_down(self, host, is_host_addition, expect_host_to_be_down=False):
+        if self._is_stale_pinned_host(host):
+            return
+        if not self._is_current_pinned_host(host):
+            super(_ControlHostSession, self)._handle_pool_down(
+                host, is_host_addition, expect_host_to_be_down)
+            return
+
+        with self._pinned_host.lock:
+            was_up = self._pinned_host.is_up
+            self._pinned_host.set_down()
+            if (not was_up and not expect_host_to_be_down) or self._pinned_host.is_currently_reconnecting():
+                return
+
+        future = super(_ControlHostSession, self).remove_pool(self._pinned_host)
+        if future:
+            future.add_done_callback(lambda f: self._start_control_host_reconnector())
+        else:
+            self._start_control_host_reconnector()
+
+    def _start_control_host_reconnector(self):
+        if self.is_shutdown or self._source_host.is_up is False:
+            return
+
+        schedule = self.cluster.reconnection_policy.new_schedule()
+        reconnector = _ControlHostReconnectionHandler(
+            self, self._pinned_host,
+            self.cluster.scheduler, schedule, lambda: None)
+
+        old_reconnector = self._pinned_host.get_and_set_reconnection_handler(reconnector)
+        if old_reconnector:
+            log.debug("Old control-host reconnector found for %s, cancelling", self._pinned_host)
+            old_reconnector.cancel()
+
+        log.debug("Starting control-host reconnector for %s", self._pinned_host)
+        reconnector.start()
+
+    def _cancel_control_host_reconnector(self, host=None):
+        target_host = self._pinned_host if host is None else host
+        reconnector = target_host.get_and_set_reconnection_handler(None)
+        if reconnector:
+            reconnector.cancel()
+
+    def _on_control_host_reconnection(self):
+        self._cancel_control_host_reconnector()
+        self._sync_from_source_host(None)
+        self.update_created_pools()
+
+    def on_down(self, host):
+        if not self._sync_from_source_host(host):
+            return
+        self._cancel_control_host_reconnector()
+        future = super(_ControlHostSession, self).remove_pool(self._pinned_host)
+        if future:
+            future.add_done_callback(lambda f: self.update_created_pools())
+        else:
+            self.update_created_pools()
+
+    def on_remove(self, host):
+        self.on_down(host)
+
+    def shutdown(self):
+        self._cancel_control_host_reconnector()
+        super(_ControlHostSession, self).shutdown()
+
+    def is_shard_aware_disabled(self):
+        return True
 
 
 class UserTypeDoesNotExist(Exception):
@@ -3545,6 +4113,7 @@ class ControlConnection(object):
 
         self._reconnection_handler = None
         self._reconnection_lock = RLock()
+        self._current_host_id = None
 
         self._event_schedule_times = {}
 
@@ -3568,6 +4137,10 @@ class ControlConnection(object):
         if old:
             log.debug("[control connection] Closing old connection %r, replacing with %r", old, conn)
             old.close()
+
+        for session in tuple(getattr(self._cluster, "sessions", ())):
+            if isinstance(session, _ControlHostSession):
+                session.update_created_pools()
 
     def _try_connect_to_hosts(self):
         errors = {}
@@ -3770,6 +4343,7 @@ class ControlConnection(object):
             if self._connection:
                 self._connection.close()
                 self._connection = None
+            self._current_host_id = None
 
     def refresh_schema(self, force=False, **kwargs):
         try:
@@ -3849,6 +4423,7 @@ class ControlConnection(object):
         found_host_ids = set()
         found_endpoints = set()
 
+        local_host_id = None
         if local_result.parsed_rows:
             local_rows = dict_factory(local_result.column_names, local_result.parsed_rows)
             local_row = local_rows[0]
@@ -3857,6 +4432,7 @@ class ControlConnection(object):
 
             partitioner = local_row.get("partitioner")
             tokens = local_row.get("tokens", None)
+            local_host_id = local_row.get("host_id")
 
             peers_result.insert(0, local_row)
 
@@ -3928,6 +4504,7 @@ class ControlConnection(object):
                 self._cluster.metadata.remove_host_by_host_id(old_host_id, old_host.endpoint)
 
         log.debug("[control connection] Finished fetching ring info")
+        self._current_host_id = local_host_id if local_host_id in found_host_ids else None
         if partitioner and should_rebuild_token_map:
             log.debug("[control connection] Rebuilding token map due to topology changes")
             self._cluster.metadata.rebuild_token_map(partitioner, token_map)
@@ -4222,25 +4799,50 @@ class ControlConnection(object):
             # try just signaling the cluster, as this will trigger a reconnect
             # as part of marking the host down
             if self._connection and self._connection.is_defunct:
-                host = self._cluster.metadata.get_host(self._connection.endpoint)
+                host = self._try_get_cluster_host()
                 # host may be None if it's already been removed, but that indicates
                 # that errors have already been reported, so we're fine
                 if host:
-                    self._cluster.signal_connection_failure(
+                    is_down = self._cluster.signal_connection_failure(
                         host, self._connection.last_error, is_host_addition=False)
-                    return
+                    if is_down:
+                        return
 
         # if the connection is not defunct or the host already left, reconnect
         # manually
         self.reconnect()
 
+    def _try_get_cluster_host(self):
+        conn = self._connection
+        endpoint = conn.endpoint if conn else None
+        if not endpoint:
+            return None
+
+        host = self._cluster.metadata.get_host(endpoint)
+        if host is not None:
+            return host
+
+        host_id = self._current_host_id
+        if host_id is None:
+            return None
+
+        return self._cluster.metadata.get_host_by_host_id(host_id)
+
     def on_up(self, host):
         pass
 
-    def on_down(self, host):
-
+    def _is_current_host(self, host):
         conn = self._connection
-        if conn and conn.endpoint == host.endpoint and \
+        if conn is None or host is None:
+            return False
+
+        if conn.endpoint == host.endpoint:
+            return True
+
+        return self._current_host_id is not None and getattr(host, 'host_id', None) == self._current_host_id
+
+    def on_down(self, host):
+        if self._is_current_host(host) and \
                 self._reconnection_handler is None:
             log.debug("[control connection] Control connection host (%s) is "
                       "considered down, starting reconnection", host)
@@ -4252,8 +4854,7 @@ class ControlConnection(object):
             self.refresh_node_list_and_token_map(force_token_rebuild=True)
 
     def on_remove(self, host):
-        c = self._connection
-        if c and c.endpoint == host.endpoint:
+        if self._is_current_host(host):
             log.debug("[control connection] Control connection host (%s) is being removed. Reconnecting", host)
             # refresh will be done on reconnect
             self.reconnect()
