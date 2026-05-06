@@ -1975,6 +1975,10 @@ class Cluster(object):
                 with host.lock:
                     host.set_up()
                     host._currently_handling_node_up = False
+                for listener in self.listeners:
+                    listener.on_up(host)
+                for session in tuple(self.sessions):
+                    session.update_created_pools()
 
         # for testing purposes
         return futures
@@ -2020,7 +2024,7 @@ class Cluster(object):
         Intended for internal use only.
         """
         if self.is_shutdown:
-            return
+            return False
 
         with host.lock:
             was_up = host.is_up
@@ -2035,14 +2039,15 @@ class Cluster(object):
                     if pool_state:
                         connected |= pool_state['open_count'] > 0
                 if connected:
-                    return
+                    return False
 
             host.set_down()
             if (not was_up and not expect_host_to_be_down) or host.is_currently_reconnecting():
-                return
+                return False
         log.warning("Host %s has been marked down", host)
 
         self.on_down_potentially_blocking(host, is_host_addition)
+        return True
 
     def on_add(self, host, refresh_nodes=True):
         if self.is_shutdown:
@@ -2134,8 +2139,8 @@ class Cluster(object):
     def signal_connection_failure(self, host, connection_exc, is_host_addition, expect_host_to_be_down=False):
         is_down = host.signal_connection_failure(connection_exc)
         if is_down:
-            self.on_down(host, is_host_addition, expect_host_to_be_down)
-        return is_down
+            return self.on_down(host, is_host_addition, expect_host_to_be_down)
+        return False
 
     def add_host(self, endpoint, datacenter=None, rack=None, signal=True, refresh_nodes=True, host_id=None):
         """
@@ -3315,7 +3320,9 @@ class Session(object):
                 # we don't eagerly set is_up on previously ignored hosts. None is included here
                 # to allow us to attempt connections to hosts that have gone from ignored to something
                 # else.
-                if distance != HostDistance.IGNORED and host.is_up in (True, None):
+                if (distance != HostDistance.IGNORED and
+                        host.is_up in (True, None) and
+                        not getattr(host, '_currently_handling_node_up', False)):
                     future = self.add_or_renew_pool(host, False)
             elif distance != pool.host_distance:
                 # the distance has changed
@@ -4226,9 +4233,10 @@ class ControlConnection(object):
                 # host may be None if it's already been removed, but that indicates
                 # that errors have already been reported, so we're fine
                 if host:
-                    self._cluster.signal_connection_failure(
+                    is_down = self._cluster.signal_connection_failure(
                         host, self._connection.last_error, is_host_addition=False)
-                    return
+                    if is_down:
+                        return
 
         # if the connection is not defunct or the host already left, reconnect
         # manually
