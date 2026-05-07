@@ -158,4 +158,4 @@ class SchemaTests(unittest.TestCase):
         time.sleep(1)
         assert rs.response_future.is_schema_agreed == exepected
         if not rs.response_future.is_schema_agreed:
-            session.cluster.control_connection.wait_for_schema_agreement(wait_time=1000)
+            session.wait_for_schema_agreement(wait_time=1000)
