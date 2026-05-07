@@ -3974,7 +3974,7 @@ class ControlConnection(object):
         if self._cluster.is_shutdown:
             return False
 
-        agreed = self.wait_for_schema_agreement(connection,
+        agreed = self._wait_for_schema_agreement(connection=connection,
                                                 preloaded_results=preloaded_results,
                                                 wait_time=schema_agreement_wait)
 
@@ -4267,6 +4267,30 @@ class ControlConnection(object):
         self._cluster.scheduler.schedule_unique(delay, self.refresh_schema, **event)
 
     def wait_for_schema_agreement(self, connection=None, preloaded_results=None, wait_time=None):
+        """
+        Wait for schema agreement from the control connection's metadata view.
+
+        This method is intended for internal metadata refresh flows. External
+        callers should use :meth:`.Session.wait_for_schema_agreement` instead.
+
+        The control connection observes schema agreement from its own
+        perspective, which may include hosts the session is not using, and it
+        may fail when the control connection itself is transiently unhealthy.
+        That can produce false positives or failures that do not reflect
+        whether a session can safely proceed.
+
+        .. deprecated:: 3.30.0
+           Use :meth:`.Session.wait_for_schema_agreement` instead.
+        """
+        warn("ControlConnection.wait_for_schema_agreement is deprecated and will be removed in 4.0. "
+             "Use Session.wait_for_schema_agreement instead. "
+             "This method is for internal metadata refresh use only.",
+             DeprecationWarning, stacklevel=2)
+        return self._wait_for_schema_agreement(connection=connection,
+                                               preloaded_results=preloaded_results,
+                                               wait_time=wait_time)
+
+    def _wait_for_schema_agreement(self, connection=None, preloaded_results=None, wait_time=None):
         total_timeout = wait_time if wait_time is not None else self._cluster.max_schema_agreement_wait
         if total_timeout <= 0:
             return True
