@@ -48,6 +48,8 @@ Clusters and Sessions
 
    .. autoattribute:: control_connection_timeout
 
+   .. autoattribute:: allow_control_connection_query_fallback
+
    .. autoattribute:: idle_heartbeat_interval
 
    .. autoattribute:: idle_heartbeat_timeout
@@ -105,6 +107,9 @@ Clusters and Sessions
    .. automethod:: refresh_nodes
 
    .. automethod:: set_meta_refresh_enabled
+
+.. autoclass:: ControlConnectionQueryFallback
+   :members:
 
 .. autoclass:: ExecutionProfile (load_balancing_policy=<object object>, retry_policy=None, consistency_level=ConsistencyLevel.LOCAL_ONE, serial_consistency_level=None, request_timeout=10.0, row_factory=<function named_tuple_factory>, speculative_execution_policy=None)
    :members:

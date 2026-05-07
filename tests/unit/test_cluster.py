@@ -13,6 +13,7 @@
 # limitations under the License.
 import unittest
 
+from concurrent.futures import Future
 import logging
 import socket
 from types import SimpleNamespace
@@ -22,9 +23,9 @@ import uuid
 
 from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, RequestExecutionException, ReadTimeout, WriteTimeout, CoordinationFailure, ReadFailure, WriteFailure, FunctionFailure, AlreadyExists,\
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
-from cassandra.cluster import _Scheduler, Session, Cluster, ResultSet, SchemaAgreementScope, default_lbp_factory, \
+from cassandra.cluster import _Scheduler, Session, Cluster, ResultSet, SchemaAgreementScope, ControlConnectionQueryFallback, default_lbp_factory, \
     ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
-from cassandra.connection import ConnectionBusy
+from cassandra.connection import ConnectionBusy, ConnectionException
 from cassandra.pool import Host
 from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
@@ -185,6 +186,52 @@ class ClusterTest(unittest.TestCase):
         for invalid_port in [0, 65536, -1]:
             with pytest.raises(ValueError):
                 cluster = Cluster(contact_points=['127.0.0.1'], port=invalid_port)
+
+    def test_control_connection_query_fallback_modes(self):
+        assert Cluster().allow_control_connection_query_fallback is ControlConnectionQueryFallback.Disabled
+        with pytest.raises(TypeError):
+            Cluster(allow_control_connection_query_fallback=False)
+        with pytest.raises(TypeError):
+            Cluster(allow_control_connection_query_fallback=True)
+        assert (
+            Cluster(allow_control_connection_query_fallback=ControlConnectionQueryFallback.Fallback)
+            .allow_control_connection_query_fallback
+            is ControlConnectionQueryFallback.Fallback
+        )
+        assert Cluster(
+            allow_control_connection_query_fallback=ControlConnectionQueryFallback.SkipPoolCreation
+        ).allow_control_connection_query_fallback is ControlConnectionQueryFallback.SkipPoolCreation
+
+    def test_control_connection_query_fallback_no_node_pool_mode_skips_pool_creation(self):
+        cluster = Cluster(
+            allow_control_connection_query_fallback=ControlConnectionQueryFallback.SkipPoolCreation,
+            monitor_reporting_enabled=False,
+        )
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+        with patch.object(Session, "add_or_renew_pool") as mocked_add_or_renew_pool:
+            session = Session(cluster, [host])
+
+        mocked_add_or_renew_pool.assert_not_called()
+        assert session._initial_connect_futures == set()
+        assert session._pools == {}
+        assert session.update_created_pools() == set()
+
+    def test_control_connection_query_fallback_fallback_tolerates_empty_initial_pools(self):
+        cluster = Cluster(
+            allow_control_connection_query_fallback=ControlConnectionQueryFallback.Fallback,
+            monitor_reporting_enabled=False,
+        )
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        future = Future()
+        future.set_result(False)
+
+        with patch.object(Session, "add_or_renew_pool", return_value=future) as mocked_add_or_renew_pool:
+            session = Session(cluster, [host])
+
+        mocked_add_or_renew_pool.assert_called_once_with(host, is_host_addition=False)
+        assert session._initial_connect_futures == {future}
+        assert session._pools == {}
 
     def test_compression_autodisabled_without_libraries(self):
         with patch.dict('cassandra.cluster.locally_supported_compressions', {}, clear=True):
@@ -550,6 +597,32 @@ class SessionTest(unittest.TestCase):
 
         with pytest.raises(ValueError):
             session.wait_for_schema_agreement(wait_time=1, scope='planet')
+
+    @mock_session_pools
+    def test_set_keyspace_for_all_pools_reports_all_errors(self, *_):
+        cluster = Cluster()
+        session = Session(
+            cluster,
+            [Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())],
+        )
+
+        pool1 = Mock(host='host1')
+        pool2 = Mock(host='host2')
+        keyspace_error = ConnectionException("boom")
+
+        pool1._set_keyspace_for_all_conns.side_effect = (
+            lambda keyspace, callback: callback(pool1, [keyspace_error])
+        )
+        pool2._set_keyspace_for_all_conns.side_effect = (
+            lambda keyspace, callback: callback(pool2, [])
+        )
+        session._pools = {'host1': pool1, 'host2': pool2}
+
+        callback = Mock()
+        session._set_keyspace_for_all_pools('ks', callback)
+
+        callback.assert_called_once()
+        assert callback.call_args.args[0] == {'host1': [keyspace_error]}
 
 class ProtocolVersionTests(unittest.TestCase):
 
