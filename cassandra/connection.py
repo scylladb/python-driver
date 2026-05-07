@@ -1816,7 +1816,19 @@ class HeartbeatFuture(object):
         with connection.lock:
             if connection.in_flight < connection.max_request_id:
                 connection.in_flight += 1
-                connection.send_msg(OptionsMessage(), connection.get_request_id(), self._options_callback)
+                request_id = connection.get_request_id()
+                try:
+                    connection.send_msg(OptionsMessage(), request_id, self._options_callback)
+                except Exception as exc:
+                    if connection.is_control_connection:
+                        connection.in_flight -= 1
+                    # send_msg() registers the callback before writing to the socket,
+                    # so a write failure must unwind that registration here.
+                    connection._requests.pop(request_id, None)
+                    if request_id not in connection.request_ids:
+                        connection.request_ids.append(request_id)
+                    self._exception = exc
+                    self._event.set()
             else:
                 self._exception = Exception("Failed to send heartbeat because connection 'in_flight' exceeds threshold")
                 self._event.set()

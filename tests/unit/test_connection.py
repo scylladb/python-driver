@@ -21,7 +21,7 @@ from unittest.mock import Mock, ANY, call, patch
 from cassandra import OperationTimedOut
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
-                                  locally_supported_compressions, ConnectionHeartbeat, _Frame, Timer, TimerManager,
+                                  locally_supported_compressions, ConnectionHeartbeat, HeartbeatFuture, _Frame, Timer, TimerManager,
                                   ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
@@ -462,6 +462,31 @@ class ConnectionHeartbeatTest(unittest.TestCase):
         max_connection.defunct.assert_has_calls([call(ANY)] * get_holders.call_count)
         holder.return_connection.assert_has_calls(
             [call(max_connection)] * get_holders.call_count)
+
+    def test_heartbeat_future_releases_request_id_when_send_fails(self, *args):
+        connection = Connection(DefaultEndPoint('1.2.3.4'))
+        connection.push = Mock(side_effect=ConnectionException("write failed"))
+        owner = Mock()
+        initial_in_flight = connection.in_flight
+        initial_request_ids = len(connection.request_ids)
+
+        # HostConnection.return_connection releases the heartbeat's in-flight slot.
+        def return_connection(conn):
+            with conn.lock:
+                conn.in_flight -= 1
+
+        owner.return_connection.side_effect = return_connection
+
+        future = HeartbeatFuture(connection, owner)
+
+        with pytest.raises(ConnectionException):
+            future.wait(0)
+
+        owner.return_connection(connection)
+
+        assert connection.in_flight == initial_in_flight
+        assert len(connection.request_ids) == initial_request_ids
+        assert not connection._requests
 
     def test_unexpected_response(self, *args):
         request_id = 999
