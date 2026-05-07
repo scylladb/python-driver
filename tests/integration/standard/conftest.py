@@ -37,6 +37,7 @@ _MODULE_CLUSTER_ORDER = {
     "test_ip_change": 4,
     "test_authentication": 4,
     "test_authentication_misconfiguration": 4,
+    "test_control_connection_query_fallback": 4,
     "test_custom_cluster": 4,
     "test_query": 4,
     # Group 5: tablets (destructive — decommissions a node)

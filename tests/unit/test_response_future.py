@@ -19,7 +19,7 @@ from threading import RLock
 from unittest.mock import Mock, MagicMock, ANY
 
 from cassandra import ConsistencyLevel, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
-from cassandra.cluster import Session, ResponseFuture, NoHostAvailable, ProtocolVersion
+from cassandra.cluster import Session, ResponseFuture, NoHostAvailable, ProtocolVersion, ControlConnectionQueryFallback
 from cassandra.connection import Connection, ConnectionException
 from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessage,
                                 UnavailableErrorMessage, ResultMessage, QueryMessage,
@@ -41,6 +41,7 @@ class ResponseFutureTests(unittest.TestCase):
         s = Mock(spec=Session)
         s.row_factory = lambda col_names, rows: [(col_names, rows)]
         s.cluster.control_connection._tablets_routing_v1 = False
+        s.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Disabled
         return s
 
     def make_pool(self):
@@ -48,6 +49,22 @@ class ResponseFutureTests(unittest.TestCase):
         pool.is_shutdown = False
         pool.borrow_connection.return_value = [Mock(), Mock()]
         return pool
+
+    def make_control_connection(self):
+        connection = Mock(spec=Connection)
+        connection.endpoint = 'control-host'
+        connection.lock = RLock()
+        connection.in_flight = 0
+        connection.max_request_id = 100
+        connection.request_ids = deque()
+        connection._requests = {}
+        connection.orphaned_request_ids = set()
+        connection.orphaned_threshold = 75
+        connection.orphaned_threshold_reached = False
+        connection.is_control_connection = True
+        connection.get_request_id.return_value = 7
+        connection.send_msg.return_value = 128
+        return connection
 
     def make_session(self):
         session = self.make_basic_session()
@@ -390,6 +407,268 @@ class ResponseFutureTests(unittest.TestCase):
         rf.send_request()
         with pytest.raises(NoHostAvailable):
             rf.result()
+
+    def test_control_connection_fallback_disabled_by_default(self):
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools = {}
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+
+        rf = self.make_response_future(session)
+        rf.send_request()
+
+        connection.send_msg.assert_not_called()
+        with pytest.raises(NoHostAvailable):
+            rf.result()
+
+    def test_control_connection_fallback_updates_connection_keyspace(self):
+        session = self.make_basic_session()
+        session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools = {}
+
+        def set_keyspace_for_all_pools(keyspace, callback):
+            session.keyspace = keyspace
+            callback({})
+
+        session._set_keyspace_for_all_pools.side_effect = set_keyspace_for_all_pools
+
+        connection = self.make_control_connection()
+        connection.keyspace = 'oldks'
+        session.cluster.control_connection._connection = connection
+        control_host = Mock(endpoint=connection.endpoint)
+        session.cluster.get_control_connection_host.return_value = control_host
+
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+
+        result = Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE, new_keyspace='newks')
+        connection.send_msg.call_args[1]['cb'](result)
+
+        assert connection.keyspace == 'newks'
+        assert session.keyspace == 'newks'
+        assert rf.result().current_rows == []
+
+    def test_control_connection_fallback_when_no_usable_pools(self):
+        session = self.make_basic_session()
+        session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.SkipPoolCreation
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1', 'ip2']
+        session._pools = {}
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        control_host = Mock(endpoint=connection.endpoint)
+        session.cluster.get_control_connection_host.return_value = control_host
+
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+
+        connection.send_msg.assert_called_once_with(
+            rf.message, 7, cb=ANY, encoder=ProtocolHandler.encode_message,
+            decoder=ProtocolHandler.decode_message, result_metadata=[])
+        assert connection.in_flight == 1
+        assert rf.attempted_hosts == [control_host]
+
+        cb = connection.send_msg.call_args[1]['cb']
+        expected_result = (object(), object())
+        cb(self.make_mock_response(expected_result[0], expected_result[1]))
+
+        assert connection.in_flight == 0
+        assert rf.result()[0] == expected_result
+
+    def test_control_connection_fallback_retries_after_server_error(self):
+        session = self.make_basic_session()
+        session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools = {}
+        connection = self.make_control_connection()
+        connection.get_request_id.side_effect = [7, 8]
+        session.cluster.control_connection._connection = connection
+        control_host = Mock(endpoint=connection.endpoint)
+        session.cluster.get_control_connection_host.return_value = control_host
+
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+
+        first_response = Mock(spec=ServerError, info={})
+        first_response.summary = 'boom'
+        first_response.to_exception.return_value = first_response
+        connection.send_msg.call_args[1]['cb'](first_response)
+
+        rf.session.cluster.scheduler.schedule.assert_called_once_with(ANY, rf._retry_task, False, control_host)
+
+        # The retry decision must come from the future state, not the live connection reference.
+        rf._connection = Mock(is_control_connection=False)
+
+        rf._retry_task(False, control_host)
+
+        assert connection.send_msg.call_count == 2
+        assert connection.send_msg.call_args_list[1][0][0] is rf.message
+        assert connection.send_msg.call_args_list[1][0][1] == 8
+        assert rf.attempted_hosts == [control_host, control_host]
+
+        expected_result = (object(), object())
+        connection.send_msg.call_args_list[1][1]['cb'](
+            self.make_mock_response(expected_result[0], expected_result[1]))
+
+        assert connection.in_flight == 0
+        assert rf.result()[0] == expected_result
+
+    def test_control_connection_fallback_fetches_next_page(self):
+        session = self.make_basic_session()
+        session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools = {}
+        connection = self.make_control_connection()
+        connection.get_request_id.side_effect = [7, 8]
+        session.cluster.control_connection._connection = connection
+        control_host = Mock(endpoint=connection.endpoint)
+        session.cluster.get_control_connection_host.return_value = control_host
+
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+
+        first_response = self.make_mock_response(['col'], [(1,)])
+        first_response.paging_state = b'next-page'
+        connection.send_msg.call_args[1]['cb'](first_response)
+
+        assert rf.result().current_rows == [(['col'], [(1,)])]
+        assert rf.has_more_pages
+
+        rf.start_fetching_next_page()
+
+        assert connection.send_msg.call_count == 2
+        assert connection.send_msg.call_args_list[1][0][0] is rf.message
+        assert connection.send_msg.call_args_list[1][0][1] == 8
+        assert rf.message.paging_state == b'next-page'
+
+        second_response = self.make_mock_response(['col'], [(2,)])
+        connection.send_msg.call_args_list[1][1]['cb'](second_response)
+
+        assert connection.in_flight == 0
+        assert rf.result().current_rows == [(['col'], [(2,)])]
+
+    def test_control_connection_fallback_reprepares_prepared_statement(self):
+        session = self.make_basic_session()
+        session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
+        session.cluster.protocol_version = ProtocolVersion.V4
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools = {}
+        session.submit.side_effect = lambda fn, *args, **kwargs: fn(*args, **kwargs)
+
+        query_id = b'a' * 16
+        prepared_statement = Mock(
+            query_id=query_id,
+            query_string="SELECT * FROM foobar",
+            keyspace="FooKeyspace",
+            result_metadata=[],
+            result_metadata_id=None)
+        session.cluster._prepared_statements = {query_id: prepared_statement}
+
+        connection = self.make_control_connection()
+        connection.keyspace = "FooKeyspace"
+        connection.get_request_id.side_effect = [7, 8, 9]
+        session.cluster.control_connection._connection = connection
+        control_host = Mock(endpoint=connection.endpoint)
+        session.cluster.get_control_connection_host.return_value = control_host
+
+        rf = self.make_response_future(session)
+        rf.prepared_statement = prepared_statement
+        assert rf.send_request()
+
+        missing = Mock(spec=PreparedQueryNotFound, info=query_id)
+        connection.send_msg.call_args_list[0][1]['cb'](missing)
+
+        assert connection.send_msg.call_count == 2
+        prepare_message = connection.send_msg.call_args_list[1][0][0]
+        assert isinstance(prepare_message, PrepareMessage)
+        assert prepare_message.query == "SELECT * FROM foobar"
+        assert connection.send_msg.call_args_list[1][0][1] == 8
+
+        prepared_response = Mock(
+            spec=ResultMessage,
+            kind=RESULT_KIND_PREPARED,
+            query_id=query_id,
+            column_metadata=[],
+            result_metadata_id=None)
+        connection.send_msg.call_args_list[1][1]['cb'](prepared_response)
+
+        assert connection.send_msg.call_count == 3
+        assert connection.send_msg.call_args_list[2][0][0] is rf.message
+        assert connection.send_msg.call_args_list[2][0][1] == 9
+
+        expected_result = (['col'], [(1,)])
+        connection.send_msg.call_args_list[2][1]['cb'](
+            self.make_mock_response(expected_result[0], expected_result[1]))
+
+        assert connection.in_flight == 0
+        assert rf.result()[0] == expected_result
+
+    def test_control_connection_fallback_not_used_when_pool_can_serve(self):
+        session = self.make_basic_session()
+        session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        pool = Mock(is_shutdown=False)
+        pool.borrow_connection.side_effect = NoConnectionsAvailable()
+        session._pools = {'ip1': pool}
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+
+        rf = self.make_response_future(session)
+        rf.send_request()
+
+        connection.send_msg.assert_not_called()
+        with pytest.raises(NoHostAvailable):
+            rf.result()
+
+    def test_control_connection_fallback_orphans_stream_on_timeout(self):
+        session = self.make_basic_session()
+        session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools = {}
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+
+        def send_msg(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = (cb, kwargs.get('decoder'), kwargs.get('result_metadata'))
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+
+        rf = self.make_response_future(session)
+        rf.send_request()
+        rf._on_timeout()
+
+        assert 7 in connection.orphaned_request_ids
+        assert connection.in_flight == 1
+        with pytest.raises(OperationTimedOut):
+            rf.result()
+
+    def test_control_connection_fallback_timeout_without_metadata_host_uses_connection_endpoint(self):
+        session = self.make_basic_session()
+        session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = []
+        session._pools = {}
+        session.cluster.get_control_connection_host.return_value = None
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+
+        def send_msg(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = (cb, kwargs.get('decoder'), kwargs.get('result_metadata'))
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+        rf._on_timeout()
+
+        with pytest.raises(OperationTimedOut) as exc_info:
+            rf.result()
+
+        assert exc_info.value.errors == {
+            'control-host': 'Client request timeout. See Session.execute[_async](timeout)'
+        }
 
     def test_first_pool_shutdown(self):
         session = self.make_basic_session()
