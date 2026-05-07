@@ -15,7 +15,7 @@
 import unittest
 
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import Mock, ANY, call
+from unittest.mock import Mock, ANY, call, patch
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
@@ -210,16 +210,27 @@ class ControlConnectionTest(unittest.TestCase):
         """
         Basic test with all schema versions agreeing
         """
-        assert self.control_connection.wait_for_schema_agreement()
+        assert self.control_connection._wait_for_schema_agreement()
         # the control connection should not have slept at all
         assert self.time.clock == 0
+
+    @patch('cassandra.cluster.warn')
+    def test_wait_for_schema_agreement_warns_about_deprecation(self, mocked_warn):
+        assert self.control_connection.wait_for_schema_agreement()
+
+        mocked_warn.assert_called_once()
+        warning_args, warning_kwargs = mocked_warn.call_args
+        assert 'ControlConnection.wait_for_schema_agreement is deprecated' in str(warning_args[0])
+        assert 'Use Session.wait_for_schema_agreement instead.' in str(warning_args[0])
+        assert warning_args[1] is DeprecationWarning
+        assert warning_kwargs['stacklevel'] == 2
 
     def test_wait_for_schema_agreement_uses_preloaded_results_if_given(self):
         """
         wait_for_schema_agreement uses preloaded results if given for shared table queries
         """
         preloaded_results = self._matching_schema_preloaded_results
-        assert self.control_connection.wait_for_schema_agreement(preloaded_results=preloaded_results)
+        assert self.control_connection._wait_for_schema_agreement(preloaded_results=preloaded_results)
         # the control connection should not have slept at all
         assert self.time.clock == 0
         # the connection should not have made any queries if given preloaded results
@@ -230,7 +241,7 @@ class ControlConnectionTest(unittest.TestCase):
         wait_for_schema_agreement requery if schema does not match using preloaded results
         """
         preloaded_results = self._nonmatching_schema_preloaded_results
-        assert self.control_connection.wait_for_schema_agreement(preloaded_results=preloaded_results)
+        assert self.control_connection._wait_for_schema_agreement(preloaded_results=preloaded_results)
         # the control connection should not have slept at all
         assert self.time.clock == 0
         assert self.connection.wait_for_responses.call_count == 1
@@ -241,7 +252,7 @@ class ControlConnectionTest(unittest.TestCase):
         """
         # change the schema version on one node
         self.connection.peer_results[1][1][2] = 'b'
-        assert not self.control_connection.wait_for_schema_agreement()
+        assert not self.control_connection._wait_for_schema_agreement()
         # the control connection should have slept until it hit the limit
         assert self.time.clock >= self.cluster.max_schema_agreement_wait
 
@@ -262,7 +273,7 @@ class ControlConnectionTest(unittest.TestCase):
         self.connection.peer_results[1][1][3] = 'c'
         self.cluster.metadata.get_host(DefaultEndPoint('192.168.1.1')).is_up = False
 
-        assert self.control_connection.wait_for_schema_agreement()
+        assert self.control_connection._wait_for_schema_agreement()
         assert self.time.clock == 0
 
     def test_wait_for_schema_agreement_rpc_lookup(self):
@@ -279,12 +290,12 @@ class ControlConnectionTest(unittest.TestCase):
 
         # even though the new host has a different schema version, it's
         # marked as down, so the control connection shouldn't care
-        assert self.control_connection.wait_for_schema_agreement()
+        assert self.control_connection._wait_for_schema_agreement()
         assert self.time.clock == 0
 
         # but once we mark it up, the control connection will care
         host.is_up = True
-        assert not self.control_connection.wait_for_schema_agreement()
+        assert not self.control_connection._wait_for_schema_agreement()
         assert self.time.clock >= self.cluster.max_schema_agreement_wait
 
 
@@ -299,7 +310,7 @@ class ControlConnectionTest(unittest.TestCase):
                                status_event_refresh_window=0)
         cc._connection = self.connection
         cc._time = self.time
-        assert cc.wait_for_schema_agreement()
+        assert cc._wait_for_schema_agreement()
 
     def test_refresh_nodes_and_tokens(self):
         self.control_connection.refresh_node_list_and_token_map()
@@ -441,7 +452,8 @@ class ControlConnectionTest(unittest.TestCase):
         self.control_connection.refresh_node_list_and_token_map()
         self.cluster.executor.submit.assert_called_with(self.control_connection._reconnect)
 
-    def test_refresh_schema_timeout(self):
+    @patch('cassandra.cluster.warn')
+    def test_refresh_schema_timeout(self, mocked_warn):
 
         def bad_wait_for_responses(*args, **kwargs):
             self.time.sleep(kwargs['timeout'])
@@ -451,6 +463,7 @@ class ControlConnectionTest(unittest.TestCase):
         self.control_connection.refresh_schema()
         assert self.connection.wait_for_responses.call_count == self.cluster.max_schema_agreement_wait / self.control_connection._timeout
         assert self.connection.wait_for_responses.call_args[1]['timeout'] == self.control_connection._timeout
+        mocked_warn.assert_not_called()
 
     def test_handle_topology_change(self):
         event = {
