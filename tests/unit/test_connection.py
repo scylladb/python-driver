@@ -389,27 +389,6 @@ class ConnectionTest(unittest.TestCase):
         assert len(c.request_ids) == initial_request_ids
         assert not c._requests
 
-    def test_set_keyspace_async_reports_send_failure_and_releases_request_id(self):
-        c = self.make_connection()
-        c.push = Mock(side_effect=ConnectionException("write failed"))
-        initial_in_flight = c.in_flight
-        initial_request_ids = len(c.request_ids)
-        callback_errors = []
-
-        def callback(conn, error):
-            callback_errors.append(error)
-            with conn.lock:
-                conn.in_flight -= 1
-
-        c.set_keyspace_async("ks", callback)
-
-        assert len(callback_errors) == 1
-        assert isinstance(callback_errors[0], ConnectionException)
-        assert c.in_flight == initial_in_flight
-        assert len(c.request_ids) == initial_request_ids
-        assert not c._requests
-
-
 @patch('cassandra.connection.ConnectionHeartbeat._raise_if_stopped')
 class ConnectionHeartbeatTest(unittest.TestCase):
 
