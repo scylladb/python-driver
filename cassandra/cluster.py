@@ -1930,6 +1930,27 @@ class Cluster(object):
         have_future = False
         futures = set()
         try:
+            # Guard against stale on_up destroying a healthy pool.
+            # Case 1: Host was replaced in metadata (different object, same endpoint).
+            current_host = self.metadata.get_host(host.endpoint)
+            if current_host is not None and current_host is not host and current_host.is_up:
+                log.debug("Host %s has been replaced by %s which is already up; "
+                          "skipping stale on_up handling", host, current_host)
+                with host.lock:
+                    host._currently_handling_node_up = False
+                return
+
+            # Case 2: A healthy pool already exists (e.g. on_add already ran).
+            for session in tuple(self.sessions):
+                pool = session._pools.get(host)
+                if pool and not pool.is_shutdown:
+                    log.debug("Host %s already has a healthy pool; "
+                              "skipping on_up pool teardown/rebuild", host)
+                    with host.lock:
+                        host.set_up()
+                        host._currently_handling_node_up = False
+                    return
+
             log.info("Host %s may be up; will prepare queries and open connection pool", host)
 
             reconnector = host.get_and_set_reconnection_handler(None)

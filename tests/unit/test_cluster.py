@@ -719,3 +719,74 @@ class ExecutionProfileTest(unittest.TestCase):
             )
 
         patched_logger.warning.assert_not_called()
+
+
+class TestOnUpStaleHost(unittest.TestCase):
+    """
+    Tests for on_up() not destroying a healthy pool when called with a stale
+    host reference after a replace-with-same-IP.
+    """
+
+    def _make_cluster(self, sessions=None):
+        """Create a minimal Cluster object without connecting."""
+        from threading import Lock
+        cluster = object.__new__(Cluster)
+        cluster.is_shutdown = False
+        cluster.metadata = Mock()
+        cluster.sessions = sessions or set()
+        cluster.profile_manager = Mock()
+        cluster.control_connection = Mock()
+        cluster._listeners = set()
+        cluster._listener_lock = Lock()
+        return cluster
+
+    def test_on_up_skips_when_host_replaced_in_metadata(self):
+        """
+        If a NEW_NODE event already replaced the old host with a new one
+        (same endpoint, different host_id), on_up(old_host) should bail out
+        instead of tearing down the new host's pool.
+        """
+        from cassandra.connection import DefaultEndPoint
+        endpoint = DefaultEndPoint('127.0.0.1')
+
+        old_host = Host(endpoint, conviction_policy_factory=Mock(), host_id=uuid.uuid4())
+        old_host.is_up = False
+        old_host._currently_handling_node_up = False
+
+        new_host = Host(endpoint, conviction_policy_factory=Mock(), host_id=uuid.uuid4())
+        new_host.is_up = True
+
+        cluster = self._make_cluster()
+        cluster.metadata.get_host = Mock(return_value=new_host)
+
+        cluster.on_up(old_host)
+
+        self.assertFalse(old_host._currently_handling_node_up,
+                         "on_up should have returned early and reset _currently_handling_node_up")
+
+    def test_on_up_skips_when_healthy_pool_exists(self):
+        """
+        If on_add already created a healthy pool for this host, a subsequent
+        on_up should not tear it down and rebuild it.
+        """
+        from cassandra.connection import DefaultEndPoint
+        endpoint = DefaultEndPoint('127.0.0.1')
+
+        host = Host(endpoint, conviction_policy_factory=Mock(), host_id=uuid.uuid4())
+        host.is_up = False
+        host._currently_handling_node_up = False
+
+        mock_pool = Mock()
+        mock_pool.is_shutdown = False
+        mock_session = Mock()
+        mock_session._pools = {host: mock_pool}
+
+        cluster = self._make_cluster(sessions={mock_session})
+        cluster.metadata.get_host = Mock(return_value=host)
+
+        cluster.on_up(host)
+
+        mock_session.remove_pool.assert_not_called()
+        self.assertTrue(host.is_up, "on_up should have marked host as up")
+        self.assertFalse(host._currently_handling_node_up,
+                         "on_up should have returned early and reset _currently_handling_node_up")
