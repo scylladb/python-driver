@@ -433,6 +433,44 @@ class TestClientRoutesEndPoint(unittest.TestCase):
         )
         self.assertEqual(ep.resolve(), ("10.0.0.1", 9042))
 
+    def test_original_port_is_part_of_identity(self):
+        """Endpoints that only differ by original port should not compare equal."""
+        host_id = uuid.uuid4()
+        ep_without_port = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+        )
+        ep_with_port = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+            original_port=9042,
+        )
+
+        self.assertNotEqual(ep_without_port, ep_with_port)
+        self.assertNotEqual(hash(ep_without_port), hash(ep_with_port))
+
+    def test_sorting_handles_missing_original_port(self):
+        """Ordering should remain deterministic when original_port is None."""
+        host_id = uuid.uuid4()
+        ep_without_port = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+        )
+        ep_with_port = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+            original_port=9042,
+        )
+
+        self.assertEqual(
+            sorted([ep_without_port, ep_with_port]),
+            [ep_with_port, ep_without_port],
+        )
+
     @patch('cassandra.client_routes.socket.getaddrinfo',
            return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, '', ("192.168.1.100", 9042))])
     def test_resolve_returns_address_when_route_exists(self, _mock_getaddrinfo):
