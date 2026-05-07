@@ -15,6 +15,7 @@ import unittest
 
 import logging
 import socket
+import threading
 
 from unittest.mock import patch, Mock
 import uuid
@@ -23,7 +24,7 @@ from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, R
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
 from cassandra.cluster import _Scheduler, Session, Cluster, default_lbp_factory, \
     ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
-from cassandra.pool import Host
+from cassandra.pool import Host, HostConnection
 from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
 from tests.unit.utils import mock_session_pools
@@ -338,6 +339,39 @@ class SessionTest(unittest.TestCase):
         query = s.execute.call_args[0][0]
         assert query == 'USE simple_ks', (
             "Simple keyspace names should not be quoted, got: %r" % query)
+
+
+class SessionPoolRaceTest(unittest.TestCase):
+    def test_concurrent_add_or_renew_pool_no_double_replace(self):
+        """Reproduces https://github.com/scylladb/python-driver/issues/317."""
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+        session = Session.__new__(Session)
+        session.submit = lambda fn: Mock(result=lambda timeout=None: fn())
+        session.keyspace = None
+        session._lock = threading.RLock()
+        session._pools = {}
+        session._profile_manager = Mock()
+        session._profile_manager.distance.return_value = HostDistance.LOCAL
+
+        winner_pool = Mock()
+        created_pools = []
+
+        def fake_host_connection_init(pool, *_):
+            pool._keyspace = session.keyspace
+            pool.shutdown = Mock()
+            created_pools.append(pool)
+            log.info("Publishing competing pool while replacement pool is being created")
+            with session._lock:
+                session._pools[host] = winner_pool
+
+        with patch.object(HostConnection, '__init__', fake_host_connection_init):
+            result = session.add_or_renew_pool(host, is_host_addition=True).result()
+
+        assert result is True
+        assert session._pools[host] is winner_pool
+        created_pools[0].shutdown.assert_called_once()
+        winner_pool.shutdown.assert_not_called()
 
 class ProtocolVersionTests(unittest.TestCase):
 
