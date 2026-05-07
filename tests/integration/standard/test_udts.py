@@ -147,7 +147,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         c.register_user_type("udt_test_register_before_connecting2", "user", User2)
 
         s = c.connect(wait_for_all_pools=True)
-        c.control_connection.wait_for_schema_agreement()
+        s.wait_for_schema_agreement()
 
         s.execute("INSERT INTO udt_test_register_before_connecting.mytable (a, b) VALUES (%s, %s)", (0, User1(42, 'bob')))
         result = s.execute("SELECT b FROM udt_test_register_before_connecting.mytable WHERE a=0")
