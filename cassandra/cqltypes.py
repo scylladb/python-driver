@@ -52,6 +52,7 @@ from cassandra.marshal import (int8_pack, int8_unpack, int16_pack, int16_unpack,
 from cassandra import util
 
 _little_endian_flag = 1  # we always serialize LE
+_INT32_NULL = int32_pack(-1)  # pre-allocated null sentinel for collection serialization
 import ipaddress
 
 apache_cassandra_type_prefix = 'org.apache.cassandra.db.marshal.'
@@ -841,7 +842,7 @@ class _SimpleParameterizedType(_ParameterizedType):
         inner_proto = max(3, protocol_version)
         for item in items:
             if item is None:
-                buf.write(int32_pack(-1))
+                buf.write(_INT32_NULL)
             else:
                 itembytes = subtype.to_binary(item, inner_proto)
                 buf.write(int32_pack(len(itembytes)))
@@ -912,13 +913,13 @@ class MapType(_ParameterizedType):
                 buf.write(int32_pack(len(keybytes)))
                 buf.write(keybytes)
             else:
-                buf.write(int32_pack(-1))
+                buf.write(_INT32_NULL)
             if val is not None:
                 valbytes = value_type.to_binary(val, inner_proto)
                 buf.write(int32_pack(len(valbytes)))
                 buf.write(valbytes)
             else:
-                buf.write(int32_pack(-1))
+                buf.write(_INT32_NULL)
         return buf.getvalue()
 
 
@@ -964,7 +965,7 @@ class TupleType(_ParameterizedType):
                 buf.write(int32_pack(len(packed_item)))
                 buf.write(packed_item)
             else:
-                buf.write(int32_pack(-1))
+                buf.write(_INT32_NULL)
         return buf.getvalue()
 
     @classmethod
@@ -1041,7 +1042,7 @@ class UserType(TupleType):
                 buf.write(int32_pack(len(packed_item)))
                 buf.write(packed_item)
             else:
-                buf.write(int32_pack(-1))
+                buf.write(_INT32_NULL)
         return buf.getvalue()
 
     @classmethod
