@@ -63,6 +63,9 @@ log = logging.getLogger(__name__)
 
 _number_types = frozenset((int, float))
 
+# Pre-computed null sentinel for collection element serialization (int32 -1)
+_INT32_NULL = int32_pack(-1)
+
 
 def _name_from_hex_string(encoded_name):
     bin_str = unhexlify(encoded_name)
@@ -836,17 +839,16 @@ class _SimpleParameterizedType(_ParameterizedType):
             raise TypeError("Received a string for a type that expects a sequence")
 
         subtype, = cls.subtypes
-        buf = io.BytesIO()
-        buf.write(int32_pack(len(items)))
         inner_proto = max(3, protocol_version)
+        parts = [int32_pack(len(items))]
         for item in items:
             if item is None:
-                buf.write(int32_pack(-1))
+                parts.append(_INT32_NULL)
             else:
                 itembytes = subtype.to_binary(item, inner_proto)
-                buf.write(int32_pack(len(itembytes)))
-                buf.write(itembytes)
-        return buf.getvalue()
+                parts.append(int32_pack(len(itembytes)))
+                parts.append(itembytes)
+        return b"".join(parts)
 
 
 class ListType(_SimpleParameterizedType):
@@ -899,27 +901,26 @@ class MapType(_ParameterizedType):
     @classmethod
     def serialize_safe(cls, themap, protocol_version):
         key_type, value_type = cls.subtypes
-        buf = io.BytesIO()
-        buf.write(int32_pack(len(themap)))
         try:
             items = themap.items()
         except AttributeError:
             raise TypeError("Got a non-map object for a map value")
         inner_proto = max(3, protocol_version)
+        parts = [int32_pack(len(themap))]
         for key, val in items:
             if key is not None:
                 keybytes = key_type.to_binary(key, inner_proto)
-                buf.write(int32_pack(len(keybytes)))
-                buf.write(keybytes)
+                parts.append(int32_pack(len(keybytes)))
+                parts.append(keybytes)
             else:
-                buf.write(int32_pack(-1))
+                parts.append(_INT32_NULL)
             if val is not None:
                 valbytes = value_type.to_binary(val, inner_proto)
-                buf.write(int32_pack(len(valbytes)))
-                buf.write(valbytes)
+                parts.append(int32_pack(len(valbytes)))
+                parts.append(valbytes)
             else:
-                buf.write(int32_pack(-1))
-        return buf.getvalue()
+                parts.append(_INT32_NULL)
+        return b"".join(parts)
 
 
 class TupleType(_ParameterizedType):
@@ -957,15 +958,15 @@ class TupleType(_ParameterizedType):
                              (len(cls.subtypes), len(val), val))
 
         proto_version = max(3, protocol_version)
-        buf = io.BytesIO()
+        parts = []
         for item, subtype in zip(val, cls.subtypes):
             if item is not None:
                 packed_item = subtype.to_binary(item, proto_version)
-                buf.write(int32_pack(len(packed_item)))
-                buf.write(packed_item)
+                parts.append(int32_pack(len(packed_item)))
+                parts.append(packed_item)
             else:
-                buf.write(int32_pack(-1))
-        return buf.getvalue()
+                parts.append(_INT32_NULL)
+        return b"".join(parts)
 
     @classmethod
     def cql_parameterized_type(cls):
@@ -1026,7 +1027,7 @@ class UserType(TupleType):
     @classmethod
     def serialize_safe(cls, val, protocol_version):
         proto_version = max(3, protocol_version)
-        buf = io.BytesIO()
+        parts = []
         for i, (fieldname, subtype) in enumerate(zip(cls.fieldnames, cls.subtypes)):
             # first treat as a tuple, else by custom type
             try:
@@ -1038,11 +1039,11 @@ class UserType(TupleType):
 
             if item is not None:
                 packed_item = subtype.to_binary(item, proto_version)
-                buf.write(int32_pack(len(packed_item)))
-                buf.write(packed_item)
+                parts.append(int32_pack(len(packed_item)))
+                parts.append(packed_item)
             else:
-                buf.write(int32_pack(-1))
-        return buf.getvalue()
+                parts.append(_INT32_NULL)
+        return b"".join(parts)
 
     @classmethod
     def _make_registered_udt_namedtuple(cls, keyspace, name, field_names):
