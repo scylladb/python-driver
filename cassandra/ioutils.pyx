@@ -15,7 +15,7 @@
 include 'cython_marshal.pyx'
 from cassandra.buffer cimport Buffer, from_ptr_and_size
 
-from libc.stdint cimport int32_t
+from libc.stdint cimport int32_t, uint16_t
 from cassandra.bytesio cimport BytesIOReader
 
 
@@ -45,3 +45,9 @@ cdef inline int32_t read_int(BytesIOReader reader) except ?0xDEAD:
     buf.ptr = reader.read(4)
     buf.size = 4
     return unpack_num[int32_t](&buf)
+
+cdef inline uint16_t read_short(BytesIOReader reader) except ?0xFFFE:
+    cdef Buffer buf
+    buf.ptr = reader.read(2)
+    buf.size = 2
+    return unpack_num[uint16_t](&buf)
