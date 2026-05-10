@@ -16,7 +16,6 @@
 import unittest
 
 import logging
-import sys
 from unittest.mock import sentinel
 
 from cassandra import ConsistencyLevel
@@ -61,8 +60,7 @@ class TestGetConfig(unittest.TestCase):
         obj = NoConfAsDict()
 
         ns = 'tests.unit.advanced.test_insights'
-        if sys.version_info > (3,):
-            ns += '.TestGetConfig.test_invalid_object.<locals>'
+        ns += '.TestGetConfig.test_invalid_object.<locals>'
 
         # no default
         # ... as a policy

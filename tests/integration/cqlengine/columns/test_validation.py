@@ -190,7 +190,7 @@ class TestVarInt(BaseCassEngTestCase):
             self.VarIntTest.objects.create(test_id=0, bignum="not_a_number")
 
 
-class DataType():
+class DataType:
     @classmethod
     def setUpClass(cls):
         if PROTOCOL_VERSION < 4 or CASSANDRA_VERSION < Version("3.0"):
@@ -597,7 +597,7 @@ class TestAscii(BaseCassEngTestCase):
 
     def test_type_checking(self):
         Ascii().validate('string')
-        Ascii().validate(u'unicode')
+        Ascii().validate('unicode')
         Ascii().validate(bytearray('bytearray', encoding='ascii'))
 
         with pytest.raises(ValidationError):
@@ -611,9 +611,6 @@ class TestAscii(BaseCassEngTestCase):
         with pytest.raises(ValidationError):
             Ascii().validate('Beyonc' + chr(233))
 
-        if sys.version_info < (3, 1):
-            with pytest.raises(ValidationError):
-                Ascii().validate(u'Beyonc' + unichr(233))
 
     def test_unaltering_validation(self):
         """ Test the validation step doesn't re-interpret values. """
@@ -724,7 +721,7 @@ class TestText(BaseCassEngTestCase):
 
     def test_type_checking(self):
         Text().validate('string')
-        Text().validate(u'unicode')
+        Text().validate('unicode')
         Text().validate(bytearray('bytearray', encoding='ascii'))
 
         with pytest.raises(ValidationError):
@@ -735,8 +732,6 @@ class TestText(BaseCassEngTestCase):
 
         Text().validate("!#$%&\'()*+,-./")
         Text().validate('Beyonc' + chr(233))
-        if sys.version_info < (3, 1):
-            Text().validate(u'Beyonc' + unichr(233))
 
     def test_unaltering_validation(self):
         """ Test the validation step doesn't re-interpret values. """

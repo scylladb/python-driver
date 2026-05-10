@@ -14,12 +14,12 @@
 
 from datetime import datetime
 
-from cassandra.cqlengine import UnicodeMixin, ValidationError
+from cassandra.cqlengine import ValidationError
 
 def get_total_seconds(td):
     return td.total_seconds()
 
-class QueryValue(UnicodeMixin):
+class QueryValue:
     """
     Base class for query filter values. Subclasses of these classes can
     be passed into .filter() keyword args
@@ -31,7 +31,7 @@ class QueryValue(UnicodeMixin):
         self.value = value
         self.context_id = None
 
-    def __unicode__(self):
+    def __str__(self):
         return self.format_string.format(self.context_id)
 
     def set_context_id(self, ctx_id):
@@ -109,7 +109,7 @@ class Token(BaseQueryFunction):
     def get_context_size(self):
         return len(self.value)
 
-    def __unicode__(self):
+    def __str__(self):
         token_args = ', '.join('%({0})s'.format(self.context_id + i) for i in range(self.get_context_size()))
         return "token({0})".format(token_args)
 

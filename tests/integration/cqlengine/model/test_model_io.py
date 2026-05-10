@@ -694,9 +694,9 @@ class TestQuerying(BaseCassEngTestCase):
     def test_query_with_date(self):
         uid = uuid4()
         day = date(2013, 11, 26)
-        obj = TestQueryModel.create(test_id=uid, date=day, description=u'foo')
+        obj = TestQueryModel.create(test_id=uid, date=day, description='foo')
 
-        assert obj.description == u'foo'
+        assert obj.description == 'foo'
 
         inst = TestQueryModel.filter(
             TestQueryModel.test_id == uid,

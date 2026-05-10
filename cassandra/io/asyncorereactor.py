@@ -24,10 +24,7 @@ import weakref
 import sys
 import ssl
 
-try:
-    from weakref import WeakSet
-except ImportError:
-    from cassandra.util import WeakSet  # noqa
+from weakref import WeakSet
 
 from cassandra import DependencyException
 try:
@@ -266,9 +263,9 @@ class AsyncoreLoop(object):
         try:
             log.debug(*args, **kwargs)
         except Exception:
-            # TODO: Remove when Python 2 support is removed
-            # PYTHON-1266. If our logger has disappeared, there's nothing we
-            # can do, so just log nothing.
+            # PYTHON-1266. If our logger has disappeared (e.g. during
+            # interpreter shutdown), there's nothing we can do, so just
+            # log nothing.
             pass
 
     def add_timer(self, timer):
