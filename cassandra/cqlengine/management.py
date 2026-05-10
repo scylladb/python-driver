@@ -270,7 +270,7 @@ def _sync_table(model, connection=None):
 
         _update_options(model, connection=connection)
 
-    table = cluster.metadata.keyspaces[ks_name].tables[raw_cf_name]
+    table = _get_table_metadata(model, connection)
 
     indexes = [c for n, c in model._columns.items() if c.index]
 
@@ -431,9 +431,20 @@ def _get_table_metadata(model, connection=None):
     # returns the table as provided by the native driver for a given model
     cluster = get_cluster(connection)
     ks = model._get_keyspace()
-    table = model._raw_column_family_name()
-    table = cluster.metadata.keyspaces[ks].tables[table]
-    return table
+    raw_cf_name = model._raw_column_family_name()
+    try:
+        return cluster.metadata.keyspaces[ks].tables[raw_cf_name]
+    except KeyError:
+        # Metadata may be stale; force a targeted refresh and retry once.
+        cluster.refresh_table_metadata(ks, raw_cf_name)
+        try:
+            return cluster.metadata.keyspaces[ks].tables[raw_cf_name]
+        except KeyError:
+            msg = format_log_context(
+                "Table metadata for '{0}'.'{1}' is not available after refresh. "
+                "Check schema agreement and cluster health.",
+                keyspace=ks, connection=connection)
+            raise CQLEngineException(msg.format(ks, raw_cf_name))
 
 
 def _options_map_from_strings(option_strings):
