@@ -78,7 +78,7 @@ class Connection(object):
         self.lazy_connect = lazy_connect
         self.retry_connect = retry_connect
         self.cluster_options = cluster_options if cluster_options else {}
-        self.lazy_connect_lock = threading.RLock()
+        self.lazy_connect_lock = threading.Lock()
 
     @classmethod
     def from_session(cls, name, session):

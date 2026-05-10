@@ -23,7 +23,7 @@ import time
 import random
 import copy
 import uuid
-from threading import Lock, RLock, Condition
+from threading import Lock, Condition
 import weakref
 try:
     from weakref import WeakSet
@@ -179,7 +179,7 @@ class Host(object):
             raise ValueError("host_id may not be None")
         self.host_id = host_id
         self.set_location_info(datacenter, rack)
-        self.lock = RLock()
+        self.lock = Lock()
 
     @property
     def address(self):
