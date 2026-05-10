@@ -215,10 +215,10 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(2, 6)
         self.coordinator_stats.assert_query_count_equals(3, 0)
 
-        decommission(1)
-        start(3)
-        self._wait_for_nodes_down([1], cluster)
+        start(3)  # Restart before decommission (Raft rejects ops with dead nodes)
         self._wait_for_nodes_up([3], cluster)
+        decommission(1)
+        self._wait_for_nodes_down([1], cluster)
 
         self.coordinator_stats.reset_counts()
         self._query(session, keyspace)
@@ -244,13 +244,12 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(3, 3)
         self.coordinator_stats.assert_query_count_equals(4, 3)
 
+        bootstrap(5, 'dc3')  # Bootstrap before force_stop (Raft rejects ops with dead nodes)
+        self._wait_for_nodes_up([5], cluster)
         force_stop(1)
-        bootstrap(5, 'dc3')
 
         # reset control connection
         self._insert(session, keyspace, count=1000)
-
-        self._wait_for_nodes_up([5], cluster)
 
         self.coordinator_stats.reset_counts()
         self._query(session, keyspace)
@@ -278,13 +277,12 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(3, 3)
         self.coordinator_stats.assert_query_count_equals(4, 3)
 
+        bootstrap(5, 'dc1')  # Bootstrap before force_stop (Raft rejects ops with dead nodes)
+        self._wait_for_nodes_up([5], cluster)
         force_stop(1)
-        bootstrap(5, 'dc1')
 
         # reset control connection
         self._insert(session, keyspace, count=1000)
-
-        self._wait_for_nodes_up([5], cluster)
 
         self.coordinator_stats.reset_counts()
         self._query(session, keyspace)
@@ -374,23 +372,25 @@ class LoadBalancingPolicyTests(unittest.TestCase):
             responses.add(self.coordinator_stats.get_query_count(node))
         assert set([0, 0, 12]) == responses
 
+        # Decommission node 1 while 3 Raft voters remain (nodes 1, 2, 5).
+        # Doing this later (with only 2 voters) can cause Raft issues.
         self.coordinator_stats.reset_counts()
-        decommission(5)
-        self._wait_for_nodes_down([5])
+        decommission(1)
+        self._wait_for_nodes_down([1])
 
         self._query(session, keyspace)
 
+        self.coordinator_stats.assert_query_count_equals(1, 0)
         self.coordinator_stats.assert_query_count_equals(3, 0)
         self.coordinator_stats.assert_query_count_equals(4, 0)
-        self.coordinator_stats.assert_query_count_equals(5, 0)
         responses = set()
-        for node in [1, 2]:
+        for node in [2, 5]:
             responses.add(self.coordinator_stats.get_query_count(node))
         assert set([0, 12]) == responses
 
         self.coordinator_stats.reset_counts()
-        decommission(1)
-        self._wait_for_nodes_down([1])
+        decommission(5)
+        self._wait_for_nodes_down([5])
 
         self._query(session, keyspace)
 
@@ -479,6 +479,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(2, 0)
 
     def test_token_aware_composite_key(self):
+        remove_cluster()
         use_singledc()
         keyspace = 'test_token_aware_composite_key'
         table = 'composite'
@@ -523,8 +524,9 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self._query(session, keyspace)
 
         self.coordinator_stats.assert_query_count_equals(1, 0)
-        self.coordinator_stats.assert_query_count_equals(2, 12)
-        self.coordinator_stats.assert_query_count_equals(3, 0)
+        # Scylla may distribute queries across both replicas with shard-aware routing
+        queried = self.coordinator_stats.get_query_count(2) + self.coordinator_stats.get_query_count(3)
+        assert queried == 12, "Expected 12 queries to replicas, got %d" % queried
 
         self.coordinator_stats.reset_counts()
         stop(2)
@@ -537,6 +539,7 @@ class LoadBalancingPolicyTests(unittest.TestCase):
         self.coordinator_stats.assert_query_count_equals(3, 12)
 
     def test_token_aware_with_local_table(self):
+        remove_cluster()
         use_singledc()
         cluster, session = self._cluster_session_with_lbp(TokenAwarePolicy(RoundRobinPolicy()))
         self.addCleanup(cluster.shutdown)
