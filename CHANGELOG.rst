@@ -1,3 +1,28 @@
+3.29.10
+=======
+May 10, 2026
+
+Features
+--------
+* Fast-path ``lookup_casstype()`` for simple type names
+* Add ``Session.wait_for_schema_agreement``
+
+Bug Fixes
+---------
+* Fix CQL injection in ``Connection.set_keyspace_blocking`` and ``Connection.set_keyspace_async``
+* Fix libev shutdown crashes by correcting atexit registration
+* Handle ``None`` ``control_connection_timeout`` in ``wait_for_schema_agreement``
+* Clean up failed heartbeat sends
+* Fix ``ExponentialBackoffRetryPolicy.__init__`` super() call
+* Correct ``clustering_key`` to ``clustering`` in column kind filter
+* Fix inverted cooldown check in ``_get_shard_aware_endpoint``
+
+Others
+------
+* Deprecate ``ControlConnection.wait_for_schema_agreement``
+* Add timeout and in-flight observability to ``OperationTimedOut``
+* Drop per-query connection log
+
 3.29.9
 ======
 March 18, 2026
