@@ -61,7 +61,8 @@ class ResponseFutureTests(unittest.TestCase):
         return ResponseFuture(session, message, query, 1)
 
     def make_mock_response(self, col_names, rows):
-        return Mock(spec=ResultMessage, kind=RESULT_KIND_ROWS, column_names=col_names, parsed_rows=rows, paging_state=None, col_types=None)
+        return Mock(spec=ResultMessage, kind=RESULT_KIND_ROWS, column_names=col_names, parsed_rows=rows,
+                    paging_state=None, col_types=None, trace_id=None, warnings=None, custom_payload=None)
 
     def test_result_message(self):
         session = self.make_basic_session()
@@ -104,7 +105,8 @@ class ResponseFutureTests(unittest.TestCase):
 
         result = Mock(spec=ResultMessage,
                       kind=RESULT_KIND_SET_KEYSPACE,
-                      results="keyspace1")
+                      results="keyspace1",
+                      trace_id=None, warnings=None, custom_payload=None)
         rf._set_result(None, None, None, result)
         rf._set_keyspace_completed({})
         assert not rf.result()
@@ -118,7 +120,8 @@ class ResponseFutureTests(unittest.TestCase):
                        'keyspace': "keyspace1", "table": "table1"}
         result = Mock(spec=ResultMessage,
                       kind=RESULT_KIND_SCHEMA_CHANGE,
-                      schema_change_event=event_results)
+                      schema_change_event=event_results,
+                      trace_id=None, warnings=None, custom_payload=None)
         connection = Mock()
         rf._set_result(None, connection, None, result)
         session.submit.assert_called_once_with(ANY, ANY, rf, connection, **event_results)
@@ -127,7 +130,8 @@ class ResponseFutureTests(unittest.TestCase):
         session = self.make_session()
         rf = self.make_response_future(session)
         rf.send_request()
-        result = Mock(spec=ResultMessage, kind=999, results=[1, 2, 3])
+        result = Mock(spec=ResultMessage, kind=999, results=[1, 2, 3],
+                      trace_id=None, warnings=None, custom_payload=None)
         rf._set_result(None, None, None, result)
         assert rf.result()[0] == result
 
@@ -633,7 +637,6 @@ class ResponseFutureTests(unittest.TestCase):
         response = Mock(spec=ResultMessage,
                         kind=RESULT_KIND_PREPARED,
                         result_metadata_id='foo')
-        response.results = (None, None, None, None, None)
         response.query_id = query_id
 
         rf._query = Mock(return_value=True)
