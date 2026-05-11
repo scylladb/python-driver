@@ -38,7 +38,7 @@ jobs:
     if: "!contains(github.event.pull_request.labels.*.name, 'disable-integration-tests')"
     runs-on: ubuntu-24.04
     env:
-      SCYLLA_VERSION: release:2025.2
+      SCYLLA_VERSION: release:2026.1
     strategy:
       fail-fast: false
       matrix:
