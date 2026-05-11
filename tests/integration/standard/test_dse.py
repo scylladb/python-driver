@@ -18,16 +18,22 @@ from packaging.version import Version
 
 from tests import notwindows
 from tests.unit.cython.utils import notcython
-from tests.integration import (execute_until_pass,
-                               execute_with_long_wait_retry, use_cluster, TestCluster)
+from tests.integration import (
+    execute_until_pass,
+    execute_with_long_wait_retry,
+    use_cluster,
+    TestCluster,
+)
 
 import unittest
 
 
-CCM_IS_DSE = (os.environ.get('CCM_IS_DSE', None) == 'true')
+CCM_IS_DSE = os.environ.get("CCM_IS_DSE", None) == "true"
 
 
-@unittest.skipIf(os.environ.get('CCM_ARGS', None), 'environment has custom CCM_ARGS; skipping')
+@unittest.skipIf(
+    os.environ.get("CCM_ARGS", None), "environment has custom CCM_ARGS; skipping"
+)
 @notwindows
 @notcython  # no need to double up on this test; also __default__ setting doesn't work
 class DseCCMClusterTest(unittest.TestCase):
@@ -38,21 +44,21 @@ class DseCCMClusterTest(unittest.TestCase):
     """
 
     def test_dse_5x(self):
-        self._test_basic(Version('5.1.10'))
+        self._test_basic(Version("5.1.10"))
 
     def test_dse_60(self):
-        self._test_basic(Version('6.0.2'))
+        self._test_basic(Version("6.0.2"))
 
-    @unittest.skipUnless(CCM_IS_DSE, 'DSE version unavailable')
+    @unittest.skipUnless(CCM_IS_DSE, "DSE version unavailable")
     def test_dse_67(self):
-        self._test_basic(Version('6.7.0'))
+        self._test_basic(Version("6.7.0"))
 
     def _test_basic(self, dse_version):
         """
         Test basic connection and usage
         """
-        cluster_name = '{}-{}'.format(
-            self.__class__.__name__, dse_version.base_version.replace('.', '_')
+        cluster_name = "{}-{}".format(
+            self.__class__.__name__, dse_version.base_version.replace(".", "_")
         )
         use_cluster(cluster_name=cluster_name, nodes=[3], dse_options={})
 
@@ -62,8 +68,9 @@ class DseCCMClusterTest(unittest.TestCase):
             session,
             """
             CREATE KEYSPACE clustertests
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
-            """)
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+            """,
+        )
         self.assertFalse(result)
 
         result = execute_with_long_wait_retry(
@@ -75,17 +82,19 @@ class DseCCMClusterTest(unittest.TestCase):
                 c text,
                 PRIMARY KEY (a, b)
             )
-            """)
+            """,
+        )
         self.assertFalse(result)
 
         result = session.execute(
             """
             INSERT INTO clustertests.cf0 (a, b, c) VALUES ('a', 'b', 'c')
-            """)
+            """
+        )
         self.assertFalse(result)
 
         result = session.execute("SELECT * FROM clustertests.cf0")
-        self.assertEqual([('a', 'b', 'c')], result)
+        self.assertEqual([("a", "b", "c")], result)
 
         execute_with_long_wait_retry(session, "DROP KEYSPACE clustertests")
 

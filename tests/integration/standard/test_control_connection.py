@@ -20,7 +20,13 @@ import unittest
 
 
 from cassandra.protocol import ConfigurationException
-from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster, greaterthanorequalcass40, notdse
+from tests.integration import (
+    use_singledc,
+    PROTOCOL_VERSION,
+    TestCluster,
+    greaterthanorequalcass40,
+    notdse,
+)
 from tests.integration.datatype_utils import update_datatypes
 
 
@@ -34,7 +40,8 @@ class ControlConnectionTests(unittest.TestCase):
         if PROTOCOL_VERSION < 3:
             raise unittest.SkipTest(
                 "Native protocol 3,0+ is required for UDTs using %r"
-                % (PROTOCOL_VERSION,))
+                % (PROTOCOL_VERSION,)
+            )
         self.cluster = TestCluster()
 
     def tearDown(self):
@@ -64,7 +71,7 @@ class ControlConnectionTests(unittest.TestCase):
         self.session = self.cluster.connect()
         self.session.execute("""
             CREATE KEYSPACE keyspacetodrop
-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
+            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
             """)
         self.session.set_keyspace("keyspacetodrop")
         self.session.execute("CREATE TYPE user (age int, name text)")

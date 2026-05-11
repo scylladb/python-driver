@@ -9,14 +9,27 @@ from itertools import count
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.cython_deps import HAVE_CYTHON, HAVE_NUMPY
-from cassandra.protocol import ProtocolHandler, LazyProtocolHandler, NumpyProtocolHandler
+from cassandra.protocol import (
+    ProtocolHandler,
+    LazyProtocolHandler,
+    NumpyProtocolHandler,
+)
 from cassandra.query import tuple_factory
 from tests import VERIFY_CYTHON
-from tests.integration import use_singledc, notprotocolv1, \
-    drop_keyspace_shutdown_cluster, BasicSharedKeyspaceUnitTestCase, greaterthancass21, TestCluster
+from tests.integration import (
+    use_singledc,
+    notprotocolv1,
+    drop_keyspace_shutdown_cluster,
+    BasicSharedKeyspaceUnitTestCase,
+    greaterthancass21,
+    TestCluster,
+)
 from tests.integration.datatype_utils import update_datatypes
 from tests.integration.standard.utils import (
-    create_table_with_all_types, get_all_primitive_params, get_primitive_datatypes)
+    create_table_with_all_types,
+    get_all_primitive_params,
+    get_primitive_datatypes,
+)
 from tests.unit.cython.utils import cythontest, numpytest
 
 
@@ -26,17 +39,20 @@ def setup_module():
 
 
 class CythonProtocolHandlerTest(unittest.TestCase):
-
     N_ITEMS = 10
 
     @classmethod
     def setUpClass(cls):
         cls.cluster = TestCluster()
         cls.session = cls.cluster.connect()
-        cls.session.execute("CREATE KEYSPACE testspace WITH replication = "
-                            "{ 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
+        cls.session.execute(
+            "CREATE KEYSPACE testspace WITH replication = "
+            "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1'}"
+        )
         cls.session.set_keyspace("testspace")
-        cls.colnames = create_table_with_all_types("test_table", cls.session, cls.N_ITEMS)
+        cls.colnames = create_table_with_all_types(
+            "test_table", cls.session, cls.N_ITEMS
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -63,7 +79,9 @@ class CythonProtocolHandlerTest(unittest.TestCase):
         """
         # arrays = { 'a': arr1, 'b': arr2, ... }
         cluster = TestCluster(
-            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)
+            }
         )
         session = cluster.connect(keyspace="testspace")
         session.client_protocol_handler = LazyProtocolHandler
@@ -74,7 +92,9 @@ class CythonProtocolHandlerTest(unittest.TestCase):
         results = session.execute("SELECT * FROM test_table")
 
         self.assertTrue(results.has_more_pages)
-        self.assertEqual(verify_iterator_data(self.assertEqual, results), self.N_ITEMS)  # make sure we see all rows
+        self.assertEqual(
+            verify_iterator_data(self.assertEqual, results), self.N_ITEMS
+        )  # make sure we see all rows
 
         cluster.shutdown()
 
@@ -97,13 +117,17 @@ class CythonProtocolHandlerTest(unittest.TestCase):
         """
         # arrays = { 'a': arr1, 'b': arr2, ... }
         cluster = TestCluster(
-            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)
+            }
         )
         session = cluster.connect(keyspace="testspace")
         session.client_protocol_handler = NumpyProtocolHandler
         session.default_fetch_size = 2
 
-        expected_pages = (self.N_ITEMS + session.default_fetch_size - 1) // session.default_fetch_size
+        expected_pages = (
+            self.N_ITEMS + session.default_fetch_size - 1
+        ) // session.default_fetch_size
 
         self.assertLess(session.default_fetch_size, self.N_ITEMS)
 
@@ -146,22 +170,24 @@ class CythonProtocolHandlerTest(unittest.TestCase):
             arr = page[colname]
             self.match_dtype(datatype, arr.dtype)
 
-        return verify_iterator_data(self.assertEqual, arrays_to_list_of_tuples(page, colnames))
+        return verify_iterator_data(
+            self.assertEqual, arrays_to_list_of_tuples(page, colnames)
+        )
 
     def match_dtype(self, datatype, dtype):
         """Match a string cqltype (e.g. 'int' or 'blob') with a numpy dtype"""
-        if datatype == 'smallint':
-            self.match_dtype_props(dtype, 'i', 2)
-        elif datatype == 'int':
-            self.match_dtype_props(dtype, 'i', 4)
-        elif datatype in ('bigint', 'counter'):
-            self.match_dtype_props(dtype, 'i', 8)
-        elif datatype == 'float':
-            self.match_dtype_props(dtype, 'f', 4)
-        elif datatype == 'double':
-            self.match_dtype_props(dtype, 'f', 8)
+        if datatype == "smallint":
+            self.match_dtype_props(dtype, "i", 2)
+        elif datatype == "int":
+            self.match_dtype_props(dtype, "i", 4)
+        elif datatype in ("bigint", "counter"):
+            self.match_dtype_props(dtype, "i", 8)
+        elif datatype == "float":
+            self.match_dtype_props(dtype, "f", 4)
+        elif datatype == "double":
+            self.match_dtype_props(dtype, "f", 8)
         else:
-            self.assertEqual(dtype.kind, 'O', msg=(dtype, datatype))
+            self.assertEqual(dtype.kind, "O", msg=(dtype, datatype))
 
     def match_dtype_props(self, dtype, kind, size, signed=None):
         self.assertEqual(dtype.kind, kind, msg=dtype)
@@ -171,8 +197,10 @@ class CythonProtocolHandlerTest(unittest.TestCase):
 def arrays_to_list_of_tuples(arrays, colnames):
     """Convert a dict of arrays (as given by the numpy protocol handler) to a list of tuples"""
     first_array = arrays[colnames[0]]
-    return [tuple(arrays[colname][i] for colname in colnames)
-                for i in range(len(first_array))]
+    return [
+        tuple(arrays[colname][i] for colname in colnames)
+        for i in range(len(first_array))
+    ]
 
 
 def get_data(protocol_handler):
@@ -180,7 +208,9 @@ def get_data(protocol_handler):
     Get data from the test table.
     """
     cluster = TestCluster(
-        execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+        execution_profiles={
+            EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)
+        }
     )
     session = cluster.connect(keyspace="testspace")
 
@@ -200,18 +230,21 @@ def verify_iterator_data(assertEqual, results):
     count = 0
     for count, result in enumerate(results, 1):
         params = get_all_primitive_params(result[0])
-        assertEqual(len(params), len(result),
-                    msg="Not the right number of columns?")
+        assertEqual(len(params), len(result), msg="Not the right number of columns?")
         for expected, actual in zip(params, result):
             assertEqual(actual, expected)
     return count
 
 
 class NumpyNullTest(BasicSharedKeyspaceUnitTestCase):
-
     @classmethod
     def setUpClass(cls):
-        cls.common_setup(1, execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)})
+        cls.common_setup(
+            1,
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)
+            },
+        )
 
     @numpytest
     @greaterthancass21
@@ -231,7 +264,9 @@ class NumpyNullTest(BasicSharedKeyspaceUnitTestCase):
         table = "%s.%s" % (self.keyspace_name, self.function_table_name)
         create_table_with_all_types(table, s, 10)
 
-        begin_unset = max(s.execute('select primkey from %s' % (table,))[0]['primkey']) + 1
+        begin_unset = (
+            max(s.execute("select primkey from %s" % (table,))[0]["primkey"]) + 1
+        )
         keys_null = range(begin_unset, begin_unset + 10)
 
         # scatter some empty rows in here
@@ -241,7 +276,8 @@ class NumpyNullTest(BasicSharedKeyspaceUnitTestCase):
         result = s.execute("select * from %s" % (table,))[0]
 
         from numpy.ma import masked, MaskedArray
-        result_keys = result.pop('primkey')
+
+        result_keys = result.pop("primkey")
         mapped_index = [v[1] for v in sorted(zip(result_keys, count()))]
 
         had_masked = had_none = False
@@ -250,8 +286,14 @@ class NumpyNullTest(BasicSharedKeyspaceUnitTestCase):
             # because None and `masked` have different identity and equals semantics
             if isinstance(col_array, MaskedArray):
                 had_masked = True
-                [self.assertIsNot(col_array[i], masked) for i in mapped_index[:begin_unset]]
-                [self.assertIs(col_array[i], masked) for i in mapped_index[begin_unset:]]
+                [
+                    self.assertIsNot(col_array[i], masked)
+                    for i in mapped_index[:begin_unset]
+                ]
+                [
+                    self.assertIs(col_array[i], masked)
+                    for i in mapped_index[begin_unset:]
+                ]
             else:
                 had_none = True
                 [self.assertIsNotNone(col_array[i]) for i in mapped_index[:begin_unset]]

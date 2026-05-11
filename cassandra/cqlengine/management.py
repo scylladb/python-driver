@@ -27,14 +27,14 @@ from cassandra.cqlengine.models import Model
 from cassandra.cqlengine.named import NamedTable
 from cassandra.cqlengine.usertype import UserType
 
-CQLENG_ALLOW_SCHEMA_MANAGEMENT = 'CQLENG_ALLOW_SCHEMA_MANAGEMENT'
+CQLENG_ALLOW_SCHEMA_MANAGEMENT = "CQLENG_ALLOW_SCHEMA_MANAGEMENT"
 
-Field = namedtuple('Field', ['name', 'type'])
+Field = namedtuple("Field", ["name", "type"])
 
 log = logging.getLogger(__name__)
 
 # system keyspaces
-schema_columnfamilies = NamedTable('system', 'schema_columnfamilies')
+schema_columnfamilies = NamedTable("system", "schema_columnfamilies")
 
 
 def _get_context(keyspaces, connections):
@@ -42,11 +42,11 @@ def _get_context(keyspaces, connections):
 
     if keyspaces:
         if not isinstance(keyspaces, (list, tuple)):
-            raise ValueError('keyspaces must be a list or a tuple.')
+            raise ValueError("keyspaces must be a list or a tuple.")
 
     if connections:
         if not isinstance(connections, (list, tuple)):
-            raise ValueError('connections must be a list or a tuple.')
+            raise ValueError("connections must be a list or a tuple.")
 
     keyspaces = keyspaces if keyspaces else [None]
     connections = connections if connections else [None]
@@ -54,9 +54,11 @@ def _get_context(keyspaces, connections):
     return product(connections, keyspaces)
 
 
-def create_keyspace_simple(name, replication_factor, durable_writes=True, connections=None):
+def create_keyspace_simple(
+    name, replication_factor, durable_writes=True, connections=None
+):
     """
-    Creates a keyspace with SimpleStrategy for replica placement
+    Creates a keyspace with NetworkTopologyStrategy for replica placement
 
     If the keyspace already exists, it will not be modified.
 
@@ -66,15 +68,22 @@ def create_keyspace_simple(name, replication_factor, durable_writes=True, connec
     *There are plans to guard schema-modifying functions with an environment-driven conditional.*
 
     :param str name: name of keyspace to create
-    :param int replication_factor: keyspace replication factor, used with :attr:`~.SimpleStrategy`
+    :param int replication_factor: keyspace replication factor, used with :attr:`~.NetworkTopologyStrategy`
     :param bool durable_writes: Write log is bypassed if set to False
     :param list connections: List of connection names
     """
-    _create_keyspace(name, durable_writes, 'SimpleStrategy',
-                     {'replication_factor': replication_factor}, connections=connections)
+    _create_keyspace(
+        name,
+        durable_writes,
+        "NetworkTopologyStrategy",
+        {"replication_factor": replication_factor},
+        connections=connections,
+    )
 
 
-def create_keyspace_network_topology(name, dc_replication_map, durable_writes=True, connections=None):
+def create_keyspace_network_topology(
+    name, dc_replication_map, durable_writes=True, connections=None
+):
     """
     Creates a keyspace with NetworkTopologyStrategy for replica placement
 
@@ -90,30 +99,56 @@ def create_keyspace_network_topology(name, dc_replication_map, durable_writes=Tr
     :param bool durable_writes: Write log is bypassed if set to False
     :param list connections: List of connection names
     """
-    _create_keyspace(name, durable_writes, 'NetworkTopologyStrategy', dc_replication_map, connections=connections)
+    _create_keyspace(
+        name,
+        durable_writes,
+        "NetworkTopologyStrategy",
+        dc_replication_map,
+        connections=connections,
+    )
 
 
-def _create_keyspace(name, durable_writes, strategy_class, strategy_options, connections=None):
+def _create_keyspace(
+    name, durable_writes, strategy_class, strategy_options, connections=None
+):
     if not _allow_schema_modification():
         return
 
     if connections:
         if not isinstance(connections, (list, tuple)):
-            raise ValueError('Connections must be a list or a tuple.')
+            raise ValueError("Connections must be a list or a tuple.")
 
-    def __create_keyspace(name, durable_writes, strategy_class, strategy_options, connection=None):
+    def __create_keyspace(
+        name, durable_writes, strategy_class, strategy_options, connection=None
+    ):
         cluster = get_cluster(connection)
 
         if name not in cluster.metadata.keyspaces:
-            log.info(format_log_context("Creating keyspace %s", connection=connection), name)
-            ks_meta = metadata.KeyspaceMetadata(name, durable_writes, strategy_class, strategy_options)
+            log.info(
+                format_log_context("Creating keyspace %s", connection=connection), name
+            )
+            ks_meta = metadata.KeyspaceMetadata(
+                name, durable_writes, strategy_class, strategy_options
+            )
             execute(ks_meta.as_cql_query(), connection=connection)
         else:
-            log.info(format_log_context("Not creating keyspace %s because it already exists", connection=connection), name)
+            log.info(
+                format_log_context(
+                    "Not creating keyspace %s because it already exists",
+                    connection=connection,
+                ),
+                name,
+            )
 
     if connections:
         for connection in connections:
-            __create_keyspace(name, durable_writes, strategy_class, strategy_options, connection=connection)
+            __create_keyspace(
+                name,
+                durable_writes,
+                strategy_class,
+                strategy_options,
+                connection=connection,
+            )
     else:
         __create_keyspace(name, durable_writes, strategy_class, strategy_options)
 
@@ -135,18 +170,22 @@ def drop_keyspace(name, connections=None):
 
     if connections:
         if not isinstance(connections, (list, tuple)):
-            raise ValueError('Connections must be a list or a tuple.')
+            raise ValueError("Connections must be a list or a tuple.")
 
     def _drop_keyspace(name, connection=None):
         cluster = get_cluster(connection)
         if name in cluster.metadata.keyspaces:
-            execute("DROP KEYSPACE {0}".format(metadata.protect_name(name)), connection=connection)
+            execute(
+                "DROP KEYSPACE {0}".format(metadata.protect_name(name)),
+                connection=connection,
+            )
 
     if connections:
         for connection in connections:
             _drop_keyspace(name, connection)
     else:
         _drop_keyspace(name)
+
 
 def _get_index_name_by_column(table, column_name):
     """
@@ -156,7 +195,7 @@ def _get_index_name_by_column(table, column_name):
     possible_index_values = [protected_name, "values(%s)" % protected_name]
     for index_metadata in table.indexes.values():
         options = dict(index_metadata.index_options)
-        if options.get('target') in possible_index_values:
+        if options.get("target") in possible_index_values:
             return index_metadata.name
 
 
@@ -210,7 +249,9 @@ def _sync_table(model, connection=None):
     try:
         keyspace = cluster.metadata.keyspaces[ks_name]
     except KeyError:
-        msg = format_log_context("Keyspace '{0}' for model {1} does not exist.", connection=connection)
+        msg = format_log_context(
+            "Keyspace '{0}' for model {1} does not exist.", connection=connection
+        )
         raise CQLEngineException(msg.format(ks_name, model))
 
     tables = keyspace.tables
@@ -223,7 +264,14 @@ def _sync_table(model, connection=None):
             _sync_type(ks_name, udt, syncd_types, connection=connection)
 
     if raw_cf_name not in tables:
-        log.debug(format_log_context("sync_table creating new table %s", keyspace=ks_name, connection=connection), cf_name)
+        log.debug(
+            format_log_context(
+                "sync_table creating new table %s",
+                keyspace=ks_name,
+                connection=connection,
+            ),
+            cf_name,
+        )
         qs = _get_create_table(model)
 
         try:
@@ -234,7 +282,14 @@ def _sync_table(model, connection=None):
             if "Cannot add already existing column family" not in str(ex):
                 raise
     else:
-        log.debug(format_log_context("sync_table checking existing table %s", keyspace=ks_name, connection=connection), cf_name)
+        log.debug(
+            format_log_context(
+                "sync_table checking existing table %s",
+                keyspace=ks_name,
+                connection=connection,
+            ),
+            cf_name,
+        )
         table_meta = tables[raw_cf_name]
 
         _validate_pk(model, table_meta)
@@ -248,8 +303,12 @@ def _sync_table(model, connection=None):
             if db_name in table_columns:
                 col_meta = table_columns[db_name]
                 if col_meta.cql_type != col.db_type:
-                    msg = format_log_context('Existing table {0} has column "{1}" with a type ({2}) differing from the model type ({3}).'
-                                  ' Model should be updated.', keyspace=ks_name, connection=connection)
+                    msg = format_log_context(
+                        'Existing table {0} has column "{1}" with a type ({2}) differing from the model type ({3}).'
+                        " Model should be updated.",
+                        keyspace=ks_name,
+                        connection=connection,
+                    )
                     msg = msg.format(cf_name, db_name, col_meta.cql_type, col.db_type)
                     warnings.warn(msg)
                     log.warning(msg)
@@ -257,7 +316,11 @@ def _sync_table(model, connection=None):
                 continue
 
             if col.primary_key or col.primary_key:
-                msg = format_log_context("Cannot add primary key '{0}' (with db_field '{1}') to existing table {2}", keyspace=ks_name, connection=connection)
+                msg = format_log_context(
+                    "Cannot add primary key '{0}' (with db_field '{1}') to existing table {2}",
+                    keyspace=ks_name,
+                    connection=connection,
+                )
                 raise CQLEngineException(msg.format(model_name, db_name, cf_name))
 
             query = "ALTER TABLE {0} add {1}".format(cf_name, col.get_column_def())
@@ -265,7 +328,11 @@ def _sync_table(model, connection=None):
 
         db_fields_not_in_model = model_fields.symmetric_difference(table_columns)
         if db_fields_not_in_model:
-            msg = format_log_context("Table {0} has fields not referenced by model: {1}", keyspace=ks_name, connection=connection)
+            msg = format_log_context(
+                "Table {0} has fields not referenced by model: {1}",
+                keyspace=ks_name,
+                connection=connection,
+            )
             log.info(msg.format(cf_name, db_fields_not_in_model))
 
         _update_options(model, connection=connection)
@@ -280,10 +347,10 @@ def _sync_table(model, connection=None):
         if index_name:
             continue
 
-        qs = ['CREATE INDEX']
-        qs += ['ON {0}'.format(cf_name)]
+        qs = ["CREATE INDEX"]
+        qs += ["ON {0}".format(cf_name)]
         qs += ['("{0}")'.format(column.db_field_name)]
-        qs = ' '.join(qs)
+        qs = " ".join(qs)
         execute(qs, connection=connection)
 
 
@@ -294,13 +361,22 @@ def _validate_pk(model, table_meta):
     meta_clustering = [c.name for c in table_meta.clustering_key]
 
     if model_partition != meta_partition or model_clustering != meta_clustering:
+
         def _pk_string(partition, clustering):
-            return "PRIMARY KEY (({0}){1})".format(', '.join(partition), ', ' + ', '.join(clustering) if clustering else '')
-        raise CQLEngineException("Model {0} PRIMARY KEY composition does not match existing table {1}. "
-                                 "Model: {2}; Table: {3}. "
-                                 "Update model or drop the table.".format(model, model.column_family_name(),
-                                                                          _pk_string(model_partition, model_clustering),
-                                                                          _pk_string(meta_partition, meta_clustering)))
+            return "PRIMARY KEY (({0}){1})".format(
+                ", ".join(partition), ", " + ", ".join(clustering) if clustering else ""
+            )
+
+        raise CQLEngineException(
+            "Model {0} PRIMARY KEY composition does not match existing table {1}. "
+            "Model: {2}; Table: {3}. "
+            "Update model or drop the table.".format(
+                model,
+                model.column_family_name(),
+                _pk_string(model_partition, model_clustering),
+                _pk_string(meta_partition, meta_clustering),
+            )
+        )
 
 
 def sync_type(ks_name, type_model, connection=None):
@@ -325,7 +401,6 @@ def sync_type(ks_name, type_model, connection=None):
 
 
 def _sync_type(ks_name, type_model, omit_subtypes=None, connection=None):
-
     syncd_sub_types = omit_subtypes or set()
     for field in type_model._fields.values():
         udts = []
@@ -343,7 +418,14 @@ def _sync_type(ks_name, type_model, omit_subtypes=None, connection=None):
     defined_types = keyspace.user_types
 
     if type_name not in defined_types:
-        log.debug(format_log_context("sync_type creating new type %s", keyspace=ks_name, connection=connection), type_name_qualified)
+        log.debug(
+            format_log_context(
+                "sync_type creating new type %s",
+                keyspace=ks_name,
+                connection=connection,
+            ),
+            type_name_qualified,
+        )
         cql = get_create_type(type_model, ks_name)
         execute(cql, connection=connection)
         cluster.refresh_user_type_metadata(ks_name, type_name)
@@ -355,39 +437,68 @@ def _sync_type(ks_name, type_model, omit_subtypes=None, connection=None):
         for field in type_model._fields.values():
             model_fields.add(field.db_field_name)
             if field.db_field_name not in defined_fields:
-                execute("ALTER TYPE {0} ADD {1}".format(type_name_qualified, field.get_column_def()), connection=connection)
+                execute(
+                    "ALTER TYPE {0} ADD {1}".format(
+                        type_name_qualified, field.get_column_def()
+                    ),
+                    connection=connection,
+                )
             else:
-                field_type = type_meta.field_types[defined_fields.index(field.db_field_name)]
+                field_type = type_meta.field_types[
+                    defined_fields.index(field.db_field_name)
+                ]
                 if field_type != field.db_type:
-                    msg = format_log_context('Existing user type {0} has field "{1}" with a type ({2}) differing from the model user type ({3}).'
-                                  ' UserType should be updated.', keyspace=ks_name, connection=connection)
-                    msg = msg.format(type_name_qualified, field.db_field_name, field_type, field.db_type)
+                    msg = format_log_context(
+                        'Existing user type {0} has field "{1}" with a type ({2}) differing from the model user type ({3}).'
+                        " UserType should be updated.",
+                        keyspace=ks_name,
+                        connection=connection,
+                    )
+                    msg = msg.format(
+                        type_name_qualified,
+                        field.db_field_name,
+                        field_type,
+                        field.db_type,
+                    )
                     warnings.warn(msg)
                     log.warning(msg)
 
         type_model.register_for_keyspace(ks_name, connection=connection)
 
         if len(defined_fields) == len(model_fields):
-            log.info(format_log_context("Type %s did not require synchronization", keyspace=ks_name, connection=connection), type_name_qualified)
+            log.info(
+                format_log_context(
+                    "Type %s did not require synchronization",
+                    keyspace=ks_name,
+                    connection=connection,
+                ),
+                type_name_qualified,
+            )
             return
 
         db_fields_not_in_model = model_fields.symmetric_difference(defined_fields)
         if db_fields_not_in_model:
-            msg = format_log_context("Type %s has fields not referenced by model: %s", keyspace=ks_name, connection=connection)
+            msg = format_log_context(
+                "Type %s has fields not referenced by model: %s",
+                keyspace=ks_name,
+                connection=connection,
+            )
             log.info(msg, type_name_qualified, db_fields_not_in_model)
 
 
 def get_create_type(type_model, keyspace):
-    type_meta = metadata.UserType(keyspace,
-                                  type_model.type_name(),
-                                  (f.db_field_name for f in type_model._fields.values()),
-                                  (v.db_type for v in type_model._fields.values()))
+    type_meta = metadata.UserType(
+        keyspace,
+        type_model.type_name(),
+        (f.db_field_name for f in type_model._fields.values()),
+        (v.db_type for v in type_model._fields.values()),
+    )
     return type_meta.as_cql_query()
 
 
 def _get_create_table(model):
     ks_table_name = model.column_family_name()
-    query_strings = ['CREATE TABLE {0}'.format(ks_table_name)]
+    query_strings = ["CREATE TABLE {0}".format(ks_table_name)]
 
     # add column types
     pkeys = []  # primary keys
@@ -397,30 +508,39 @@ def _get_create_table(model):
     def add_column(col):
         s = col.get_column_def()
         if col.primary_key:
-            keys = (pkeys if col.partition_key else ckeys)
+            keys = pkeys if col.partition_key else ckeys
             keys.append('"{0}"'.format(col.db_field_name))
         qtypes.append(s)
 
     for name, col in model._columns.items():
         add_column(col)
 
-    qtypes.append('PRIMARY KEY (({0}){1})'.format(', '.join(pkeys), ckeys and ', ' + ', '.join(ckeys) or ''))
+    qtypes.append(
+        "PRIMARY KEY (({0}){1})".format(
+            ", ".join(pkeys), ckeys and ", " + ", ".join(ckeys) or ""
+        )
+    )
 
-    query_strings += ['({0})'.format(', '.join(qtypes))]
+    query_strings += ["({0})".format(", ".join(qtypes))]
 
     property_strings = []
 
-    _order = ['"{0}" {1}'.format(c.db_field_name, c.clustering_order or 'ASC') for c in model._clustering_keys.values()]
+    _order = [
+        '"{0}" {1}'.format(c.db_field_name, c.clustering_order or "ASC")
+        for c in model._clustering_keys.values()
+    ]
     if _order:
-        property_strings.append('CLUSTERING ORDER BY ({0})'.format(', '.join(_order)))
+        property_strings.append("CLUSTERING ORDER BY ({0})".format(", ".join(_order)))
 
     # options strings use the V3 format, which matches CQL more closely and does not require mapping
-    property_strings += metadata.TableMetadataV3._make_option_strings(model.__options__ or {})
+    property_strings += metadata.TableMetadataV3._make_option_strings(
+        model.__options__ or {}
+    )
 
     if property_strings:
-        query_strings += ['WITH {0}'.format(' AND '.join(property_strings))]
+        query_strings += ["WITH {0}".format(" AND ".join(property_strings))]
 
-    return ' '.join(query_strings)
+    return " ".join(query_strings)
 
 
 def _get_table_metadata(model, connection=None):
@@ -436,10 +556,14 @@ def _options_map_from_strings(option_strings):
     # converts options strings to a mapping to strings or dict
     options = {}
     for option in option_strings:
-        name, value = option.split('=')
-        i = value.find('{')
+        name, value = option.split("=")
+        i = value.find("{")
         if i >= 0:
-            value = value[i:value.rfind('}') + 1].replace("'", '"')  # from cql single quotes to json double; not aware of any values that would be escaped right now
+            value = value[
+                i : value.rfind("}") + 1
+            ].replace(
+                "'", '"'
+            )  # from cql single quotes to json double; not aware of any values that would be escaped right now
             value = json.loads(value)
         else:
             value = value.strip()
@@ -458,7 +582,9 @@ def _update_options(model, connection=None):
     :rtype: bool
     """
     ks_name = model._get_keyspace()
-    msg = format_log_context("Checking %s for option differences", keyspace=ks_name, connection=connection)
+    msg = format_log_context(
+        "Checking %s for option differences", keyspace=ks_name, connection=connection
+    )
     log.debug(msg, model)
     model_options = model.__options__ or {}
 
@@ -474,7 +600,11 @@ def _update_options(model, connection=None):
         try:
             existing_value = existing_options[name]
         except KeyError:
-            msg = format_log_context("Invalid table option: '%s'; known options: %s", keyspace=ks_name, connection=connection)
+            msg = format_log_context(
+                "Invalid table option: '%s'; known options: %s",
+                keyspace=ks_name,
+                connection=connection,
+            )
             raise KeyError(msg % (name, existing_options.keys()))
         if isinstance(existing_value, str):
             if value != existing_value:
@@ -489,7 +619,9 @@ def _update_options(model, connection=None):
                 update_options[name] = value
 
     if update_options:
-        options = ' AND '.join(metadata.TableMetadataV3._make_option_strings(update_options))
+        options = " AND ".join(
+            metadata.TableMetadataV3._make_option_strings(update_options)
+        )
         query = "ALTER TABLE {0} WITH {1}".format(model.column_family_name(), options)
         execute(query, connection=connection)
         return True
@@ -533,14 +665,19 @@ def _drop_table(model, connection=None):
 
     try:
         meta.keyspaces[ks_name].tables[raw_cf_name]
-        execute('DROP TABLE {0};'.format(model.column_family_name()), connection=connection)
+        execute(
+            "DROP TABLE {0};".format(model.column_family_name()), connection=connection
+        )
     except KeyError:
         pass
 
 
 def _allow_schema_modification():
     if not os.getenv(CQLENG_ALLOW_SCHEMA_MANAGEMENT):
-        msg = CQLENG_ALLOW_SCHEMA_MANAGEMENT + " environment variable is not set. Future versions of this package will require this variable to enable management functions."
+        msg = (
+            CQLENG_ALLOW_SCHEMA_MANAGEMENT
+            + " environment variable is not set. Future versions of this package will require this variable to enable management functions."
+        )
         warnings.warn(msg)
         log.warning(msg)
 

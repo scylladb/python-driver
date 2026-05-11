@@ -15,31 +15,47 @@
 import unittest
 
 from cassandra.metadata import (
-    KeyspaceMetadata, TableMetadataDSE68,
-    VertexMetadata, EdgeMetadata
+    KeyspaceMetadata,
+    TableMetadataDSE68,
+    VertexMetadata,
+    EdgeMetadata,
 )
 
 
 class GraphMetadataToCQLTests(unittest.TestCase):
-
-    def _create_edge_metadata(self, partition_keys=['pk1'], clustering_keys=['c1']):
+    def _create_edge_metadata(self, partition_keys=["pk1"], clustering_keys=["c1"]):
         return EdgeMetadata(
-            'keyspace', 'table', 'label', 'from_table', 'from_label',
-            partition_keys, clustering_keys, 'to_table', 'to_label',
-            partition_keys, clustering_keys)
+            "keyspace",
+            "table",
+            "label",
+            "from_table",
+            "from_label",
+            partition_keys,
+            clustering_keys,
+            "to_table",
+            "to_label",
+            partition_keys,
+            clustering_keys,
+        )
 
-    def _create_vertex_metadata(self, label_name='label'):
-        return VertexMetadata('keyspace', 'table', label_name)
+    def _create_vertex_metadata(self, label_name="label"):
+        return VertexMetadata("keyspace", "table", label_name)
 
     def _create_keyspace_metadata(self, graph_engine):
         return KeyspaceMetadata(
-            'keyspace', True, 'org.apache.cassandra.locator.SimpleStrategy',
-            {'replication_factor': 1}, graph_engine=graph_engine)
+            "keyspace",
+            True,
+            "org.apache.cassandra.locator.NetworkTopologyStrategy",
+            {"dc1": 1},
+            graph_engine=graph_engine,
+        )
 
     def _create_table_metadata(self, with_vertex=False, with_edge=False):
-        tm = TableMetadataDSE68('keyspace', 'table')
+        tm = TableMetadataDSE68("keyspace", "table")
         if with_vertex:
-            tm.vertex = self._create_vertex_metadata() if with_vertex is True else with_vertex
+            tm.vertex = (
+                self._create_vertex_metadata() if with_vertex is True else with_vertex
+            )
         elif with_edge:
             tm.edge = self._create_edge_metadata() if with_edge is True else with_edge
 
@@ -48,24 +64,15 @@ class GraphMetadataToCQLTests(unittest.TestCase):
     def test_keyspace_no_graph_engine(self):
         km = self._create_keyspace_metadata(None)
         self.assertEqual(km.graph_engine, None)
-        self.assertNotIn(
-            "graph_engine",
-            km.as_cql_query()
-        )
+        self.assertNotIn("graph_engine", km.as_cql_query())
 
     def test_keyspace_with_graph_engine(self):
-        graph_engine = 'Core'
+        graph_engine = "Core"
         km = self._create_keyspace_metadata(graph_engine)
         self.assertEqual(km.graph_engine, graph_engine)
         cql = km.as_cql_query()
-        self.assertIn(
-            "graph_engine",
-            cql
-        )
-        self.assertIn(
-            "Core",
-            cql
-        )
+        self.assertIn("graph_engine", cql)
+        self.assertIn("Core", cql)
 
     def test_table_no_vertex_or_edge(self):
         tm = self._create_table_metadata()
@@ -94,45 +101,31 @@ class GraphMetadataToCQLTests(unittest.TestCase):
         self.assertIn("TO to_label", cql)
 
     def test_vertex_with_label(self):
-        tm = self. _create_table_metadata(with_vertex=True)
-        self.assertTrue(tm.as_cql_query().endswith('VERTEX LABEL label'))
+        tm = self._create_table_metadata(with_vertex=True)
+        self.assertTrue(tm.as_cql_query().endswith("VERTEX LABEL label"))
 
     def test_edge_single_partition_key_and_clustering_key(self):
         tm = self._create_table_metadata(with_edge=True)
-        self.assertIn(
-            'FROM from_label(pk1, c1)',
-            tm.as_cql_query()
-        )
+        self.assertIn("FROM from_label(pk1, c1)", tm.as_cql_query())
 
     def test_edge_multiple_partition_keys(self):
-        edge = self._create_edge_metadata(partition_keys=['pk1', 'pk2'])
-        tm = self. _create_table_metadata(with_edge=edge)
-        self.assertIn(
-            'FROM from_label((pk1, pk2), ',
-            tm.as_cql_query()
-        )
+        edge = self._create_edge_metadata(partition_keys=["pk1", "pk2"])
+        tm = self._create_table_metadata(with_edge=edge)
+        self.assertIn("FROM from_label((pk1, pk2), ", tm.as_cql_query())
 
     def test_edge_no_clustering_keys(self):
         edge = self._create_edge_metadata(clustering_keys=[])
-        tm = self. _create_table_metadata(with_edge=edge)
-        self.assertIn(
-            'FROM from_label(pk1) ',
-            tm.as_cql_query()
-        )
+        tm = self._create_table_metadata(with_edge=edge)
+        self.assertIn("FROM from_label(pk1) ", tm.as_cql_query())
 
     def test_edge_multiple_clustering_keys(self):
-        edge = self._create_edge_metadata(clustering_keys=['c1', 'c2'])
-        tm = self. _create_table_metadata(with_edge=edge)
-        self.assertIn(
-            'FROM from_label(pk1, c1, c2) ',
-            tm.as_cql_query()
-        )
+        edge = self._create_edge_metadata(clustering_keys=["c1", "c2"])
+        tm = self._create_table_metadata(with_edge=edge)
+        self.assertIn("FROM from_label(pk1, c1, c2) ", tm.as_cql_query())
 
     def test_edge_multiple_partition_and_clustering_keys(self):
-        edge = self._create_edge_metadata(partition_keys=['pk1', 'pk2'],
-                                          clustering_keys=['c1', 'c2'])
-        tm = self. _create_table_metadata(with_edge=edge)
-        self.assertIn(
-            'FROM from_label((pk1, pk2), c1, c2) ',
-            tm.as_cql_query()
+        edge = self._create_edge_metadata(
+            partition_keys=["pk1", "pk2"], clustering_keys=["c1", "c2"]
         )
+        tm = self._create_table_metadata(with_edge=edge)
+        self.assertIn("FROM from_label((pk1, pk2), c1, c2) ", tm.as_cql_query())

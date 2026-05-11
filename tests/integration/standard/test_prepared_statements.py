@@ -13,7 +13,12 @@
 # limitations under the License.
 
 
-from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster, CASSANDRA_VERSION
+from tests.integration import (
+    use_singledc,
+    PROTOCOL_VERSION,
+    TestCluster,
+    CASSANDRA_VERSION,
+)
 
 import unittest
 
@@ -23,8 +28,13 @@ from cassandra import InvalidRequest, DriverException
 
 from cassandra import ConsistencyLevel, ProtocolVersion
 from cassandra.query import PreparedStatement, UNSET_VALUE
-from tests.integration import (get_server_versions, greaterthanorequalcass40, greaterthanorequaldse50,
-    requirecassandra, BasicSharedKeyspaceUnitTestCase)
+from tests.integration import (
+    get_server_versions,
+    greaterthanorequalcass40,
+    greaterthanorequaldse50,
+    requirecassandra,
+    BasicSharedKeyspaceUnitTestCase,
+)
 
 import logging
 
@@ -37,13 +47,14 @@ def setup_module():
 
 
 class PreparedStatementTests(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         cls.cass_version = get_server_versions()
 
     def setUp(self):
-        self.cluster = TestCluster(metrics_enabled=True, allow_beta_protocol_version=True)
+        self.cluster = TestCluster(
+            metrics_enabled=True, allow_beta_protocol_version=True
+        )
         self.session = self.cluster.connect()
 
     def tearDown(self):
@@ -61,8 +72,9 @@ class PreparedStatementTests(unittest.TestCase):
         self.session.execute(
             """
             CREATE KEYSPACE preparedtests
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
-            """)
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+            """
+        )
 
         self.session.set_keyspace("preparedtests")
         self.session.execute(
@@ -73,53 +85,54 @@ class PreparedStatementTests(unittest.TestCase):
                 c text,
                 PRIMARY KEY (a, b)
             )
-            """)
+            """
+        )
 
         prepared = self.session.prepare(
             """
             INSERT INTO cf0 (a, b, c) VALUES  (?, ?, ?)
-            """)
+            """
+        )
 
         self.assertIsInstance(prepared, PreparedStatement)
-        bound = prepared.bind(('a', 'b', 'c'))
+        bound = prepared.bind(("a", "b", "c"))
 
         self.session.execute(bound)
 
         prepared = self.session.prepare(
             """
             SELECT * FROM cf0 WHERE a=?
-            """)
+            """
+        )
         self.assertIsInstance(prepared, PreparedStatement)
 
-        bound = prepared.bind(('a'))
+        bound = prepared.bind(("a"))
         results = self.session.execute(bound)
-        self.assertEqual(results, [('a', 'b', 'c')])
+        self.assertEqual(results, [("a", "b", "c")])
 
         # test with new dict binding
         prepared = self.session.prepare(
             """
             INSERT INTO cf0 (a, b, c) VALUES  (?, ?, ?)
-            """)
+            """
+        )
 
         self.assertIsInstance(prepared, PreparedStatement)
-        bound = prepared.bind({
-            'a': 'x',
-            'b': 'y',
-            'c': 'z'
-        })
+        bound = prepared.bind({"a": "x", "b": "y", "c": "z"})
 
         self.session.execute(bound)
 
         prepared = self.session.prepare(
             """
             SELECT * FROM cf0 WHERE a=?
-            """)
+            """
+        )
 
         self.assertIsInstance(prepared, PreparedStatement)
 
-        bound = prepared.bind({'a': 'x'})
+        bound = prepared.bind({"a": "x"})
         results = self.session.execute(bound)
-        self.assertEqual(results, [('x', 'y', 'z')])
+        self.assertEqual(results, [("x", "y", "z")])
 
     def test_missing_primary_key(self):
         """
@@ -156,7 +169,7 @@ class PreparedStatementTests(unittest.TestCase):
         else:
             prepared = session.prepare(statement_to_prepare)
             self.assertIsInstance(prepared, PreparedStatement)
-            bound = prepared.bind({'v': 1})
+            bound = prepared.bind({"v": 1})
             self.assertRaises(InvalidRequest, session.execute, bound)
 
     def test_too_many_bind_values(self):
@@ -167,7 +180,7 @@ class PreparedStatementTests(unittest.TestCase):
 
     def _run_too_many_bind_values(self, session):
         statement_to_prepare = """ INSERT INTO test3rf.test (v) VALUES  (?)"""
-         # logic needed work with changes in CASSANDRA-6237
+        # logic needed work with changes in CASSANDRA-6237
         if self.cass_version[0] >= (3, 0, 0):
             self.assertRaises(InvalidRequest, session.prepare, statement_to_prepare)
         else:
@@ -184,20 +197,21 @@ class PreparedStatementTests(unittest.TestCase):
         prepared = self.session.prepare(
             """
             INSERT INTO test3rf.test (k, v) VALUES  (?, ?)
-            """)
+            """
+        )
 
         self.assertIsInstance(prepared, PreparedStatement)
 
         # too many values is ok - others are ignored
-        prepared.bind({'k': 1, 'v': 2, 'v2': 3})
+        prepared.bind({"k": 1, "v": 2, "v2": 3})
 
         # right number, but one does not belong
         if PROTOCOL_VERSION < 4:
             # pre v4, the driver bails with key error when 'v' is found missing
-            self.assertRaises(KeyError, prepared.bind, {'k': 1, 'v2': 3})
+            self.assertRaises(KeyError, prepared.bind, {"k": 1, "v2": 3})
         else:
             # post v4, the driver uses UNSET_VALUE for 'v' and 'v2' is ignored
-            prepared.bind({'k': 1, 'v2': 3})
+            prepared.bind({"k": 1, "v2": 3})
 
         # also catch too few variables with dicts
         self.assertIsInstance(prepared, PreparedStatement)
@@ -215,7 +229,8 @@ class PreparedStatementTests(unittest.TestCase):
         prepared = self.session.prepare(
             """
             INSERT INTO test3rf.test (k, v) VALUES  (?, ?)
-            """)
+            """
+        )
 
         self.assertIsInstance(prepared, PreparedStatement)
         bound = prepared.bind((1, None))
@@ -224,7 +239,8 @@ class PreparedStatementTests(unittest.TestCase):
         prepared = self.session.prepare(
             """
             SELECT * FROM test3rf.test WHERE k=?
-            """)
+            """
+        )
         self.assertIsInstance(prepared, PreparedStatement)
 
         bound = prepared.bind((1,))
@@ -246,27 +262,41 @@ class PreparedStatementTests(unittest.TestCase):
         @test_category prepared_statements:binding
         """
         if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Binding UNSET values is not supported in protocol version < 4")
+            raise unittest.SkipTest(
+                "Binding UNSET values is not supported in protocol version < 4"
+            )
 
         # table with at least two values so one can be used as a marker
-        self.session.execute("CREATE TABLE IF NOT EXISTS test1rf.test_unset_values (k int PRIMARY KEY, v0 int, v1 int)")
-        insert = self.session.prepare("INSERT INTO test1rf.test_unset_values (k, v0, v1) VALUES  (?, ?, ?)")
-        select = self.session.prepare("SELECT * FROM test1rf.test_unset_values WHERE k=?")
+        self.session.execute(
+            "CREATE TABLE IF NOT EXISTS test1rf.test_unset_values (k int PRIMARY KEY, v0 int, v1 int)"
+        )
+        insert = self.session.prepare(
+            "INSERT INTO test1rf.test_unset_values (k, v0, v1) VALUES  (?, ?, ?)"
+        )
+        select = self.session.prepare(
+            "SELECT * FROM test1rf.test_unset_values WHERE k=?"
+        )
 
         bind_expected = [
             # initial condition
-            ((0, 0, 0),                            (0, 0, 0)),
+            ((0, 0, 0), (0, 0, 0)),
             # unset implicit
-            ((0, 1,),                              (0, 1, 0)),
-            ({'k': 0, 'v0': 2},                    (0, 2, 0)),
-            ({'k': 0, 'v1': 1},                    (0, 2, 1)),
+            (
+                (
+                    0,
+                    1,
+                ),
+                (0, 1, 0),
+            ),
+            ({"k": 0, "v0": 2}, (0, 2, 0)),
+            ({"k": 0, "v1": 1}, (0, 2, 1)),
             # unset explicit
-            ((0, 3, UNSET_VALUE),                  (0, 3, 1)),
-            ((0, UNSET_VALUE, 2),                  (0, 3, 2)),
-            ({'k': 0, 'v0': 4, 'v1': UNSET_VALUE}, (0, 4, 2)),
-            ({'k': 0, 'v0': UNSET_VALUE, 'v1': 3}, (0, 4, 3)),
+            ((0, 3, UNSET_VALUE), (0, 3, 1)),
+            ((0, UNSET_VALUE, 2), (0, 3, 2)),
+            ({"k": 0, "v0": 4, "v1": UNSET_VALUE}, (0, 4, 2)),
+            ({"k": 0, "v0": UNSET_VALUE, "v1": 3}, (0, 4, 3)),
             # nulls still work
-            ((0, None, None),                      (0, None, None)),
+            ((0, None, None), (0, None, None)),
         ]
 
         for params, expected in bind_expected:
@@ -277,11 +307,11 @@ class PreparedStatementTests(unittest.TestCase):
         self.assertRaises(ValueError, self.session.execute, select, (UNSET_VALUE, 0, 0))
 
     def test_no_meta(self):
-
         prepared = self.session.prepare(
             """
             INSERT INTO test3rf.test (k, v) VALUES  (0, 0)
-            """)
+            """
+        )
 
         self.assertIsInstance(prepared, PreparedStatement)
         bound = prepared.bind(None)
@@ -291,7 +321,8 @@ class PreparedStatementTests(unittest.TestCase):
         prepared = self.session.prepare(
             """
             SELECT * FROM test3rf.test WHERE k=0
-            """)
+            """
+        )
         self.assertIsInstance(prepared, PreparedStatement)
 
         bound = prepared.bind(None)
@@ -308,19 +339,21 @@ class PreparedStatementTests(unittest.TestCase):
         prepared = self.session.prepare(
             """
             INSERT INTO test3rf.test (k, v) VALUES  (?, ?)
-            """)
+            """
+        )
 
         self.assertIsInstance(prepared, PreparedStatement)
-        bound = prepared.bind({'k': 1, 'v': None})
+        bound = prepared.bind({"k": 1, "v": None})
         self.session.execute(bound)
 
         prepared = self.session.prepare(
             """
             SELECT * FROM test3rf.test WHERE k=?
-            """)
+            """
+        )
         self.assertIsInstance(prepared, PreparedStatement)
 
-        bound = prepared.bind({'k': 1})
+        bound = prepared.bind({"k": 1})
         results = self.session.execute(bound)
         self.assertEqual(results[0].v, None)
 
@@ -332,7 +365,8 @@ class PreparedStatementTests(unittest.TestCase):
         prepared = self.session.prepare(
             """
             INSERT INTO test3rf.test (k, v) VALUES  (?, ?)
-            """)
+            """
+        )
 
         self.assertIsInstance(prepared, PreparedStatement)
         future = self.session.execute_async(prepared, (873, None))
@@ -341,7 +375,8 @@ class PreparedStatementTests(unittest.TestCase):
         prepared = self.session.prepare(
             """
             SELECT * FROM test3rf.test WHERE k=?
-            """)
+            """
+        )
         self.assertIsInstance(prepared, PreparedStatement)
 
         future = self.session.execute_async(prepared, (873,))
@@ -355,19 +390,21 @@ class PreparedStatementTests(unittest.TestCase):
         prepared = self.session.prepare(
             """
             INSERT INTO test3rf.test (k, v) VALUES  (?, ?)
-            """)
+            """
+        )
 
         self.assertIsInstance(prepared, PreparedStatement)
-        future = self.session.execute_async(prepared, {'k': 873, 'v': None})
+        future = self.session.execute_async(prepared, {"k": 873, "v": None})
         future.result()
 
         prepared = self.session.prepare(
             """
             SELECT * FROM test3rf.test WHERE k=?
-            """)
+            """
+        )
         self.assertIsInstance(prepared, PreparedStatement)
 
-        future = self.session.execute_async(prepared, {'k': 873})
+        future = self.session.execute_async(prepared, {"k": 873})
         results = future.result()
         self.assertEqual(results[0].v, None)
 
@@ -388,25 +425,35 @@ class PreparedStatementTests(unittest.TestCase):
         @test_category prepared_statements
         """
 
-        self.session.execute("CREATE TABLE test3rf.error_test (k int PRIMARY KEY, v int)")
+        self.session.execute(
+            "CREATE TABLE test3rf.error_test (k int PRIMARY KEY, v int)"
+        )
         prepared = self.session.prepare("SELECT * FROM test3rf.error_test WHERE k=?")
         self.session.execute("DROP TABLE test3rf.error_test")
 
         with self.assertRaises(InvalidRequest):
             self.session.execute(prepared, [0])
 
-    @unittest.skipIf((CASSANDRA_VERSION >= Version('3.11.12') and CASSANDRA_VERSION < Version('4.0')) or \
-        CASSANDRA_VERSION >= Version('4.0.2'),
-        "Fixed server-side in Cassandra 3.11.12, 4.0.2")
+    @unittest.skipIf(
+        (CASSANDRA_VERSION >= Version("3.11.12") and CASSANDRA_VERSION < Version("4.0"))
+        or CASSANDRA_VERSION >= Version("4.0.2"),
+        "Fixed server-side in Cassandra 3.11.12, 4.0.2",
+    )
     def test_fail_if_different_query_id_on_reprepare(self):
-        """ PYTHON-1124 and CASSANDRA-15252 """
+        """PYTHON-1124 and CASSANDRA-15252"""
         keyspace = "test_fail_if_different_query_id_on_reprepare"
         self.session.execute(
             "CREATE KEYSPACE IF NOT EXISTS {} WITH replication = "
-            "{{'class': 'SimpleStrategy', 'replication_factor': 1}}".format(keyspace)
+            "{{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}".format(
+                keyspace
+            )
         )
-        self.session.execute("CREATE TABLE IF NOT EXISTS {}.foo(k int PRIMARY KEY)".format(keyspace))
-        prepared = self.session.prepare("SELECT * FROM {}.foo WHERE k=?".format(keyspace))
+        self.session.execute(
+            "CREATE TABLE IF NOT EXISTS {}.foo(k int PRIMARY KEY)".format(keyspace)
+        )
+        prepared = self.session.prepare(
+            "SELECT * FROM {}.foo WHERE k=?".format(keyspace)
+        )
         self.session.execute("DROP TABLE {}.foo".format(keyspace))
         self.session.execute("CREATE TABLE {}.foo(k int PRIMARY KEY)".format(keyspace))
         self.session.execute("USE {}".format(keyspace))
@@ -417,14 +464,25 @@ class PreparedStatementTests(unittest.TestCase):
 
 @greaterthanorequalcass40
 class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
-
     def setUp(self):
-        self.table_name = "{}.prepared_statement_invalidation_test".format(self.keyspace_name)
-        self.session.execute("CREATE TABLE {} (a int PRIMARY KEY, b int, d int);".format(self.table_name))
-        self.session.execute("INSERT INTO {} (a, b, d) VALUES (1, 1, 1);".format(self.table_name))
-        self.session.execute("INSERT INTO {} (a, b, d) VALUES (2, 2, 2);".format(self.table_name))
-        self.session.execute("INSERT INTO {} (a, b, d) VALUES (3, 3, 3);".format(self.table_name))
-        self.session.execute("INSERT INTO {} (a, b, d) VALUES (4, 4, 4);".format(self.table_name))
+        self.table_name = "{}.prepared_statement_invalidation_test".format(
+            self.keyspace_name
+        )
+        self.session.execute(
+            "CREATE TABLE {} (a int PRIMARY KEY, b int, d int);".format(self.table_name)
+        )
+        self.session.execute(
+            "INSERT INTO {} (a, b, d) VALUES (1, 1, 1);".format(self.table_name)
+        )
+        self.session.execute(
+            "INSERT INTO {} (a, b, d) VALUES (2, 2, 2);".format(self.table_name)
+        )
+        self.session.execute(
+            "INSERT INTO {} (a, b, d) VALUES (3, 3, 3);".format(self.table_name)
+        )
+        self.session.execute(
+            "INSERT INTO {} (a, b, d) VALUES (4, 4, 4);".format(self.table_name)
+        )
 
     def tearDown(self):
         self.session.execute("DROP TABLE {}".format(self.table_name))
@@ -439,7 +497,9 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
         Prior to this fix, the request would blow up with a protocol error when the result was decoded expecting a different
         number of columns.
         """
-        wildcard_prepared = self.session.prepare("SELECT * FROM {}".format(self.table_name))
+        wildcard_prepared = self.session.prepare(
+            "SELECT * FROM {}".format(self.table_name)
+        )
         original_result_metadata = wildcard_prepared.result_metadata
         self.assertEqual(len(original_result_metadata), 3)
 
@@ -449,7 +509,9 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
         self.session.execute("ALTER TABLE {} DROP d".format(self.table_name))
 
         # Get a bunch of requests in the pipeline with varying states of result_meta, reprepare, resolved
-        futures = set(self.session.execute_async(wildcard_prepared.bind(None)) for _ in range(200))
+        futures = set(
+            self.session.execute_async(wildcard_prepared.bind(None)) for _ in range(200)
+        )
         for f in futures:
             self.assertEqual(f.result()[0], (1, 1))
 
@@ -466,12 +528,14 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
 
         The query id from the prepared statment must have changed
         """
-        prepared_statement = self.session.prepare("SELECT * from {} WHERE a = ?".format(self.table_name))
+        prepared_statement = self.session.prepare(
+            "SELECT * from {} WHERE a = ?".format(self.table_name)
+        )
         id_before = prepared_statement.result_metadata_id
         self.assertEqual(len(prepared_statement.result_metadata), 3)
 
         self.session.execute("ALTER TABLE {} ADD c int".format(self.table_name))
-        bound_statement = prepared_statement.bind((1, ))
+        bound_statement = prepared_statement.bind((1,))
         self.session.execute(bound_statement, timeout=1)
 
         id_after = prepared_statement.result_metadata_id
@@ -489,7 +553,9 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
         @since 3.12
         @jira_ticket PYTHON-808
         """
-        prepared_statement = self.session.prepare("SELECT * from {}".format(self.table_name))
+        prepared_statement = self.session.prepare(
+            "SELECT * from {}".format(self.table_name)
+        )
         id_before = prepared_statement.result_metadata_id
         self.assertEqual(len(prepared_statement.result_metadata), 3)
 
@@ -500,7 +566,9 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
 
         self.session.execute("ALTER TABLE {} ADD c int".format(self.table_name))
 
-        result_set = set(x for x in ((1, 1, 1), (2, 2, 2), (3, 3, None, 3), (4, 4, None, 4)))
+        result_set = set(
+            x for x in ((1, 1, 1), (2, 2, 2), (3, 3, None, 3), (4, 4, None, 4))
+        )
         expected_result_set = set(row for row in result)
 
         id_after = prepared_statement.result_metadata_id
@@ -529,7 +597,7 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
         one_id_before = one_prepared_stm.result_metadata_id
 
         self.session.execute("ALTER TABLE {} ADD c int".format(self.table_name))
-        one_session.execute(one_prepared_stm, (1, ))
+        one_session.execute(one_prepared_stm, (1,))
 
         one_id_after = one_prepared_stm.result_metadata_id
         self.assertNotEqual(one_id_before, one_id_after)
@@ -544,10 +612,11 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
         @jira_ticket PYTHON-808
         """
         prepared_statement = self.session.prepare(
-            "SELECT a, b, d FROM {} WHERE a = ?".format(self.table_name))
+            "SELECT a, b, d FROM {} WHERE a = ?".format(self.table_name)
+        )
         self.session.execute("ALTER TABLE {} DROP d".format(self.table_name))
         with self.assertRaises(InvalidRequest):
-            self.session.execute(prepared_statement.bind((1, )))
+            self.session.execute(prepared_statement.bind((1,)))
 
     def test_id_is_not_updated_conditional_v4(self):
         """
@@ -609,15 +678,16 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
 
     def _test_updated_conditional(self, session, value):
         prepared_statement = session.prepare(
-            "INSERT INTO {}(a, b, d) VALUES "
-            "(?, ? , ?) IF NOT EXISTS".format(self.table_name))
+            "INSERT INTO {}(a, b, d) VALUES (?, ? , ?) IF NOT EXISTS".format(
+                self.table_name
+            )
+        )
         first_id = prepared_statement.result_metadata_id
-        LOG.debug('initial result_metadata_id: {}'.format(first_id))
+        LOG.debug("initial result_metadata_id: {}".format(first_id))
 
         def check_result_and_metadata(expected):
             self.assertEqual(
-                session.execute(prepared_statement, (value, value, value))[0],
-                expected
+                session.execute(prepared_statement, (value, value, value))[0], expected
             )
             self.assertEqual(prepared_statement.result_metadata_id, first_id)
             self.assertIsNone(prepared_statement.result_metadata)

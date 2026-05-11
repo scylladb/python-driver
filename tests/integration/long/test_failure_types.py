@@ -21,16 +21,31 @@ from unittest.mock import Mock
 
 from cassandra.policies import HostFilterPolicy, RoundRobinPolicy
 from cassandra import (
-    ConsistencyLevel, OperationTimedOut, ReadTimeout, WriteTimeout, ReadFailure, WriteFailure,
-    FunctionFailure, ProtocolVersion,
+    ConsistencyLevel,
+    OperationTimedOut,
+    ReadTimeout,
+    WriteTimeout,
+    ReadFailure,
+    WriteFailure,
+    FunctionFailure,
+    ProtocolVersion,
 )
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.query import SimpleStatement
 from tests.integration import (
-    use_singledc, PROTOCOL_VERSION, get_cluster, setup_keyspace, remove_cluster,
-    get_node, start_cluster_wait_for_up, requiresmallclockgranularity,
-    local, CASSANDRA_VERSION, TestCluster)
+    use_singledc,
+    PROTOCOL_VERSION,
+    get_cluster,
+    setup_keyspace,
+    remove_cluster,
+    get_node,
+    start_cluster_wait_for_up,
+    requiresmallclockgranularity,
+    local,
+    CASSANDRA_VERSION,
+    TestCluster,
+)
 
 
 import unittest
@@ -52,8 +67,8 @@ def setup_module():
         ccm_cluster = get_cluster()
         ccm_cluster.stop()
         config_options = {
-            'tombstone_failure_threshold': 2000,
-            'tombstone_warn_threshold': 1000,
+            "tombstone_failure_threshold": 2000,
+            "tombstone_warn_threshold": 1000,
         }
         ccm_cluster.set_configuration_options(config_options)
         start_cluster_wait_for_up(ccm_cluster)
@@ -70,7 +85,6 @@ def teardown_module():
 
 
 class ClientExceptionTests(unittest.TestCase):
-
     def setUp(self):
         """
         Test is skipped if run with native protocol version <4
@@ -78,14 +92,14 @@ class ClientExceptionTests(unittest.TestCase):
         if PROTOCOL_VERSION < 4:
             raise unittest.SkipTest(
                 "Native protocol 4,0+ is required for custom payloads, currently using %r"
-                % (PROTOCOL_VERSION,))
+                % (PROTOCOL_VERSION,)
+            )
         self.cluster = TestCluster()
         self.session = self.cluster.connect()
         self.nodes_currently_failing = []
         self.node1, self.node2, self.node3 = get_cluster().nodes.values()
 
     def tearDown(self):
-
         self.cluster.shutdown()
         failing_nodes = []
 
@@ -99,24 +113,44 @@ class ClientExceptionTests(unittest.TestCase):
                 return session.execute(query)
             except OperationTimedOut:
                 ex_type, ex, tb = sys.exc_info()
-                log.warning("{0}: {1} Backtrace: {2}".format(ex_type.__name__, ex, traceback.extract_tb(tb)))
+                log.warning(
+                    "{0}: {1} Backtrace: {2}".format(
+                        ex_type.__name__, ex, traceback.extract_tb(tb)
+                    )
+                )
                 del tb
                 tries += 1
 
-        raise RuntimeError("Failed to execute query after 100 attempts: {0}".format(query))
+        raise RuntimeError(
+            "Failed to execute query after 100 attempts: {0}".format(query)
+        )
 
     def execute_concurrent_args_helper(self, session, query, params):
         tries = 0
         while tries < 100:
             try:
-                return execute_concurrent_with_args(session, query, params, concurrency=50)
-            except (ReadTimeout, WriteTimeout, OperationTimedOut, ReadFailure, WriteFailure):
+                return execute_concurrent_with_args(
+                    session, query, params, concurrency=50
+                )
+            except (
+                ReadTimeout,
+                WriteTimeout,
+                OperationTimedOut,
+                ReadFailure,
+                WriteFailure,
+            ):
                 ex_type, ex, tb = sys.exc_info()
-                log.warning("{0}: {1} Backtrace: {2}".format(ex_type.__name__, ex, traceback.extract_tb(tb)))
+                log.warning(
+                    "{0}: {1} Backtrace: {2}".format(
+                        ex_type.__name__, ex, traceback.extract_tb(tb)
+                    )
+                )
                 del tb
                 tries += 1
 
-        raise RuntimeError("Failed to execute query after 100 attempts: {0}".format(query))
+        raise RuntimeError(
+            "Failed to execute query after 100 attempts: {0}".format(query)
+        )
 
     def setFailingNodes(self, failing_nodes, keyspace):
         """
@@ -131,8 +165,11 @@ class ClientExceptionTests(unittest.TestCase):
         for node in failing_nodes:
             if node not in self.nodes_currently_failing:
                 node.stop(wait_other_notice=True, gently=False)
-                node.start(jvm_args=[" -Dcassandra.test.fail_writes_ks=" + keyspace], wait_for_binary_proto=True,
-                           wait_other_notice=True)
+                node.start(
+                    jvm_args=[" -Dcassandra.test.fail_writes_ks=" + keyspace],
+                    wait_for_binary_proto=True,
+                    wait_other_notice=True,
+                )
                 self.nodes_currently_failing.append(node)
 
         # Ensure all nodes not on the list, but that are currently set to failing are enabled
@@ -142,7 +179,9 @@ class ClientExceptionTests(unittest.TestCase):
                 node.start(wait_for_binary_proto=True, wait_other_notice=True)
                 self.nodes_currently_failing.remove(node)
 
-    def _perform_cql_statement(self, text, consistency_level, expected_exception, session=None):
+    def _perform_cql_statement(
+        self, text, consistency_level, expected_exception, session=None
+    ):
         """
         Simple helper method to preform cql statements and check for expected exception
         @param text CQl statement to execute
@@ -185,8 +224,11 @@ class ClientExceptionTests(unittest.TestCase):
         self._perform_cql_statement(
             """
             CREATE KEYSPACE testksfail
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}
-            """, consistency_level=ConsistencyLevel.ALL, expected_exception=None)
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}
+            """,
+            consistency_level=ConsistencyLevel.ALL,
+            expected_exception=None,
+        )
 
         # create table
         self._perform_cql_statement(
@@ -194,7 +236,10 @@ class ClientExceptionTests(unittest.TestCase):
             CREATE TABLE testksfail.test (
                 k int PRIMARY KEY,
                 v int )
-            """, consistency_level=ConsistencyLevel.ALL, expected_exception=None)
+            """,
+            consistency_level=ConsistencyLevel.ALL,
+            expected_exception=None,
+        )
 
         # Disable one node
         failing_nodes = [self.node1]
@@ -204,13 +249,19 @@ class ClientExceptionTests(unittest.TestCase):
         self._perform_cql_statement(
             """
             INSERT INTO testksfail.test (k, v) VALUES  (1, 0 )
-            """, consistency_level=ConsistencyLevel.ALL, expected_exception=WriteFailure)
+            """,
+            consistency_level=ConsistencyLevel.ALL,
+            expected_exception=WriteFailure,
+        )
 
         # We have two nodes left so a write with consistency level of QUORUM should complete as expected
         self._perform_cql_statement(
             """
             INSERT INTO testksfail.test (k, v) VALUES  (1, 0 )
-            """, consistency_level=ConsistencyLevel.QUORUM, expected_exception=None)
+            """,
+            consistency_level=ConsistencyLevel.QUORUM,
+            expected_exception=None,
+        )
 
         failing_nodes = []
 
@@ -221,7 +272,10 @@ class ClientExceptionTests(unittest.TestCase):
         self._perform_cql_statement(
             """
             DROP KEYSPACE testksfail
-            """, consistency_level=ConsistencyLevel.ANY, expected_exception=None)
+            """,
+            consistency_level=ConsistencyLevel.ANY,
+            expected_exception=None,
+        )
 
     def test_tombstone_overflow_read_failure(self):
         """
@@ -248,26 +302,39 @@ class ClientExceptionTests(unittest.TestCase):
                 k int,
                 v0 int,
                 v1 int, PRIMARY KEY (k,v0))
-            """, consistency_level=ConsistencyLevel.ALL, expected_exception=None)
+            """,
+            consistency_level=ConsistencyLevel.ALL,
+            expected_exception=None,
+        )
 
-        statement = self.session.prepare("INSERT INTO test3rf.test2 (k, v0,v1) VALUES  (1,?,1)")
+        statement = self.session.prepare(
+            "INSERT INTO test3rf.test2 (k, v0,v1) VALUES  (1,?,1)"
+        )
         parameters = [(x,) for x in range(3000)]
         self.execute_concurrent_args_helper(self.session, statement, parameters)
 
-        column = 'v1' if CASSANDRA_VERSION < Version('4.0') else ''
-        statement = self.session.prepare("DELETE {} FROM test3rf.test2 WHERE k = 1 AND v0 =?".format(column))
+        column = "v1" if CASSANDRA_VERSION < Version("4.0") else ""
+        statement = self.session.prepare(
+            "DELETE {} FROM test3rf.test2 WHERE k = 1 AND v0 =?".format(column)
+        )
         parameters = [(x,) for x in range(2001)]
         self.execute_concurrent_args_helper(self.session, statement, parameters)
 
         self._perform_cql_statement(
             """
             SELECT * FROM test3rf.test2 WHERE k = 1
-            """, consistency_level=ConsistencyLevel.ALL, expected_exception=ReadFailure)
+            """,
+            consistency_level=ConsistencyLevel.ALL,
+            expected_exception=ReadFailure,
+        )
 
         self._perform_cql_statement(
             """
             DROP TABLE test3rf.test2;
-            """, consistency_level=ConsistencyLevel.ALL, expected_exception=None)
+            """,
+            consistency_level=ConsistencyLevel.ALL,
+            expected_exception=None,
+        )
 
     def test_user_function_failure(self):
         """
@@ -291,35 +358,53 @@ class ClientExceptionTests(unittest.TestCase):
             RETURNS NULL ON NULL INPUT
             RETURNS double
             LANGUAGE java AS 'throw new RuntimeException("failure");';
-            """, consistency_level=ConsistencyLevel.ALL, expected_exception=None)
+            """,
+            consistency_level=ConsistencyLevel.ALL,
+            expected_exception=None,
+        )
 
         # Create test table
         self._perform_cql_statement(
             """
             CREATE TABLE  test3rf.d (k int PRIMARY KEY , d double);
-            """, consistency_level=ConsistencyLevel.ALL, expected_exception=None)
+            """,
+            consistency_level=ConsistencyLevel.ALL,
+            expected_exception=None,
+        )
 
         # Insert some values
         self._perform_cql_statement(
             """
             INSERT INTO test3rf.d (k,d) VALUES (0, 5.12);
-            """, consistency_level=ConsistencyLevel.ALL, expected_exception=None)
+            """,
+            consistency_level=ConsistencyLevel.ALL,
+            expected_exception=None,
+        )
 
         # Run the function expect a function failure exception
         self._perform_cql_statement(
             """
             SELECT test_failure(d) FROM test3rf.d WHERE k = 0;
-            """, consistency_level=ConsistencyLevel.ALL, expected_exception=FunctionFailure)
+            """,
+            consistency_level=ConsistencyLevel.ALL,
+            expected_exception=FunctionFailure,
+        )
 
         self._perform_cql_statement(
             """
             DROP FUNCTION test3rf.test_failure;
-            """, consistency_level=ConsistencyLevel.ALL, expected_exception=None)
+            """,
+            consistency_level=ConsistencyLevel.ALL,
+            expected_exception=None,
+        )
 
         self._perform_cql_statement(
             """
             DROP TABLE test3rf.d;
-            """, consistency_level=ConsistencyLevel.ALL, expected_exception=None)
+            """,
+            consistency_level=ConsistencyLevel.ALL,
+            expected_exception=None,
+        )
 
 
 @requiresmallclockgranularity
@@ -343,10 +428,10 @@ class TimeoutTimerTest(unittest.TestCase):
         self.control_connection_host_number = 1
         self.node_to_stop = get_node(self.control_connection_host_number)
 
-        ddl = '''
+        ddl = """
             CREATE TABLE test3rf.timeout (
                 k int PRIMARY KEY,
-                v int )'''
+                v int )"""
         self.session.execute(ddl)
         self.node_to_stop.pause()
 
@@ -375,7 +460,9 @@ class TimeoutTimerTest(unittest.TestCase):
         """
 
         # Because node1 is stopped these statements will all timeout
-        ss = SimpleStatement('SELECT * FROM test3rf.test', consistency_level=ConsistencyLevel.ALL)
+        ss = SimpleStatement(
+            "SELECT * FROM test3rf.test", consistency_level=ConsistencyLevel.ALL
+        )
 
         # Test with default timeout (should be 10)
         start_time = time.time()
@@ -383,10 +470,10 @@ class TimeoutTimerTest(unittest.TestCase):
         with self.assertRaises(OperationTimedOut):
             future.result()
         end_time = time.time()
-        total_time = end_time-start_time
+        total_time = end_time - start_time
         expected_time = self.cluster.profile_manager.default.request_timeout
         # check timeout and ensure it's within a reasonable range
-        self.assertAlmostEqual(expected_time, total_time, delta=.05)
+        self.assertAlmostEqual(expected_time, total_time, delta=0.05)
 
         # Test with user defined timeout (Should be 1)
         expected_time = 1
@@ -400,8 +487,8 @@ class TimeoutTimerTest(unittest.TestCase):
         with self.assertRaises(OperationTimedOut):
             future.result()
         end_time = time.time()
-        total_time = end_time-start_time
+        total_time = end_time - start_time
         # check timeout and ensure it's within a reasonable range
-        self.assertAlmostEqual(expected_time, total_time, delta=.05)
+        self.assertAlmostEqual(expected_time, total_time, delta=0.05)
         self.assertTrue(mock_errorback.called)
         self.assertFalse(mock_callback.called)

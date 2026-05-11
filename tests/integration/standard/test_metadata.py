@@ -23,22 +23,55 @@ import os
 from packaging.version import Version
 from unittest.mock import Mock, patch
 
-from cassandra import AlreadyExists, SignatureDescriptor, UserFunctionDescriptor, UserAggregateDescriptor
+from cassandra import (
+    AlreadyExists,
+    SignatureDescriptor,
+    UserFunctionDescriptor,
+    UserAggregateDescriptor,
+)
 
 from cassandra.encoder import Encoder
-from cassandra.metadata import (IndexMetadata, Token, murmur3, Function, Aggregate, protect_name, protect_names,
-                                RegisteredTableExtension, _RegisteredExtensionType, get_schema_parser,
-                                group_keys_by_replica, NO_VALID_REPLICA)
+from cassandra.metadata import (
+    IndexMetadata,
+    Token,
+    murmur3,
+    Function,
+    Aggregate,
+    protect_name,
+    protect_names,
+    RegisteredTableExtension,
+    _RegisteredExtensionType,
+    get_schema_parser,
+    group_keys_by_replica,
+    NO_VALID_REPLICA,
+)
 from cassandra.util import SortedSet
 
-from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, execute_until_pass,
-                               BasicSegregatedKeyspaceUnitTestCase, BasicSharedKeyspaceUnitTestCase,
-                               BasicExistingKeyspaceUnitTestCase, drop_keyspace_shutdown_cluster, CASSANDRA_VERSION,
-                               greaterthanorequaldse51, greaterthanorequalcass30, lessthancass30, local,
-                               get_supported_protocol_versions, greaterthancass20,
-                               greaterthancass21, assert_startswith, greaterthanorequalcass40,
-                               greaterthanorequaldse67, lessthancass40,
-                               TestCluster, DSE_VERSION, HCD_VERSION)
+from tests.integration import (
+    get_cluster,
+    use_singledc,
+    PROTOCOL_VERSION,
+    execute_until_pass,
+    BasicSegregatedKeyspaceUnitTestCase,
+    BasicSharedKeyspaceUnitTestCase,
+    BasicExistingKeyspaceUnitTestCase,
+    drop_keyspace_shutdown_cluster,
+    CASSANDRA_VERSION,
+    greaterthanorequaldse51,
+    greaterthanorequalcass30,
+    lessthancass30,
+    local,
+    get_supported_protocol_versions,
+    greaterthancass20,
+    greaterthancass21,
+    assert_startswith,
+    greaterthanorequalcass40,
+    greaterthanorequaldse67,
+    lessthancass40,
+    TestCluster,
+    DSE_VERSION,
+    HCD_VERSION,
+)
 
 
 log = logging.getLogger(__name__)
@@ -67,7 +100,7 @@ class HostMetaDataTests(BasicExistingKeyspaceUnitTestCase):
             self.assertIsNotNone(host.broadcast_rpc_address)
             self.assertIsNotNone(host.host_id)
 
-            if not DSE_VERSION and CASSANDRA_VERSION >= Version('4-a'):
+            if not DSE_VERSION and CASSANDRA_VERSION >= Version("4-a"):
                 self.assertIsNotNone(host.broadcast_port)
                 self.assertIsNotNone(host.broadcast_rpc_port)
 
@@ -75,16 +108,21 @@ class HostMetaDataTests(BasicExistingKeyspaceUnitTestCase):
         local_host = con.host
 
         # The control connection node should have the listen address set.
-        listen_addrs = [host.listen_address for host in self.cluster.metadata.all_hosts()]
+        listen_addrs = [
+            host.listen_address for host in self.cluster.metadata.all_hosts()
+        ]
         self.assertTrue(local_host in listen_addrs)
 
         # The control connection node should have the broadcast_rpc_address set.
-        rpc_addrs = [host.broadcast_rpc_address for host in self.cluster.metadata.all_hosts()]
+        rpc_addrs = [
+            host.broadcast_rpc_address for host in self.cluster.metadata.all_hosts()
+        ]
         self.assertTrue(local_host in rpc_addrs)
 
     @unittest.skipUnless(
-        os.getenv('MAPPED_CASSANDRA_VERSION', None) is not None,
-        "Don't check the host version for test-dse")
+        os.getenv("MAPPED_CASSANDRA_VERSION", None) is not None,
+        "Don't check the host version for test-dse",
+    )
     def test_host_release_version(self):
         """
         Checks the hosts release version and validates that it is equal to the
@@ -100,12 +138,12 @@ class HostMetaDataTests(BasicExistingKeyspaceUnitTestCase):
             assert_startswith(host.release_version, CASSANDRA_VERSION.base_version)
 
 
-
 @local
 class MetaDataRemovalTest(unittest.TestCase):
-
     def setUp(self):
-        self.cluster = TestCluster(contact_points=['127.0.0.1', '127.0.0.2', '127.0.0.3', '126.0.0.186'])
+        self.cluster = TestCluster(
+            contact_points=["127.0.0.1", "127.0.0.2", "127.0.0.3", "126.0.0.186"]
+        )
         self.cluster.connect()
 
     def tearDown(self):
@@ -125,7 +163,6 @@ class MetaDataRemovalTest(unittest.TestCase):
 
 
 class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
-
     def test_schema_metadata_disable(self):
         """
         Checks to ensure that schema metadata_enabled, and token_metadata_enabled
@@ -142,7 +179,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         no_schema = TestCluster(schema_metadata_enabled=False)
         no_schema_session = no_schema.connect()
         self.assertEqual(len(no_schema.metadata.keyspaces), 0)
-        self.assertEqual(no_schema.metadata.export_schema_as_string(), '')
+        self.assertEqual(no_schema.metadata.export_schema_as_string(), "")
         no_token = TestCluster(token_metadata_enabled=False)
         no_token_session = no_token.connect()
         self.assertEqual(len(no_token.metadata.token_map.token_to_host_owner), 0)
@@ -156,18 +193,27 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         no_schema.shutdown()
         no_token.shutdown()
 
-    def make_create_statement(self, partition_cols, clustering_cols=None, other_cols=None):
+    def make_create_statement(
+        self, partition_cols, clustering_cols=None, other_cols=None
+    ):
         clustering_cols = clustering_cols or []
         other_cols = other_cols or []
 
-        statement = "CREATE TABLE %s.%s (" % (self.keyspace_name, self.function_table_name)
+        statement = "CREATE TABLE %s.%s (" % (
+            self.keyspace_name,
+            self.function_table_name,
+        )
         if len(partition_cols) == 1 and not clustering_cols:
             statement += "%s text PRIMARY KEY, " % protect_name(partition_cols[0])
         else:
-            statement += ", ".join("%s text" % protect_name(col) for col in partition_cols)
+            statement += ", ".join(
+                "%s text" % protect_name(col) for col in partition_cols
+            )
             statement += ", "
 
-        statement += ", ".join("%s text" % protect_name(col) for col in clustering_cols + other_cols)
+        statement += ", ".join(
+            "%s text" % protect_name(col) for col in clustering_cols + other_cols
+        )
 
         if len(partition_cols) != 1 or clustering_cols:
             statement += ", PRIMARY KEY ("
@@ -189,18 +235,28 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
     def check_create_statement(self, tablemeta, original):
         recreate = tablemeta.as_cql_query(formatted=False)
-        self.assertEqual(original, recreate[:len(original)])
-        execute_until_pass(self.session, "DROP TABLE {0}.{1}".format(self.keyspace_name, self.function_table_name))
+        self.assertEqual(original, recreate[: len(original)])
+        execute_until_pass(
+            self.session,
+            "DROP TABLE {0}.{1}".format(self.keyspace_name, self.function_table_name),
+        )
         execute_until_pass(self.session, recreate)
 
         # create the table again, but with formatting enabled
-        execute_until_pass(self.session, "DROP TABLE {0}.{1}".format(self.keyspace_name, self.function_table_name))
+        execute_until_pass(
+            self.session,
+            "DROP TABLE {0}.{1}".format(self.keyspace_name, self.function_table_name),
+        )
         recreate = tablemeta.as_cql_query(formatted=True)
         execute_until_pass(self.session, recreate)
 
     def get_table_metadata(self):
-        self.cluster.refresh_table_metadata(self.keyspace_name, self.function_table_name)
-        return self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name]
+        self.cluster.refresh_table_metadata(
+            self.keyspace_name, self.function_table_name
+        )
+        return self.cluster.metadata.keyspaces[self.keyspace_name].tables[
+            self.function_table_name
+        ]
 
     def test_basic_table_meta_properties(self):
         create_statement = self.make_create_statement(["a"], [], ["b", "c"])
@@ -215,7 +271,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
         self.assertEqual(ksmeta.name, self.keyspace_name)
         self.assertTrue(ksmeta.durable_writes)
-        self.assertEqual(ksmeta.replication_strategy.name, 'SimpleStrategy')
+        self.assertEqual(ksmeta.replication_strategy.name, "NetworkTopologyStrategy")
         self.assertEqual(ksmeta.replication_strategy.replication_factor, 1)
 
         self.assertTrue(self.function_table_name in ksmeta.tables)
@@ -224,16 +280,16 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.assertEqual(tablemeta.name, self.function_table_name)
         self.assertEqual(tablemeta.name, self.function_table_name)
 
-        self.assertEqual([u'a'], [c.name for c in tablemeta.partition_key])
+        self.assertEqual(["a"], [c.name for c in tablemeta.partition_key])
         self.assertEqual([], tablemeta.clustering_key)
-        self.assertEqual([u'a', u'b', u'c'], sorted(tablemeta.columns.keys()))
+        self.assertEqual(["a", "b", "c"], sorted(tablemeta.columns.keys()))
 
         cc = self.cluster.control_connection._connection
         parser = get_schema_parser(
             cc,
             self.cluster.metadata.get_host(cc.host).release_version,
             self.cluster.metadata.get_host(cc.host).dse_version,
-            1
+            1,
         )
 
         for option in tablemeta.options:
@@ -247,9 +303,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        self.assertEqual([u'a'], [c.name for c in tablemeta.partition_key])
-        self.assertEqual([u'b'], [c.name for c in tablemeta.clustering_key])
-        self.assertEqual([u'a', u'b', u'c'], sorted(tablemeta.columns.keys()))
+        self.assertEqual(["a"], [c.name for c in tablemeta.partition_key])
+        self.assertEqual(["b"], [c.name for c in tablemeta.clustering_key])
+        self.assertEqual(["a", "b", "c"], sorted(tablemeta.columns.keys()))
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -259,23 +315,25 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        self.assertEqual([u'Aa'], [c.name for c in tablemeta.partition_key])
-        self.assertEqual([u'Bb'], [c.name for c in tablemeta.clustering_key])
-        self.assertEqual([u'Aa', u'Bb', u'Cc'], sorted(tablemeta.columns.keys()))
+        self.assertEqual(["Aa"], [c.name for c in tablemeta.partition_key])
+        self.assertEqual(["Bb"], [c.name for c in tablemeta.clustering_key])
+        self.assertEqual(["Aa", "Bb", "Cc"], sorted(tablemeta.columns.keys()))
 
         self.check_create_statement(tablemeta, create_statement)
 
     def test_compound_primary_keys_more_columns(self):
-        create_statement = self.make_create_statement(["a"], ["b", "c"], ["d", "e", "f"])
+        create_statement = self.make_create_statement(
+            ["a"], ["b", "c"], ["d", "e", "f"]
+        )
         create_statement += " WITH CLUSTERING ORDER BY (b ASC, c ASC)"
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        self.assertEqual([u'a'], [c.name for c in tablemeta.partition_key])
-        self.assertEqual([u'b', u'c'], [c.name for c in tablemeta.clustering_key])
+        self.assertEqual(["a"], [c.name for c in tablemeta.partition_key])
+        self.assertEqual(["b", "c"], [c.name for c in tablemeta.clustering_key])
         self.assertEqual(
-            [u'a', u'b', u'c', u'd', u'e', u'f'],
-            sorted(tablemeta.columns.keys()))
+            ["a", "b", "c", "d", "e", "f"], sorted(tablemeta.columns.keys())
+        )
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -284,9 +342,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        self.assertEqual([u'a', u'b'], [c.name for c in tablemeta.partition_key])
+        self.assertEqual(["a", "b"], [c.name for c in tablemeta.partition_key])
         self.assertEqual([], tablemeta.clustering_key)
-        self.assertEqual([u'a', u'b', u'c'], sorted(tablemeta.columns.keys()))
+        self.assertEqual(["a", "b", "c"], sorted(tablemeta.columns.keys()))
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -296,9 +354,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        self.assertEqual([u'a', u'b'], [c.name for c in tablemeta.partition_key])
-        self.assertEqual([u'c'], [c.name for c in tablemeta.clustering_key])
-        self.assertEqual([u'a', u'b', u'c', u'd', u'e'], sorted(tablemeta.columns.keys()))
+        self.assertEqual(["a", "b"], [c.name for c in tablemeta.partition_key])
+        self.assertEqual(["c"], [c.name for c in tablemeta.clustering_key])
+        self.assertEqual(["a", "b", "c", "d", "e"], sorted(tablemeta.columns.keys()))
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -308,9 +366,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        self.assertEqual([u'a'], [c.name for c in tablemeta.partition_key])
-        self.assertEqual([u'b'], [c.name for c in tablemeta.clustering_key])
-        self.assertEqual([u'a', u'b', u'c'], sorted(tablemeta.columns.keys()))
+        self.assertEqual(["a"], [c.name for c in tablemeta.partition_key])
+        self.assertEqual(["b"], [c.name for c in tablemeta.clustering_key])
+        self.assertEqual(["a", "b", "c"], sorted(tablemeta.columns.keys()))
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -331,9 +389,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         create_statement += " WITH CLUSTERING ORDER BY (b ASC, c DESC)"
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
-        b_column = tablemeta.columns['b']
+        b_column = tablemeta.columns["b"]
         self.assertFalse(b_column.is_reversed)
-        c_column = tablemeta.columns['c']
+        c_column = tablemeta.columns["c"]
         self.assertTrue(c_column.is_reversed)
 
     def test_compound_primary_keys_more_columns_compact(self):
@@ -342,9 +400,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        self.assertEqual([u'a'], [c.name for c in tablemeta.partition_key])
-        self.assertEqual([u'b', u'c'], [c.name for c in tablemeta.clustering_key])
-        self.assertEqual([u'a', u'b', u'c', u'd'], sorted(tablemeta.columns.keys()))
+        self.assertEqual(["a"], [c.name for c in tablemeta.partition_key])
+        self.assertEqual(["b", "c"], [c.name for c in tablemeta.clustering_key])
+        self.assertEqual(["a", "b", "c", "d"], sorted(tablemeta.columns.keys()))
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -353,9 +411,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        self.assertEqual([u'a', u'b'], [c.name for c in tablemeta.partition_key])
+        self.assertEqual(["a", "b"], [c.name for c in tablemeta.partition_key])
         self.assertEqual([], tablemeta.clustering_key)
-        self.assertEqual([u'a', u'b', u'c'], sorted(tablemeta.columns.keys()))
+        self.assertEqual(["a", "b", "c"], sorted(tablemeta.columns.keys()))
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -365,24 +423,23 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        self.assertEqual([u'a', u'b'], [c.name for c in tablemeta.partition_key])
-        self.assertEqual([u'c'], [c.name for c in tablemeta.clustering_key])
-        self.assertEqual([u'a', u'b', u'c', u'd'], sorted(tablemeta.columns.keys()))
+        self.assertEqual(["a", "b"], [c.name for c in tablemeta.partition_key])
+        self.assertEqual(["c"], [c.name for c in tablemeta.clustering_key])
+        self.assertEqual(["a", "b", "c", "d"], sorted(tablemeta.columns.keys()))
 
         self.check_create_statement(tablemeta, create_statement)
 
     @lessthancass30
     def test_cql_compatibility(self):
-
         # having more than one non-PK column is okay if there aren't any
         # clustering columns
         create_statement = self.make_create_statement(["a"], [], ["b", "c", "d"])
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        self.assertEqual([u'a'], [c.name for c in tablemeta.partition_key])
+        self.assertEqual(["a"], [c.name for c in tablemeta.partition_key])
         self.assertEqual([], tablemeta.clustering_key)
-        self.assertEqual([u'a', u'b', u'c', u'd'], sorted(tablemeta.columns.keys()))
+        self.assertEqual(["a", "b", "c", "d"], sorted(tablemeta.columns.keys()))
 
         self.assertTrue(tablemeta.is_cql_compatible)
 
@@ -401,7 +458,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.check_create_statement(tablemeta, create_statement)
 
     def test_compound_primary_keys_more_columns_ordering(self):
-        create_statement = self.make_create_statement(["a"], ["b", "c"], ["d", "e", "f"])
+        create_statement = self.make_create_statement(
+            ["a"], ["b", "c"], ["d", "e", "f"]
+        )
         create_statement += " WITH CLUSTERING ORDER BY (b DESC, c ASC)"
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
@@ -434,8 +493,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
     def test_counter(self):
         create_statement = (
-            "CREATE TABLE {keyspace}.{table} ("
-            "key text PRIMARY KEY, a1 counter)"
+            "CREATE TABLE {keyspace}.{table} (key text PRIMARY KEY, a1 counter)"
         ).format(keyspace=self.keyspace_name, table=self.function_table_name)
 
         self.session.execute(create_statement)
@@ -444,7 +502,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
     @lessthancass40
     def test_counter_with_compact_storage(self):
-        """ PYTHON-1100 """
+        """PYTHON-1100"""
         create_statement = (
             "CREATE TABLE {keyspace}.{table} ("
             "key text PRIMARY KEY, a1 counter) WITH COMPACT STORAGE"
@@ -466,18 +524,26 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.check_create_statement(tablemeta, create_statement)
 
     def test_indexes(self):
-        create_statement = self.make_create_statement(["a"], ["b", "c"], ["d", "e", "f"])
+        create_statement = self.make_create_statement(
+            ["a"], ["b", "c"], ["d", "e", "f"]
+        )
         create_statement += " WITH CLUSTERING ORDER BY (b ASC, c ASC)"
         execute_until_pass(self.session, create_statement)
 
-        d_index = "CREATE INDEX d_index ON %s.%s (d)" % (self.keyspace_name, self.function_table_name)
-        e_index = "CREATE INDEX e_index ON %s.%s (e)" % (self.keyspace_name, self.function_table_name)
+        d_index = "CREATE INDEX d_index ON %s.%s (d)" % (
+            self.keyspace_name,
+            self.function_table_name,
+        )
+        e_index = "CREATE INDEX e_index ON %s.%s (e)" % (
+            self.keyspace_name,
+            self.function_table_name,
+        )
         execute_until_pass(self.session, d_index)
         execute_until_pass(self.session, e_index)
 
         tablemeta = self.get_table_metadata()
         statements = tablemeta.export_as_string().strip()
-        statements = [s.strip() for s in statements.split(';')]
+        statements = [s.strip() for s in statements.split(";")]
         statements = list(filter(bool, statements))
         self.assertEqual(3, len(statements))
         self.assertIn(d_index, statements)
@@ -486,45 +552,62 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         # make sure indexes are included in KeyspaceMetadata.export_as_string()
         ksmeta = self.cluster.metadata.keyspaces[self.keyspace_name]
         statement = ksmeta.export_as_string()
-        self.assertIn('CREATE INDEX d_index', statement)
-        self.assertIn('CREATE INDEX e_index', statement)
+        self.assertIn("CREATE INDEX d_index", statement)
+        self.assertIn("CREATE INDEX e_index", statement)
 
     @greaterthancass21
     def test_collection_indexes(self):
-
-        self.session.execute("CREATE TABLE %s.%s (a int PRIMARY KEY, b map<text, text>)"
-                             % (self.keyspace_name, self.function_table_name))
-        self.session.execute("CREATE INDEX index1 ON %s.%s (keys(b))"
-                             % (self.keyspace_name, self.function_table_name))
+        self.session.execute(
+            "CREATE TABLE %s.%s (a int PRIMARY KEY, b map<text, text>)"
+            % (self.keyspace_name, self.function_table_name)
+        )
+        self.session.execute(
+            "CREATE INDEX index1 ON %s.%s (keys(b))"
+            % (self.keyspace_name, self.function_table_name)
+        )
 
         tablemeta = self.get_table_metadata()
-        self.assertIn('(keys(b))', tablemeta.export_as_string())
+        self.assertIn("(keys(b))", tablemeta.export_as_string())
 
         self.session.execute("DROP INDEX %s.index1" % (self.keyspace_name,))
-        self.session.execute("CREATE INDEX index2 ON %s.%s (b)"
-                             % (self.keyspace_name, self.function_table_name))
+        self.session.execute(
+            "CREATE INDEX index2 ON %s.%s (b)"
+            % (self.keyspace_name, self.function_table_name)
+        )
 
         tablemeta = self.get_table_metadata()
-        target = ' (b)' if CASSANDRA_VERSION < Version("3.0") else 'values(b))'  # explicit values in C* 3+
+        target = (
+            " (b)" if CASSANDRA_VERSION < Version("3.0") else "values(b))"
+        )  # explicit values in C* 3+
         self.assertIn(target, tablemeta.export_as_string())
 
         # test full indexes on frozen collections, if available
         if CASSANDRA_VERSION >= Version("2.1.3"):
-            self.session.execute("DROP TABLE %s.%s" % (self.keyspace_name, self.function_table_name))
-            self.session.execute("CREATE TABLE %s.%s (a int PRIMARY KEY, b frozen<map<text, text>>)"
-                                 % (self.keyspace_name, self.function_table_name))
-            self.session.execute("CREATE INDEX index3 ON %s.%s (full(b))"
-                                 % (self.keyspace_name, self.function_table_name))
+            self.session.execute(
+                "DROP TABLE %s.%s" % (self.keyspace_name, self.function_table_name)
+            )
+            self.session.execute(
+                "CREATE TABLE %s.%s (a int PRIMARY KEY, b frozen<map<text, text>>)"
+                % (self.keyspace_name, self.function_table_name)
+            )
+            self.session.execute(
+                "CREATE INDEX index3 ON %s.%s (full(b))"
+                % (self.keyspace_name, self.function_table_name)
+            )
 
             tablemeta = self.get_table_metadata()
-            self.assertIn('(full(b))', tablemeta.export_as_string())
+            self.assertIn("(full(b))", tablemeta.export_as_string())
 
     def test_compression_disabled(self):
         create_statement = self.make_create_statement(["a"], ["b"], ["c"])
         create_statement += " WITH compression = {}"
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
-        expected = "compression = {}" if CASSANDRA_VERSION < Version("3.0") else "compression = {'enabled': 'false'}"
+        expected = (
+            "compression = {}"
+            if CASSANDRA_VERSION < Version("3.0")
+            else "compression = {'enabled': 'false'}"
+        )
         self.assertIn(expected, tablemeta.export_as_string())
 
     def test_non_size_tiered_compaction(self):
@@ -549,7 +632,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.assertIn("'tombstone_threshold': '0.3'", cql)
         self.assertIn("LeveledCompactionStrategy", cql)
         # formerly legacy options; reintroduced in 4.0
-        if CASSANDRA_VERSION < Version('4.0-a'):
+        if CASSANDRA_VERSION < Version("4.0-a"):
             self.assertNotIn("min_threshold", cql)
             self.assertNotIn("max_threshold", cql)
 
@@ -577,56 +660,93 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.assertNotIn("new_keyspace", cluster2.metadata.keyspaces)
 
         # Cluster metadata modification
-        self.session.execute("CREATE KEYSPACE new_keyspace WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}")
+        self.session.execute(
+            "CREATE KEYSPACE new_keyspace WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}"
+        )
         self.assertNotIn("new_keyspace", cluster2.metadata.keyspaces)
 
         cluster2.refresh_schema_metadata()
         self.assertIn("new_keyspace", cluster2.metadata.keyspaces)
 
         # Keyspace metadata modification
-        self.session.execute("ALTER KEYSPACE {0} WITH durable_writes = false".format(self.keyspace_name))
+        self.session.execute(
+            "ALTER KEYSPACE {0} WITH durable_writes = false".format(self.keyspace_name)
+        )
         self.assertTrue(cluster2.metadata.keyspaces[self.keyspace_name].durable_writes)
         cluster2.refresh_schema_metadata()
         self.assertFalse(cluster2.metadata.keyspaces[self.keyspace_name].durable_writes)
 
         # Table metadata modification
         table_name = "test"
-        self.session.execute("CREATE TABLE {0}.{1} (a int PRIMARY KEY, b text)".format(self.keyspace_name, table_name))
+        self.session.execute(
+            "CREATE TABLE {0}.{1} (a int PRIMARY KEY, b text)".format(
+                self.keyspace_name, table_name
+            )
+        )
         cluster2.refresh_schema_metadata()
 
-        self.session.execute("ALTER TABLE {0}.{1} ADD c double".format(self.keyspace_name, table_name))
-        self.assertNotIn("c", cluster2.metadata.keyspaces[self.keyspace_name].tables[table_name].columns)
+        self.session.execute(
+            "ALTER TABLE {0}.{1} ADD c double".format(self.keyspace_name, table_name)
+        )
+        self.assertNotIn(
+            "c",
+            cluster2.metadata.keyspaces[self.keyspace_name].tables[table_name].columns,
+        )
         cluster2.refresh_schema_metadata()
-        self.assertIn("c", cluster2.metadata.keyspaces[self.keyspace_name].tables[table_name].columns)
+        self.assertIn(
+            "c",
+            cluster2.metadata.keyspaces[self.keyspace_name].tables[table_name].columns,
+        )
 
         if PROTOCOL_VERSION >= 3:
             # UDT metadata modification
-            self.session.execute("CREATE TYPE {0}.user (age int, name text)".format(self.keyspace_name))
-            self.assertEqual(cluster2.metadata.keyspaces[self.keyspace_name].user_types, {})
+            self.session.execute(
+                "CREATE TYPE {0}.user (age int, name text)".format(self.keyspace_name)
+            )
+            self.assertEqual(
+                cluster2.metadata.keyspaces[self.keyspace_name].user_types, {}
+            )
             cluster2.refresh_schema_metadata()
-            self.assertIn("user", cluster2.metadata.keyspaces[self.keyspace_name].user_types)
+            self.assertIn(
+                "user", cluster2.metadata.keyspaces[self.keyspace_name].user_types
+            )
 
         if PROTOCOL_VERSION >= 4:
             # UDF metadata modification
-            self.session.execute("""CREATE FUNCTION {0}.sum_int(key int, val int)
+            self.session.execute(
+                """CREATE FUNCTION {0}.sum_int(key int, val int)
                                 RETURNS NULL ON NULL INPUT
                                 RETURNS int
-                                LANGUAGE java AS 'return key+val;';""".format(self.keyspace_name))
+                                LANGUAGE java AS 'return key+val;';""".format(
+                    self.keyspace_name
+                )
+            )
 
-            self.assertEqual(cluster2.metadata.keyspaces[self.keyspace_name].functions, {})
+            self.assertEqual(
+                cluster2.metadata.keyspaces[self.keyspace_name].functions, {}
+            )
             cluster2.refresh_schema_metadata()
-            self.assertIn("sum_int(int,int)", cluster2.metadata.keyspaces[self.keyspace_name].functions)
+            self.assertIn(
+                "sum_int(int,int)",
+                cluster2.metadata.keyspaces[self.keyspace_name].functions,
+            )
 
             # UDA metadata modification
-            self.session.execute("""CREATE AGGREGATE {0}.sum_agg(int)
+            self.session.execute(
+                """CREATE AGGREGATE {0}.sum_agg(int)
                                  SFUNC sum_int
                                  STYPE int
-                                 INITCOND 0"""
-                                 .format(self.keyspace_name))
+                                 INITCOND 0""".format(self.keyspace_name)
+            )
 
-            self.assertEqual(cluster2.metadata.keyspaces[self.keyspace_name].aggregates, {})
+            self.assertEqual(
+                cluster2.metadata.keyspaces[self.keyspace_name].aggregates, {}
+            )
             cluster2.refresh_schema_metadata()
-            self.assertIn("sum_agg(int)", cluster2.metadata.keyspaces[self.keyspace_name].aggregates)
+            self.assertIn(
+                "sum_agg(int)",
+                cluster2.metadata.keyspaces[self.keyspace_name].aggregates,
+            )
 
         # Cluster metadata modification
         self.session.execute("DROP KEYSPACE new_keyspace")
@@ -658,7 +778,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         cluster2.connect()
 
         self.assertTrue(cluster2.metadata.keyspaces[self.keyspace_name].durable_writes)
-        self.session.execute("ALTER KEYSPACE {0} WITH durable_writes = false".format(self.keyspace_name))
+        self.session.execute(
+            "ALTER KEYSPACE {0} WITH durable_writes = false".format(self.keyspace_name)
+        )
         self.assertTrue(cluster2.metadata.keyspaces[self.keyspace_name].durable_writes)
         cluster2.refresh_keyspace_metadata(self.keyspace_name)
         self.assertFalse(cluster2.metadata.keyspaces[self.keyspace_name].durable_writes)
@@ -683,17 +805,32 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         """
 
         table_name = "test"
-        self.session.execute("CREATE TABLE {0}.{1} (a int PRIMARY KEY, b text)".format(self.keyspace_name, table_name))
+        self.session.execute(
+            "CREATE TABLE {0}.{1} (a int PRIMARY KEY, b text)".format(
+                self.keyspace_name, table_name
+            )
+        )
 
         cluster2 = TestCluster(schema_event_refresh_window=-1)
         cluster2.connect()
 
-        self.assertNotIn("c", cluster2.metadata.keyspaces[self.keyspace_name].tables[table_name].columns)
-        self.session.execute("ALTER TABLE {0}.{1} ADD c double".format(self.keyspace_name, table_name))
-        self.assertNotIn("c", cluster2.metadata.keyspaces[self.keyspace_name].tables[table_name].columns)
+        self.assertNotIn(
+            "c",
+            cluster2.metadata.keyspaces[self.keyspace_name].tables[table_name].columns,
+        )
+        self.session.execute(
+            "ALTER TABLE {0}.{1} ADD c double".format(self.keyspace_name, table_name)
+        )
+        self.assertNotIn(
+            "c",
+            cluster2.metadata.keyspaces[self.keyspace_name].tables[table_name].columns,
+        )
 
         cluster2.refresh_table_metadata(self.keyspace_name, table_name)
-        self.assertIn("c", cluster2.metadata.keyspaces[self.keyspace_name].tables[table_name].columns)
+        self.assertIn(
+            "c",
+            cluster2.metadata.keyspaces[self.keyspace_name].tables[table_name].columns,
+        )
 
         cluster2.shutdown()
 
@@ -717,44 +854,92 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         @test_category metadata
         """
 
-        self.session.execute("CREATE TABLE {0}.{1} (a int PRIMARY KEY, b text)".format(self.keyspace_name, self.function_table_name))
+        self.session.execute(
+            "CREATE TABLE {0}.{1} (a int PRIMARY KEY, b text)".format(
+                self.keyspace_name, self.function_table_name
+            )
+        )
 
         cluster2 = TestCluster(schema_event_refresh_window=-1)
         cluster2.connect()
 
         try:
-            self.assertNotIn("mv1", cluster2.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views)
-            self.session.execute("CREATE MATERIALIZED VIEW {0}.mv1 AS SELECT a, b FROM {0}.{1} "
-                                 "WHERE a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (a, b)"
-                                 .format(self.keyspace_name, self.function_table_name))
-            self.assertNotIn("mv1", cluster2.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views)
+            self.assertNotIn(
+                "mv1",
+                cluster2.metadata.keyspaces[self.keyspace_name]
+                .tables[self.function_table_name]
+                .views,
+            )
+            self.session.execute(
+                "CREATE MATERIALIZED VIEW {0}.mv1 AS SELECT a, b FROM {0}.{1} "
+                "WHERE a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (a, b)".format(
+                    self.keyspace_name, self.function_table_name
+                )
+            )
+            self.assertNotIn(
+                "mv1",
+                cluster2.metadata.keyspaces[self.keyspace_name]
+                .tables[self.function_table_name]
+                .views,
+            )
 
             cluster2.refresh_table_metadata(self.keyspace_name, "mv1")
-            self.assertIn("mv1", cluster2.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views)
+            self.assertIn(
+                "mv1",
+                cluster2.metadata.keyspaces[self.keyspace_name]
+                .tables[self.function_table_name]
+                .views,
+            )
         finally:
             cluster2.shutdown()
 
-        original_meta = self.cluster.metadata.keyspaces[self.keyspace_name].views['mv1']
-        self.assertIs(original_meta, self.session.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views['mv1'])
-        self.cluster.refresh_materialized_view_metadata(self.keyspace_name, 'mv1')
+        original_meta = self.cluster.metadata.keyspaces[self.keyspace_name].views["mv1"]
+        self.assertIs(
+            original_meta,
+            self.session.cluster.metadata.keyspaces[self.keyspace_name]
+            .tables[self.function_table_name]
+            .views["mv1"],
+        )
+        self.cluster.refresh_materialized_view_metadata(self.keyspace_name, "mv1")
 
-        current_meta = self.cluster.metadata.keyspaces[self.keyspace_name].views['mv1']
+        current_meta = self.cluster.metadata.keyspaces[self.keyspace_name].views["mv1"]
         self.assertIsNot(current_meta, original_meta)
-        self.assertIsNot(original_meta, self.session.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views['mv1'])
+        self.assertIsNot(
+            original_meta,
+            self.session.cluster.metadata.keyspaces[self.keyspace_name]
+            .tables[self.function_table_name]
+            .views["mv1"],
+        )
         self.assertEqual(original_meta.as_cql_query(), current_meta.as_cql_query())
 
         cluster3 = TestCluster(schema_event_refresh_window=-1)
         cluster3.connect()
         try:
-            self.assertNotIn("mv2", cluster3.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views)
+            self.assertNotIn(
+                "mv2",
+                cluster3.metadata.keyspaces[self.keyspace_name]
+                .tables[self.function_table_name]
+                .views,
+            )
             self.session.execute(
                 "CREATE MATERIALIZED VIEW {0}.mv2 AS SELECT a, b FROM {0}.{1} "
                 "WHERE a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (a, b)".format(
-                    self.keyspace_name, self.function_table_name)
+                    self.keyspace_name, self.function_table_name
+                )
             )
-            self.assertNotIn("mv2", cluster3.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views)
-            cluster3.refresh_materialized_view_metadata(self.keyspace_name, 'mv2')
-            self.assertIn("mv2", cluster3.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views)
+            self.assertNotIn(
+                "mv2",
+                cluster3.metadata.keyspaces[self.keyspace_name]
+                .tables[self.function_table_name]
+                .views,
+            )
+            cluster3.refresh_materialized_view_metadata(self.keyspace_name, "mv2")
+            self.assertIn(
+                "mv2",
+                cluster3.metadata.keyspaces[self.keyspace_name]
+                .tables[self.function_table_name]
+                .views,
+            )
         finally:
             cluster3.shutdown()
 
@@ -776,17 +961,25 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         """
 
         if PROTOCOL_VERSION < 3:
-            raise unittest.SkipTest("Protocol 3+ is required for UDTs, currently testing against {0}".format(PROTOCOL_VERSION))
+            raise unittest.SkipTest(
+                "Protocol 3+ is required for UDTs, currently testing against {0}".format(
+                    PROTOCOL_VERSION
+                )
+            )
 
         cluster2 = TestCluster(schema_event_refresh_window=-1)
         cluster2.connect()
 
         self.assertEqual(cluster2.metadata.keyspaces[self.keyspace_name].user_types, {})
-        self.session.execute("CREATE TYPE {0}.user (age int, name text)".format(self.keyspace_name))
+        self.session.execute(
+            "CREATE TYPE {0}.user (age int, name text)".format(self.keyspace_name)
+        )
         self.assertEqual(cluster2.metadata.keyspaces[self.keyspace_name].user_types, {})
 
         cluster2.refresh_user_type_metadata(self.keyspace_name, "user")
-        self.assertIn("user", cluster2.metadata.keyspaces[self.keyspace_name].user_types)
+        self.assertIn(
+            "user", cluster2.metadata.keyspaces[self.keyspace_name].user_types
+        )
 
         cluster2.shutdown()
 
@@ -803,26 +996,64 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         """
         supported_versions = get_supported_protocol_versions()
         if 2 not in supported_versions:  # 1 and 2 were dropped in the same version
-                raise unittest.SkipTest("Protocol versions 1 and 2 are not supported in Cassandra version ".format(CASSANDRA_VERSION))
+            raise unittest.SkipTest(
+                "Protocol versions 1 and 2 are not supported in Cassandra version ".format(
+                    CASSANDRA_VERSION
+                )
+            )
 
         for protocol_version in (1, 2):
             cluster = TestCluster()
             session = cluster.connect()
-            self.assertEqual(cluster.metadata.keyspaces[self.keyspace_name].user_types, {})
+            self.assertEqual(
+                cluster.metadata.keyspaces[self.keyspace_name].user_types, {}
+            )
 
-            session.execute("CREATE TYPE {0}.user (age int, name text)".format(self.keyspace_name))
-            self.assertIn("user", cluster.metadata.keyspaces[self.keyspace_name].user_types)
-            self.assertIn("age", cluster.metadata.keyspaces[self.keyspace_name].user_types["user"].field_names)
-            self.assertIn("name", cluster.metadata.keyspaces[self.keyspace_name].user_types["user"].field_names)
+            session.execute(
+                "CREATE TYPE {0}.user (age int, name text)".format(self.keyspace_name)
+            )
+            self.assertIn(
+                "user", cluster.metadata.keyspaces[self.keyspace_name].user_types
+            )
+            self.assertIn(
+                "age",
+                cluster.metadata.keyspaces[self.keyspace_name]
+                .user_types["user"]
+                .field_names,
+            )
+            self.assertIn(
+                "name",
+                cluster.metadata.keyspaces[self.keyspace_name]
+                .user_types["user"]
+                .field_names,
+            )
 
-            session.execute("ALTER TYPE {0}.user ADD flag boolean".format(self.keyspace_name))
-            self.assertIn("flag", cluster.metadata.keyspaces[self.keyspace_name].user_types["user"].field_names)
+            session.execute(
+                "ALTER TYPE {0}.user ADD flag boolean".format(self.keyspace_name)
+            )
+            self.assertIn(
+                "flag",
+                cluster.metadata.keyspaces[self.keyspace_name]
+                .user_types["user"]
+                .field_names,
+            )
 
-            session.execute("ALTER TYPE {0}.user RENAME flag TO something".format(self.keyspace_name))
-            self.assertIn("something", cluster.metadata.keyspaces[self.keyspace_name].user_types["user"].field_names)
+            session.execute(
+                "ALTER TYPE {0}.user RENAME flag TO something".format(
+                    self.keyspace_name
+                )
+            )
+            self.assertIn(
+                "something",
+                cluster.metadata.keyspaces[self.keyspace_name]
+                .user_types["user"]
+                .field_names,
+            )
 
             session.execute("DROP TYPE {0}.user".format(self.keyspace_name))
-            self.assertEqual(cluster.metadata.keyspaces[self.keyspace_name].user_types, {})
+            self.assertEqual(
+                cluster.metadata.keyspaces[self.keyspace_name].user_types, {}
+            )
             cluster.shutdown()
 
     def test_refresh_user_function_metadata(self):
@@ -844,20 +1075,33 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         """
 
         if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Protocol 4+ is required for UDFs, currently testing against {0}".format(PROTOCOL_VERSION))
+            raise unittest.SkipTest(
+                "Protocol 4+ is required for UDFs, currently testing against {0}".format(
+                    PROTOCOL_VERSION
+                )
+            )
 
         cluster2 = TestCluster(schema_event_refresh_window=-1)
         cluster2.connect()
 
         self.assertEqual(cluster2.metadata.keyspaces[self.keyspace_name].functions, {})
-        self.session.execute("""CREATE FUNCTION {0}.sum_int(key int, val int)
+        self.session.execute(
+            """CREATE FUNCTION {0}.sum_int(key int, val int)
                             RETURNS NULL ON NULL INPUT
                             RETURNS int
-                            LANGUAGE java AS ' return key + val;';""".format(self.keyspace_name))
+                            LANGUAGE java AS ' return key + val;';""".format(
+                self.keyspace_name
+            )
+        )
 
         self.assertEqual(cluster2.metadata.keyspaces[self.keyspace_name].functions, {})
-        cluster2.refresh_user_function_metadata(self.keyspace_name, UserFunctionDescriptor("sum_int", ["int", "int"]))
-        self.assertIn("sum_int(int,int)", cluster2.metadata.keyspaces[self.keyspace_name].functions)
+        cluster2.refresh_user_function_metadata(
+            self.keyspace_name, UserFunctionDescriptor("sum_int", ["int", "int"])
+        )
+        self.assertIn(
+            "sum_int(int,int)",
+            cluster2.metadata.keyspaces[self.keyspace_name].functions,
+        )
 
         cluster2.shutdown()
 
@@ -880,26 +1124,39 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         """
 
         if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Protocol 4+ is required for UDAs, currently testing against {0}".format(PROTOCOL_VERSION))
+            raise unittest.SkipTest(
+                "Protocol 4+ is required for UDAs, currently testing against {0}".format(
+                    PROTOCOL_VERSION
+                )
+            )
 
         cluster2 = TestCluster(schema_event_refresh_window=-1)
         cluster2.connect()
 
         self.assertEqual(cluster2.metadata.keyspaces[self.keyspace_name].aggregates, {})
-        self.session.execute("""CREATE FUNCTION {0}.sum_int(key int, val int)
+        self.session.execute(
+            """CREATE FUNCTION {0}.sum_int(key int, val int)
                             RETURNS NULL ON NULL INPUT
                             RETURNS int
-                            LANGUAGE java AS 'return key + val;';""".format(self.keyspace_name))
+                            LANGUAGE java AS 'return key + val;';""".format(
+                self.keyspace_name
+            )
+        )
 
-        self.session.execute("""CREATE AGGREGATE {0}.sum_agg(int)
+        self.session.execute(
+            """CREATE AGGREGATE {0}.sum_agg(int)
                              SFUNC sum_int
                              STYPE int
-                             INITCOND 0"""
-                             .format(self.keyspace_name))
+                             INITCOND 0""".format(self.keyspace_name)
+        )
 
         self.assertEqual(cluster2.metadata.keyspaces[self.keyspace_name].aggregates, {})
-        cluster2.refresh_user_aggregate_metadata(self.keyspace_name, UserAggregateDescriptor("sum_agg", ["int"]))
-        self.assertIn("sum_agg(int)", cluster2.metadata.keyspaces[self.keyspace_name].aggregates)
+        cluster2.refresh_user_aggregate_metadata(
+            self.keyspace_name, UserAggregateDescriptor("sum_agg", ["int"])
+        )
+        self.assertIn(
+            "sum_agg(int)", cluster2.metadata.keyspaces[self.keyspace_name].aggregates
+        )
 
         cluster2.shutdown()
 
@@ -917,14 +1174,30 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         @test_category metadata
         """
 
-        self.session.execute("CREATE TABLE {0}.{1} (a int PRIMARY KEY, b map<text, int>)".format(self.keyspace_name, self.function_table_name))
-        self.session.execute("CREATE INDEX index_1 ON {0}.{1}(b)".format(self.keyspace_name, self.function_table_name))
-        self.session.execute("CREATE INDEX index_2 ON {0}.{1}(keys(b))".format(self.keyspace_name, self.function_table_name))
+        self.session.execute(
+            "CREATE TABLE {0}.{1} (a int PRIMARY KEY, b map<text, int>)".format(
+                self.keyspace_name, self.function_table_name
+            )
+        )
+        self.session.execute(
+            "CREATE INDEX index_1 ON {0}.{1}(b)".format(
+                self.keyspace_name, self.function_table_name
+            )
+        )
+        self.session.execute(
+            "CREATE INDEX index_2 ON {0}.{1}(keys(b))".format(
+                self.keyspace_name, self.function_table_name
+            )
+        )
 
-        indices = self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].indexes
+        indices = (
+            self.cluster.metadata.keyspaces[self.keyspace_name]
+            .tables[self.function_table_name]
+            .indexes
+        )
         self.assertEqual(len(indices), 2)
         index_1 = indices["index_1"]
-        index_2 = indices['index_2']
+        index_2 = indices["index_2"]
         self.assertEqual(index_1.table_name, "test_multiple_indices")
         self.assertEqual(index_1.name, "index_1")
         self.assertEqual(index_1.kind, "COMPOSITES")
@@ -942,7 +1215,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         ks = self.keyspace_name
         ks_meta = s.cluster.metadata.keyspaces[ks]
         t = self.function_table_name
-        v = t + 'view'
+        v = t + "view"
 
         s.execute("CREATE TABLE %s.%s (k text PRIMARY KEY, v int)" % (ks, t))
         s.execute(
@@ -969,7 +1242,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
                 return "%s %s %s %s" % (cls.name, table_meta.name, ext_key, ext_blob)
 
         class Ext1(Ext0):
-            name = t + '##'
+            name = t + "##"
 
         self.assertFalse(table_meta.extensions)
         self.assertFalse(view_meta.extensions)
@@ -985,13 +1258,22 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.assertEqual(table_meta.export_as_string(), original_table_cql)
         self.assertEqual(view_meta.export_as_string(), original_view_cql)
 
-        update_t = s.prepare('UPDATE system_schema.tables SET extensions=? WHERE keyspace_name=? AND table_name=?')  # for blob type coercing
-        update_v = s.prepare('UPDATE system_schema.views SET extensions=? WHERE keyspace_name=? AND view_name=?')
+        update_t = s.prepare(
+            "UPDATE system_schema.tables SET extensions=? WHERE keyspace_name=? AND table_name=?"
+        )  # for blob type coercing
+        update_v = s.prepare(
+            "UPDATE system_schema.views SET extensions=? WHERE keyspace_name=? AND view_name=?"
+        )
         # extensions registered, one present
         # --------------------------------------
         ext_map = {Ext0.name: b"THA VALUE"}
-        [(s.execute(update_t, (ext_map, ks, t)), s.execute(update_v, (ext_map, ks, v)))
-         for _ in self.cluster.metadata.all_hosts()]  # we're manipulating metadata - do it on all hosts
+        [
+            (
+                s.execute(update_t, (ext_map, ks, t)),
+                s.execute(update_v, (ext_map, ks, v)),
+            )
+            for _ in self.cluster.metadata.all_hosts()
+        ]  # we're manipulating metadata - do it on all hosts
         self.cluster.refresh_table_metadata(ks, t)
         self.cluster.refresh_materialized_view_metadata(ks, v)
         table_meta = ks_meta.tables[t]
@@ -1000,21 +1282,29 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.assertIn(Ext0.name, table_meta.extensions)
         new_cql = table_meta.export_as_string()
         self.assertNotEqual(new_cql, original_table_cql)
-        self.assertIn(Ext0.after_table_cql(table_meta, Ext0.name, ext_map[Ext0.name]), new_cql)
+        self.assertIn(
+            Ext0.after_table_cql(table_meta, Ext0.name, ext_map[Ext0.name]), new_cql
+        )
         self.assertNotIn(Ext1.name, new_cql)
 
         self.assertIn(Ext0.name, view_meta.extensions)
         new_cql = view_meta.export_as_string()
         self.assertNotEqual(new_cql, original_view_cql)
-        self.assertIn(Ext0.after_table_cql(view_meta, Ext0.name, ext_map[Ext0.name]), new_cql)
+        self.assertIn(
+            Ext0.after_table_cql(view_meta, Ext0.name, ext_map[Ext0.name]), new_cql
+        )
         self.assertNotIn(Ext1.name, new_cql)
 
         # extensions registered, one present
         # --------------------------------------
-        ext_map = {Ext0.name: b"THA VALUE",
-                   Ext1.name: b"OTHA VALUE"}
-        [(s.execute(update_t, (ext_map, ks, t)), s.execute(update_v, (ext_map, ks, v)))
-         for _ in self.cluster.metadata.all_hosts()]  # we're manipulating metadata - do it on all hosts
+        ext_map = {Ext0.name: b"THA VALUE", Ext1.name: b"OTHA VALUE"}
+        [
+            (
+                s.execute(update_t, (ext_map, ks, t)),
+                s.execute(update_v, (ext_map, ks, v)),
+            )
+            for _ in self.cluster.metadata.all_hosts()
+        ]  # we're manipulating metadata - do it on all hosts
         self.cluster.refresh_table_metadata(ks, t)
         self.cluster.refresh_materialized_view_metadata(ks, v)
         table_meta = ks_meta.tables[t]
@@ -1024,19 +1314,26 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.assertIn(Ext1.name, table_meta.extensions)
         new_cql = table_meta.export_as_string()
         self.assertNotEqual(new_cql, original_table_cql)
-        self.assertIn(Ext0.after_table_cql(table_meta, Ext0.name, ext_map[Ext0.name]), new_cql)
-        self.assertIn(Ext1.after_table_cql(table_meta, Ext1.name, ext_map[Ext1.name]), new_cql)
+        self.assertIn(
+            Ext0.after_table_cql(table_meta, Ext0.name, ext_map[Ext0.name]), new_cql
+        )
+        self.assertIn(
+            Ext1.after_table_cql(table_meta, Ext1.name, ext_map[Ext1.name]), new_cql
+        )
 
         self.assertIn(Ext0.name, view_meta.extensions)
         self.assertIn(Ext1.name, view_meta.extensions)
         new_cql = view_meta.export_as_string()
         self.assertNotEqual(new_cql, original_view_cql)
-        self.assertIn(Ext0.after_table_cql(view_meta, Ext0.name, ext_map[Ext0.name]), new_cql)
-        self.assertIn(Ext1.after_table_cql(view_meta, Ext1.name, ext_map[Ext1.name]), new_cql)
+        self.assertIn(
+            Ext0.after_table_cql(view_meta, Ext0.name, ext_map[Ext0.name]), new_cql
+        )
+        self.assertIn(
+            Ext1.after_table_cql(view_meta, Ext1.name, ext_map[Ext1.name]), new_cql
+        )
 
 
 class TestCodeCoverage(unittest.TestCase):
-
     def test_export_schema(self):
         """
         Test export schema functionality
@@ -1064,19 +1361,29 @@ class TestCodeCoverage(unittest.TestCase):
 
     def assert_equal_diff(self, received, expected):
         if received != expected:
-            diff_string = '\n'.join(difflib.unified_diff(expected.split('\n'),
-                                                         received.split('\n'),
-                                                         'EXPECTED', 'RECEIVED',
-                                                         lineterm=''))
+            diff_string = "\n".join(
+                difflib.unified_diff(
+                    expected.split("\n"),
+                    received.split("\n"),
+                    "EXPECTED",
+                    "RECEIVED",
+                    lineterm="",
+                )
+            )
             self.fail(diff_string)
 
     def assert_startswith_diff(self, received, prefix):
         if not received.startswith(prefix):
-            prefix_lines = prefix.split('\n')
-            diff_string = '\n'.join(difflib.unified_diff(prefix_lines,
-                                                         received.split('\n')[:len(prefix_lines)],
-                                                         'EXPECTED', 'RECEIVED',
-                                                         lineterm=''))
+            prefix_lines = prefix.split("\n")
+            diff_string = "\n".join(
+                difflib.unified_diff(
+                    prefix_lines,
+                    received.split("\n")[: len(prefix_lines)],
+                    "EXPECTED",
+                    "RECEIVED",
+                    lineterm="",
+                )
+            )
             self.fail(diff_string)
 
     @greaterthancass20
@@ -1088,17 +1395,20 @@ class TestCodeCoverage(unittest.TestCase):
         if PROTOCOL_VERSION < 3:
             raise unittest.SkipTest(
                 "Protocol 3.0+ is required for UDT change events, currently testing against %r"
-                % (PROTOCOL_VERSION,))
+                % (PROTOCOL_VERSION,)
+            )
 
         if sys.version_info[0:2] != (2, 7):
-            raise unittest.SkipTest('This test compares static strings generated from dict items, which may change orders. Test with 2.7.')
+            raise unittest.SkipTest(
+                "This test compares static strings generated from dict items, which may change orders. Test with 2.7."
+            )
 
         cluster = TestCluster()
         session = cluster.connect()
 
         session.execute("""
             CREATE KEYSPACE export_udts
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
             AND durable_writes = true;
         """)
         session.execute("""
@@ -1122,7 +1432,7 @@ class TestCodeCoverage(unittest.TestCase):
             addresses map<text, frozen<address>>)
         """)
 
-        expected_prefix = """CREATE KEYSPACE export_udts WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}  AND durable_writes = true;
+        expected_prefix = """CREATE KEYSPACE export_udts WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}  AND durable_writes = true;
 
 CREATE TYPE export_udts.street (
     street_number int,
@@ -1143,9 +1453,12 @@ CREATE TABLE export_udts.users (
     user text PRIMARY KEY,
     addresses map<text, frozen<address>>"""
 
-        self.assert_startswith_diff(cluster.metadata.keyspaces['export_udts'].export_as_string(), expected_prefix)
+        self.assert_startswith_diff(
+            cluster.metadata.keyspaces["export_udts"].export_as_string(),
+            expected_prefix,
+        )
 
-        table_meta = cluster.metadata.keyspaces['export_udts'].tables['users']
+        table_meta = cluster.metadata.keyspaces["export_udts"].tables["users"]
 
         expected_prefix = """CREATE TABLE export_udts.users (
     user text PRIMARY KEY,
@@ -1164,15 +1477,19 @@ CREATE TABLE export_udts.users (
         cluster = TestCluster()
         session = cluster.connect()
 
-        ksname = 'AnInterestingKeyspace'
-        cfname = 'AnInterestingTable'
+        ksname = "AnInterestingKeyspace"
+        cfname = "AnInterestingTable"
 
         session.execute("DROP KEYSPACE IF EXISTS {0}".format(ksname))
-        session.execute("""
+        session.execute(
+            """
             CREATE KEYSPACE "%s"
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
-            """ % (ksname,))
-        session.execute("""
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+            """
+            % (ksname,)
+        )
+        session.execute(
+            """
             CREATE TABLE "%s"."%s" (
                 k int,
                 "A" int,
@@ -1180,25 +1497,41 @@ CREATE TABLE export_udts.users (
                 "MyColumn" int,
                 PRIMARY KEY (k, "A"))
             WITH CLUSTERING ORDER BY ("A" DESC)
-            """ % (ksname, cfname))
-        session.execute("""
+            """
+            % (ksname, cfname)
+        )
+        session.execute(
+            """
             CREATE INDEX myindex ON "%s"."%s" ("MyColumn")
-            """ % (ksname, cfname))
-        session.execute("""
+            """
+            % (ksname, cfname)
+        )
+        session.execute(
+            """
             CREATE INDEX "AnotherIndex" ON "%s"."%s" ("B")
-            """ % (ksname, cfname))
+            """
+            % (ksname, cfname)
+        )
 
         ksmeta = cluster.metadata.keyspaces[ksname]
         schema = ksmeta.export_as_string()
         self.assertIn('CREATE KEYSPACE "AnInterestingKeyspace"', schema)
-        self.assertIn('CREATE TABLE "AnInterestingKeyspace"."AnInterestingTable"', schema)
+        self.assertIn(
+            'CREATE TABLE "AnInterestingKeyspace"."AnInterestingTable"', schema
+        )
         self.assertIn('"A" int', schema)
         self.assertIn('"B" int', schema)
         self.assertIn('"MyColumn" int', schema)
         self.assertIn('PRIMARY KEY (k, "A")', schema)
         self.assertIn('WITH CLUSTERING ORDER BY ("A" DESC)', schema)
-        self.assertIn('CREATE INDEX myindex ON "AnInterestingKeyspace"."AnInterestingTable" ("MyColumn")', schema)
-        self.assertIn('CREATE INDEX "AnotherIndex" ON "AnInterestingKeyspace"."AnInterestingTable" ("B")', schema)
+        self.assertIn(
+            'CREATE INDEX myindex ON "AnInterestingKeyspace"."AnInterestingTable" ("MyColumn")',
+            schema,
+        )
+        self.assertIn(
+            'CREATE INDEX "AnotherIndex" ON "AnInterestingKeyspace"."AnInterestingTable" ("B")',
+            schema,
+        )
         cluster.shutdown()
 
     def test_already_exists_exceptions(self):
@@ -1209,18 +1542,18 @@ CREATE TABLE export_udts.users (
         cluster = TestCluster()
         session = cluster.connect()
 
-        ksname = 'test3rf'
-        cfname = 'test'
+        ksname = "test3rf"
+        cfname = "test"
 
-        ddl = '''
+        ddl = """
             CREATE KEYSPACE %s
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}'''
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}"""
         self.assertRaises(AlreadyExists, session.execute, ddl % ksname)
 
-        ddl = '''
+        ddl = """
             CREATE TABLE %s.%s (
                 k int PRIMARY KEY,
-                v int )'''
+                v int )"""
         self.assertRaises(AlreadyExists, session.execute, ddl % (ksname, cfname))
         cluster.shutdown()
 
@@ -1230,17 +1563,17 @@ CREATE TABLE export_udts.users (
         Ensure cluster.metadata.get_replicas return correctly when not attached to keyspace
         """
         if murmur3 is None:
-            raise unittest.SkipTest('the murmur3 extension is not available')
+            raise unittest.SkipTest("the murmur3 extension is not available")
 
         cluster = TestCluster()
-        self.assertEqual(cluster.metadata.get_replicas('test3rf', 'key'), [])
+        self.assertEqual(cluster.metadata.get_replicas("test3rf", "key"), [])
 
-        cluster.connect('test3rf')
+        cluster.connect("test3rf")
 
-        self.assertNotEqual(list(cluster.metadata.get_replicas('test3rf', b'key')), [])
-        host = list(cluster.metadata.get_replicas('test3rf', b'key'))[0]
-        self.assertEqual(host.datacenter, 'dc1')
-        self.assertEqual(host.rack, 'r1')
+        self.assertNotEqual(list(cluster.metadata.get_replicas("test3rf", b"key")), [])
+        host = list(cluster.metadata.get_replicas("test3rf", b"key"))[0]
+        self.assertEqual(host.datacenter, "dc1")
+        self.assertEqual(host.rack, "r1")
         cluster.shutdown()
 
     def test_token_map(self):
@@ -1249,18 +1582,23 @@ CREATE TABLE export_udts.users (
         """
 
         cluster = TestCluster()
-        cluster.connect('test3rf')
+        cluster.connect("test3rf")
         ring = cluster.metadata.token_map.ring
-        owners = list(cluster.metadata.token_map.token_to_host_owner[token] for token in ring)
+        owners = list(
+            cluster.metadata.token_map.token_to_host_owner[token] for token in ring
+        )
         get_replicas = cluster.metadata.token_map.get_replicas
 
-        for ksname in ('test1rf', 'test2rf', 'test3rf'):
+        for ksname in ("test1rf", "test2rf", "test3rf"):
             self.assertNotEqual(list(get_replicas(ksname, ring[0])), [])
 
         for i, token in enumerate(ring):
-            self.assertEqual(set(get_replicas('test3rf', token)), set(owners))
-            self.assertEqual(set(get_replicas('test2rf', token)), set([owners[i], owners[(i + 1) % 3]]))
-            self.assertEqual(set(get_replicas('test1rf', token)), set([owners[i]]))
+            self.assertEqual(set(get_replicas("test3rf", token)), set(owners))
+            self.assertEqual(
+                set(get_replicas("test2rf", token)),
+                set([owners[i], owners[(i + 1) % 3]]),
+            )
+            self.assertEqual(set(get_replicas("test1rf", token)), set([owners[i]]))
         cluster.shutdown()
 
 
@@ -1268,6 +1606,7 @@ class TokenMetadataTest(unittest.TestCase):
     """
     Test of TokenMap creation and other behavior.
     """
+
     @local
     def test_token(self):
         expected_node_count = len(get_cluster().nodes)
@@ -1284,17 +1623,21 @@ class KeyspaceAlterMetadata(unittest.TestCase):
     """
     Test verifies that table metadata is preserved on keyspace alter
     """
+
     def setUp(self):
         self.cluster = TestCluster()
         self.session = self.cluster.connect()
         name = self._testMethodName.lower()
-        crt_ks = '''
-                CREATE KEYSPACE %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1} AND durable_writes = true''' % name
+        crt_ks = (
+            """
+                CREATE KEYSPACE %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND durable_writes = true"""
+            % name
+        )
         self.session.execute(crt_ks)
 
     def tearDown(self):
         name = self._testMethodName.lower()
-        self.session.execute('DROP KEYSPACE %s' % name)
+        self.session.execute("DROP KEYSPACE %s" % name)
         self.cluster.shutdown()
 
     def test_keyspace_alter(self):
@@ -1309,20 +1652,19 @@ class KeyspaceAlterMetadata(unittest.TestCase):
         """
         name = self._testMethodName.lower()
 
-        self.session.execute('CREATE TABLE %s.d (d INT PRIMARY KEY)' % name)
+        self.session.execute("CREATE TABLE %s.d (d INT PRIMARY KEY)" % name)
         original_keyspace_meta = self.cluster.metadata.keyspaces[name]
         self.assertEqual(original_keyspace_meta.durable_writes, True)
         self.assertEqual(len(original_keyspace_meta.tables), 1)
 
-        self.session.execute('ALTER KEYSPACE %s WITH durable_writes = false' % name)
+        self.session.execute("ALTER KEYSPACE %s WITH durable_writes = false" % name)
         new_keyspace_meta = self.cluster.metadata.keyspaces[name]
         self.assertNotEqual(original_keyspace_meta, new_keyspace_meta)
         self.assertEqual(new_keyspace_meta.durable_writes, False)
 
 
 class IndexMapTests(unittest.TestCase):
-
-    keyspace_name = 'index_map_tests'
+    keyspace_name = "index_map_tests"
 
     @property
     def table_name(self):
@@ -1339,8 +1681,10 @@ class IndexMapTests(unittest.TestCase):
             cls.session.execute(
                 """
                 CREATE KEYSPACE %s
-                WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'};
-                """ % cls.keyspace_name)
+                WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'};
+                """
+                % cls.keyspace_name
+            )
             cls.session.set_keyspace(cls.keyspace_name)
         except Exception:
             cls.cluster.shutdown()
@@ -1354,7 +1698,9 @@ class IndexMapTests(unittest.TestCase):
             cls.cluster.shutdown()
 
     def create_basic_table(self):
-        self.session.execute("CREATE TABLE %s (k int PRIMARY KEY, a int)" % self.table_name)
+        self.session.execute(
+            "CREATE TABLE %s (k int PRIMARY KEY, a int)" % self.table_name
+        )
 
     def drop_basic_table(self):
         self.session.execute("DROP TABLE %s" % self.table_name)
@@ -1364,10 +1710,10 @@ class IndexMapTests(unittest.TestCase):
 
         ks_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
         table_meta = ks_meta.tables[self.table_name]
-        self.assertNotIn('a_idx', ks_meta.indexes)
-        self.assertNotIn('b_idx', ks_meta.indexes)
-        self.assertNotIn('a_idx', table_meta.indexes)
-        self.assertNotIn('b_idx', table_meta.indexes)
+        self.assertNotIn("a_idx", ks_meta.indexes)
+        self.assertNotIn("b_idx", ks_meta.indexes)
+        self.assertNotIn("a_idx", table_meta.indexes)
+        self.assertNotIn("b_idx", table_meta.indexes)
 
         self.session.execute("CREATE INDEX a_idx ON %s (a)" % self.table_name)
         self.session.execute("ALTER TABLE %s ADD b int" % self.table_name)
@@ -1375,10 +1721,10 @@ class IndexMapTests(unittest.TestCase):
 
         ks_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
         table_meta = ks_meta.tables[self.table_name]
-        self.assertIsInstance(ks_meta.indexes['a_idx'], IndexMetadata)
-        self.assertIsInstance(ks_meta.indexes['b_idx'], IndexMetadata)
-        self.assertIsInstance(table_meta.indexes['a_idx'], IndexMetadata)
-        self.assertIsInstance(table_meta.indexes['b_idx'], IndexMetadata)
+        self.assertIsInstance(ks_meta.indexes["a_idx"], IndexMetadata)
+        self.assertIsInstance(ks_meta.indexes["b_idx"], IndexMetadata)
+        self.assertIsInstance(table_meta.indexes["a_idx"], IndexMetadata)
+        self.assertIsInstance(table_meta.indexes["b_idx"], IndexMetadata)
 
         # both indexes updated when index dropped
         self.session.execute("DROP INDEX a_idx")
@@ -1388,28 +1734,30 @@ class IndexMapTests(unittest.TestCase):
 
         ks_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
         table_meta = ks_meta.tables[self.table_name]
-        self.assertNotIn('a_idx', ks_meta.indexes)
-        self.assertIsInstance(ks_meta.indexes['b_idx'], IndexMetadata)
-        self.assertNotIn('a_idx', table_meta.indexes)
-        self.assertIsInstance(table_meta.indexes['b_idx'], IndexMetadata)
+        self.assertNotIn("a_idx", ks_meta.indexes)
+        self.assertIsInstance(ks_meta.indexes["b_idx"], IndexMetadata)
+        self.assertNotIn("a_idx", table_meta.indexes)
+        self.assertIsInstance(table_meta.indexes["b_idx"], IndexMetadata)
 
         # keyspace index updated when table dropped
         self.drop_basic_table()
         ks_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
         self.assertNotIn(self.table_name, ks_meta.tables)
-        self.assertNotIn('a_idx', ks_meta.indexes)
-        self.assertNotIn('b_idx', ks_meta.indexes)
+        self.assertNotIn("a_idx", ks_meta.indexes)
+        self.assertNotIn("b_idx", ks_meta.indexes)
 
     def test_index_follows_alter(self):
         self.create_basic_table()
 
-        idx = self.table_name + '_idx'
+        idx = self.table_name + "_idx"
         self.session.execute("CREATE INDEX %s ON %s (a)" % (idx, self.table_name))
         ks_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
         table_meta = ks_meta.tables[self.table_name]
         self.assertIsInstance(ks_meta.indexes[idx], IndexMetadata)
         self.assertIsInstance(table_meta.indexes[idx], IndexMetadata)
-        self.session.execute('ALTER KEYSPACE %s WITH durable_writes = false' % self.keyspace_name)
+        self.session.execute(
+            "ALTER KEYSPACE %s WITH durable_writes = false" % self.keyspace_name
+        )
         old_meta = ks_meta
         ks_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
         self.assertIsNot(ks_meta, old_meta)
@@ -1430,7 +1778,9 @@ class FunctionTest(unittest.TestCase):
         """
 
         if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Function metadata requires native protocol version 4+")
+            raise unittest.SkipTest(
+                "Function metadata requires native protocol version 4+"
+            )
 
     @property
     def function_name(self):
@@ -1442,10 +1792,17 @@ class FunctionTest(unittest.TestCase):
             cls.cluster = TestCluster()
             cls.keyspace_name = cls.__name__.lower()
             cls.session = cls.cluster.connect()
-            cls.session.execute("CREATE KEYSPACE IF NOT EXISTS %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}" % cls.keyspace_name)
+            cls.session.execute(
+                "CREATE KEYSPACE IF NOT EXISTS %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+                % cls.keyspace_name
+            )
             cls.session.set_keyspace(cls.keyspace_name)
-            cls.keyspace_function_meta = cls.cluster.metadata.keyspaces[cls.keyspace_name].functions
-            cls.keyspace_aggregate_meta = cls.cluster.metadata.keyspaces[cls.keyspace_name].aggregates
+            cls.keyspace_function_meta = cls.cluster.metadata.keyspaces[
+                cls.keyspace_name
+            ].functions
+            cls.keyspace_aggregate_meta = cls.cluster.metadata.keyspaces[
+                cls.keyspace_name
+            ].aggregates
 
     @classmethod
     def teardown_class(cls):
@@ -1454,7 +1811,6 @@ class FunctionTest(unittest.TestCase):
             cls.cluster.shutdown()
 
     class Verified(object):
-
         def __init__(self, test_case, meta_class, element_meta, **function_kwargs):
             self.test_case = test_case
             self.function_kwargs = dict(function_kwargs)
@@ -1469,42 +1825,53 @@ class FunctionTest(unittest.TestCase):
             tc.assertIn(expected_meta.signature, self.element_meta)
 
             generated_meta = self.element_meta[expected_meta.signature]
-            self.test_case.assertEqual(generated_meta.as_cql_query(), expected_meta.as_cql_query())
+            self.test_case.assertEqual(
+                generated_meta.as_cql_query(), expected_meta.as_cql_query()
+            )
             return self
 
         def __exit__(self, exc_type, exc_val, exc_tb):
             tc = self.test_case
-            tc.session.execute("DROP %s %s.%s" % (self.meta_class.__name__, tc.keyspace_name, self.signature))
+            tc.session.execute(
+                "DROP %s %s.%s"
+                % (self.meta_class.__name__, tc.keyspace_name, self.signature)
+            )
             tc.assertNotIn(self.signature, self.element_meta)
 
         @property
         def signature(self):
-            return SignatureDescriptor.format_signature(self.function_kwargs['name'],
-                                                        self.function_kwargs['argument_types'])
+            return SignatureDescriptor.format_signature(
+                self.function_kwargs["name"], self.function_kwargs["argument_types"]
+            )
 
     class VerifiedFunction(Verified):
         def __init__(self, test_case, **kwargs):
-            super(FunctionTest.VerifiedFunction, self).__init__(test_case, Function, test_case.keyspace_function_meta, **kwargs)
+            super(FunctionTest.VerifiedFunction, self).__init__(
+                test_case, Function, test_case.keyspace_function_meta, **kwargs
+            )
 
     class VerifiedAggregate(Verified):
         def __init__(self, test_case, **kwargs):
-            super(FunctionTest.VerifiedAggregate, self).__init__(test_case, Aggregate, test_case.keyspace_aggregate_meta, **kwargs)
+            super(FunctionTest.VerifiedAggregate, self).__init__(
+                test_case, Aggregate, test_case.keyspace_aggregate_meta, **kwargs
+            )
 
 
 class FunctionMetadata(FunctionTest):
-
     def make_function_kwargs(self, called_on_null=True):
-        return {'keyspace': self.keyspace_name,
-                'name': self.function_name,
-                'argument_types': ['double', 'int'],
-                'argument_names': ['d', 'i'],
-                'return_type': 'double',
-                'language': 'java',
-                'body': 'return new Double(0.0);',
-                'called_on_null_input': called_on_null,
-                'deterministic': False,
-                'monotonic': False,
-                'monotonic_on': []}
+        return {
+            "keyspace": self.keyspace_name,
+            "name": self.function_name,
+            "argument_types": ["double", "int"],
+            "argument_names": ["d", "i"],
+            "return_type": "double",
+            "language": "java",
+            "body": "return new Double(0.0);",
+            "called_on_null_input": called_on_null,
+            "deterministic": False,
+            "monotonic": False,
+            "monotonic_on": [],
+        }
 
     def test_functions_after_udt(self):
         """
@@ -1530,15 +1897,21 @@ class FunctionMetadata(FunctionTest):
 
         self.assertNotIn(self.function_name, self.keyspace_function_meta)
 
-        udt_name = 'udtx'
+        udt_name = "udtx"
         self.session.execute("CREATE TYPE %s (x int)" % udt_name)
 
         with self.VerifiedFunction(self, **self.make_function_kwargs()):
             # udts must come before functions in keyspace dump
-            keyspace_cql = self.cluster.metadata.keyspaces[self.keyspace_name].export_as_string()
+            keyspace_cql = self.cluster.metadata.keyspaces[
+                self.keyspace_name
+            ].export_as_string()
             type_idx = keyspace_cql.rfind("CREATE TYPE")
             func_idx = keyspace_cql.find("CREATE FUNCTION")
-            self.assertNotIn(-1, (type_idx, func_idx), "TYPE or FUNCTION not found in keyspace_cql: " + keyspace_cql)
+            self.assertNotIn(
+                -1,
+                (type_idx, func_idx),
+                "TYPE or FUNCTION not found in keyspace_cql: " + keyspace_cql,
+            )
             self.assertGreater(func_idx, type_idx)
 
     def test_function_same_name_diff_types(self):
@@ -1557,18 +1930,23 @@ class FunctionMetadata(FunctionTest):
         # Create a function
         kwargs = self.make_function_kwargs()
         with self.VerifiedFunction(self, **kwargs):
-
             # another function: same name, different type sig.
-            self.assertGreater(len(kwargs['argument_types']), 1)
-            self.assertGreater(len(kwargs['argument_names']), 1)
-            kwargs['argument_types'] = kwargs['argument_types'][:1]
-            kwargs['argument_names'] = kwargs['argument_names'][:1]
+            self.assertGreater(len(kwargs["argument_types"]), 1)
+            self.assertGreater(len(kwargs["argument_names"]), 1)
+            kwargs["argument_types"] = kwargs["argument_types"][:1]
+            kwargs["argument_names"] = kwargs["argument_names"][:1]
 
             # Ensure they are surfaced separately
             with self.VerifiedFunction(self, **kwargs):
-                functions = [f for f in self.keyspace_function_meta.values() if f.name == self.function_name]
+                functions = [
+                    f
+                    for f in self.keyspace_function_meta.values()
+                    if f.name == self.function_name
+                ]
                 self.assertEqual(len(functions), 2)
-                self.assertNotEqual(functions[0].argument_types, functions[1].argument_types)
+                self.assertNotEqual(
+                    functions[0].argument_types, functions[1].argument_types
+                )
 
     def test_function_no_parameters(self):
         """
@@ -1582,14 +1960,16 @@ class FunctionMetadata(FunctionTest):
         @test_category function
         """
         kwargs = self.make_function_kwargs()
-        kwargs['argument_types'] = []
-        kwargs['argument_names'] = []
-        kwargs['return_type'] = 'bigint'
-        kwargs['body'] = 'return System.currentTimeMillis() / 1000L;'
+        kwargs["argument_types"] = []
+        kwargs["argument_names"] = []
+        kwargs["return_type"] = "bigint"
+        kwargs["body"] = "return System.currentTimeMillis() / 1000L;"
 
         with self.VerifiedFunction(self, **kwargs) as vf:
             fn_meta = self.keyspace_function_meta[vf.signature]
-            self.assertRegex(fn_meta.as_cql_query(), "CREATE FUNCTION.*%s\(\) .*" % kwargs['name'])
+            self.assertRegex(
+                fn_meta.as_cql_query(), "CREATE FUNCTION.*%s\(\) .*" % kwargs["name"]
+            )
 
     def test_functions_follow_keyspace_alter(self):
         """
@@ -1608,15 +1988,21 @@ class FunctionMetadata(FunctionTest):
         # Create function
         with self.VerifiedFunction(self, **self.make_function_kwargs()):
             original_keyspace_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
-            self.session.execute('ALTER KEYSPACE %s WITH durable_writes = false' % self.keyspace_name)
+            self.session.execute(
+                "ALTER KEYSPACE %s WITH durable_writes = false" % self.keyspace_name
+            )
 
             # After keyspace alter ensure that we maintain function equality.
             try:
                 new_keyspace_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
                 self.assertNotEqual(original_keyspace_meta, new_keyspace_meta)
-                self.assertIs(original_keyspace_meta.functions, new_keyspace_meta.functions)
+                self.assertIs(
+                    original_keyspace_meta.functions, new_keyspace_meta.functions
+                )
             finally:
-                self.session.execute('ALTER KEYSPACE %s WITH durable_writes = true' % self.keyspace_name)
+                self.session.execute(
+                    "ALTER KEYSPACE %s WITH durable_writes = true" % self.keyspace_name
+                )
 
     def test_function_cql_called_on_null(self):
         """
@@ -1634,19 +2020,24 @@ class FunctionMetadata(FunctionTest):
         """
 
         kwargs = self.make_function_kwargs()
-        kwargs['called_on_null_input'] = True
+        kwargs["called_on_null_input"] = True
         with self.VerifiedFunction(self, **kwargs) as vf:
             fn_meta = self.keyspace_function_meta[vf.signature]
-            self.assertRegex(fn_meta.as_cql_query(), "CREATE FUNCTION.*\) CALLED ON NULL INPUT RETURNS .*")
+            self.assertRegex(
+                fn_meta.as_cql_query(),
+                "CREATE FUNCTION.*\) CALLED ON NULL INPUT RETURNS .*",
+            )
 
-        kwargs['called_on_null_input'] = False
+        kwargs["called_on_null_input"] = False
         with self.VerifiedFunction(self, **kwargs) as vf:
             fn_meta = self.keyspace_function_meta[vf.signature]
-            self.assertRegex(fn_meta.as_cql_query(), "CREATE FUNCTION.*\) RETURNS NULL ON NULL INPUT RETURNS .*")
+            self.assertRegex(
+                fn_meta.as_cql_query(),
+                "CREATE FUNCTION.*\) RETURNS NULL ON NULL INPUT RETURNS .*",
+            )
 
 
 class AggregateMetadata(FunctionTest):
-
     @classmethod
     def setup_class(cls):
         if PROTOCOL_VERSION >= 4:
@@ -1678,16 +2069,20 @@ class AggregateMetadata(FunctionTest):
                 cls.session.execute("INSERT INTO t (k,v) VALUES (%s, %s)", (x, x))
             cls.session.execute("INSERT INTO t (k) VALUES (%s)", (4,))
 
-    def make_aggregate_kwargs(self, state_func, state_type, final_func=None, init_cond=None):
-        return {'keyspace': self.keyspace_name,
-                'name': self.function_name + '_aggregate',
-                'argument_types': ['int'],
-                'state_func': state_func,
-                'state_type': state_type,
-                'final_func': final_func,
-                'initial_condition': init_cond,
-                'return_type': "does not matter for creation",
-                'deterministic': False}
+    def make_aggregate_kwargs(
+        self, state_func, state_type, final_func=None, init_cond=None
+    ):
+        return {
+            "keyspace": self.keyspace_name,
+            "name": self.function_name + "_aggregate",
+            "argument_types": ["int"],
+            "state_func": state_func,
+            "state_type": state_type,
+            "final_func": final_func,
+            "initial_condition": init_cond,
+            "return_type": "does not matter for creation",
+            "deterministic": False,
+        }
 
     def test_return_type_meta(self):
         """
@@ -1703,8 +2098,12 @@ class AggregateMetadata(FunctionTest):
         @test_category aggregate
         """
 
-        with self.VerifiedAggregate(self, **self.make_aggregate_kwargs('sum_int', 'int', init_cond='1')) as va:
-            self.assertEqual(self.keyspace_aggregate_meta[va.signature].return_type, 'int')
+        with self.VerifiedAggregate(
+            self, **self.make_aggregate_kwargs("sum_int", "int", init_cond="1")
+        ) as va:
+            self.assertEqual(
+                self.keyspace_aggregate_meta[va.signature].return_type, "int"
+            )
 
     def test_init_cond(self):
         """
@@ -1731,28 +2130,50 @@ class AggregateMetadata(FunctionTest):
         # int32
         for init_cond in (-1, 0, 1):
             cql_init = encoder.cql_encode_all_types(init_cond)
-            with self.VerifiedAggregate(self, **self.make_aggregate_kwargs('sum_int', 'int', init_cond=cql_init)) as va:
-                sum_res = s.execute("SELECT %s(v) AS sum FROM t" % va.function_kwargs['name'])[0].sum
+            with self.VerifiedAggregate(
+                self, **self.make_aggregate_kwargs("sum_int", "int", init_cond=cql_init)
+            ) as va:
+                sum_res = s.execute(
+                    "SELECT %s(v) AS sum FROM t" % va.function_kwargs["name"]
+                )[0].sum
                 self.assertEqual(sum_res, int(init_cond) + sum(expected_values))
 
         # list<text>
-        for init_cond in ([], ['1', '2']):
+        for init_cond in ([], ["1", "2"]):
             cql_init = encoder.cql_encode_all_types(init_cond)
-            with self.VerifiedAggregate(self, **self.make_aggregate_kwargs('extend_list', 'list<text>', init_cond=cql_init)) as va:
-                list_res = s.execute("SELECT %s(v) AS list_res FROM t" % va.function_kwargs['name'])[0].list_res
-                self.assertListEqual(list_res[:len(init_cond)], init_cond)
-                self.assertEqual(set(i for i in list_res[len(init_cond):]),
-                                 set(str(i) for i in expected_values))
+            with self.VerifiedAggregate(
+                self,
+                **self.make_aggregate_kwargs(
+                    "extend_list", "list<text>", init_cond=cql_init
+                ),
+            ) as va:
+                list_res = s.execute(
+                    "SELECT %s(v) AS list_res FROM t" % va.function_kwargs["name"]
+                )[0].list_res
+                self.assertListEqual(list_res[: len(init_cond)], init_cond)
+                self.assertEqual(
+                    set(i for i in list_res[len(init_cond) :]),
+                    set(str(i) for i in expected_values),
+                )
 
         # map<int,int>
         expected_map_values = dict((i, i) for i in expected_values)
         expected_key_set = set(expected_values)
         for init_cond in ({}, {1: 2, 3: 4}, {5: 5}):
             cql_init = encoder.cql_encode_all_types(init_cond)
-            with self.VerifiedAggregate(self, **self.make_aggregate_kwargs('update_map', 'map<int, int>', init_cond=cql_init)) as va:
-                map_res = s.execute("SELECT %s(v) AS map_res FROM t" % va.function_kwargs['name'])[0].map_res
+            with self.VerifiedAggregate(
+                self,
+                **self.make_aggregate_kwargs(
+                    "update_map", "map<int, int>", init_cond=cql_init
+                ),
+            ) as va:
+                map_res = s.execute(
+                    "SELECT %s(v) AS map_res FROM t" % va.function_kwargs["name"]
+                )[0].map_res
                 self.assertLessEqual(expected_map_values.items(), map_res.items())
-                init_not_updated = dict((k, init_cond[k]) for k in set(init_cond) - expected_key_set)
+                init_not_updated = dict(
+                    (k, init_cond[k]) for k in set(init_cond) - expected_key_set
+                )
                 self.assertLessEqual(init_not_updated.items(), map_res.items())
         c.shutdown()
 
@@ -1771,11 +2192,19 @@ class AggregateMetadata(FunctionTest):
         """
 
         # functions must come before functions in keyspace dump
-        with self.VerifiedAggregate(self, **self.make_aggregate_kwargs('extend_list', 'list<text>')):
-            keyspace_cql = self.cluster.metadata.keyspaces[self.keyspace_name].export_as_string()
+        with self.VerifiedAggregate(
+            self, **self.make_aggregate_kwargs("extend_list", "list<text>")
+        ):
+            keyspace_cql = self.cluster.metadata.keyspaces[
+                self.keyspace_name
+            ].export_as_string()
             func_idx = keyspace_cql.find("CREATE FUNCTION")
             aggregate_idx = keyspace_cql.rfind("CREATE AGGREGATE")
-            self.assertNotIn(-1, (aggregate_idx, func_idx), "AGGREGATE or FUNCTION not found in keyspace_cql: " + keyspace_cql)
+            self.assertNotIn(
+                -1,
+                (aggregate_idx, func_idx),
+                "AGGREGATE or FUNCTION not found in keyspace_cql: " + keyspace_cql,
+            )
             self.assertGreater(aggregate_idx, func_idx)
 
     def test_same_name_diff_types(self):
@@ -1791,14 +2220,20 @@ class AggregateMetadata(FunctionTest):
         @test_category function
         """
 
-        kwargs = self.make_aggregate_kwargs('sum_int', 'int', init_cond='0')
+        kwargs = self.make_aggregate_kwargs("sum_int", "int", init_cond="0")
         with self.VerifiedAggregate(self, **kwargs):
-            kwargs['state_func'] = 'sum_int_two'
-            kwargs['argument_types'] = ['int', 'int']
+            kwargs["state_func"] = "sum_int_two"
+            kwargs["argument_types"] = ["int", "int"]
             with self.VerifiedAggregate(self, **kwargs):
-                aggregates = [a for a in self.keyspace_aggregate_meta.values() if a.name == kwargs['name']]
+                aggregates = [
+                    a
+                    for a in self.keyspace_aggregate_meta.values()
+                    if a.name == kwargs["name"]
+                ]
                 self.assertEqual(len(aggregates), 2)
-                self.assertNotEqual(aggregates[0].argument_types, aggregates[1].argument_types)
+                self.assertNotEqual(
+                    aggregates[0].argument_types, aggregates[1].argument_types
+                )
 
     def test_aggregates_follow_keyspace_alter(self):
         """
@@ -1814,15 +2249,23 @@ class AggregateMetadata(FunctionTest):
         @test_category function
         """
 
-        with self.VerifiedAggregate(self, **self.make_aggregate_kwargs('sum_int', 'int', init_cond='0')):
+        with self.VerifiedAggregate(
+            self, **self.make_aggregate_kwargs("sum_int", "int", init_cond="0")
+        ):
             original_keyspace_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
-            self.session.execute('ALTER KEYSPACE %s WITH durable_writes = false' % self.keyspace_name)
+            self.session.execute(
+                "ALTER KEYSPACE %s WITH durable_writes = false" % self.keyspace_name
+            )
             try:
                 new_keyspace_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
                 self.assertNotEqual(original_keyspace_meta, new_keyspace_meta)
-                self.assertIs(original_keyspace_meta.aggregates, new_keyspace_meta.aggregates)
+                self.assertIs(
+                    original_keyspace_meta.aggregates, new_keyspace_meta.aggregates
+                )
             finally:
-                self.session.execute('ALTER KEYSPACE %s WITH durable_writes = true' % self.keyspace_name)
+                self.session.execute(
+                    "ALTER KEYSPACE %s WITH durable_writes = true" % self.keyspace_name
+                )
 
     def test_cql_optional_params(self):
         """
@@ -1838,53 +2281,61 @@ class AggregateMetadata(FunctionTest):
         @test_category function
         """
 
-        kwargs = self.make_aggregate_kwargs('extend_list', 'list<text>')
+        kwargs = self.make_aggregate_kwargs("extend_list", "list<text>")
         encoder = Encoder()
 
         # no initial condition, final func
-        self.assertIsNone(kwargs['initial_condition'])
-        self.assertIsNone(kwargs['final_func'])
+        self.assertIsNone(kwargs["initial_condition"])
+        self.assertIsNone(kwargs["final_func"])
         with self.VerifiedAggregate(self, **kwargs) as va:
             meta = self.keyspace_aggregate_meta[va.signature]
             self.assertIsNone(meta.initial_condition)
             self.assertIsNone(meta.final_func)
             cql = meta.as_cql_query()
-            self.assertEqual(cql.find('INITCOND'), -1)
-            self.assertEqual(cql.find('FINALFUNC'), -1)
+            self.assertEqual(cql.find("INITCOND"), -1)
+            self.assertEqual(cql.find("FINALFUNC"), -1)
 
         # initial condition, no final func
-        kwargs['initial_condition'] = encoder.cql_encode_all_types(['init', 'cond'])
+        kwargs["initial_condition"] = encoder.cql_encode_all_types(["init", "cond"])
         with self.VerifiedAggregate(self, **kwargs) as va:
             meta = self.keyspace_aggregate_meta[va.signature]
-            self.assertEqual(meta.initial_condition, kwargs['initial_condition'])
+            self.assertEqual(meta.initial_condition, kwargs["initial_condition"])
             self.assertIsNone(meta.final_func)
             cql = meta.as_cql_query()
-            search_string = "INITCOND %s" % kwargs['initial_condition']
-            self.assertGreater(cql.find(search_string), 0, '"%s" search string not found in cql:\n%s' % (search_string, cql))
-            self.assertEqual(cql.find('FINALFUNC'), -1)
+            search_string = "INITCOND %s" % kwargs["initial_condition"]
+            self.assertGreater(
+                cql.find(search_string),
+                0,
+                '"%s" search string not found in cql:\n%s' % (search_string, cql),
+            )
+            self.assertEqual(cql.find("FINALFUNC"), -1)
 
         # no initial condition, final func
-        kwargs['initial_condition'] = None
-        kwargs['final_func'] = 'List_As_String'
+        kwargs["initial_condition"] = None
+        kwargs["final_func"] = "List_As_String"
         with self.VerifiedAggregate(self, **kwargs) as va:
             meta = self.keyspace_aggregate_meta[va.signature]
             self.assertIsNone(meta.initial_condition)
-            self.assertEqual(meta.final_func, kwargs['final_func'])
+            self.assertEqual(meta.final_func, kwargs["final_func"])
             cql = meta.as_cql_query()
-            self.assertEqual(cql.find('INITCOND'), -1)
-            search_string = 'FINALFUNC "%s"' % kwargs['final_func']
-            self.assertGreater(cql.find(search_string), 0, '"%s" search string not found in cql:\n%s' % (search_string, cql))
+            self.assertEqual(cql.find("INITCOND"), -1)
+            search_string = 'FINALFUNC "%s"' % kwargs["final_func"]
+            self.assertGreater(
+                cql.find(search_string),
+                0,
+                '"%s" search string not found in cql:\n%s' % (search_string, cql),
+            )
 
         # both
-        kwargs['initial_condition'] = encoder.cql_encode_all_types(['init', 'cond'])
-        kwargs['final_func'] = 'List_As_String'
+        kwargs["initial_condition"] = encoder.cql_encode_all_types(["init", "cond"])
+        kwargs["final_func"] = "List_As_String"
         with self.VerifiedAggregate(self, **kwargs) as va:
             meta = self.keyspace_aggregate_meta[va.signature]
-            self.assertEqual(meta.initial_condition, kwargs['initial_condition'])
-            self.assertEqual(meta.final_func, kwargs['final_func'])
+            self.assertEqual(meta.initial_condition, kwargs["initial_condition"])
+            self.assertEqual(meta.final_func, kwargs["final_func"])
             cql = meta.as_cql_query()
-            init_cond_idx = cql.find("INITCOND %s" % kwargs['initial_condition'])
-            final_func_idx = cql.find('FINALFUNC "%s"' % kwargs['final_func'])
+            init_cond_idx = cql.find("INITCOND %s" % kwargs["initial_condition"])
+            final_func_idx = cql.find('FINALFUNC "%s"' % kwargs["final_func"])
             self.assertNotIn(-1, (init_cond_idx, final_func_idx))
             self.assertGreater(init_cond_idx, final_func_idx)
 
@@ -1908,7 +2359,10 @@ class BadMetaTest(unittest.TestCase):
         cls.cluster = TestCluster()
         cls.keyspace_name = cls.__name__.lower()
         cls.session = cls.cluster.connect()
-        cls.session.execute("CREATE KEYSPACE %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}" % cls.keyspace_name)
+        cls.session.execute(
+            "CREATE KEYSPACE %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+            % cls.keyspace_name
+        )
         cls.session.set_keyspace(cls.keyspace_name)
         connection = cls.cluster.control_connection._connection
 
@@ -1916,7 +2370,7 @@ class BadMetaTest(unittest.TestCase):
             connection,
             cls.cluster.metadata.get_host(connection.host).release_version,
             cls.cluster.metadata.get_host(connection.host).dse_version,
-            timeout=20
+            timeout=20,
         ).__class__
         cls.cluster.control_connection.reconnect = Mock()
 
@@ -1925,52 +2379,79 @@ class BadMetaTest(unittest.TestCase):
         drop_keyspace_shutdown_cluster(cls.keyspace_name, cls.session, cls.cluster)
 
     def test_bad_keyspace(self):
-        with patch.object(self.parser_class, '_build_keyspace_metadata_internal', side_effect=self.BadMetaException):
+        with patch.object(
+            self.parser_class,
+            "_build_keyspace_metadata_internal",
+            side_effect=self.BadMetaException,
+        ):
             self.cluster.refresh_keyspace_metadata(self.keyspace_name)
             m = self.cluster.metadata.keyspaces[self.keyspace_name]
             self.assertIs(m._exc_info[0], self.BadMetaException)
             self.assertIn("/*\nWarning:", m.export_as_string())
 
     def test_bad_table(self):
-        self.session.execute('CREATE TABLE %s (k int PRIMARY KEY, v int)' % self.function_name)
-        with patch.object(self.parser_class, '_build_column_metadata', side_effect=self.BadMetaException):
+        self.session.execute(
+            "CREATE TABLE %s (k int PRIMARY KEY, v int)" % self.function_name
+        )
+        with patch.object(
+            self.parser_class,
+            "_build_column_metadata",
+            side_effect=self.BadMetaException,
+        ):
             self.cluster.refresh_table_metadata(self.keyspace_name, self.function_name)
-            m = self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_name]
+            m = self.cluster.metadata.keyspaces[self.keyspace_name].tables[
+                self.function_name
+            ]
             self.assertIs(m._exc_info[0], self.BadMetaException)
             self.assertIn("/*\nWarning:", m.export_as_string())
 
     def test_bad_index(self):
-        self.session.execute('CREATE TABLE %s (k int PRIMARY KEY, v int)' % self.function_name)
-        self.session.execute('CREATE INDEX ON %s(v)' % self.function_name)
-        with patch.object(self.parser_class, '_build_index_metadata', side_effect=self.BadMetaException):
+        self.session.execute(
+            "CREATE TABLE %s (k int PRIMARY KEY, v int)" % self.function_name
+        )
+        self.session.execute("CREATE INDEX ON %s(v)" % self.function_name)
+        with patch.object(
+            self.parser_class,
+            "_build_index_metadata",
+            side_effect=self.BadMetaException,
+        ):
             self.cluster.refresh_table_metadata(self.keyspace_name, self.function_name)
-            m = self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_name]
+            m = self.cluster.metadata.keyspaces[self.keyspace_name].tables[
+                self.function_name
+            ]
             self.assertIs(m._exc_info[0], self.BadMetaException)
             self.assertIn("/*\nWarning:", m.export_as_string())
 
     @greaterthancass20
     def test_bad_user_type(self):
-        self.session.execute('CREATE TYPE %s (i int, d double)' % self.function_name)
-        with patch.object(self.parser_class, '_build_user_type', side_effect=self.BadMetaException):
-            self.cluster.refresh_schema_metadata()   # presently do not capture these errors on udt direct refresh -- make sure it's contained during full refresh
+        self.session.execute("CREATE TYPE %s (i int, d double)" % self.function_name)
+        with patch.object(
+            self.parser_class, "_build_user_type", side_effect=self.BadMetaException
+        ):
+            self.cluster.refresh_schema_metadata()  # presently do not capture these errors on udt direct refresh -- make sure it's contained during full refresh
             m = self.cluster.metadata.keyspaces[self.keyspace_name]
             self.assertIs(m._exc_info[0], self.BadMetaException)
             self.assertIn("/*\nWarning:", m.export_as_string())
 
     @greaterthancass21
     def test_bad_user_function(self):
-        self.session.execute("""CREATE FUNCTION IF NOT EXISTS %s (key int, val int)
+        self.session.execute(
+            """CREATE FUNCTION IF NOT EXISTS %s (key int, val int)
                                 RETURNS NULL ON NULL INPUT
                                 RETURNS int
-                                LANGUAGE java AS 'return key + val;';""" % self.function_name)
+                                LANGUAGE java AS 'return key + val;';"""
+            % self.function_name
+        )
 
-        #We need to patch as well the reconnect function because after patching the _build_function
-        #there will an Error refreshing schema which will trigger a reconnection. If this happened
-        #in a timely manner in the call self.cluster.refresh_schema_metadata() it would return an exception
-        #due to that a connection would be closed
-        with patch.object(self.cluster.control_connection, 'reconnect'):
-            with patch.object(self.parser_class, '_build_function', side_effect=self.BadMetaException):
-                self.cluster.refresh_schema_metadata()   # presently do not capture these errors on udt direct refresh -- make sure it's contained during full refresh
+        # We need to patch as well the reconnect function because after patching the _build_function
+        # there will an Error refreshing schema which will trigger a reconnection. If this happened
+        # in a timely manner in the call self.cluster.refresh_schema_metadata() it would return an exception
+        # due to that a connection would be closed
+        with patch.object(self.cluster.control_connection, "reconnect"):
+            with patch.object(
+                self.parser_class, "_build_function", side_effect=self.BadMetaException
+            ):
+                self.cluster.refresh_schema_metadata()  # presently do not capture these errors on udt direct refresh -- make sure it's contained during full refresh
                 m = self.cluster.metadata.keyspaces[self.keyspace_name]
                 self.assertIs(m._exc_info[0], self.BadMetaException)
                 self.assertIn("/*\nWarning:", m.export_as_string())
@@ -1981,21 +2462,25 @@ class BadMetaTest(unittest.TestCase):
                                 RETURNS NULL ON NULL INPUT
                                 RETURNS int
                                 LANGUAGE java AS 'return key + val;';""")
-        self.session.execute("""CREATE AGGREGATE %s(int)
+        self.session.execute(
+            """CREATE AGGREGATE %s(int)
                                  SFUNC sum_int
                                  STYPE int
-                                 INITCOND 0""" % self.function_name)
-        #We have the same issue here as in test_bad_user_function
-        with patch.object(self.cluster.control_connection, 'reconnect'):
-            with patch.object(self.parser_class, '_build_aggregate', side_effect=self.BadMetaException):
-                self.cluster.refresh_schema_metadata()   # presently do not capture these errors on udt direct refresh -- make sure it's contained during full refresh
+                                 INITCOND 0"""
+            % self.function_name
+        )
+        # We have the same issue here as in test_bad_user_function
+        with patch.object(self.cluster.control_connection, "reconnect"):
+            with patch.object(
+                self.parser_class, "_build_aggregate", side_effect=self.BadMetaException
+            ):
+                self.cluster.refresh_schema_metadata()  # presently do not capture these errors on udt direct refresh -- make sure it's contained during full refresh
                 m = self.cluster.metadata.keyspaces[self.keyspace_name]
                 self.assertIs(m._exc_info[0], self.BadMetaException)
                 self.assertIn("/*\nWarning:", m.export_as_string())
 
 
 class DynamicCompositeTypeTest(BasicSharedKeyspaceUnitTestCase):
-
     def test_dct_alias(self):
         """
         Tests to make sure DCT's have correct string formatting
@@ -2008,38 +2493,58 @@ class DynamicCompositeTypeTest(BasicSharedKeyspaceUnitTestCase):
 
         @test_category metadata
         """
-        self.session.execute("CREATE TABLE {0}.{1} ("
-                             "k int PRIMARY KEY,"
-                             "c1 'DynamicCompositeType(s => UTF8Type, i => Int32Type)',"
-                             "c2 Text)".format(self.ks_name, self.function_table_name))
-        dct_table = self.cluster.metadata.keyspaces.get(self.ks_name).tables.get(self.function_table_name)
+        self.session.execute(
+            "CREATE TABLE {0}.{1} ("
+            "k int PRIMARY KEY,"
+            "c1 'DynamicCompositeType(s => UTF8Type, i => Int32Type)',"
+            "c2 Text)".format(self.ks_name, self.function_table_name)
+        )
+        dct_table = self.cluster.metadata.keyspaces.get(self.ks_name).tables.get(
+            self.function_table_name
+        )
 
         # Format can very slightly between versions, strip out whitespace for consistency sake
         table_text = dct_table.as_cql_query().replace(" ", "")
         dynamic_type_text = "c1'org.apache.cassandra.db.marshal.DynamicCompositeType("
-        self.assertIn("c1'org.apache.cassandra.db.marshal.DynamicCompositeType(", table_text)
+        self.assertIn(
+            "c1'org.apache.cassandra.db.marshal.DynamicCompositeType(", table_text
+        )
         # Types within in the composite can come out in random order, so grab the type definition and find each one
-        type_definition_start = table_text.index("(", table_text.find(dynamic_type_text))
+        type_definition_start = table_text.index(
+            "(", table_text.find(dynamic_type_text)
+        )
         type_definition_end = table_text.index(")")
         type_definition_text = table_text[type_definition_start:type_definition_end]
-        self.assertIn("s=>org.apache.cassandra.db.marshal.UTF8Type", type_definition_text)
-        self.assertIn("i=>org.apache.cassandra.db.marshal.Int32Type", type_definition_text)
+        self.assertIn(
+            "s=>org.apache.cassandra.db.marshal.UTF8Type", type_definition_text
+        )
+        self.assertIn(
+            "i=>org.apache.cassandra.db.marshal.Int32Type", type_definition_text
+        )
 
 
 @greaterthanorequalcass30
 class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
-
     def setUp(self):
-        self.session.execute("CREATE TABLE {0}.{1} (pk int PRIMARY KEY, c int)".format(self.keyspace_name, self.function_table_name))
+        self.session.execute(
+            "CREATE TABLE {0}.{1} (pk int PRIMARY KEY, c int)".format(
+                self.keyspace_name, self.function_table_name
+            )
+        )
         self.session.execute(
             "CREATE MATERIALIZED VIEW {0}.mv1 AS SELECT pk, c FROM {0}.{1} "
             "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)".format(
-                self.keyspace_name, self.function_table_name)
+                self.keyspace_name, self.function_table_name
+            )
         )
 
     def tearDown(self):
-        self.session.execute("DROP MATERIALIZED VIEW {0}.mv1".format(self.keyspace_name))
-        self.session.execute("DROP TABLE {0}.{1}".format(self.keyspace_name, self.function_table_name))
+        self.session.execute(
+            "DROP MATERIALIZED VIEW {0}.mv1".format(self.keyspace_name)
+        )
+        self.session.execute(
+            "DROP TABLE {0}.{1}".format(self.keyspace_name, self.function_table_name)
+        )
 
     def test_materialized_view_metadata_creation(self):
         """
@@ -2058,10 +2563,27 @@ class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
         """
 
         self.assertIn("mv1", self.cluster.metadata.keyspaces[self.keyspace_name].views)
-        self.assertIn("mv1", self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views)
+        self.assertIn(
+            "mv1",
+            self.cluster.metadata.keyspaces[self.keyspace_name]
+            .tables[self.function_table_name]
+            .views,
+        )
 
-        self.assertEqual(self.keyspace_name, self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views["mv1"].keyspace_name)
-        self.assertEqual(self.function_table_name, self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views["mv1"].base_table_name)
+        self.assertEqual(
+            self.keyspace_name,
+            self.cluster.metadata.keyspaces[self.keyspace_name]
+            .tables[self.function_table_name]
+            .views["mv1"]
+            .keyspace_name,
+        )
+        self.assertEqual(
+            self.function_table_name,
+            self.cluster.metadata.keyspaces[self.keyspace_name]
+            .tables[self.function_table_name]
+            .views["mv1"]
+            .base_table_name,
+        )
 
     def test_materialized_view_metadata_alter(self):
         """
@@ -2078,14 +2600,28 @@ class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
 
         @test_category metadata
         """
-        compaction = self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views["mv1"].options["compaction"]["class"]
+        compaction = (
+            self.cluster.metadata.keyspaces[self.keyspace_name]
+            .tables[self.function_table_name]
+            .views["mv1"]
+            .options["compaction"]["class"]
+        )
         if HCD_VERSION:
             self.assertIn("UnifiedCompactionStrategy", compaction)
         else:
             self.assertIn("SizeTieredCompactionStrategy", compaction)
 
-        self.session.execute("ALTER MATERIALIZED VIEW {0}.mv1 WITH compaction = {{ 'class' : 'LeveledCompactionStrategy' }}".format(self.keyspace_name))
-        compaction = self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views["mv1"].options["compaction"]["class"]
+        self.session.execute(
+            "ALTER MATERIALIZED VIEW {0}.mv1 WITH compaction = {{ 'class' : 'LeveledCompactionStrategy' }}".format(
+                self.keyspace_name
+            )
+        )
+        compaction = (
+            self.cluster.metadata.keyspaces[self.keyspace_name]
+            .tables[self.function_table_name]
+            .views["mv1"]
+            .options["compaction"]["class"]
+        )
         self.assertIn("LeveledCompactionStrategy", compaction)
 
     def test_materialized_view_metadata_drop(self):
@@ -2104,17 +2640,34 @@ class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
         @test_category metadata
         """
 
-        self.session.execute("DROP MATERIALIZED VIEW {0}.mv1".format(self.keyspace_name))
+        self.session.execute(
+            "DROP MATERIALIZED VIEW {0}.mv1".format(self.keyspace_name)
+        )
 
-        self.assertNotIn("mv1", self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views)
-        self.assertNotIn("mv1", self.cluster.metadata.keyspaces[self.keyspace_name].views)
-        self.assertDictEqual({}, self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views)
-        self.assertDictEqual({}, self.cluster.metadata.keyspaces[self.keyspace_name].views)
+        self.assertNotIn(
+            "mv1",
+            self.cluster.metadata.keyspaces[self.keyspace_name]
+            .tables[self.function_table_name]
+            .views,
+        )
+        self.assertNotIn(
+            "mv1", self.cluster.metadata.keyspaces[self.keyspace_name].views
+        )
+        self.assertDictEqual(
+            {},
+            self.cluster.metadata.keyspaces[self.keyspace_name]
+            .tables[self.function_table_name]
+            .views,
+        )
+        self.assertDictEqual(
+            {}, self.cluster.metadata.keyspaces[self.keyspace_name].views
+        )
 
         self.session.execute(
             "CREATE MATERIALIZED VIEW {0}.mv1 AS SELECT pk, c FROM {0}.{1} "
             "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)".format(
-                self.keyspace_name, self.function_table_name)
+                self.keyspace_name, self.function_table_name
+            )
         )
 
 
@@ -2150,36 +2703,40 @@ class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
                         SELECT game, year, month, score, user, day FROM {0}.scores
                         WHERE game IS NOT NULL AND year IS NOT NULL AND month IS NOT NULL AND score IS NOT NULL AND user IS NOT NULL AND day IS NOT NULL
                         PRIMARY KEY ((game, year, month), score, user, day)
-                        WITH CLUSTERING ORDER BY (score DESC, user ASC, day ASC)""".format(self.keyspace_name)
+                        WITH CLUSTERING ORDER BY (score DESC, user ASC, day ASC)""".format(
+            self.keyspace_name
+        )
 
         self.session.execute(create_mv)
-        score_table = self.cluster.metadata.keyspaces[self.keyspace_name].tables['scores']
-        mv = self.cluster.metadata.keyspaces[self.keyspace_name].views['monthlyhigh']
+        score_table = self.cluster.metadata.keyspaces[self.keyspace_name].tables[
+            "scores"
+        ]
+        mv = self.cluster.metadata.keyspaces[self.keyspace_name].views["monthlyhigh"]
 
         self.assertIsNotNone(score_table.views["monthlyhigh"])
         self.assertIsNotNone(len(score_table.views), 1)
 
         # Make sure user is a partition key, and not null
         self.assertEqual(len(score_table.partition_key), 1)
-        self.assertIsNotNone(score_table.columns['user'])
-        self.assertTrue(score_table.columns['user'], score_table.partition_key[0])
+        self.assertIsNotNone(score_table.columns["user"])
+        self.assertTrue(score_table.columns["user"], score_table.partition_key[0])
 
         # Validate clustering keys
         self.assertEqual(len(score_table.clustering_key), 4)
 
-        self.assertIsNotNone(score_table.columns['game'])
-        self.assertTrue(score_table.columns['game'], score_table.clustering_key[0])
+        self.assertIsNotNone(score_table.columns["game"])
+        self.assertTrue(score_table.columns["game"], score_table.clustering_key[0])
 
-        self.assertIsNotNone(score_table.columns['year'])
-        self.assertTrue(score_table.columns['year'], score_table.clustering_key[1])
+        self.assertIsNotNone(score_table.columns["year"])
+        self.assertTrue(score_table.columns["year"], score_table.clustering_key[1])
 
-        self.assertIsNotNone(score_table.columns['month'])
-        self.assertTrue(score_table.columns['month'], score_table.clustering_key[2])
+        self.assertIsNotNone(score_table.columns["month"])
+        self.assertTrue(score_table.columns["month"], score_table.clustering_key[2])
 
-        self.assertIsNotNone(score_table.columns['day'])
-        self.assertTrue(score_table.columns['day'], score_table.clustering_key[3])
+        self.assertIsNotNone(score_table.columns["day"])
+        self.assertTrue(score_table.columns["day"], score_table.clustering_key[3])
 
-        self.assertIsNotNone(score_table.columns['score'])
+        self.assertIsNotNone(score_table.columns["score"])
 
         # Validate basic mv information
         self.assertEqual(mv.keyspace_name, self.keyspace_name)
@@ -2193,17 +2750,17 @@ class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
 
         game_column = mv_columns[0]
         self.assertIsNotNone(game_column)
-        self.assertEqual(game_column.name, 'game')
+        self.assertEqual(game_column.name, "game")
         self.assertEqual(game_column, mv.partition_key[0])
 
         year_column = mv_columns[1]
         self.assertIsNotNone(year_column)
-        self.assertEqual(year_column.name, 'year')
+        self.assertEqual(year_column.name, "year")
         self.assertEqual(year_column, mv.partition_key[1])
 
         month_column = mv_columns[2]
         self.assertIsNotNone(month_column)
-        self.assertEqual(month_column.name, 'month')
+        self.assertEqual(month_column.name, "month")
         self.assertEqual(month_column, mv.partition_key[2])
 
         def compare_columns(a, b, name):
@@ -2215,13 +2772,13 @@ class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
             self.assertEqual(a.is_reversed, b.is_reversed)
 
         score_column = mv_columns[3]
-        compare_columns(score_column, mv.clustering_key[0], 'score')
+        compare_columns(score_column, mv.clustering_key[0], "score")
 
         user_column = mv_columns[4]
-        compare_columns(user_column, mv.clustering_key[1], 'user')
+        compare_columns(user_column, mv.clustering_key[1], "user")
 
         day_column = mv_columns[5]
-        compare_columns(day_column, mv.clustering_key[2], 'day')
+        compare_columns(day_column, mv.clustering_key[2], "day")
 
     def test_base_table_column_addition_mv(self):
         """
@@ -2252,44 +2809,64 @@ class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
                         SELECT game, year, month, score, user, day FROM {0}.scores
                         WHERE game IS NOT NULL AND year IS NOT NULL AND month IS NOT NULL AND score IS NOT NULL AND user IS NOT NULL AND day IS NOT NULL
                         PRIMARY KEY ((game, year, month), score, user, day)
-                        WITH CLUSTERING ORDER BY (score DESC, user ASC, day ASC)""".format(self.keyspace_name)
+                        WITH CLUSTERING ORDER BY (score DESC, user ASC, day ASC)""".format(
+            self.keyspace_name
+        )
 
         create_mv_alltime = """CREATE MATERIALIZED VIEW {0}.alltimehigh AS
                         SELECT * FROM {0}.scores
                         WHERE game IS NOT NULL AND score IS NOT NULL AND user IS NOT NULL AND year IS NOT NULL AND month IS NOT NULL AND day IS NOT NULL
                         PRIMARY KEY (game, score, user, year, month, day)
-                        WITH CLUSTERING ORDER BY (score DESC, user ASC, year ASC, month ASC, day ASC)""".format(self.keyspace_name)
+                        WITH CLUSTERING ORDER BY (score DESC, user ASC, year ASC, month ASC, day ASC)""".format(
+            self.keyspace_name
+        )
 
         self.session.execute(create_mv)
 
         self.session.execute(create_mv_alltime)
 
-        score_table = self.cluster.metadata.keyspaces[self.keyspace_name].tables['scores']
+        score_table = self.cluster.metadata.keyspaces[self.keyspace_name].tables[
+            "scores"
+        ]
 
         self.assertIsNotNone(score_table.views["monthlyhigh"])
         self.assertIsNotNone(score_table.views["alltimehigh"])
-        self.assertEqual(len(self.cluster.metadata.keyspaces[self.keyspace_name].views), 2)
+        self.assertEqual(
+            len(self.cluster.metadata.keyspaces[self.keyspace_name].views), 2
+        )
 
-        insert_fouls = """ALTER TABLE {0}.scores ADD fouls INT""".format((self.keyspace_name))
+        insert_fouls = """ALTER TABLE {0}.scores ADD fouls INT""".format(
+            (self.keyspace_name)
+        )
 
         self.session.execute(insert_fouls)
-        self.assertEqual(len(self.cluster.metadata.keyspaces[self.keyspace_name].views), 2)
+        self.assertEqual(
+            len(self.cluster.metadata.keyspaces[self.keyspace_name].views), 2
+        )
 
-        score_table = self.cluster.metadata.keyspaces[self.keyspace_name].tables['scores']
+        score_table = self.cluster.metadata.keyspaces[self.keyspace_name].tables[
+            "scores"
+        ]
         self.assertIn("fouls", score_table.columns)
 
         # This is a workaround for mv notifications being separate from base table schema responses.
         # This maybe fixed with future protocol changes
         for i in range(10):
-            mv_alltime = self.cluster.metadata.keyspaces[self.keyspace_name].views["alltimehigh"]
-            if("fouls" in mv_alltime.columns):
+            mv_alltime = self.cluster.metadata.keyspaces[self.keyspace_name].views[
+                "alltimehigh"
+            ]
+            if "fouls" in mv_alltime.columns:
                 break
-            time.sleep(.2)
+            time.sleep(0.2)
 
         self.assertIn("fouls", mv_alltime.columns)
 
-        mv_alltime_fouls_comumn = self.cluster.metadata.keyspaces[self.keyspace_name].views["alltimehigh"].columns['fouls']
-        self.assertEqual(mv_alltime_fouls_comumn.cql_type, 'int')
+        mv_alltime_fouls_comumn = (
+            self.cluster.metadata.keyspaces[self.keyspace_name]
+            .views["alltimehigh"]
+            .columns["fouls"]
+        )
+        self.assertEqual(mv_alltime_fouls_comumn.cql_type, "int")
 
     @lessthancass30
     def test_base_table_type_alter_mv(self):
@@ -2324,25 +2901,41 @@ class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
                         SELECT game, year, month, score, user, day FROM {0}.scores
                         WHERE game IS NOT NULL AND year IS NOT NULL AND month IS NOT NULL AND score IS NOT NULL AND user IS NOT NULL AND day IS NOT NULL
                         PRIMARY KEY ((game, year, month), score, user, day)
-                        WITH CLUSTERING ORDER BY (score DESC, user ASC, day ASC)""".format(self.keyspace_name)
+                        WITH CLUSTERING ORDER BY (score DESC, user ASC, day ASC)""".format(
+            self.keyspace_name
+        )
 
         self.session.execute(create_mv)
-        self.assertEqual(len(self.cluster.metadata.keyspaces[self.keyspace_name].views), 1)
-        alter_scores = """ALTER TABLE {0}.scores ALTER score TYPE blob""".format((self.keyspace_name))
+        self.assertEqual(
+            len(self.cluster.metadata.keyspaces[self.keyspace_name].views), 1
+        )
+        alter_scores = """ALTER TABLE {0}.scores ALTER score TYPE blob""".format(
+            (self.keyspace_name)
+        )
         self.session.execute(alter_scores)
-        self.assertEqual(len(self.cluster.metadata.keyspaces[self.keyspace_name].views), 1)
+        self.assertEqual(
+            len(self.cluster.metadata.keyspaces[self.keyspace_name].views), 1
+        )
 
-        score_column = self.cluster.metadata.keyspaces[self.keyspace_name].tables['scores'].columns['score']
-        self.assertEqual(score_column.cql_type, 'blob')
+        score_column = (
+            self.cluster.metadata.keyspaces[self.keyspace_name]
+            .tables["scores"]
+            .columns["score"]
+        )
+        self.assertEqual(score_column.cql_type, "blob")
 
         # until CASSANDRA-9920+CASSANDRA-10500 MV updates are only available later with an async event
         for i in range(10):
-            score_mv_column = self.cluster.metadata.keyspaces[self.keyspace_name].views["monthlyhigh"].columns['score']
+            score_mv_column = (
+                self.cluster.metadata.keyspaces[self.keyspace_name]
+                .views["monthlyhigh"]
+                .columns["score"]
+            )
             if "blob" == score_mv_column.cql_type:
                 break
-            time.sleep(.2)
+            time.sleep(0.2)
 
-        self.assertEqual(score_mv_column.cql_type, 'blob')
+        self.assertEqual(score_mv_column.cql_type, "blob")
 
     def test_metadata_with_quoted_identifiers(self):
         """
@@ -2363,7 +2956,9 @@ class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
                         "theKey" int,
                         "the;Clustering" int,
                         "the Value" int,
-                        PRIMARY KEY ("theKey", "the;Clustering"))""".format(self.keyspace_name)
+                        PRIMARY KEY ("theKey", "the;Clustering"))""".format(
+            self.keyspace_name
+        )
 
         self.session.execute(create_table)
 
@@ -2371,28 +2966,30 @@ class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
                     SELECT "theKey", "the;Clustering", "the Value"
                     FROM {0}.t1
                     WHERE "theKey" IS NOT NULL AND "the;Clustering" IS NOT NULL AND "the Value" IS NOT NULL
-                    PRIMARY KEY ("theKey", "the;Clustering")""".format(self.keyspace_name)
+                    PRIMARY KEY ("theKey", "the;Clustering")""".format(
+            self.keyspace_name
+        )
 
         self.session.execute(create_mv)
 
-        t1_table = self.cluster.metadata.keyspaces[self.keyspace_name].tables['t1']
-        mv = self.cluster.metadata.keyspaces[self.keyspace_name].views['mv1']
+        t1_table = self.cluster.metadata.keyspaces[self.keyspace_name].tables["t1"]
+        mv = self.cluster.metadata.keyspaces[self.keyspace_name].views["mv1"]
 
         self.assertIsNotNone(t1_table.views["mv1"])
         self.assertIsNotNone(len(t1_table.views), 1)
 
         # Validate partition key, and not null
         self.assertEqual(len(t1_table.partition_key), 1)
-        self.assertIsNotNone(t1_table.columns['theKey'])
-        self.assertTrue(t1_table.columns['theKey'], t1_table.partition_key[0])
+        self.assertIsNotNone(t1_table.columns["theKey"])
+        self.assertTrue(t1_table.columns["theKey"], t1_table.partition_key[0])
 
         # Validate clustering key column
         self.assertEqual(len(t1_table.clustering_key), 1)
-        self.assertIsNotNone(t1_table.columns['the;Clustering'])
-        self.assertTrue(t1_table.columns['the;Clustering'], t1_table.clustering_key[0])
+        self.assertIsNotNone(t1_table.columns["the;Clustering"])
+        self.assertTrue(t1_table.columns["the;Clustering"], t1_table.clustering_key[0])
 
         # Validate regular column
-        self.assertIsNotNone(t1_table.columns['the Value'])
+        self.assertIsNotNone(t1_table.columns["the Value"])
 
         # Validate basic mv information
         self.assertEqual(mv.keyspace_name, self.keyspace_name)
@@ -2406,12 +3003,12 @@ class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
 
         theKey_column = mv_columns[0]
         self.assertIsNotNone(theKey_column)
-        self.assertEqual(theKey_column.name, 'theKey')
+        self.assertEqual(theKey_column.name, "theKey")
         self.assertEqual(theKey_column, mv.partition_key[0])
 
         cluster_column = mv_columns[1]
         self.assertIsNotNone(cluster_column)
-        self.assertEqual(cluster_column.name, 'the;Clustering')
+        self.assertEqual(cluster_column.name, "the;Clustering")
         self.assertEqual(cluster_column.name, mv.clustering_key[0].name)
         self.assertEqual(cluster_column.table, mv.clustering_key[0].table)
         self.assertEqual(cluster_column.is_static, mv.clustering_key[0].is_static)
@@ -2419,7 +3016,7 @@ class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
 
         value_column = mv_columns[2]
         self.assertIsNotNone(value_column)
-        self.assertEqual(value_column.name, 'the Value')
+        self.assertEqual(value_column.name, "the Value")
 
     @greaterthanorequaldse51
     def test_dse_workloads(self):
@@ -2443,13 +3040,13 @@ class GroupPerHost(BasicSharedKeyspaceUnitTestCase):
         cls.common_setup(rf=1, create_class_table=True)
         cls.table_two_pk = "table_with_two_pk"
         cls.session.execute(
-            '''
+            """
             CREATE TABLE {0}.{1} (
                 k_one int,
                 k_two int,
                 v int,
                 PRIMARY KEY ((k_one, k_two))
-            )'''.format(cls.ks_name, cls.table_two_pk)
+            )""".format(cls.ks_name, cls.table_two_pk)
         )
 
     def test_group_keys_by_host(self):
@@ -2464,7 +3061,9 @@ class GroupPerHost(BasicSharedKeyspaceUnitTestCase):
         @test_category metadata
         """
         stmt = """SELECT * FROM {}.{}
-                         WHERE k_one = ? AND k_two = ? """.format(self.ks_name, self.table_two_pk)
+                         WHERE k_one = ? AND k_two = ? """.format(
+            self.ks_name, self.table_two_pk
+        )
         keys = ((1, 2), (2, 2), (2, 3), (3, 4))
         self._assert_group_keys_by_host(keys, self.table_two_pk, stmt)
 
@@ -2474,7 +3073,9 @@ class GroupPerHost(BasicSharedKeyspaceUnitTestCase):
         self._assert_group_keys_by_host(keys, self.ks_name, stmt)
 
     def _assert_group_keys_by_host(self, keys, table_name, stmt):
-        keys_per_host = group_keys_by_replica(self.session, self.ks_name, table_name, keys)
+        keys_per_host = group_keys_by_replica(
+            self.session, self.ks_name, table_name, keys
+        )
         self.assertNotIn(NO_VALID_REPLICA, keys_per_host)
 
         prepared_stmt = self.session.prepare(stmt)
@@ -2486,19 +3087,17 @@ class GroupPerHost(BasicSharedKeyspaceUnitTestCase):
 
 
 class VirtualKeypaceTest(BasicSharedKeyspaceUnitTestCase):
-    virtual_ks_names = ('system_virtual_schema', 'system_views')
+    virtual_ks_names = ("system_virtual_schema", "system_views")
 
     def test_existing_keyspaces_have_correct_virtual_tags(self):
         for name, ks in self.cluster.metadata.keyspaces.items():
             if name in self.virtual_ks_names:
                 self.assertTrue(
-                    ks.virtual,
-                    'incorrect .virtual value for {}'.format(name)
+                    ks.virtual, "incorrect .virtual value for {}".format(name)
                 )
             else:
                 self.assertFalse(
-                    ks.virtual,
-                    'incorrect .virtual value for {}'.format(name)
+                    ks.virtual, "incorrect .virtual value for {}".format(name)
                 )
 
     @greaterthanorequalcass40
@@ -2507,7 +3106,7 @@ class VirtualKeypaceTest(BasicSharedKeyspaceUnitTestCase):
         for name in self.virtual_ks_names:
             self.assertTrue(
                 self.cluster.metadata.keyspaces[name].virtual,
-                'incorrect .virtual value for {}'.format(name)
+                "incorrect .virtual value for {}".format(name),
             )
 
     @greaterthanorequalcass40
@@ -2525,6 +3124,13 @@ class VirtualKeypaceTest(BasicSharedKeyspaceUnitTestCase):
                 )
 
         # Identify a couple known values to verify we parsed the structure correctly
-        self.assertIn('table_name', ingested_virtual_ks_structure['system_virtual_schema']['tables'])
-        self.assertIn('type', ingested_virtual_ks_structure['system_virtual_schema']['columns'])
-        self.assertIn('total', ingested_virtual_ks_structure['system_views']['sstable_tasks'])
+        self.assertIn(
+            "table_name",
+            ingested_virtual_ks_structure["system_virtual_schema"]["tables"],
+        )
+        self.assertIn(
+            "type", ingested_virtual_ks_structure["system_virtual_schema"]["columns"]
+        )
+        self.assertIn(
+            "total", ingested_virtual_ks_structure["system_views"]["sstable_tasks"]
+        )

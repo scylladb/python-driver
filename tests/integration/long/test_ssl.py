@@ -23,12 +23,18 @@ from cassandra.query import SimpleStatement
 from OpenSSL import SSL, crypto
 
 from tests.integration import (
-    get_cluster, remove_cluster, use_single_node, start_cluster_wait_for_up, EVENT_LOOP_MANAGER, TestCluster
+    get_cluster,
+    remove_cluster,
+    use_single_node,
+    start_cluster_wait_for_up,
+    EVENT_LOOP_MANAGER,
+    TestCluster,
 )
 
-if not hasattr(ssl, 'match_hostname'):
+if not hasattr(ssl, "match_hostname"):
     try:
         from ssl import match_hostname
+
         ssl.match_hostname = match_hostname
     except ImportError:
         pass  # tests will fail
@@ -39,25 +45,28 @@ DEFAULT_PASSWORD = "cassandra"
 
 # Server keystore trust store locations
 SERVER_KEYSTORE_PATH = os.path.abspath("tests/integration/long/ssl/127.0.0.1.keystore")
-SERVER_TRUSTSTORE_PATH = os.path.abspath("tests/integration/long/ssl/cassandra.truststore")
+SERVER_TRUSTSTORE_PATH = os.path.abspath(
+    "tests/integration/long/ssl/cassandra.truststore"
+)
 
 # Client specific keys/certs
 CLIENT_CA_CERTS = os.path.abspath("tests/integration/long/ssl/rootCa.crt")
 DRIVER_KEYFILE = os.path.abspath("tests/integration/long/ssl/client.key")
-DRIVER_KEYFILE_ENCRYPTED = os.path.abspath("tests/integration/long/ssl/client_encrypted.key")
+DRIVER_KEYFILE_ENCRYPTED = os.path.abspath(
+    "tests/integration/long/ssl/client_encrypted.key"
+)
 DRIVER_CERTFILE = os.path.abspath("tests/integration/long/ssl/client.crt_signed")
 DRIVER_CERTFILE_BAD = os.path.abspath("tests/integration/long/ssl/client_bad.key")
 
 USES_PYOPENSSL = "twisted" in EVENT_LOOP_MANAGER or "eventlet" in EVENT_LOOP_MANAGER
 if "twisted" in EVENT_LOOP_MANAGER:
     import OpenSSL
+
     ssl_version = OpenSSL.SSL.TLSv1_2_METHOD
-    verify_certs = {'cert_reqs': SSL.VERIFY_PEER,
-                    'check_hostname': True}
+    verify_certs = {"cert_reqs": SSL.VERIFY_PEER, "check_hostname": True}
 else:
     ssl_version = ssl.PROTOCOL_TLS
-    verify_certs = {'cert_reqs': ssl.CERT_REQUIRED,
-                    'check_hostname': True}
+    verify_certs = {"cert_reqs": ssl.CERT_REQUIRED, "check_hostname": True}
 
 
 def verify_callback(connection, x509, errnum, errdepth, ok):
@@ -75,62 +84,69 @@ def setup_cluster_ssl(client_auth=False):
     ccm_cluster.stop()
 
     # Configure ccm to use ssl.
-    config_options = {'client_encryption_options': {'enabled': True,
-                                                    'keystore': SERVER_KEYSTORE_PATH,
-                                                    'keystore_password': DEFAULT_PASSWORD}}
+    config_options = {
+        "client_encryption_options": {
+            "enabled": True,
+            "keystore": SERVER_KEYSTORE_PATH,
+            "keystore_password": DEFAULT_PASSWORD,
+        }
+    }
 
-    if(client_auth):
-        client_encyrption_options = config_options['client_encryption_options']
-        client_encyrption_options['require_client_auth'] = True
-        client_encyrption_options['truststore'] = SERVER_TRUSTSTORE_PATH
-        client_encyrption_options['truststore_password'] = DEFAULT_PASSWORD
+    if client_auth:
+        client_encyrption_options = config_options["client_encryption_options"]
+        client_encyrption_options["require_client_auth"] = True
+        client_encyrption_options["truststore"] = SERVER_TRUSTSTORE_PATH
+        client_encyrption_options["truststore_password"] = DEFAULT_PASSWORD
 
     ccm_cluster.set_configuration_options(config_options)
     start_cluster_wait_for_up(ccm_cluster)
 
 
 def validate_ssl_options(**kwargs):
-        ssl_options = kwargs.get('ssl_options', None)
-        ssl_context = kwargs.get('ssl_context', None)
-        hostname = kwargs.get('hostname', '127.0.0.1')
+    ssl_options = kwargs.get("ssl_options", None)
+    ssl_context = kwargs.get("ssl_context", None)
+    hostname = kwargs.get("hostname", "127.0.0.1")
 
-        # find absolute path to client CA_CERTS
-        tries = 0
-        while True:
-            if tries > 5:
-                raise RuntimeError("Failed to connect to SSL cluster after 5 attempts")
-            try:
-                cluster = TestCluster(
-                    contact_points=[DefaultEndPoint(hostname)],
-                    ssl_options=ssl_options,
-                    ssl_context=ssl_context
+    # find absolute path to client CA_CERTS
+    tries = 0
+    while True:
+        if tries > 5:
+            raise RuntimeError("Failed to connect to SSL cluster after 5 attempts")
+        try:
+            cluster = TestCluster(
+                contact_points=[DefaultEndPoint(hostname)],
+                ssl_options=ssl_options,
+                ssl_context=ssl_context,
+            )
+            session = cluster.connect(wait_for_all_pools=True)
+            break
+        except Exception:
+            ex_type, ex, tb = sys.exc_info()
+            log.warning(
+                "{0}: {1} Backtrace: {2}".format(
+                    ex_type.__name__, ex, traceback.extract_tb(tb)
                 )
-                session = cluster.connect(wait_for_all_pools=True)
-                break
-            except Exception:
-                ex_type, ex, tb = sys.exc_info()
-                log.warning("{0}: {1} Backtrace: {2}".format(ex_type.__name__, ex, traceback.extract_tb(tb)))
-                del tb
-                tries += 1
+            )
+            del tb
+            tries += 1
 
-        # attempt a few simple commands.
-        insert_keyspace = """CREATE KEYSPACE ssltest
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}
+    # attempt a few simple commands.
+    insert_keyspace = """CREATE KEYSPACE ssltest
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}
             """
-        statement = SimpleStatement(insert_keyspace)
-        statement.consistency_level = 3
-        session.execute(statement)
+    statement = SimpleStatement(insert_keyspace)
+    statement.consistency_level = 3
+    session.execute(statement)
 
-        drop_keyspace = "DROP KEYSPACE ssltest"
-        statement = SimpleStatement(drop_keyspace)
-        statement.consistency_level = ConsistencyLevel.ANY
-        session.execute(statement)
+    drop_keyspace = "DROP KEYSPACE ssltest"
+    statement = SimpleStatement(drop_keyspace)
+    statement.consistency_level = ConsistencyLevel.ANY
+    session.execute(statement)
 
-        cluster.shutdown()
+    cluster.shutdown()
 
 
 class SSLConnectionTests(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         setup_cluster_ssl()
@@ -158,7 +174,7 @@ class SSLConnectionTests(unittest.TestCase):
         """
 
         # find absolute path to client CA_CERTS
-        ssl_options = {'ca_certs': CLIENT_CA_CERTS,'ssl_version': ssl_version}
+        ssl_options = {"ca_certs": CLIENT_CA_CERTS, "ssl_version": ssl_version}
         validate_ssl_options(ssl_options=ssl_options)
 
     def test_can_connect_with_ssl_long_running(self):
@@ -174,8 +190,7 @@ class SSLConnectionTests(unittest.TestCase):
 
         # find absolute path to client CA_CERTS
         abs_path_ca_cert_path = os.path.abspath(CLIENT_CA_CERTS)
-        ssl_options = {'ca_certs': abs_path_ca_cert_path,
-                       'ssl_version': ssl_version}
+        ssl_options = {"ca_certs": abs_path_ca_cert_path, "ssl_version": ssl_version}
         tries = 0
         while True:
             if tries > 5:
@@ -186,7 +201,11 @@ class SSLConnectionTests(unittest.TestCase):
                 break
             except Exception:
                 ex_type, ex, tb = sys.exc_info()
-                log.warning("{0}: {1} Backtrace: {2}".format(ex_type.__name__, ex, traceback.extract_tb(tb)))
+                log.warning(
+                    "{0}: {1} Backtrace: {2}".format(
+                        ex_type.__name__, ex, traceback.extract_tb(tb)
+                    )
+                )
                 del tb
                 tries += 1
 
@@ -212,15 +231,13 @@ class SSLConnectionTests(unittest.TestCase):
         @test_category connection:ssl
         """
 
-        ssl_options = {'ca_certs': CLIENT_CA_CERTS,
-                       'ssl_version': ssl_version}
+        ssl_options = {"ca_certs": CLIENT_CA_CERTS, "ssl_version": ssl_version}
         ssl_options.update(verify_certs)
 
         validate_ssl_options(ssl_options=ssl_options)
 
 
 class SSLConnectionAuthTests(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         setup_cluster_ssl(client_auth=True)
@@ -245,10 +262,12 @@ class SSLConnectionAuthTests(unittest.TestCase):
         @test_category connection:ssl
         """
 
-        ssl_options = {'ca_certs': CLIENT_CA_CERTS,
-                       'ssl_version': ssl_version,
-                       'keyfile': DRIVER_KEYFILE,
-                       'certfile': DRIVER_CERTFILE}
+        ssl_options = {
+            "ca_certs": CLIENT_CA_CERTS,
+            "ssl_version": ssl_version,
+            "keyfile": DRIVER_KEYFILE,
+            "certfile": DRIVER_CERTFILE,
+        }
         validate_ssl_options(ssl_options=ssl_options)
 
     def test_can_connect_with_ssl_client_auth_host_name(self):
@@ -266,10 +285,12 @@ class SSLConnectionAuthTests(unittest.TestCase):
         @test_category connection:ssl
         """
 
-        ssl_options = {'ca_certs': CLIENT_CA_CERTS,
-                       'ssl_version': ssl_version,
-                       'keyfile': DRIVER_KEYFILE,
-                       'certfile': DRIVER_CERTFILE}
+        ssl_options = {
+            "ca_certs": CLIENT_CA_CERTS,
+            "ssl_version": ssl_version,
+            "keyfile": DRIVER_KEYFILE,
+            "certfile": DRIVER_CERTFILE,
+        }
         ssl_options.update(verify_certs)
 
         validate_ssl_options(ssl_options=ssl_options)
@@ -287,8 +308,9 @@ class SSLConnectionAuthTests(unittest.TestCase):
         @test_category connection:ssl
         """
 
-        cluster = TestCluster(ssl_options={'ca_certs': CLIENT_CA_CERTS,
-                                           'ssl_version': ssl_version})
+        cluster = TestCluster(
+            ssl_options={"ca_certs": CLIENT_CA_CERTS, "ssl_version": ssl_version}
+        )
 
         with self.assertRaises(NoHostAvailable) as _:
             cluster.connect()
@@ -308,18 +330,22 @@ class SSLConnectionAuthTests(unittest.TestCase):
         @test_category connection:ssl
         """
 
-        ssl_options = {'ca_certs': CLIENT_CA_CERTS,
-                       'ssl_version': ssl_version,
-                       'keyfile': DRIVER_KEYFILE}
+        ssl_options = {
+            "ca_certs": CLIENT_CA_CERTS,
+            "ssl_version": ssl_version,
+            "keyfile": DRIVER_KEYFILE,
+        }
 
         if not USES_PYOPENSSL:
             # I don't set the bad certfile for pyopenssl because it hangs
-            ssl_options['certfile'] = DRIVER_CERTFILE_BAD
+            ssl_options["certfile"] = DRIVER_CERTFILE_BAD
 
         cluster = TestCluster(
-            ssl_options={'ca_certs': CLIENT_CA_CERTS,
-                         'ssl_version': ssl_version,
-                         'keyfile': DRIVER_KEYFILE}
+            ssl_options={
+                "ca_certs": CLIENT_CA_CERTS,
+                "ssl_version": ssl_version,
+                "keyfile": DRIVER_KEYFILE,
+            }
         )
 
         with self.assertRaises(NoHostAvailable) as _:
@@ -327,18 +353,19 @@ class SSLConnectionAuthTests(unittest.TestCase):
         cluster.shutdown()
 
     def test_cannot_connect_with_invalid_hostname(self):
-        ssl_options = {'ca_certs': CLIENT_CA_CERTS,
-                       'ssl_version': ssl_version,
-                       'keyfile': DRIVER_KEYFILE,
-                       'certfile': DRIVER_CERTFILE}
+        ssl_options = {
+            "ca_certs": CLIENT_CA_CERTS,
+            "ssl_version": ssl_version,
+            "keyfile": DRIVER_KEYFILE,
+            "certfile": DRIVER_CERTFILE,
+        }
         ssl_options.update(verify_certs)
 
         with self.assertRaises(Exception):
-            validate_ssl_options(ssl_options=ssl_options, hostname='localhost')
+            validate_ssl_options(ssl_options=ssl_options, hostname="localhost")
 
 
 class SSLSocketErrorTests(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         setup_cluster_ssl()
@@ -359,24 +386,26 @@ class SSLSocketErrorTests(unittest.TestCase):
 
         @test_category connection:ssl
         """
-        ssl_options = {'ca_certs': CLIENT_CA_CERTS,
-                       'ssl_version': ssl_version}
+        ssl_options = {"ca_certs": CLIENT_CA_CERTS, "ssl_version": ssl_version}
         cluster = TestCluster(ssl_options=ssl_options)
         session = cluster.connect(wait_for_all_pools=True)
         try:
-            session.execute('drop keyspace ssl_error_test')
+            session.execute("drop keyspace ssl_error_test")
         except:
             pass
         session.execute(
-            "CREATE KEYSPACE ssl_error_test WITH replication = {'class':'SimpleStrategy','replication_factor':1};")
-        session.execute("CREATE TABLE ssl_error_test.big_text (id uuid PRIMARY KEY, data text);")
+            "CREATE KEYSPACE ssl_error_test WITH replication = {'class':'NetworkTopologyStrategy','replication_factor':1};"
+        )
+        session.execute(
+            "CREATE TABLE ssl_error_test.big_text (id uuid PRIMARY KEY, data text);"
+        )
 
-        params = {
-            '0': uuid.uuid4(),
-            '1': "0" * int(math.pow(10, 7))
-        }
+        params = {"0": uuid.uuid4(), "1": "0" * int(math.pow(10, 7))}
 
-        session.execute('INSERT INTO ssl_error_test.big_text ("id", "data") VALUES (%(0)s, %(1)s)', params)
+        session.execute(
+            'INSERT INTO ssl_error_test.big_text ("id", "data") VALUES (%(0)s, %(1)s)',
+            params,
+        )
 
 
 class SSLConnectionWithSSLContextTests(unittest.TestCase):
@@ -428,14 +457,18 @@ class SSLConnectionWithSSLContextTests(unittest.TestCase):
             ssl_context = SSL.Context(SSL.TLSv1_2_METHOD)
             ssl_context.use_certificate_file(abs_driver_certfile)
             with open(abs_driver_keyfile) as keyfile:
-                key = crypto.load_privatekey(crypto.FILETYPE_PEM, keyfile.read(), b'cassandra')
+                key = crypto.load_privatekey(
+                    crypto.FILETYPE_PEM, keyfile.read(), b"cassandra"
+                )
             ssl_context.use_privatekey(key)
             ssl_context.set_verify(SSL.VERIFY_NONE, verify_callback)
         else:
             ssl_context = ssl.SSLContext(ssl_version)
-            ssl_context.load_cert_chain(certfile=abs_driver_certfile,
-                                        keyfile=abs_driver_keyfile,
-                                        password="cassandra")
+            ssl_context.load_cert_chain(
+                certfile=abs_driver_certfile,
+                keyfile=abs_driver_keyfile,
+                password="cassandra",
+            )
             ssl_context.verify_mode = ssl.CERT_NONE
         validate_ssl_options(ssl_context=ssl_context, ssl_options=ssl_options)
 
@@ -449,7 +482,9 @@ class SSLConnectionWithSSLContextTests(unittest.TestCase):
             ssl_context = SSL.Context(SSL.TLSv1_2_METHOD)
             ssl_context.use_certificate_file(DRIVER_CERTFILE)
             with open(DRIVER_KEYFILE_ENCRYPTED) as keyfile:
-                key = crypto.load_privatekey(crypto.FILETYPE_PEM, keyfile.read(), b'cassandra')
+                key = crypto.load_privatekey(
+                    crypto.FILETYPE_PEM, keyfile.read(), b"cassandra"
+                )
             ssl_context.use_privatekey(key)
             ssl_context.load_verify_locations(CLIENT_CA_CERTS)
             ssl_options["check_hostname"] = True
@@ -472,7 +507,9 @@ class SSLConnectionWithSSLContextTests(unittest.TestCase):
             ssl_context = SSL.Context(SSL.TLSv1_2_METHOD)
             ssl_context.use_certificate_file(DRIVER_CERTFILE)
             with open(DRIVER_KEYFILE_ENCRYPTED) as keyfile:
-                key = crypto.load_privatekey(crypto.FILETYPE_PEM, keyfile.read(), b"cassandra")
+                key = crypto.load_privatekey(
+                    crypto.FILETYPE_PEM, keyfile.read(), b"cassandra"
+                )
             ssl_context.use_privatekey(key)
             ssl_context.load_verify_locations(CLIENT_CA_CERTS)
             ssl_options["check_hostname"] = True
@@ -488,7 +525,9 @@ class SSLConnectionWithSSLContextTests(unittest.TestCase):
             ssl_context.verify_mode = ssl.CERT_REQUIRED
             ssl_options["check_hostname"] = True
         with self.assertRaises(Exception):
-            validate_ssl_options(ssl_context=ssl_context, ssl_options=ssl_options, hostname="localhost")
+            validate_ssl_options(
+                ssl_context=ssl_context, ssl_options=ssl_options, hostname="localhost"
+            )
 
     @unittest.skipIf(USES_PYOPENSSL, "This test is for the built-in ssl.Context")
     def test_can_connect_with_sslcontext_default_context(self):
