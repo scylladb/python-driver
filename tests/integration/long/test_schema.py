@@ -57,7 +57,7 @@ class SchemaTests(unittest.TestCase):
                     log.debug(drop)
                     execute_until_pass(session, drop)
 
-                create = "CREATE KEYSPACE {0} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 3}}".format(keyspace)
+                create = "CREATE KEYSPACE {0} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}}".format(keyspace)
                 log.debug(create)
                 execute_until_pass(session, create)
 
@@ -82,7 +82,7 @@ class SchemaTests(unittest.TestCase):
         session = self.session
 
         for i in range(30):
-            execute_until_pass(session, "CREATE KEYSPACE test_{0} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}".format(i))
+            execute_until_pass(session, "CREATE KEYSPACE test_{0} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}".format(i))
             execute_until_pass(session, "CREATE TABLE test_{0}.cf (key int PRIMARY KEY, value int)".format(i))
 
             for j in range(100):
@@ -100,10 +100,10 @@ class SchemaTests(unittest.TestCase):
 
         for i in range(30):
             try:
-                execute_until_pass(session, "CREATE KEYSPACE test WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
+                execute_until_pass(session, "CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
             except AlreadyExists:
                 execute_until_pass(session, "DROP KEYSPACE test")
-                execute_until_pass(session, "CREATE KEYSPACE test WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
+                execute_until_pass(session, "CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
 
             execute_until_pass(session, "CREATE TABLE test.cf (key int PRIMARY KEY, value int)")
 
@@ -132,7 +132,7 @@ class SchemaTests(unittest.TestCase):
         cluster = TestCluster(max_schema_agreement_wait=0.001)
         session = cluster.connect(wait_for_all_pools=True)
 
-        rs = session.execute("CREATE KEYSPACE test_schema_disagreement WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}")
+        rs = session.execute("CREATE KEYSPACE test_schema_disagreement WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
         self.check_and_wait_for_agreement(session, rs, False)
         rs = session.execute(SimpleStatement("CREATE TABLE test_schema_disagreement.cf (key int PRIMARY KEY, value int)",
                                              consistency_level=ConsistencyLevel.ALL))
@@ -144,7 +144,7 @@ class SchemaTests(unittest.TestCase):
         # These should have schema agreement
         cluster = TestCluster(max_schema_agreement_wait=100)
         session = cluster.connect()
-        rs = session.execute("CREATE KEYSPACE test_schema_disagreement WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}")
+        rs = session.execute("CREATE KEYSPACE test_schema_disagreement WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
         self.check_and_wait_for_agreement(session, rs, True)
         rs = session.execute(SimpleStatement("CREATE TABLE test_schema_disagreement.cf (key int PRIMARY KEY, value int)",
                                              consistency_level=ConsistencyLevel.ALL))

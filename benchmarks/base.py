@@ -97,7 +97,7 @@ def setup(options):
         try:
             session.execute("""
                 CREATE KEYSPACE %s
-                WITH replication = { 'class': 'SimpleStrategy', 'replication_factor': '2' }
+                WITH replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': '2' }
                 """ % options.keyspace)
 
             log.debug("Setting keyspace...")

@@ -187,7 +187,7 @@ class ClientExceptionTests(unittest.TestCase):
         self._perform_cql_statement(
             """
             CREATE KEYSPACE testksfail
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}
             """, consistency_level=ConsistencyLevel.ALL, expected_exception=None)
 
         # create table

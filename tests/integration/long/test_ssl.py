@@ -116,7 +116,7 @@ def validate_ssl_options(**kwargs):
 
         # attempt a few simple commands.
         insert_keyspace = """CREATE KEYSPACE ssltest
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}
             """
         statement = SimpleStatement(insert_keyspace)
         statement.consistency_level = 3
@@ -369,7 +369,7 @@ class SSLSocketErrorTests(unittest.TestCase):
         except:
             pass
         session.execute(
-            "CREATE KEYSPACE ssl_error_test WITH replication = {'class':'SimpleStrategy','replication_factor':1};")
+            "CREATE KEYSPACE ssl_error_test WITH replication = {'class':'NetworkTopologyStrategy','replication_factor':1};")
         session.execute("CREATE TABLE ssl_error_test.big_text (id uuid PRIMARY KEY, data text);")
 
         params = {

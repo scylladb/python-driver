@@ -25,7 +25,7 @@ from cassandra.cqltypes import strip_frozen
 from cassandra.marshal import uint16_unpack, uint16_pack
 from cassandra.metadata import (Murmur3Token, MD5Token,
                                 BytesToken, ReplicationStrategy,
-                                NetworkTopologyStrategy, SimpleStrategy,
+                                NetworkTopologyStrategy,
                                 LocalStrategy, protect_name,
                                 protect_names, protect_value, is_valid_name,
                                 UserType, KeyspaceMetadata, get_schema_parser,
@@ -96,14 +96,14 @@ class StrategiesTest(unittest.TestCase):
         assert rs.create('NetworkTopologyStrategy', fake_options_map).dc_replication_factors == NetworkTopologyStrategy(fake_options_map).dc_replication_factors
 
         fake_options_map = {'options': 'map'}
-        assert rs.create('SimpleStrategy', fake_options_map) is None
+        assert rs.create('NetworkTopologyStrategy', fake_options_map) is None
 
         fake_options_map = {'options': 'map'}
         assert isinstance(rs.create('LocalStrategy', fake_options_map), LocalStrategy)
 
-        fake_options_map = {'options': 'map', 'replication_factor': 3}
-        assert isinstance(rs.create('SimpleStrategy', fake_options_map), SimpleStrategy)
-        assert rs.create('SimpleStrategy', fake_options_map).replication_factor == SimpleStrategy(fake_options_map).replication_factor
+        fake_options_map = {'dc1': 3}
+        assert isinstance(rs.create('NetworkTopologyStrategy', fake_options_map), NetworkTopologyStrategy)
+        assert rs.create('NetworkTopologyStrategy', fake_options_map).dc_replication_factors == NetworkTopologyStrategy(fake_options_map).dc_replication_factors
 
         assert rs.create('xxxxxxxx', fake_options_map) == _UnknownStrategy('xxxxxxxx', fake_options_map)
 
@@ -113,38 +113,38 @@ class StrategiesTest(unittest.TestCase):
             rs.export_for_schema()
 
     def test_simple_replication_type_parsing(self):
-        """ Test equality between passing numeric and string replication factor for simple strategy """
+        """ Test equality between passing numeric and string replication factor for NTS """
         rs = ReplicationStrategy()
 
-        simple_int = rs.create('SimpleStrategy', {'replication_factor': 3})
-        simple_str = rs.create('SimpleStrategy', {'replication_factor': '3'})
+        nts_int = rs.create('NetworkTopologyStrategy', {'dc1': 3})
+        nts_str = rs.create('NetworkTopologyStrategy', {'dc1': '3'})
 
-        assert simple_int.export_for_schema() == simple_str.export_for_schema()
-        assert simple_int == simple_str
+        assert nts_int.export_for_schema() == nts_str.export_for_schema()
+        assert nts_int == nts_str
 
         # make token replica map
         ring = [MD5Token(0), MD5Token(1), MD5Token(2)]
-        hosts = [Host('dc1.{}'.format(host), SimpleConvictionPolicy, host_id=uuid.uuid4()) for host in range(3)]
+        hosts = [Host('dc1.{}'.format(host), SimpleConvictionPolicy, datacenter='dc1', rack='rack1', host_id=uuid.uuid4()) for host in range(3)]
         token_to_host = dict(zip(ring, hosts))
-        assert simple_int.make_token_replica_map(token_to_host, ring) == simple_str.make_token_replica_map(token_to_host, ring)
+        assert nts_int.make_token_replica_map(token_to_host, ring) == nts_str.make_token_replica_map(token_to_host, ring)
 
     def test_transient_replication_parsing(self):
-        """ Test that we can PARSE a transient replication factor for SimpleStrategy """
+        """ Test that we can PARSE a transient replication factor for NetworkTopologyStrategy """
         rs = ReplicationStrategy()
 
-        simple_transient = rs.create('SimpleStrategy', {'replication_factor': '3/1'})
-        assert simple_transient.replication_factor_info == ReplicationFactor(3, 1)
-        assert simple_transient.replication_factor == 2
-        assert "'replication_factor': '3/1'" in simple_transient.export_for_schema()
+        nts_transient = rs.create('NetworkTopologyStrategy', {'dc1': '3/1'})
+        assert nts_transient.dc_replication_factors_info['dc1'] == ReplicationFactor(3, 1)
+        assert nts_transient.dc_replication_factors['dc1'] == 2
+        assert "'dc1': '3/1'" in nts_transient.export_for_schema()
 
-        simple_str = rs.create('SimpleStrategy', {'replication_factor': '2'})
-        assert simple_transient != simple_str
+        nts_str = rs.create('NetworkTopologyStrategy', {'dc1': '2'})
+        assert nts_transient != nts_str
 
         # make token replica map
         ring = [MD5Token(0), MD5Token(1), MD5Token(2)]
-        hosts = [Host('dc1.{}'.format(host), SimpleConvictionPolicy, host_id=uuid.uuid4()) for host in range(3)]
+        hosts = [Host('dc1.{}'.format(host), SimpleConvictionPolicy, datacenter='dc1', rack='rack1', host_id=uuid.uuid4()) for host in range(3)]
         token_to_host = dict(zip(ring, hosts))
-        assert simple_transient.make_token_replica_map(token_to_host, ring) == simple_str.make_token_replica_map(token_to_host, ring)
+        assert nts_transient.make_token_replica_map(token_to_host, ring) == nts_str.make_token_replica_map(token_to_host, ring)
 
     def test_nts_replication_parsing(self):
         """ Test equality between passing numeric and string replication factor for NTS """
@@ -318,9 +318,9 @@ class StrategiesTest(unittest.TestCase):
         assert "{'class': 'NetworkTopologyStrategy', 'dc1': '1', 'dc2': '2'}" == strategy.export_for_schema()
 
     def test_simple_strategy_make_token_replica_map(self):
-        host1 = Host('1', SimpleConvictionPolicy, host_id=uuid.uuid4())
-        host2 = Host('2', SimpleConvictionPolicy, host_id=uuid.uuid4())
-        host3 = Host('3', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host1 = Host('1', SimpleConvictionPolicy, datacenter='dc1', rack='rack1', host_id=uuid.uuid4())
+        host2 = Host('2', SimpleConvictionPolicy, datacenter='dc1', rack='rack1', host_id=uuid.uuid4())
+        host3 = Host('3', SimpleConvictionPolicy, datacenter='dc1', rack='rack1', host_id=uuid.uuid4())
         token_to_host_owner = {
             MD5Token(0): host1,
             MD5Token(100): host2,
@@ -328,23 +328,23 @@ class StrategiesTest(unittest.TestCase):
         }
         ring = [MD5Token(0), MD5Token(100), MD5Token(200)]
 
-        rf1_replicas = SimpleStrategy({'replication_factor': '1'}).make_token_replica_map(token_to_host_owner, ring)
+        rf1_replicas = NetworkTopologyStrategy({'dc1': '1'}).make_token_replica_map(token_to_host_owner, ring)
         assertCountEqual(rf1_replicas[MD5Token(0)], [host1])
         assertCountEqual(rf1_replicas[MD5Token(100)], [host2])
         assertCountEqual(rf1_replicas[MD5Token(200)], [host3])
 
-        rf2_replicas = SimpleStrategy({'replication_factor': '2'}).make_token_replica_map(token_to_host_owner, ring)
+        rf2_replicas = NetworkTopologyStrategy({'dc1': '2'}).make_token_replica_map(token_to_host_owner, ring)
         assertCountEqual(rf2_replicas[MD5Token(0)], [host1, host2])
         assertCountEqual(rf2_replicas[MD5Token(100)], [host2, host3])
         assertCountEqual(rf2_replicas[MD5Token(200)], [host3, host1])
 
-        rf3_replicas = SimpleStrategy({'replication_factor': '3'}).make_token_replica_map(token_to_host_owner, ring)
+        rf3_replicas = NetworkTopologyStrategy({'dc1': '3'}).make_token_replica_map(token_to_host_owner, ring)
         assertCountEqual(rf3_replicas[MD5Token(0)], [host1, host2, host3])
         assertCountEqual(rf3_replicas[MD5Token(100)], [host2, host3, host1])
         assertCountEqual(rf3_replicas[MD5Token(200)], [host3, host1, host2])
 
     def test_ss_equals(self):
-        assert SimpleStrategy({'replication_factor': '1'}) != NetworkTopologyStrategy({'dc1': 2})
+        assert NetworkTopologyStrategy({'dc1': '1'}) != NetworkTopologyStrategy({'dc1': 2})
 
 
 class NameEscapingTest(unittest.TestCase):
@@ -409,9 +409,9 @@ class NameEscapingTest(unittest.TestCase):
 class GetReplicasTest(unittest.TestCase):
     def _get_replicas(self, token_klass):
         tokens = [token_klass(i) for i in range(0, (2 ** 127 - 1), 2 ** 125)]
-        hosts = [Host("ip%d" % i, SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(len(tokens))]
+        hosts = [Host("ip%d" % i, SimpleConvictionPolicy, datacenter="dc1", rack="rack1", host_id=uuid.uuid4()) for i in range(len(tokens))]
         token_to_primary_replica = dict(zip(tokens, hosts))
-        keyspace = KeyspaceMetadata("ks", True, "SimpleStrategy", {"replication_factor": "1"})
+        keyspace = KeyspaceMetadata("ks", True, "NetworkTopologyStrategy", {"dc1": "1"})
         metadata = Mock(spec=Metadata, keyspaces={'ks': keyspace})
         token_map = TokenMap(token_klass, token_to_primary_replica, tokens, metadata)
 
@@ -524,13 +524,13 @@ class KeyspaceMetadataTest(unittest.TestCase):
 
     def test_export_as_string_user_types(self):
         keyspace_name = 'test'
-        keyspace = KeyspaceMetadata(keyspace_name, True, 'SimpleStrategy', dict(replication_factor=3))
+        keyspace = KeyspaceMetadata(keyspace_name, True, 'NetworkTopologyStrategy', dict(dc1=3))
         keyspace.user_types['a'] = UserType(keyspace_name, 'a', ['one', 'two'], ['c', 'int'])
         keyspace.user_types['b'] = UserType(keyspace_name, 'b', ['one', 'two', 'three'], ['d', 'int', 'a'])
         keyspace.user_types['c'] = UserType(keyspace_name, 'c', ['one'], ['int'])
         keyspace.user_types['d'] = UserType(keyspace_name, 'd', ['one'], ['c'])
 
-        assert """CREATE KEYSPACE test WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}  AND durable_writes = true;
+        assert """CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': '3'}  AND durable_writes = true;
 
 CREATE TYPE test.c (
     one int
@@ -662,7 +662,7 @@ class UnicodeIdentifiersTests(unittest.TestCase):
     name = b'\'_-()"\xc2\xac'.decode('utf-8')
 
     def test_keyspace_name(self):
-        km = KeyspaceMetadata(self.name, False, 'SimpleStrategy', {'replication_factor': 1})
+        km = KeyspaceMetadata(self.name, False, 'NetworkTopologyStrategy', {'dc1': 1})
         km.export_as_string()
 
     def test_table_name(self):

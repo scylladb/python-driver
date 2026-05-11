@@ -36,7 +36,7 @@ def main():
     log.info("creating keyspace...")
     session.execute("""
         CREATE KEYSPACE IF NOT EXISTS %s
-        WITH replication = { 'class': 'SimpleStrategy', 'replication_factor': '2' }
+        WITH replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': '2' }
         """ % KEYSPACE)
 
     log.info("setting keyspace...")
