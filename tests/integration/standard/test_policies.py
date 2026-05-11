@@ -15,8 +15,14 @@
 import unittest
 
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
-from cassandra.policies import HostFilterPolicy, RoundRobinPolicy,  SimpleConvictionPolicy, \
-    WhiteListRoundRobinPolicy, ExponentialBackoffRetryPolicy, ColDesc
+from cassandra.policies import (
+    HostFilterPolicy,
+    RoundRobinPolicy,
+    SimpleConvictionPolicy,
+    WhiteListRoundRobinPolicy,
+    ExponentialBackoffRetryPolicy,
+    ColDesc,
+)
 from cassandra.pool import Host
 from cassandra.connection import DefaultEndPoint
 
@@ -30,7 +36,6 @@ def setup_module():
 
 
 class HostFilterPolicyTests(unittest.TestCase):
-
     def test_predicate_changes(self):
         """
         Test to validate host filter reacts correctly when the predicate return
@@ -45,13 +50,20 @@ class HostFilterPolicyTests(unittest.TestCase):
         external_event = True
         contact_point = DefaultEndPoint("127.0.0.1")
 
-        predicate = lambda host: host.endpoint == contact_point if external_event else True
-        hfp = ExecutionProfile(
-            load_balancing_policy=HostFilterPolicy(RoundRobinPolicy(), predicate=predicate)
+        predicate = (
+            lambda host: host.endpoint == contact_point if external_event else True
         )
-        cluster = TestCluster(contact_points=(contact_point,), execution_profiles={EXEC_PROFILE_DEFAULT: hfp},
-                              topology_event_refresh_window=0,
-                              status_event_refresh_window=0)
+        hfp = ExecutionProfile(
+            load_balancing_policy=HostFilterPolicy(
+                RoundRobinPolicy(), predicate=predicate
+            )
+        )
+        cluster = TestCluster(
+            contact_points=(contact_point,),
+            execution_profiles={EXEC_PROFILE_DEFAULT: hfp},
+            topology_event_refresh_window=0,
+            status_event_refresh_window=0,
+        )
         session = cluster.connect(wait_for_all_pools=True)
 
         queried_hosts = set()
@@ -71,30 +83,37 @@ class HostFilterPolicyTests(unittest.TestCase):
             response = session.execute("SELECT * from system.local WHERE key='local'")
             queried_hosts.update(response.response_future.attempted_hosts)
         assert len(queried_hosts) == 3
-        assert {host.endpoint for host in queried_hosts} == {DefaultEndPoint(f"127.0.0.{i}") for i in range(1, 4)}
+        assert {host.endpoint for host in queried_hosts} == {
+            DefaultEndPoint(f"127.0.0.{i}") for i in range(1, 4)
+        }
 
 
 class WhiteListRoundRobinPolicyTests(unittest.TestCase):
-
     @local
     def test_only_connects_to_subset(self):
         only_connect_hosts = {"127.0.0.1", "127.0.0.2"}
-        white_list = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy(only_connect_hosts))
+        white_list = ExecutionProfile(
+            load_balancing_policy=WhiteListRoundRobinPolicy(only_connect_hosts)
+        )
         cluster = TestCluster(execution_profiles={"white_list": white_list})
-        #cluster = Cluster(load_balancing_policy=WhiteListRoundRobinPolicy(only_connect_hosts))
+        # cluster = Cluster(load_balancing_policy=WhiteListRoundRobinPolicy(only_connect_hosts))
         session = cluster.connect(wait_for_all_pools=True)
         queried_hosts = set()
         for _ in range(10):
-            response = session.execute("SELECT * from system.local WHERE key='local'", execution_profile="white_list")
+            response = session.execute(
+                "SELECT * from system.local WHERE key='local'",
+                execution_profile="white_list",
+            )
             queried_hosts.update(response.response_future.attempted_hosts)
         queried_hosts = set(host.address for host in queried_hosts)
         assert queried_hosts == only_connect_hosts
 
 
 class ExponentialRetryPolicyTests(unittest.TestCase):
-
     def setUp(self):
-        self.cluster = TestCluster(default_retry_policy=ExponentialBackoffRetryPolicy(max_num_retries=3))
+        self.cluster = TestCluster(
+            default_retry_policy=ExponentialBackoffRetryPolicy(max_num_retries=3)
+        )
         self.session = self.cluster.connect()
 
     def tearDown(self):
@@ -104,5 +123,6 @@ class ExponentialRetryPolicyTests(unittest.TestCase):
         self.session.execute(
             """
             CREATE KEYSPACE preparedtests
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
-            """)
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+            """
+        )

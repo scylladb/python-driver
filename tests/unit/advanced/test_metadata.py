@@ -15,32 +15,50 @@ import datetime
 import unittest
 
 from cassandra.metadata import (
-    KeyspaceMetadata, TableMetadataDSE68,
-    VertexMetadata, EdgeMetadata, SchemaParserV22, _SchemaParser
+    KeyspaceMetadata,
+    TableMetadataDSE68,
+    VertexMetadata,
+    EdgeMetadata,
+    SchemaParserV22,
+    _SchemaParser,
 )
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
 
 
 class GraphMetadataToCQLTests(unittest.TestCase):
-
-    def _create_edge_metadata(self, partition_keys=['pk1'], clustering_keys=['c1']):
+    def _create_edge_metadata(self, partition_keys=["pk1"], clustering_keys=["c1"]):
         return EdgeMetadata(
-            'keyspace', 'table', 'label', 'from_table', 'from_label',
-            partition_keys, clustering_keys, 'to_table', 'to_label',
-            partition_keys, clustering_keys)
+            "keyspace",
+            "table",
+            "label",
+            "from_table",
+            "from_label",
+            partition_keys,
+            clustering_keys,
+            "to_table",
+            "to_label",
+            partition_keys,
+            clustering_keys,
+        )
 
-    def _create_vertex_metadata(self, label_name='label'):
-        return VertexMetadata('keyspace', 'table', label_name)
+    def _create_vertex_metadata(self, label_name="label"):
+        return VertexMetadata("keyspace", "table", label_name)
 
     def _create_keyspace_metadata(self, graph_engine):
         return KeyspaceMetadata(
-            'keyspace', True, 'org.apache.cassandra.locator.SimpleStrategy',
-            {'replication_factor': 1}, graph_engine=graph_engine)
+            "keyspace",
+            True,
+            "org.apache.cassandra.locator.NetworkTopologyStrategy",
+            {"dc1": 1},
+            graph_engine=graph_engine,
+        )
 
     def _create_table_metadata(self, with_vertex=False, with_edge=False):
-        tm = TableMetadataDSE68('keyspace', 'table')
+        tm = TableMetadataDSE68("keyspace", "table")
         if with_vertex:
-            tm.vertex = self._create_vertex_metadata() if with_vertex is True else with_vertex
+            tm.vertex = (
+                self._create_vertex_metadata() if with_vertex is True else with_vertex
+            )
         elif with_edge:
             tm.edge = self._create_edge_metadata() if with_edge is True else with_edge
 
@@ -52,7 +70,7 @@ class GraphMetadataToCQLTests(unittest.TestCase):
         assert "graph_engine" not in km.as_cql_query()
 
     def test_keyspace_with_graph_engine(self):
-        graph_engine = 'Core'
+        graph_engine = "Core"
         km = self._create_keyspace_metadata(graph_engine)
         assert km.graph_engine == graph_engine
         cql = km.as_cql_query()
@@ -86,33 +104,34 @@ class GraphMetadataToCQLTests(unittest.TestCase):
         assert "TO to_label" in cql
 
     def test_vertex_with_label(self):
-        tm = self. _create_table_metadata(with_vertex=True)
-        assert tm.as_cql_query().endswith('VERTEX LABEL label')
+        tm = self._create_table_metadata(with_vertex=True)
+        assert tm.as_cql_query().endswith("VERTEX LABEL label")
 
     def test_edge_single_partition_key_and_clustering_key(self):
         tm = self._create_table_metadata(with_edge=True)
-        assert 'FROM from_label(pk1, c1)' in tm.as_cql_query()
+        assert "FROM from_label(pk1, c1)" in tm.as_cql_query()
 
     def test_edge_multiple_partition_keys(self):
-        edge = self._create_edge_metadata(partition_keys=['pk1', 'pk2'])
-        tm = self. _create_table_metadata(with_edge=edge)
-        assert 'FROM from_label((pk1, pk2), ' in tm.as_cql_query()
+        edge = self._create_edge_metadata(partition_keys=["pk1", "pk2"])
+        tm = self._create_table_metadata(with_edge=edge)
+        assert "FROM from_label((pk1, pk2), " in tm.as_cql_query()
 
     def test_edge_no_clustering_keys(self):
         edge = self._create_edge_metadata(clustering_keys=[])
-        tm = self. _create_table_metadata(with_edge=edge)
-        assert 'FROM from_label(pk1) ' in tm.as_cql_query()
+        tm = self._create_table_metadata(with_edge=edge)
+        assert "FROM from_label(pk1) " in tm.as_cql_query()
 
     def test_edge_multiple_clustering_keys(self):
-        edge = self._create_edge_metadata(clustering_keys=['c1', 'c2'])
-        tm = self. _create_table_metadata(with_edge=edge)
-        assert 'FROM from_label(pk1, c1, c2) ' in tm.as_cql_query()
+        edge = self._create_edge_metadata(clustering_keys=["c1", "c2"])
+        tm = self._create_table_metadata(with_edge=edge)
+        assert "FROM from_label(pk1, c1, c2) " in tm.as_cql_query()
 
     def test_edge_multiple_partition_and_clustering_keys(self):
-        edge = self._create_edge_metadata(partition_keys=['pk1', 'pk2'],
-                                          clustering_keys=['c1', 'c2'])
-        tm = self. _create_table_metadata(with_edge=edge)
-        assert 'FROM from_label((pk1, pk2), c1, c2) ' in tm.as_cql_query()
+        edge = self._create_edge_metadata(
+            partition_keys=["pk1", "pk2"], clustering_keys=["c1", "c2"]
+        )
+        tm = self._create_table_metadata(with_edge=edge)
+        assert "FROM from_label((pk1, pk2), c1, c2) " in tm.as_cql_query()
 
 
 class SchemaParsersTests(unittest.TestCase):
@@ -135,19 +154,26 @@ class SchemaParsersTests(unittest.TestCase):
             p._query_all()
 
             for q in conn.queries:
-                assert "USING TIMEOUT" not in q.query, f"<{schemaClass.__name__}> query `{q.query}` contains `USING TIMEOUT`, while should not"
+                assert "USING TIMEOUT" not in q.query, (
+                    f"<{schemaClass.__name__}> query `{q.query}` contains `USING TIMEOUT`, while should not"
+                )
 
             conn = FakeConnection()
             p = schemaClass(conn, 2.0, 1000, datetime.timedelta(seconds=2))
             p._query_all()
 
             for q in conn.queries:
-                assert "USING TIMEOUT 2000ms" in q.query, f"{schemaClass.__name__} query `{q.query}` does not contain `USING TIMEOUT 2000ms`"
+                assert "USING TIMEOUT 2000ms" in q.query, (
+                    f"{schemaClass.__name__} query `{q.query}` does not contain `USING TIMEOUT 2000ms`"
+                )
 
 
 def get_all_schema_parser_classes(cl):
     for child in cl.__subclasses__():
-        if not child.__name__.startswith('SchemaParser') or child.__module__ != 'cassandra.metadata':
+        if (
+            not child.__name__.startswith("SchemaParser")
+            or child.__module__ != "cassandra.metadata"
+        ):
             continue
         yield child
         for c in get_all_schema_parser_classes(child):

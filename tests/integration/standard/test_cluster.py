@@ -27,11 +27,24 @@ import os
 import pytest
 
 import cassandra
-from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DEFAULT, ControlConnection, Cluster
+from cassandra.cluster import (
+    NoHostAvailable,
+    ExecutionProfile,
+    EXEC_PROFILE_DEFAULT,
+    ControlConnection,
+    Cluster,
+)
 from cassandra.concurrent import execute_concurrent
-from cassandra.policies import (RoundRobinPolicy, ExponentialReconnectionPolicy,
-                                RetryPolicy, SimpleConvictionPolicy, HostDistance,
-                                AddressTranslator, TokenAwarePolicy, HostFilterPolicy)
+from cassandra.policies import (
+    RoundRobinPolicy,
+    ExponentialReconnectionPolicy,
+    RetryPolicy,
+    SimpleConvictionPolicy,
+    HostDistance,
+    AddressTranslator,
+    TokenAwarePolicy,
+    HostFilterPolicy,
+)
 from cassandra import ConsistencyLevel
 
 from cassandra.query import SimpleStatement, TraceUnavailable, tuple_factory
@@ -40,10 +53,25 @@ from cassandra import connection
 from cassandra.connection import DefaultEndPoint
 
 from tests import notwindows, notasyncio
-from tests.integration import use_cluster, get_server_versions, CASSANDRA_VERSION, \
-    execute_until_pass, execute_with_long_wait_retry, get_node, MockLoggingHandler, get_unsupported_lower_protocol, \
-    get_unsupported_upper_protocol, local, CASSANDRA_IP, greaterthanorequalcass30, \
-    lessthanorequalcass40, TestCluster, PROTOCOL_VERSION, xfail_scylla, incorrect_test
+from tests.integration import (
+    use_cluster,
+    get_server_versions,
+    CASSANDRA_VERSION,
+    execute_until_pass,
+    execute_with_long_wait_retry,
+    get_node,
+    MockLoggingHandler,
+    get_unsupported_lower_protocol,
+    get_unsupported_upper_protocol,
+    local,
+    CASSANDRA_IP,
+    greaterthanorequalcass30,
+    lessthanorequalcass40,
+    TestCluster,
+    PROTOCOL_VERSION,
+    xfail_scylla,
+    incorrect_test,
+)
 from tests.integration.util import assert_quiescent_pool_state
 from tests.util import assertListEqual
 import sys
@@ -56,27 +84,26 @@ _saved_scylla_ext_opts = None
 
 def setup_module():
     global _saved_scylla_ext_opts
-    _saved_scylla_ext_opts = os.environ.get('SCYLLA_EXT_OPTS')
-    os.environ['SCYLLA_EXT_OPTS'] = "--smp 2"
+    _saved_scylla_ext_opts = os.environ.get("SCYLLA_EXT_OPTS")
+    os.environ["SCYLLA_EXT_OPTS"] = "--smp 2"
     use_cluster("cluster_tests", [3], start=True, workloads=None)
     warnings.simplefilter("always")
 
 
 def teardown_module():
     if _saved_scylla_ext_opts is None:
-        os.environ.pop('SCYLLA_EXT_OPTS', None)
+        os.environ.pop("SCYLLA_EXT_OPTS", None)
     else:
-        os.environ['SCYLLA_EXT_OPTS'] = _saved_scylla_ext_opts
+        os.environ["SCYLLA_EXT_OPTS"] = _saved_scylla_ext_opts
 
 
 class IgnoredHostPolicy(RoundRobinPolicy):
-
     def __init__(self, ignored_hosts):
         self.ignored_hosts = ignored_hosts
         RoundRobinPolicy.__init__(self)
 
     def distance(self, host):
-        if(host.address in self.ignored_hosts):
+        if host.address in self.ignored_hosts:
             return HostDistance.IGNORED
         else:
             return HostDistance.LOCAL
@@ -96,7 +123,11 @@ class ClusterTests(unittest.TestCase):
         """
         ignored_host_policy = IgnoredHostPolicy(["127.0.0.2", "127.0.0.3"])
         cluster = TestCluster(
-            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(load_balancing_policy=ignored_host_policy)}
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(
+                    load_balancing_policy=ignored_host_policy
+                )
+            }
         )
         cluster.connect()
         for host in cluster.metadata.all_hosts():
@@ -118,7 +149,7 @@ class ClusterTests(unittest.TestCase):
         @test_category connection
         """
         cluster = TestCluster(contact_points=["localhost"], connect_timeout=1)
-        assert DefaultEndPoint('127.0.0.1') in cluster.endpoints_resolved
+        assert DefaultEndPoint("127.0.0.1") in cluster.endpoints_resolved
 
     @local
     def test_host_duplication(self):
@@ -132,13 +163,21 @@ class ClusterTests(unittest.TestCase):
         @test_category connection
         """
         cluster = TestCluster(
-            contact_points=["localhost", "127.0.0.1", "localhost", "localhost", "localhost"],
-            connect_timeout=1
+            contact_points=[
+                "localhost",
+                "127.0.0.1",
+                "localhost",
+                "localhost",
+                "localhost",
+            ],
+            connect_timeout=1,
         )
         cluster.connect(wait_for_all_pools=True)
         assert len(cluster.metadata.all_hosts()) == 3
         cluster.shutdown()
-        cluster = TestCluster(contact_points=["127.0.0.1", "localhost"], connect_timeout=1)
+        cluster = TestCluster(
+            contact_points=["127.0.0.1", "localhost"], connect_timeout=1
+        )
         cluster.connect(wait_for_all_pools=True)
         assert len(cluster.metadata.all_hosts()) == 3
         cluster.shutdown()
@@ -162,9 +201,12 @@ class ClusterTests(unittest.TestCase):
         """
 
         get_node(1).pause()
-        cluster = TestCluster(contact_points=['127.0.0.1'], connect_timeout=1)
+        cluster = TestCluster(contact_points=["127.0.0.1"], connect_timeout=1)
 
-        with pytest.raises(NoHostAvailable, match=r"OperationTimedOut\('errors=Timed out creating connection \(1 seconds\)"):
+        with pytest.raises(
+            NoHostAvailable,
+            match=r"OperationTimedOut\('errors=Timed out creating connection \(1 seconds\)",
+        ):
             cluster.connect()
         cluster.shutdown()
 
@@ -177,14 +219,17 @@ class ClusterTests(unittest.TestCase):
 
         cluster = TestCluster()
         session = cluster.connect()
-        result = execute_until_pass(session,
+        result = execute_until_pass(
+            session,
             """
             CREATE KEYSPACE clustertests
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
-            """)
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+            """,
+        )
         assert not result
 
-        result = execute_with_long_wait_retry(session,
+        result = execute_with_long_wait_retry(
+            session,
             """
             CREATE TABLE clustertests.cf0 (
                 a text,
@@ -192,17 +237,19 @@ class ClusterTests(unittest.TestCase):
                 c text,
                 PRIMARY KEY (a, b)
             )
-            """)
+            """,
+        )
         assert not result
 
         result = session.execute(
             """
             INSERT INTO clustertests.cf0 (a, b, c) VALUES ('a', 'b', 'c')
-            """)
+            """
+        )
         assert not result
 
         result = session.execute("SELECT * FROM clustertests.cf0")
-        assert [('a', 'b', 'c')] == result
+        assert [("a", "b", "c")] == result
 
         execute_with_long_wait_retry(session, "DROP KEYSPACE clustertests")
 
@@ -222,12 +269,14 @@ class ClusterTests(unittest.TestCase):
 
         @test_category connection
         """
+
         def cleanup():
             """
             When this test fails, the inline .shutdown() calls don't get
             called, so we register this as a cleanup.
             """
             self.cluster_to_shutdown.shutdown()
+
         self.addCleanup(cleanup)
 
         # Test with empty list
@@ -237,13 +286,15 @@ class ClusterTests(unittest.TestCase):
         self.cluster_to_shutdown.shutdown()
 
         # Test with only invalid
-        self.cluster_to_shutdown = TestCluster(contact_points=('1.2.3.4',))
+        self.cluster_to_shutdown = TestCluster(contact_points=("1.2.3.4",))
         with pytest.raises(NoHostAvailable):
             self.cluster_to_shutdown.connect()
         self.cluster_to_shutdown.shutdown()
 
         # Test with valid and invalid hosts
-        self.cluster_to_shutdown = TestCluster(contact_points=("127.0.0.1", "127.0.0.2", "1.2.3.4"))
+        self.cluster_to_shutdown = TestCluster(
+            contact_points=("127.0.0.1", "127.0.0.2", "1.2.3.4")
+        )
         self.cluster_to_shutdown.connect()
         self.cluster_to_shutdown.shutdown()
 
@@ -269,25 +320,25 @@ class ClusterTests(unittest.TestCase):
         updated_protocol_version = session._protocol_version
         updated_cluster_version = cluster.protocol_version
         # Make sure the correct protocol was selected by default
-        if CASSANDRA_VERSION >= Version('4.0-beta5'):
+        if CASSANDRA_VERSION >= Version("4.0-beta5"):
             assert updated_protocol_version == cassandra.ProtocolVersion.V5
             assert updated_cluster_version == cassandra.ProtocolVersion.V5
-        elif CASSANDRA_VERSION >= Version('4.0-a'):
+        elif CASSANDRA_VERSION >= Version("4.0-a"):
             assert updated_protocol_version == cassandra.ProtocolVersion.V4
             assert updated_cluster_version == cassandra.ProtocolVersion.V4
-        elif CASSANDRA_VERSION >= Version('3.11'):
+        elif CASSANDRA_VERSION >= Version("3.11"):
             assert updated_protocol_version == cassandra.ProtocolVersion.V4
             assert updated_cluster_version == cassandra.ProtocolVersion.V4
-        elif CASSANDRA_VERSION >= Version('3.0'):
+        elif CASSANDRA_VERSION >= Version("3.0"):
             assert updated_protocol_version == cassandra.ProtocolVersion.V4
             assert updated_cluster_version == cassandra.ProtocolVersion.V4
-        elif CASSANDRA_VERSION >= Version('2.2'):
+        elif CASSANDRA_VERSION >= Version("2.2"):
             assert updated_protocol_version == 4
             assert updated_cluster_version == 4
-        elif CASSANDRA_VERSION >= Version('2.1'):
+        elif CASSANDRA_VERSION >= Version("2.1"):
             assert updated_protocol_version == 3
             assert updated_cluster_version == 3
-        elif CASSANDRA_VERSION >= Version('2.0'):
+        elif CASSANDRA_VERSION >= Version("2.0"):
             assert updated_protocol_version == 2
             assert updated_cluster_version == 2
         else:
@@ -319,7 +370,7 @@ class ClusterTests(unittest.TestCase):
         """
 
         upper_bound = get_unsupported_upper_protocol()
-        log.debug('got upper_bound of {}'.format(upper_bound))
+        log.debug("got upper_bound of {}".format(upper_bound))
         if upper_bound is not None:
             cluster = TestCluster(protocol_version=upper_bound)
             with pytest.raises(NoHostAvailable):
@@ -327,7 +378,7 @@ class ClusterTests(unittest.TestCase):
             cluster.shutdown()
 
         lower_bound = get_unsupported_lower_protocol()
-        log.debug('got lower_bound of {}'.format(lower_bound))
+        log.debug("got lower_bound of {}".format(lower_bound))
         if lower_bound is not None:
             cluster = TestCluster(protocol_version=lower_bound)
             with pytest.raises(NoHostAvailable):
@@ -344,14 +395,17 @@ class ClusterTests(unittest.TestCase):
         result = session.execute(
             """
             INSERT INTO test1rf.test (k, v) VALUES (8889, 8889)
-            """)
+            """
+        )
         assert not result
 
         result = session.execute("SELECT * FROM test1rf.test")
-        assert [(8889, 8889)] == result, "Rows in ResultSet are {0}".format(result.current_rows)
+        assert [(8889, 8889)] == result, "Rows in ResultSet are {0}".format(
+            result.current_rows
+        )
 
         # test_connect_on_keyspace
-        session2 = cluster.connect('test1rf')
+        session2 = cluster.connect("test1rf")
         result2 = session2.execute("SELECT * FROM test")
         assert result == result2
         cluster.shutdown()
@@ -371,7 +425,7 @@ class ClusterTests(unittest.TestCase):
         TestCluster(
             reconnection_policy=ExponentialReconnectionPolicy(1.0, 600.0),
             conviction_policy_factory=SimpleConvictionPolicy,
-            protocol_version=PROTOCOL_VERSION
+            protocol_version=PROTOCOL_VERSION,
         )
 
     def test_connect_to_already_shutdown_cluster(self):
@@ -391,18 +445,18 @@ class ClusterTests(unittest.TestCase):
             Cluster(auth_provider=1, protocol_version=1)
         c = TestCluster(protocol_version=1)
         with pytest.raises(TypeError):
-            setattr(c, 'auth_provider', 1)
+            setattr(c, "auth_provider", 1)
 
     def test_v2_auth_provider(self):
         """
         Check for v2 auth_provider compliance
         """
-        bad_auth_provider = lambda x: {'username': 'foo', 'password': 'bar'}
+        bad_auth_provider = lambda x: {"username": "foo", "password": "bar"}
         with pytest.raises(TypeError):
             Cluster(auth_provider=bad_auth_provider, protocol_version=2)
         c = TestCluster(protocol_version=2)
         with pytest.raises(TypeError):
-            setattr(c, 'auth_provider', bad_auth_provider)
+            setattr(c, "auth_provider", bad_auth_provider)
 
     def test_conviction_policy_factory_is_callable(self):
         """
@@ -418,8 +472,10 @@ class ClusterTests(unittest.TestCase):
         when a cluster cannot connect to given hosts
         """
 
-        cluster = TestCluster(contact_points=['127.1.2.9', '127.1.2.10'],
-                              protocol_version=PROTOCOL_VERSION)
+        cluster = TestCluster(
+            contact_points=["127.1.2.9", "127.1.2.10"],
+            protocol_version=PROTOCOL_VERSION,
+        )
         with pytest.raises(NoHostAvailable):
             cluster.connect()
 
@@ -440,13 +496,13 @@ class ClusterTests(unittest.TestCase):
         session = cluster.connect()
 
         original_meta = cluster.metadata.keyspaces
-        original_system_meta = original_meta['system']
+        original_system_meta = original_meta["system"]
 
         # only refresh one keyspace
-        cluster.refresh_keyspace_metadata('system')
+        cluster.refresh_keyspace_metadata("system")
         current_meta = cluster.metadata.keyspaces
         assert original_meta is current_meta
-        current_system_meta = current_meta['system']
+        current_system_meta = current_meta["system"]
         assert original_system_meta is not current_system_meta
         assert original_system_meta.as_cql_query() == current_system_meta.as_cql_query()
         cluster.shutdown()
@@ -456,46 +512,58 @@ class ClusterTests(unittest.TestCase):
         session = cluster.connect()
 
         original_meta = cluster.metadata.keyspaces
-        original_system_meta = original_meta['system']
-        original_system_schema_meta = original_system_meta.tables['local']
+        original_system_meta = original_meta["system"]
+        original_system_schema_meta = original_system_meta.tables["local"]
 
         # only refresh one table
-        cluster.refresh_table_metadata('system', 'local')
+        cluster.refresh_table_metadata("system", "local")
         current_meta = cluster.metadata.keyspaces
-        current_system_meta = current_meta['system']
-        current_system_schema_meta = current_system_meta.tables['local']
+        current_system_meta = current_meta["system"]
+        current_system_schema_meta = current_system_meta.tables["local"]
         assert original_meta is current_meta
         assert original_system_meta is current_system_meta
         assert original_system_schema_meta is not current_system_schema_meta
-        assert original_system_schema_meta.as_cql_query() == current_system_schema_meta.as_cql_query()
+        assert (
+            original_system_schema_meta.as_cql_query()
+            == current_system_schema_meta.as_cql_query()
+        )
         cluster.shutdown()
 
     def test_refresh_schema_type(self):
         if get_server_versions()[0] < (2, 1, 0):
-            raise unittest.SkipTest('UDTs were introduced in Cassandra 2.1')
+            raise unittest.SkipTest("UDTs were introduced in Cassandra 2.1")
 
         if PROTOCOL_VERSION < 3:
-            raise unittest.SkipTest('UDTs are not specified in change events for protocol v2')
+            raise unittest.SkipTest(
+                "UDTs are not specified in change events for protocol v2"
+            )
             # We may want to refresh types on keyspace change events in that case(?)
 
         cluster = TestCluster()
         session = cluster.connect()
 
-        keyspace_name = 'test1rf'
+        keyspace_name = "test1rf"
         type_name = self._testMethodName
 
-        execute_until_pass(session, 'CREATE TYPE IF NOT EXISTS %s.%s (one int, two text)' % (keyspace_name, type_name))
+        execute_until_pass(
+            session,
+            "CREATE TYPE IF NOT EXISTS %s.%s (one int, two text)"
+            % (keyspace_name, type_name),
+        )
         original_meta = cluster.metadata.keyspaces
         original_test1rf_meta = original_meta[keyspace_name]
         original_type_meta = original_test1rf_meta.user_types[type_name]
 
         # only refresh one type
-        cluster.refresh_user_type_metadata('test1rf', type_name)
+        cluster.refresh_user_type_metadata("test1rf", type_name)
         current_meta = cluster.metadata.keyspaces
         current_test1rf_meta = current_meta[keyspace_name]
         current_type_meta = current_test1rf_meta.user_types[type_name]
         assert original_meta is current_meta
-        assert original_test1rf_meta.export_as_string() == current_test1rf_meta.export_as_string()
+        assert (
+            original_test1rf_meta.export_as_string()
+            == current_test1rf_meta.export_as_string()
+        )
         assert original_type_meta is not current_type_meta
         assert original_type_meta.as_cql_query() == current_type_meta.as_cql_query()
         cluster.shutdown()
@@ -508,12 +576,19 @@ class ClusterTests(unittest.TestCase):
         def patched_wait_for_responses(*args, **kwargs):
             # When selecting schema version, replace the real schema UUID with an unexpected UUID
             response = original_wait_for_responses(*args, **kwargs)
-            if len(args) > 2 and hasattr(args[2], "query") and "SELECT schema_version FROM system.local WHERE key='local'" in args[2].query:
+            if (
+                len(args) > 2
+                and hasattr(args[2], "query")
+                and "SELECT schema_version FROM system.local WHERE key='local'"
+                in args[2].query
+            ):
                 new_uuid = uuid4()
                 response[1].parsed_rows[0] = (new_uuid,)
             return response
 
-        with patch.object(connection.Connection, "wait_for_responses", patched_wait_for_responses):
+        with patch.object(
+            connection.Connection, "wait_for_responses", patched_wait_for_responses
+        ):
             agreement_timeout = 1
 
             # cluster agreement wait exceeded
@@ -577,7 +652,9 @@ class ClusterTests(unittest.TestCase):
         cluster = TestCluster()
         session = cluster.connect()
 
-        result = session.execute( "SELECT * FROM system.local WHERE key='local'", trace=True)
+        result = session.execute(
+            "SELECT * FROM system.local WHERE key='local'", trace=True
+        )
         self._check_trace(result.get_query_trace())
 
         query = "SELECT * FROM system.local WHERE key='local'"
@@ -619,7 +696,7 @@ class ClusterTests(unittest.TestCase):
         @expected_result TraceUnavailable is arisen in both cases
 
         @test_category query
-                """
+        """
         cluster = TestCluster()
         self.addCleanup(cluster.shutdown)
         session = cluster.connect()
@@ -638,8 +715,11 @@ class ClusterTests(unittest.TestCase):
             except TraceUnavailable:
                 break
         else:
-            raise Exception("get_query_trace didn't raise TraceUnavailable after {} tries".format(max_retry_count))
-
+            raise Exception(
+                "get_query_trace didn't raise TraceUnavailable after {} tries".format(
+                    max_retry_count
+                )
+            )
 
         for i in range(max_retry_count):
             future = session.execute_async(statement, trace=True)
@@ -650,7 +730,11 @@ class ClusterTests(unittest.TestCase):
             except TraceUnavailable:
                 break
         else:
-            raise Exception("get_query_trace didn't raise TraceUnavailable after {} tries".format(max_retry_count))
+            raise Exception(
+                "get_query_trace didn't raise TraceUnavailable after {} tries".format(
+                    max_retry_count
+                )
+            )
 
     def test_one_returns_none(self):
         """
@@ -664,7 +748,12 @@ class ClusterTests(unittest.TestCase):
         """
         with TestCluster() as cluster:
             session = cluster.connect()
-            assert session.execute("SELECT * from system.local WHERE key='madeup_key'").one() is None
+            assert (
+                session.execute(
+                    "SELECT * from system.local WHERE key='madeup_key'"
+                ).one()
+                is None
+            )
 
     def test_string_coverage(self):
         """
@@ -682,7 +771,7 @@ class ClusterTests(unittest.TestCase):
         future.result()
 
         assert query in str(future)
-        assert 'result' in str(future)
+        assert "result" in str(future)
         cluster.shutdown()
 
     def test_can_connect_with_plainauth(self):
@@ -699,8 +788,7 @@ class ClusterTests(unittest.TestCase):
         @test_category auth
         """
         auth_provider = PlainTextAuthProvider(
-            username="made_up_username",
-            password="made_up_password"
+            username="made_up_username", password="made_up_password"
         )
         self._warning_are_issued_when_auth(auth_provider)
 
@@ -717,11 +805,13 @@ class ClusterTests(unittest.TestCase):
 
         @test_category auth
         """
-        sasl_kwargs = {'service': 'cassandra',
-                       'mechanism': 'PLAIN',
-                       'qops': ['auth'],
-                       'username': "made_up_username",
-                       'password': "made_up_password"}
+        sasl_kwargs = {
+            "service": "cassandra",
+            "mechanism": "PLAIN",
+            "qops": ["auth"],
+            "username": "made_up_username",
+            "password": "made_up_password",
+        }
 
         auth_provider = SaslAuthProvider(**sasl_kwargs)
         self._warning_are_issued_when_auth(auth_provider)
@@ -730,37 +820,50 @@ class ClusterTests(unittest.TestCase):
         with MockLoggingHandler().set_module_name(connection.__name__) as mock_handler:
             with TestCluster(auth_provider=auth_provider) as cluster:
                 session = cluster.connect()
-                assert session.execute("SELECT * from system.local WHERE key='local'") is not None
+                assert (
+                    session.execute("SELECT * from system.local WHERE key='local'")
+                    is not None
+                )
 
             # Verify that auth warnings are issued for connections where
             # auth is configured but the server does not send a challenge.
             # At minimum one warning per node connection (3 for a 3-node
             # cluster).  The control connection and shard-aware connections
             # may add more, so we only assert a lower bound.
-            auth_warning = mock_handler.get_message_count('warning', "An authentication challenge was not sent")
+            auth_warning = mock_handler.get_message_count(
+                "warning", "An authentication challenge was not sent"
+            )
             assert auth_warning >= 3
 
     def _wait_for_all_shard_connections(self, cluster, timeout=30):
         """Wait until all shard-aware connections are fully established."""
         from cassandra.pool import HostConnection
+
         deadline = time.time() + timeout
         while time.time() < deadline:
             all_connected = True
             for holder in cluster.get_connection_holders():
                 if not isinstance(holder, HostConnection):
                     continue
-                if holder.host.sharding_info and len(holder._connections) < holder.host.sharding_info.shards_count:
+                if (
+                    holder.host.sharding_info
+                    and len(holder._connections)
+                    < holder.host.sharding_info.shards_count
+                ):
                     all_connected = False
                     break
             if all_connected:
                 return
             time.sleep(0.1)
-        raise RuntimeError("Timed out waiting for all shard connections to be established")
+        raise RuntimeError(
+            "Timed out waiting for all shard connections to be established"
+        )
 
     def test_idle_heartbeat(self):
         interval = 2
-        cluster = TestCluster(idle_heartbeat_interval=interval,
-                              monitor_reporting_enabled=False)
+        cluster = TestCluster(
+            idle_heartbeat_interval=interval, monitor_reporting_enabled=False
+        )
         session = cluster.connect(wait_for_all_pools=True)
 
         # wait_for_all_pools only waits for the first connection per host;
@@ -776,12 +879,18 @@ class ClusterTests(unittest.TestCase):
                 # make sure none are idle (should have startup messages
                 assert not c.is_idle
                 with c.lock:
-                    connection_request_ids[id(c)] = deque(c.request_ids)  # copy of request ids
+                    connection_request_ids[id(c)] = deque(
+                        c.request_ids
+                    )  # copy of request ids
 
         # let two heatbeat intervals pass (first one had startup messages in it)
-        time.sleep(2 * interval + interval/2)
+        time.sleep(2 * interval + interval / 2)
 
-        connections = [c for holders in cluster.get_connection_holders() for c in holders.get_connections()]
+        connections = [
+            c
+            for holders in cluster.get_connection_holders()
+            for c in holders.get_connections()
+        ]
 
         # make sure requests were sent on all connections
         for c in connections:
@@ -797,27 +906,35 @@ class ClusterTests(unittest.TestCase):
         # (with shard-aware routing, each query only hits one shard per host,
         # so we need more queries than just len(hosts) to cover all connections)
         num_connections = len([c for c in connections if not c.is_control_connection])
-        statements_and_params = [("SELECT release_version FROM system.local WHERE key='local'", ())] * max(num_connections * 2, len(cluster.metadata.all_hosts()))
+        statements_and_params = [
+            ("SELECT release_version FROM system.local WHERE key='local'", ())
+        ] * max(num_connections * 2, len(cluster.metadata.all_hosts()))
         results = execute_concurrent(session, statements_and_params)
         for success, result in results:
             assert success
 
         # assert at least some non-control connections are no longer idle
         # (shard-aware routing may not distribute queries to every connection)
-        non_idle = [c for c in connections if not c.is_control_connection and not c.is_idle]
+        non_idle = [
+            c for c in connections if not c.is_control_connection and not c.is_idle
+        ]
         assert len(non_idle) > 0
 
         # holders include session pools and cc
         holders = cluster.get_connection_holders()
         assert cluster.control_connection in holders
-        assert len(holders) == len(cluster.metadata.all_hosts()) + 1  # hosts pools, 1 for cc
+        assert (
+            len(holders) == len(cluster.metadata.all_hosts()) + 1
+        )  # hosts pools, 1 for cc
 
         # include additional sessions
         session2 = cluster.connect(wait_for_all_pools=True)
 
         holders = cluster.get_connection_holders()
         assert cluster.control_connection in holders
-        assert len(holders) == 2 * len(cluster.metadata.all_hosts()) + 1  # 2 sessions' hosts pools, 1 for cc
+        assert (
+            len(holders) == 2 * len(cluster.metadata.all_hosts()) + 1
+        )  # 2 sessions' hosts pools, 1 for cc
 
         cluster._idle_heartbeat.stop()
         cluster._idle_heartbeat.join()
@@ -825,7 +942,7 @@ class ClusterTests(unittest.TestCase):
 
         cluster.shutdown()
 
-    @patch('cassandra.cluster.Cluster.idle_heartbeat_interval', new=0.1)
+    @patch("cassandra.cluster.Cluster.idle_heartbeat_interval", new=0.1)
     def test_idle_heartbeat_disabled(self):
         assert Cluster.idle_heartbeat_interval
 
@@ -837,7 +954,11 @@ class ClusterTests(unittest.TestCase):
         # let two heatbeat intervals pass (first one had startup messages in it)
         time.sleep(2 * Cluster.idle_heartbeat_interval)
 
-        connections = [c for holders in cluster.get_connection_holders() for c in holders.get_connections()]
+        connections = [
+            c
+            for holders in cluster.get_connection_holders()
+            for c in holders.get_connections()
+        ]
 
         # assert not idle status (should never get reset because there is not heartbeat)
         assert not any(c.is_idle for c in connections)
@@ -846,24 +967,26 @@ class ClusterTests(unittest.TestCase):
 
     def test_pool_management(self):
         # Ensure that in_flight and request_ids quiesce after cluster operations
-        cluster = TestCluster(idle_heartbeat_interval=0)  # no idle heartbeat here, pool management is tested in test_idle_heartbeat
+        cluster = TestCluster(
+            idle_heartbeat_interval=0
+        )  # no idle heartbeat here, pool management is tested in test_idle_heartbeat
         session = cluster.connect()
         session2 = cluster.connect()
 
         # prepare
         p = session.prepare("SELECT * FROM system.local WHERE key=?")
-        assert session.execute(p, ('local',))
+        assert session.execute(p, ("local",))
 
         # simple
         assert session.execute("SELECT * FROM system.local WHERE key='local'")
 
         # set keyspace
-        session.set_keyspace('system')
-        session.set_keyspace('system_traces')
+        session.set_keyspace("system")
+        session.set_keyspace("system_traces")
 
         # use keyspace
-        session.execute('USE system')
-        session.execute('USE system_traces')
+        session.execute("USE system")
+        session.execute("USE system_traces")
 
         # refresh schema
         cluster.refresh_schema_metadata()
@@ -890,7 +1013,9 @@ class ClusterTests(unittest.TestCase):
                 RoundRobinPolicy(), lambda host: host.address == CASSANDRA_IP
             )
         )
-        with TestCluster(execution_profiles={'node1': node1}, monitor_reporting_enabled=False) as cluster:
+        with TestCluster(
+            execution_profiles={"node1": node1}, monitor_reporting_enabled=False
+        ) as cluster:
             session = cluster.connect(wait_for_all_pools=True)
 
             # default is DCA RR for all hosts
@@ -902,10 +1027,12 @@ class ClusterTests(unittest.TestCase):
             assert queried_hosts == expected_hosts
 
             # by name we should only hit the one
-            expected_hosts = set(h for h in cluster.metadata.all_hosts() if h.address == CASSANDRA_IP)
+            expected_hosts = set(
+                h for h in cluster.metadata.all_hosts() if h.address == CASSANDRA_IP
+            )
             queried_hosts = set()
             for _ in cluster.metadata.all_hosts():
-                rs = session.execute(query, execution_profile='node1')
+                rs = session.execute(query, execution_profile="node1")
                 queried_hosts.add(rs.response_future._current_host)
             assert queried_hosts == expected_hosts
 
@@ -928,7 +1055,9 @@ class ClusterTests(unittest.TestCase):
                 tuple_row.release_version
 
             # make sure original profile is not impacted
-            assert session.execute(query, execution_profile='node1').one().release_version
+            assert (
+                session.execute(query, execution_profile="node1").one().release_version
+            )
 
     def test_setting_lbp_legacy(self):
         cluster = TestCluster()
@@ -955,7 +1084,7 @@ class ClusterTests(unittest.TestCase):
         query = "select release_version from system.local where key='local'"
         rr1 = ExecutionProfile(load_balancing_policy=RoundRobinPolicy())
         rr2 = ExecutionProfile(load_balancing_policy=RoundRobinPolicy())
-        exec_profiles = {'rr1': rr1, 'rr2': rr2}
+        exec_profiles = {"rr1": rr1, "rr2": rr2}
         with TestCluster(execution_profiles=exec_profiles) as cluster:
             session = cluster.connect(wait_for_all_pools=True)
 
@@ -967,9 +1096,9 @@ class ClusterTests(unittest.TestCase):
             rr2_queried_hosts = []
 
             for _ in range(num_hosts * 2):
-                rs = session.execute(query, execution_profile='rr1')
+                rs = session.execute(query, execution_profile="rr1")
                 rr1_queried_hosts.append(rs.response_future._current_host)
-                rs = session.execute(query, execution_profile='rr2')
+                rs = session.execute(query, execution_profile="rr2")
                 rr2_queried_hosts.append(rs.response_future._current_host)
 
             # Both policies should have queried all hosts
@@ -997,7 +1126,7 @@ class ClusterTests(unittest.TestCase):
         with TestCluster() as cluster:
             session = cluster.connect()
             cluster.add_execution_profile("ta1", ta1)
-            rs = session.execute(query, execution_profile='ta1')
+            rs = session.execute(query, execution_profile="ta1")
 
     def test_clone_shared_lbp(self):
         """
@@ -1014,18 +1143,22 @@ class ClusterTests(unittest.TestCase):
         """
         query = "select release_version from system.local where key='local'"
         rr1 = ExecutionProfile(load_balancing_policy=RoundRobinPolicy())
-        exec_profiles = {'rr1': rr1}
+        exec_profiles = {"rr1": rr1}
         with TestCluster(execution_profiles=exec_profiles) as cluster:
             session = cluster.connect(wait_for_all_pools=True)
-            assert len(cluster.metadata.all_hosts()) > 1, "We only have one host connected at this point"
+            assert len(cluster.metadata.all_hosts()) > 1, (
+                "We only have one host connected at this point"
+            )
 
-            rr1_clone = session.execution_profile_clone_update('rr1', row_factory=tuple_factory)
+            rr1_clone = session.execution_profile_clone_update(
+                "rr1", row_factory=tuple_factory
+            )
             cluster.add_execution_profile("rr1_clone", rr1_clone)
             rr1_queried_hosts = set()
             rr1_clone_queried_hosts = set()
-            rs = session.execute(query, execution_profile='rr1')
+            rs = session.execute(query, execution_profile="rr1")
             rr1_queried_hosts.add(rs.response_future._current_host)
-            rs = session.execute(query, execution_profile='rr1_clone')
+            rs = session.execute(query, execution_profile="rr1_clone")
             rr1_clone_queried_hosts.add(rs.response_future._current_host)
             assert rr1_clone_queried_hosts != rr1_queried_hosts
 
@@ -1042,11 +1175,11 @@ class ClusterTests(unittest.TestCase):
         query = "select release_version from system.local where key='local'"
         rr1 = ExecutionProfile(load_balancing_policy=RoundRobinPolicy())
         rr2 = ExecutionProfile(load_balancing_policy=RoundRobinPolicy())
-        exec_profiles = {'rr1': rr1, 'rr2': rr2}
+        exec_profiles = {"rr1": rr1, "rr2": rr2}
         with TestCluster(execution_profiles=exec_profiles) as cluster:
             session = cluster.connect()
             with pytest.raises(ValueError):
-                session.execute(query, execution_profile='rr3')
+                session.execute(query, execution_profile="rr3")
 
     @local
     def test_profile_pool_management(self):
@@ -1070,12 +1203,14 @@ class ClusterTests(unittest.TestCase):
                 RoundRobinPolicy(), lambda host: host.address == "127.0.0.2"
             )
         )
-        with TestCluster(execution_profiles={EXEC_PROFILE_DEFAULT: node1, 'node2': node2}) as cluster:
+        with TestCluster(
+            execution_profiles={EXEC_PROFILE_DEFAULT: node1, "node2": node2}
+        ) as cluster:
             session = cluster.connect(wait_for_all_pools=True)
             pools = session.get_pool_state()
             # there are more hosts, but we connected to the ones in the lbp aggregate
             assert len(cluster.metadata.all_hosts()) > 2
-            assert set(h.address for h in pools) == set(('127.0.0.1', '127.0.0.2'))
+            assert set(h.address for h in pools) == set(("127.0.0.1", "127.0.0.2"))
 
             # dynamically update pools on add
             node3 = ExecutionProfile(
@@ -1083,9 +1218,11 @@ class ClusterTests(unittest.TestCase):
                     RoundRobinPolicy(), lambda host: host.address == "127.0.0.3"
                 )
             )
-            cluster.add_execution_profile('node3', node3)
+            cluster.add_execution_profile("node3", node3)
             pools = session.get_pool_state()
-            assert set(h.address for h in pools) == set(('127.0.0.1', '127.0.0.2', '127.0.0.3'))
+            assert set(h.address for h in pools) == set(
+                ("127.0.0.1", "127.0.0.2", "127.0.0.3")
+            )
 
     @local
     def test_add_profile_timeout(self):
@@ -1105,29 +1242,39 @@ class ClusterTests(unittest.TestCase):
                     RoundRobinPolicy(), lambda host: host.address == "127.0.0.1"
                 )
             )
-            with TestCluster(execution_profiles={EXEC_PROFILE_DEFAULT: node1}) as cluster:
+            with TestCluster(
+                execution_profiles={EXEC_PROFILE_DEFAULT: node1}
+            ) as cluster:
                 session = cluster.connect(wait_for_all_pools=True)
                 pools = session.get_pool_state()
                 assert len(cluster.metadata.all_hosts()) > 2
-                assert set(h.address for h in pools) == set(('127.0.0.1',))
+                assert set(h.address for h in pools) == set(("127.0.0.1",))
 
                 node2 = ExecutionProfile(
                     load_balancing_policy=HostFilterPolicy(
-                        RoundRobinPolicy(), lambda host: host.address in ["127.0.0.2", "127.0.0.3"]
+                        RoundRobinPolicy(),
+                        lambda host: host.address in ["127.0.0.2", "127.0.0.3"],
                     )
                 )
 
                 start = time.time()
                 try:
                     with pytest.raises(cassandra.OperationTimedOut):
-                        cluster.add_execution_profile('profile_{0}'.format(i),
-                                      node2, pool_wait_timeout=sys.float_info.min)
+                        cluster.add_execution_profile(
+                            "profile_{0}".format(i),
+                            node2,
+                            pool_wait_timeout=sys.float_info.min,
+                        )
                     break
                 except AssertionError:
                     end = time.time()
                     assert start == pytest.approx(end, abs=1e-1)
         else:
-            raise Exception("add_execution_profile didn't timeout after {0} retries".format(max_retry_count))
+            raise Exception(
+                "add_execution_profile didn't timeout after {0} retries".format(
+                    max_retry_count
+                )
+            )
 
     def test_stale_connections_after_shutdown(self):
         """
@@ -1136,7 +1283,9 @@ class ClusterTests(unittest.TestCase):
         """
         for _ in range(10):
             with TestCluster(protocol_version=3) as cluster:
-                cluster.connect(wait_for_all_pools=True).execute("SELECT * FROM system_schema.keyspaces")
+                cluster.connect(wait_for_all_pools=True).execute(
+                    "SELECT * FROM system_schema.keyspaces"
+                )
 
             with TestCluster(protocol_version=3) as cluster:
                 session = cluster.connect()
@@ -1151,10 +1300,14 @@ class ClusterTests(unittest.TestCase):
                 with TestCluster(protocol_version=3) as cluster:
                     cluster.connect()
 
-            result = subprocess.run(["lsof -nP | awk '$3 ~ \":9042\" {print $0}' | grep ''"], shell=True, capture_output=True)
+            result = subprocess.run(
+                ["lsof -nP | awk '$3 ~ \":9042\" {print $0}' | grep ''"],
+                shell=True,
+                capture_output=True,
+            )
             if result.returncode:
                 continue
-            assert False, f'Found stale connections: {result.stdout}'
+            assert False, f"Found stale connections: {result.stdout}"
 
     @notwindows
     @notasyncio  # asyncio can't do timeouts smaller than 1ms, as this test requires
@@ -1181,11 +1334,16 @@ class ClusterTests(unittest.TestCase):
                     break
                 except:
                     import traceback
+
                     traceback.print_exc()
                     end = time.time()
                     assert start == pytest.approx(end, abs=1e-1)
             else:
-                raise Exception("session.execute didn't time out in {0} tries".format(max_retry_count))
+                raise Exception(
+                    "session.execute didn't time out in {0} tries".format(
+                        max_retry_count
+                    )
+                )
 
     def test_replicas_are_queried(self):
         """
@@ -1205,43 +1363,57 @@ class ClusterTests(unittest.TestCase):
         tap_profile = ExecutionProfile(
             load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy())
         )
-        with TestCluster(execution_profiles={EXEC_PROFILE_DEFAULT: tap_profile}) as cluster:
+        with TestCluster(
+            execution_profiles={EXEC_PROFILE_DEFAULT: tap_profile}
+        ) as cluster:
             session = cluster.connect(wait_for_all_pools=True)
-            session.execute('''
+            session.execute("""
                     CREATE TABLE test1rf.table_with_big_key (
                         k1 int,
                         k2 int,
                         k3 int,
                         k4 int,
-                        PRIMARY KEY((k1, k2, k3), k4))''')
+                        PRIMARY KEY((k1, k2, k3), k4))""")
             prepared = session.prepare("""SELECT * from test1rf.table_with_big_key
                                           WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""")
             for i in range(10):
                 result = session.execute(prepared, (i, i, i, i), trace=True)
-                trace = result.response_future.get_query_trace(query_cl=ConsistencyLevel.ALL)
+                trace = result.response_future.get_query_trace(
+                    query_cl=ConsistencyLevel.ALL
+                )
                 queried_hosts = self._assert_replica_queried(trace, only_replicas=True)
                 last_i = i
 
         hfp_profile = ExecutionProfile(
-            load_balancing_policy=HostFilterPolicy(RoundRobinPolicy(),
-                     predicate=lambda host: host.address != only_replica)
+            load_balancing_policy=HostFilterPolicy(
+                RoundRobinPolicy(), predicate=lambda host: host.address != only_replica
+            )
         )
         only_replica = queried_hosts.pop()
         log = logging.getLogger(__name__)
         log.info("The only replica found was: {}".format(only_replica))
-        available_hosts = [host for host in ["127.0.0.1", "127.0.0.2", "127.0.0.3"] if host != only_replica]
-        with TestCluster(contact_points=available_hosts,
-                         execution_profiles={EXEC_PROFILE_DEFAULT: hfp_profile}) as cluster:
-
+        available_hosts = [
+            host
+            for host in ["127.0.0.1", "127.0.0.2", "127.0.0.3"]
+            if host != only_replica
+        ]
+        with TestCluster(
+            contact_points=available_hosts,
+            execution_profiles={EXEC_PROFILE_DEFAULT: hfp_profile},
+        ) as cluster:
             session = cluster.connect(wait_for_all_pools=True)
             prepared = session.prepare("""SELECT * from test1rf.table_with_big_key
                                           WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""")
             for _ in range(10):
-                result = session.execute(prepared, (last_i, last_i, last_i, last_i), trace=True)
-                trace = result.response_future.get_query_trace(query_cl=ConsistencyLevel.ALL)
+                result = session.execute(
+                    prepared, (last_i, last_i, last_i, last_i), trace=True
+                )
+                trace = result.response_future.get_query_trace(
+                    query_cl=ConsistencyLevel.ALL
+                )
                 self._assert_replica_queried(trace, only_replicas=False)
 
-            session.execute('''DROP TABLE test1rf.table_with_big_key''')
+            session.execute("""DROP TABLE test1rf.table_with_big_key""")
 
     @greaterthanorequalcass30
     @lessthanorequalcass40
@@ -1270,40 +1442,51 @@ class ClusterTests(unittest.TestCase):
         session.set_keyspace("test3rf")
 
         nc_session.execute(
-            "CREATE TABLE IF NOT EXISTS compact_table (k int PRIMARY KEY, v1 int, v2 int) WITH COMPACT STORAGE;")
+            "CREATE TABLE IF NOT EXISTS compact_table (k int PRIMARY KEY, v1 int, v2 int) WITH COMPACT STORAGE;"
+        )
 
         for i in range(1, 5):
             nc_session.execute(
                 "INSERT INTO compact_table (k, column1, v1, v2, value) VALUES "
-                "({i}, 'a{i}', {i}, {i}, textAsBlob('b{i}'))".format(i=i))
+                "({i}, 'a{i}', {i}, {i}, textAsBlob('b{i}'))".format(i=i)
+            )
             nc_session.execute(
                 "INSERT INTO compact_table (k, column1, v1, v2, value) VALUES "
-                "({i}, 'a{i}{i}', {i}{i}, {i}{i}, textAsBlob('b{i}{i}'))".format(i=i))
+                "({i}, 'a{i}{i}', {i}{i}, {i}{i}, textAsBlob('b{i}{i}'))".format(i=i)
+            )
 
         nc_results = nc_session.execute("SELECT * FROM compact_table")
-        assert set(nc_results.current_rows) == {(1, u'a1', 11, 11, 'b1'),
-         (1, u'a11', 11, 11, 'b11'),
-         (2, u'a2', 22, 22, 'b2'),
-         (2, u'a22', 22, 22, 'b22'),
-         (3, u'a3', 33, 33, 'b3'),
-         (3, u'a33', 33, 33, 'b33'),
-         (4, u'a4', 44, 44, 'b4'),
-         (4, u'a44', 44, 44, 'b44')}
+        assert set(nc_results.current_rows) == {
+            (1, "a1", 11, 11, "b1"),
+            (1, "a11", 11, 11, "b11"),
+            (2, "a2", 22, 22, "b2"),
+            (2, "a22", 22, 22, "b22"),
+            (3, "a3", 33, 33, "b3"),
+            (3, "a33", 33, 33, "b33"),
+            (4, "a4", 44, 44, "b4"),
+            (4, "a44", 44, 44, "b44"),
+        }
 
         results = session.execute("SELECT * FROM compact_table")
-        assert set(results.current_rows) == {(1, 11, 11),
-         (2, 22, 22),
-         (3, 33, 33),
-         (4, 44, 44)}
+        assert set(results.current_rows) == {
+            (1, 11, 11),
+            (2, 22, 22),
+            (3, 33, 33),
+            (4, 44, 44),
+        }
 
     def _assert_replica_queried(self, trace, only_replicas=True):
         queried_hosts = set()
         for row in trace.events:
             queried_hosts.add(row.source)
         if only_replicas:
-            assert len(queried_hosts) == 1, "The hosts queried where {}".format(queried_hosts)
+            assert len(queried_hosts) == 1, "The hosts queried where {}".format(
+                queried_hosts
+            )
         else:
-            assert len(queried_hosts) > 1, "The host queried was {}".format(queried_hosts)
+            assert len(queried_hosts) > 1, "The host queried was {}".format(
+                queried_hosts
+            )
         return queried_hosts
 
     def _check_trace(self, trace):
@@ -1315,7 +1498,6 @@ class ClusterTests(unittest.TestCase):
 
 
 class LocalHostAdressTranslator(AddressTranslator):
-
     def __init__(self, addr_map=None):
         self.addr_map = addr_map
 
@@ -1323,9 +1505,9 @@ class LocalHostAdressTranslator(AddressTranslator):
         new_addr = self.addr_map.get(addr)
         return new_addr
 
+
 @local
 class TestAddressTranslation(unittest.TestCase):
-
     def test_address_translator_basic(self):
         """
         Test host address translation
@@ -1340,7 +1522,13 @@ class TestAddressTranslation(unittest.TestCase):
 
         @test_category metadata
         """
-        lh_ad = LocalHostAdressTranslator({'127.0.0.1': '127.0.0.1', '127.0.0.2': '127.0.0.1', '127.0.0.3': '127.0.0.1'})
+        lh_ad = LocalHostAdressTranslator(
+            {
+                "127.0.0.1": "127.0.0.1",
+                "127.0.0.2": "127.0.0.1",
+                "127.0.0.3": "127.0.0.1",
+            }
+        )
         c = TestCluster(address_translator=lh_ad)
         c.connect()
         assert len(c.metadata.all_hosts()) == 1
@@ -1359,7 +1547,11 @@ class TestAddressTranslation(unittest.TestCase):
 
         @test_category metadata
         """
-        adder_map = {'127.0.0.1': '127.0.0.1', '127.0.0.2': '127.0.0.3', '127.0.0.3': '127.0.0.2'}
+        adder_map = {
+            "127.0.0.1": "127.0.0.1",
+            "127.0.0.2": "127.0.0.3",
+            "127.0.0.3": "127.0.0.2",
+        }
         lh_ad = LocalHostAdressTranslator(adder_map)
         c = TestCluster(address_translator=lh_ad)
         c.connect()
@@ -1367,15 +1559,21 @@ class TestAddressTranslation(unittest.TestCase):
             assert adder_map.get(host.address) == host.broadcast_address
         c.shutdown()
 
+
 @local
 class ContextManagementTest(unittest.TestCase):
     load_balancing_policy = HostFilterPolicy(
         RoundRobinPolicy(), lambda host: host.address == CASSANDRA_IP
     )
-    cluster_kwargs = {'execution_profiles': {EXEC_PROFILE_DEFAULT: ExecutionProfile(load_balancing_policy=
-                                                                                    load_balancing_policy)},
-                      'schema_metadata_enabled': False,
-                      'token_metadata_enabled': False}
+    cluster_kwargs = {
+        "execution_profiles": {
+            EXEC_PROFILE_DEFAULT: ExecutionProfile(
+                load_balancing_policy=load_balancing_policy
+            )
+        },
+        "schema_metadata_enabled": False,
+        "token_metadata_enabled": False,
+    }
 
     def test_no_connect(self):
         """
@@ -1405,7 +1603,7 @@ class ContextManagementTest(unittest.TestCase):
             with cluster.connect() as session:
                 assert not cluster.is_shutdown
                 assert not session.is_shutdown
-                assert session.execute('select release_version from system.local').one()
+                assert session.execute("select release_version from system.local").one()
             assert session.is_shutdown
         assert cluster.is_shutdown
 
@@ -1423,7 +1621,7 @@ class ContextManagementTest(unittest.TestCase):
             session = cluster.connect()
             assert not cluster.is_shutdown
             assert not session.is_shutdown
-            assert session.execute('select release_version from system.local').one()
+            assert session.execute("select release_version from system.local").one()
         assert session.is_shutdown
         assert cluster.is_shutdown
 
@@ -1443,7 +1641,7 @@ class ContextManagementTest(unittest.TestCase):
             assert not cluster.is_shutdown
             assert not session.is_shutdown
             assert not unmanaged_session.is_shutdown
-            assert session.execute('select release_version from system.local').one()
+            assert session.execute("select release_version from system.local").one()
         assert session.is_shutdown
         assert not cluster.is_shutdown
         assert not unmanaged_session.is_shutdown
@@ -1455,7 +1653,6 @@ class ContextManagementTest(unittest.TestCase):
 
 
 class HostStateTest(unittest.TestCase):
-
     def test_down_event_with_active_connection(self):
         """
         Test to ensure that on down calls to clusters with connections still active don't result in
@@ -1475,7 +1672,7 @@ class HostStateTest(unittest.TestCase):
             for _ in range(10):
                 new_host = cluster.metadata.all_hosts()[0]
                 assert new_host.is_up, "Host was not up on iteration {0}".format(_)
-                time.sleep(.01)
+                time.sleep(0.01)
 
             pool = session._pools.get(random_host)
             pool.shutdown()
@@ -1486,27 +1683,32 @@ class HostStateTest(unittest.TestCase):
                 if not new_host.is_up:
                     was_marked_down = True
                     break
-                time.sleep(.01)
+                time.sleep(0.01)
             assert was_marked_down
 
 
 @local
 class DontPrepareOnIgnoredHostsTest(unittest.TestCase):
-    ignored_addresses = ['127.0.0.3']
+    ignored_addresses = ["127.0.0.3"]
     ignore_node_3_policy = IgnoredHostPolicy(ignored_addresses)
 
     def test_prepare_on_ignored_hosts(self):
-
         cluster = TestCluster(
-            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(load_balancing_policy=self.ignore_node_3_policy)}
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(
+                    load_balancing_policy=self.ignore_node_3_policy
+                )
+            }
         )
         session = cluster.connect()
         cluster.reprepare_on_up, cluster.prepare_on_all_hosts = True, False
 
         hosts = cluster.metadata.all_hosts()
-        session.execute("CREATE KEYSPACE clustertests "
-                        "WITH replication = "
-                        "{'class': 'SimpleStrategy', 'replication_factor': '1'}")
+        session.execute(
+            "CREATE KEYSPACE clustertests "
+            "WITH replication = "
+            "{'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}"
+        )
         session.execute("CREATE TABLE clustertests.tab (a text, PRIMARY KEY (a))")
         # assign to an unused variable so cluster._prepared_statements retains
         # reference
@@ -1514,7 +1716,7 @@ class DontPrepareOnIgnoredHostsTest(unittest.TestCase):
 
         cluster.connection_factory = Mock(wraps=cluster.connection_factory)
 
-        unignored_address = '127.0.0.1'
+        unignored_address = "127.0.0.1"
         unignored_host = next(h for h in hosts if h.address == unignored_address)
         ignored_host = next(h for h in hosts if h.address in self.ignored_addresses)
         unignored_host.is_up = ignored_host.is_up = False
@@ -1545,9 +1747,13 @@ class DeprecationWarningTest(unittest.TestCase):
             TestCluster(load_balancing_policy=RoundRobinPolicy())
             logging.info(w)
             assert len(w) >= 1
-            assert any(["Legacy execution parameters will be removed in 4.0. "
-                                 "Consider using execution profiles." in
-                            str(wa.message) for wa in w])
+            assert any(
+                [
+                    "Legacy execution parameters will be removed in 4.0. "
+                    "Consider using execution profiles." in str(wa.message)
+                    for wa in w
+                ]
+            )
 
     def test_deprecation_warnings_meta_refreshed(self):
         """
@@ -1565,8 +1771,13 @@ class DeprecationWarningTest(unittest.TestCase):
             cluster.set_meta_refresh_enabled(True)
             logging.info(w)
             assert len(w) >= 1
-            assert any(["Cluster.set_meta_refresh_enabled is deprecated and will be removed in 4.0." in
-                            str(wa.message) for wa in w])
+            assert any(
+                [
+                    "Cluster.set_meta_refresh_enabled is deprecated and will be removed in 4.0."
+                    in str(wa.message)
+                    for wa in w
+                ]
+            )
 
     def test_deprecation_warning_default_consistency_level(self):
         """
@@ -1584,5 +1795,10 @@ class DeprecationWarningTest(unittest.TestCase):
             session = cluster.connect()
             session.default_consistency_level = ConsistencyLevel.ONE
             assert len(w) >= 1
-            assert any(["Setting the consistency level at the session level will be removed in 4.0" in
-                            str(wa.message) for wa in w])
+            assert any(
+                [
+                    "Setting the consistency level at the session level will be removed in 4.0"
+                    in str(wa.message)
+                    for wa in w
+                ]
+            )

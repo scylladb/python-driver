@@ -8,7 +8,11 @@ from unittest.mock import patch
 
 from cassandra.connection import Connection
 from cassandra.cluster import Cluster
-from cassandra.policies import TokenAwarePolicy, RoundRobinPolicy, ConstantReconnectionPolicy
+from cassandra.policies import (
+    TokenAwarePolicy,
+    RoundRobinPolicy,
+    ConstantReconnectionPolicy,
+)
 
 from tests.integration import use_cluster, PROTOCOL_VERSION, local
 
@@ -19,25 +23,28 @@ _saved_scylla_ext_opts = None
 
 def setup_module():
     global _saved_scylla_ext_opts
-    _saved_scylla_ext_opts = os.environ.get('SCYLLA_EXT_OPTS')
-    os.environ['SCYLLA_EXT_OPTS'] = "--smp 2 --memory 2048M"
-    use_cluster('shared_aware', [3], start=True)
+    _saved_scylla_ext_opts = os.environ.get("SCYLLA_EXT_OPTS")
+    os.environ["SCYLLA_EXT_OPTS"] = "--smp 2 --memory 2048M"
+    use_cluster("shared_aware", [3], start=True)
 
 
 def teardown_module():
     if _saved_scylla_ext_opts is None:
-        os.environ.pop('SCYLLA_EXT_OPTS', None)
+        os.environ.pop("SCYLLA_EXT_OPTS", None)
     else:
-        os.environ['SCYLLA_EXT_OPTS'] = _saved_scylla_ext_opts
+        os.environ["SCYLLA_EXT_OPTS"] = _saved_scylla_ext_opts
 
 
 @local
 class TestUseKeyspace(unittest.TestCase):
     @classmethod
     def setup_class(cls):
-        cls.cluster = Cluster(contact_points=["127.0.0.1"], protocol_version=PROTOCOL_VERSION,
-                              load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy()),
-                              reconnection_policy=ConstantReconnectionPolicy(1))
+        cls.cluster = Cluster(
+            contact_points=["127.0.0.1"],
+            protocol_version=PROTOCOL_VERSION,
+            load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy()),
+            reconnection_policy=ConstantReconnectionPolicy(1),
+        )
         cls.session = cls.cluster.connect()
         LOGGER.info(cls.cluster.is_shard_aware())
         LOGGER.info(cls.cluster.shard_aware_stats())
@@ -45,13 +52,13 @@ class TestUseKeyspace(unittest.TestCase):
     @classmethod
     def teardown_class(cls):
         cls.cluster.shutdown()
-    
+
     def test_set_keyspace_slow_connection(self):
         # Test that "USE keyspace" gets propagated
         # to all connections.
         #
         # Reproduces an issue #187 where some pending
-        # connections for shards would not 
+        # connections for shards would not
         # receive "USE keyspace".
         #
         # Simulate that scenario by adding an artifical
@@ -64,11 +71,19 @@ class TestUseKeyspace(unittest.TestCase):
             time.sleep(1)
             return original_set_keyspace_blocking(*args, **kwargs)
 
-        with patch.object(Connection, "set_keyspace_blocking", patched_set_keyspace_blocking):
-            self.session.execute("CREATE KEYSPACE test_set_keyspace WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
-            self.session.execute("CREATE TABLE test_set_keyspace.set_keyspace_slow_connection(pk int, PRIMARY KEY(pk))")
+        with patch.object(
+            Connection, "set_keyspace_blocking", patched_set_keyspace_blocking
+        ):
+            self.session.execute(
+                "CREATE KEYSPACE test_set_keyspace WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+            )
+            self.session.execute(
+                "CREATE TABLE test_set_keyspace.set_keyspace_slow_connection(pk int, PRIMARY KEY(pk))"
+            )
 
             session2 = self.cluster.connect()
             session2.execute("USE test_set_keyspace")
             for i in range(200):
-                session2.execute(f"SELECT * FROM set_keyspace_slow_connection WHERE pk = 1")
+                session2.execute(
+                    f"SELECT * FROM set_keyspace_slow_connection WHERE pk = 1"
+                )

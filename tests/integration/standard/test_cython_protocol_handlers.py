@@ -9,14 +9,27 @@ from itertools import count
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.cython_deps import HAVE_CYTHON, HAVE_NUMPY
-from cassandra.protocol import ProtocolHandler, LazyProtocolHandler, NumpyProtocolHandler
+from cassandra.protocol import (
+    ProtocolHandler,
+    LazyProtocolHandler,
+    NumpyProtocolHandler,
+)
 from cassandra.query import tuple_factory
 from tests import VERIFY_CYTHON
-from tests.integration import use_single_node, notprotocolv1, \
-    drop_keyspace_shutdown_cluster, BasicSharedKeyspaceUnitTestCase, greaterthancass21, TestCluster
+from tests.integration import (
+    use_single_node,
+    notprotocolv1,
+    drop_keyspace_shutdown_cluster,
+    BasicSharedKeyspaceUnitTestCase,
+    greaterthancass21,
+    TestCluster,
+)
 from tests.integration.datatype_utils import update_datatypes
 from tests.integration.standard.utils import (
-    create_table_with_all_types, get_all_primitive_params, get_primitive_datatypes)
+    create_table_with_all_types,
+    get_all_primitive_params,
+    get_primitive_datatypes,
+)
 from tests.unit.cython.utils import cythontest, numpytest
 
 
@@ -26,17 +39,20 @@ def setup_module():
 
 
 class CythonProtocolHandlerTest(unittest.TestCase):
-
     N_ITEMS = 10
 
     @classmethod
     def setUpClass(cls):
         cls.cluster = TestCluster()
         cls.session = cls.cluster.connect()
-        cls.session.execute("CREATE KEYSPACE testspace WITH replication = "
-                            "{ 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
+        cls.session.execute(
+            "CREATE KEYSPACE testspace WITH replication = "
+            "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1'}"
+        )
         cls.session.set_keyspace("testspace")
-        cls.colnames = create_table_with_all_types("test_table", cls.session, cls.N_ITEMS)
+        cls.colnames = create_table_with_all_types(
+            "test_table", cls.session, cls.N_ITEMS
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -63,7 +79,9 @@ class CythonProtocolHandlerTest(unittest.TestCase):
         """
         # arrays = { 'a': arr1, 'b': arr2, ... }
         cluster = TestCluster(
-            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)
+            }
         )
         session = cluster.connect(keyspace="testspace")
         session.client_protocol_handler = LazyProtocolHandler
@@ -74,7 +92,9 @@ class CythonProtocolHandlerTest(unittest.TestCase):
         results = session.execute("SELECT * FROM test_table")
 
         assert results.has_more_pages
-        assert verify_iterator_data(results) == self.N_ITEMS  # make sure we see all rows
+        assert (
+            verify_iterator_data(results) == self.N_ITEMS
+        )  # make sure we see all rows
 
         cluster.shutdown()
 
@@ -97,13 +117,17 @@ class CythonProtocolHandlerTest(unittest.TestCase):
         """
         # arrays = { 'a': arr1, 'b': arr2, ... }
         cluster = TestCluster(
-            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)
+            }
         )
         session = cluster.connect(keyspace="testspace")
         session.client_protocol_handler = NumpyProtocolHandler
         session.default_fetch_size = 2
 
-        expected_pages = (self.N_ITEMS + session.default_fetch_size - 1) // session.default_fetch_size
+        expected_pages = (
+            self.N_ITEMS + session.default_fetch_size - 1
+        ) // session.default_fetch_size
 
         assert session.default_fetch_size < self.N_ITEMS
 
@@ -151,18 +175,18 @@ class CythonProtocolHandlerTest(unittest.TestCase):
 
     def match_dtype(self, datatype, dtype):
         """Match a string cqltype (e.g. 'int' or 'blob') with a numpy dtype"""
-        if datatype == 'smallint':
-            self.match_dtype_props(dtype, 'i', 2)
-        elif datatype == 'int':
-            self.match_dtype_props(dtype, 'i', 4)
-        elif datatype in ('bigint', 'counter'):
-            self.match_dtype_props(dtype, 'i', 8)
-        elif datatype == 'float':
-            self.match_dtype_props(dtype, 'f', 4)
-        elif datatype == 'double':
-            self.match_dtype_props(dtype, 'f', 8)
+        if datatype == "smallint":
+            self.match_dtype_props(dtype, "i", 2)
+        elif datatype == "int":
+            self.match_dtype_props(dtype, "i", 4)
+        elif datatype in ("bigint", "counter"):
+            self.match_dtype_props(dtype, "i", 8)
+        elif datatype == "float":
+            self.match_dtype_props(dtype, "f", 4)
+        elif datatype == "double":
+            self.match_dtype_props(dtype, "f", 8)
         else:
-            assert dtype.kind == 'O', (dtype, datatype)
+            assert dtype.kind == "O", (dtype, datatype)
 
     def match_dtype_props(self, dtype, kind, size, signed=None):
         assert dtype.kind == kind, dtype
@@ -172,8 +196,10 @@ class CythonProtocolHandlerTest(unittest.TestCase):
 def arrays_to_list_of_tuples(arrays, colnames):
     """Convert a dict of arrays (as given by the numpy protocol handler) to a list of tuples"""
     first_array = arrays[colnames[0]]
-    return [tuple(arrays[colname][i] for colname in colnames)
-                for i in range(len(first_array))]
+    return [
+        tuple(arrays[colname][i] for colname in colnames)
+        for i in range(len(first_array))
+    ]
 
 
 def get_data(protocol_handler):
@@ -181,7 +207,9 @@ def get_data(protocol_handler):
     Get data from the test table.
     """
     cluster = TestCluster(
-        execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+        execution_profiles={
+            EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)
+        }
     )
     session = cluster.connect(keyspace="testspace")
 
@@ -224,16 +252,20 @@ class NumpyWideTableTest(unittest.TestCase):
     def setUpClass(cls):
         cls.cluster = TestCluster()
         cls.session = cls.cluster.connect()
-        cls.session.execute("CREATE KEYSPACE IF NOT EXISTS test_wide_table WITH replication = "
-                            "{ 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
+        cls.session.execute(
+            "CREATE KEYSPACE IF NOT EXISTS test_wide_table WITH replication = "
+            "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1'}"
+        )
         cls.session.set_keyspace("test_wide_table")
 
         # Create a wide table with many int columns
         columns = ["pk int", "ck int"]
         columns += ["col{0} int".format(i) for i in range(cls.N_COLUMNS)]
         cls.session.execute(
-            "CREATE TABLE wide_table ({0}, PRIMARY KEY (pk, ck))".format(", ".join(columns)),
-            timeout=120
+            "CREATE TABLE wide_table ({0}, PRIMARY KEY (pk, ck))".format(
+                ", ".join(columns)
+            ),
+            timeout=120,
         )
 
         # Insert test data
@@ -262,7 +294,9 @@ class NumpyWideTableTest(unittest.TestCase):
         that all data is still returned correctly across multiple pages.
         """
         cluster = TestCluster(
-            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)
+            }
         )
         session = cluster.connect(keyspace="test_wide_table")
         session.client_protocol_handler = NumpyProtocolHandler
@@ -276,14 +310,18 @@ class NumpyWideTableTest(unittest.TestCase):
         for page in results:
             page_count += 1
             # Get row count from first column array
-            arr = page.get('pk')
+            arr = page.get("pk")
             if arr is not None:
                 total_rows += len(arr)
 
         # Verify all rows were returned
-        self.assertEqual(total_rows, self.N_ROWS,
-                         "Expected {0} rows total, got {1} across {2} pages".format(
-                             self.N_ROWS, total_rows, page_count))
+        self.assertEqual(
+            total_rows,
+            self.N_ROWS,
+            "Expected {0} rows total, got {1} across {2} pages".format(
+                self.N_ROWS, total_rows, page_count
+            ),
+        )
 
         cluster.shutdown()
 
@@ -296,7 +334,9 @@ class NumpyWideTableTest(unittest.TestCase):
         This is the recommended workaround for getting larger pages with wide tables.
         """
         cluster = TestCluster(
-            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)
+            }
         )
         session = cluster.connect(keyspace="test_wide_table")
         session.client_protocol_handler = NumpyProtocolHandler
@@ -309,23 +349,31 @@ class NumpyWideTableTest(unittest.TestCase):
         page_count = 0
         for page in results:
             page_count += 1
-            arr = page.get('pk')
+            arr = page.get("pk")
             if arr is not None:
                 total_rows += len(arr)
 
         # Verify all rows were returned
-        self.assertEqual(total_rows, self.N_ROWS,
-                         "Expected {0} rows total, got {1} across {2} pages".format(
-                             self.N_ROWS, total_rows, page_count))
+        self.assertEqual(
+            total_rows,
+            self.N_ROWS,
+            "Expected {0} rows total, got {1} across {2} pages".format(
+                self.N_ROWS, total_rows, page_count
+            ),
+        )
 
         cluster.shutdown()
 
 
 class NumpyNullTest(BasicSharedKeyspaceUnitTestCase):
-
     @classmethod
     def setUpClass(cls):
-        cls.common_setup(1, execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)})
+        cls.common_setup(
+            1,
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)
+            },
+        )
 
     @numpytest
     @greaterthancass21
@@ -345,7 +393,9 @@ class NumpyNullTest(BasicSharedKeyspaceUnitTestCase):
         table = "%s.%s" % (self.keyspace_name, self.function_table_name)
         create_table_with_all_types(table, s, 10)
 
-        begin_unset = max(s.execute('select primkey from %s' % (table,)).one()['primkey']) + 1
+        begin_unset = (
+            max(s.execute("select primkey from %s" % (table,)).one()["primkey"]) + 1
+        )
         keys_null = range(begin_unset, begin_unset + 10)
 
         # scatter some emptry rows in here
@@ -355,7 +405,8 @@ class NumpyNullTest(BasicSharedKeyspaceUnitTestCase):
         result = s.execute("select * from %s" % (table,)).one()
 
         from numpy.ma import masked, MaskedArray
-        result_keys = result.pop('primkey')
+
+        result_keys = result.pop("primkey")
         mapped_index = [v[1] for v in sorted(zip(result_keys, count()))]
 
         had_masked = had_none = False

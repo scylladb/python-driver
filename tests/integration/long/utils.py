@@ -19,63 +19,83 @@ import pytest
 from collections import defaultdict
 from packaging.version import Version
 
-from tests.integration import (get_node, get_cluster, wait_for_node_socket,
-                               CASSANDRA_VERSION)
+from tests.integration import (
+    get_node,
+    get_cluster,
+    wait_for_node_socket,
+    CASSANDRA_VERSION,
+)
 
 
-IP_FORMAT = '127.0.0.%s'
+IP_FORMAT = "127.0.0.%s"
 
 log = logging.getLogger(__name__)
 
 
-class CoordinatorStats():
-
+class CoordinatorStats:
     def __init__(self):
         self.coordinator_counts = defaultdict(int)
 
     def add_coordinator(self, future):
-        log.debug('adding coordinator from {}'.format(future))
+        log.debug("adding coordinator from {}".format(future))
         future.result()
         coordinator = future._current_host.address
         self.coordinator_counts[coordinator] += 1
 
         if future._errors:
-            log.error('future._errors: %s', future._errors)
+            log.error("future._errors: %s", future._errors)
 
     def reset_counts(self):
         self.coordinator_counts = defaultdict(int)
 
     def get_query_count(self, node):
-        ip = '127.0.0.%d' % node
+        ip = "127.0.0.%d" % node
         return self.coordinator_counts[ip]
 
     def assert_query_count_equals(self, node, expected):
-        ip = '127.0.0.%d' % node
+        ip = "127.0.0.%d" % node
         if self.get_query_count(node) != expected:
-            pytest.fail('Expected %d queries to %s, but got %d. Query counts: %s' % (
-                expected, ip, self.coordinator_counts[ip], dict(self.coordinator_counts)))
+            pytest.fail(
+                "Expected %d queries to %s, but got %d. Query counts: %s"
+                % (
+                    expected,
+                    ip,
+                    self.coordinator_counts[ip],
+                    dict(self.coordinator_counts),
+                )
+            )
 
 
-def create_schema(cluster, session, keyspace, simple_strategy=True,
-                  replication_factor=1, replication_strategy=None):
+def create_schema(
+    cluster,
+    session,
+    keyspace,
+    simple_strategy=True,
+    replication_factor=1,
+    replication_strategy=None,
+):
     if keyspace in cluster.metadata.keyspaces.keys():
-        session.execute('DROP KEYSPACE %s' % keyspace, timeout=20)
+        session.execute("DROP KEYSPACE %s" % keyspace, timeout=20)
 
     if simple_strategy:
-        ddl = "CREATE KEYSPACE %s WITH replication" \
-              " = {'class': 'SimpleStrategy', 'replication_factor': '%s'}"
+        ddl = (
+            "CREATE KEYSPACE %s WITH replication"
+            " = {'class': 'NetworkTopologyStrategy', 'replication_factor': '%s'}"
+        )
         session.execute(ddl % (keyspace, replication_factor), timeout=10)
     else:
         if not replication_strategy:
-            raise Exception('replication_strategy is not set')
+            raise Exception("replication_strategy is not set")
 
-        ddl = "CREATE KEYSPACE %s" \
-              " WITH replication = { 'class' : 'NetworkTopologyStrategy', %s }"
+        ddl = (
+            "CREATE KEYSPACE %s"
+            " WITH replication = { 'class' : 'NetworkTopologyStrategy', %s }"
+        )
         session.execute(ddl % (keyspace, str(replication_strategy)[1:-1]), timeout=10)
 
-    ddl = 'CREATE TABLE %s.cf (k int PRIMARY KEY, i int)'
+    ddl = "CREATE TABLE %s.cf (k int PRIMARY KEY, i int)"
     session.execute(ddl % keyspace, timeout=10)
-    session.execute('USE %s' % keyspace)
+    session.execute("USE %s" % keyspace)
 
 
 def start(node):
@@ -102,14 +122,12 @@ def decommission(node):
 
 
 def bootstrap(node, data_center=None, token=None):
-    log.debug('called bootstrap('
-              'node={node}, data_center={data_center}, '
-              'token={token})')
+    log.debug("called bootstrap(node={node}, data_center={data_center}, token={token})")
     cluster = get_cluster()
     # for now assumes cluster has at least one node
     node_type = type(next(iter(cluster.nodes.values())))
     node_instance = node_type(
-        'node%s' % node,
+        "node%s" % node,
         cluster,
         auto_bootstrap=False,
         thrift_interface=(IP_FORMAT % node, 9160),
@@ -117,25 +135,25 @@ def bootstrap(node, data_center=None, token=None):
         binary_interface=(IP_FORMAT % node, 9042),
         jmx_port=str(7000 + 100 * node),
         remote_debug_port=0,
-        initial_token=token if token else node * 10
+        initial_token=token if token else node * 10,
     )
     cluster.add(node_instance, is_seed=False, data_center=data_center)
 
     try:
         node_instance.start()
     except Exception as e0:
-        log.debug('failed 1st bootstrap attempt with: \n{}'.format(e0))
+        log.debug("failed 1st bootstrap attempt with: \n{}".format(e0))
         # Try only twice
         try:
             node_instance.start()
         except Exception as e1:
-            log.debug('failed 2nd bootstrap attempt with: \n{}'.format(e1))
-            log.error('Added node failed to start twice.')
+            log.debug("failed 2nd bootstrap attempt with: \n{}".format(e1))
+            log.error("Added node failed to start twice.")
             raise e1
 
 
 def ring(node):
-    get_node(node).nodetool('ring')
+    get_node(node).nodetool("ring")
 
 
 def wait_for_up(cluster, node):

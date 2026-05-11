@@ -22,7 +22,11 @@ import unittest
 import pytest
 
 from cassandra.cluster import Cluster
-from cassandra.policies import TokenAwarePolicy, RoundRobinPolicy, ConstantReconnectionPolicy
+from cassandra.policies import (
+    TokenAwarePolicy,
+    RoundRobinPolicy,
+    ConstantReconnectionPolicy,
+)
 from cassandra import OperationTimedOut, ConsistencyLevel
 
 from tests.integration import use_cluster, get_node, PROTOCOL_VERSION
@@ -36,24 +40,27 @@ _saved_scylla_ext_opts = None
 
 def setup_module():
     global _saved_scylla_ext_opts
-    _saved_scylla_ext_opts = os.environ.get('SCYLLA_EXT_OPTS')
-    os.environ['SCYLLA_EXT_OPTS'] = "--smp 2"
-    use_cluster('cluster_tests', [3], start=True)
+    _saved_scylla_ext_opts = os.environ.get("SCYLLA_EXT_OPTS")
+    os.environ["SCYLLA_EXT_OPTS"] = "--smp 2"
+    use_cluster("cluster_tests", [3], start=True)
 
 
 def teardown_module():
     if _saved_scylla_ext_opts is None:
-        os.environ.pop('SCYLLA_EXT_OPTS', None)
+        os.environ.pop("SCYLLA_EXT_OPTS", None)
     else:
-        os.environ['SCYLLA_EXT_OPTS'] = _saved_scylla_ext_opts
+        os.environ["SCYLLA_EXT_OPTS"] = _saved_scylla_ext_opts
 
 
 class TestShardAwareIntegration(unittest.TestCase):
     @classmethod
     def setup_class(cls):
-        cls.cluster = Cluster(contact_points=["127.0.0.1"], protocol_version=PROTOCOL_VERSION,
-                              load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy()),
-                              reconnection_policy=ConstantReconnectionPolicy(1))
+        cls.cluster = Cluster(
+            contact_points=["127.0.0.1"],
+            protocol_version=PROTOCOL_VERSION,
+            load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy()),
+            reconnection_policy=ConstantReconnectionPolicy(1),
+        )
         cls.session = cls.cluster.connect()
         LOGGER.info(cls.cluster.is_shard_aware())
         LOGGER.info(cls.cluster.shard_aware_stats())
@@ -69,16 +76,18 @@ class TestShardAwareIntegration(unittest.TestCase):
             LOGGER.info("%s %s %s", event.source, event.thread_name, event.description)
         for event in events:
             assert shard_name in event.thread_name
-        assert 'querying locally' in "\n".join([event.description for event in events])
+        assert "querying locally" in "\n".join([event.description for event in events])
 
         trace_id = results.response_future.get_query_trace_ids()[0]
-        traces = self.session.execute("SELECT * FROM system_traces.events WHERE session_id = %s", (trace_id,))
+        traces = self.session.execute(
+            "SELECT * FROM system_traces.events WHERE session_id = %s", (trace_id,)
+        )
         events = [event for event in traces]
         for event in events:
             LOGGER.info("%s %s", event.thread, event.activity)
         for event in events:
             assert shard_name in event.thread
-        assert 'querying locally' in "\n".join([event.activity for event in events])
+        assert "querying locally" in "\n".join([event.activity for event in events])
 
     def create_ks_and_cf(self):
         self.session.execute(
@@ -89,8 +98,9 @@ class TestShardAwareIntegration(unittest.TestCase):
         self.session.execute(
             """
             CREATE KEYSPACE preparedtests
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}
-            """)
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}
+            """
+        )
 
         self.session.execute("USE preparedtests")
         self.session.execute(
@@ -101,7 +111,8 @@ class TestShardAwareIntegration(unittest.TestCase):
                 c text,
                 PRIMARY KEY (a, b)
             )
-            """)
+            """
+        )
 
     @staticmethod
     def create_data(session):
@@ -109,35 +120,37 @@ class TestShardAwareIntegration(unittest.TestCase):
         prepared = session.prepare(
             """
             INSERT INTO cf0 (a, b, c) VALUES  (?, ?, ?)
-            """)
+            """
+        )
 
-        bound = prepared.bind(('a', 'b', 'c'))
+        bound = prepared.bind(("a", "b", "c"))
         session.execute(bound)
-        bound = prepared.bind(('e', 'f', 'g'))
+        bound = prepared.bind(("e", "f", "g"))
         session.execute(bound)
-        bound = prepared.bind(('100002', 'f', 'g'))
+        bound = prepared.bind(("100002", "f", "g"))
         session.execute(bound)
 
     def query_data(self, session, verify_in_tracing=True):
         prepared = session.prepare(
             """
             SELECT * FROM cf0 WHERE a=? AND b=?
-            """)
+            """
+        )
 
-        bound = prepared.bind(('a', 'b'))
+        bound = prepared.bind(("a", "b"))
         results = session.execute(bound, trace=True)
-        assert results == [('a', 'b', 'c')]
+        assert results == [("a", "b", "c")]
         if verify_in_tracing:
             self.verify_same_shard_in_tracing(results, "shard 0")
 
-        bound = prepared.bind(('100002', 'f'))
+        bound = prepared.bind(("100002", "f"))
         results = session.execute(bound, trace=True)
-        assert results == [('100002', 'f', 'g')]
+        assert results == [("100002", "f", "g")]
 
         if verify_in_tracing:
             self.verify_same_shard_in_tracing(results, "shard 1")
 
-        bound = prepared.bind(('e', 'f'))
+        bound = prepared.bind(("e", "f"))
         results = session.execute(bound, trace=True)
 
         if verify_in_tracing:
@@ -145,25 +158,37 @@ class TestShardAwareIntegration(unittest.TestCase):
 
     def _assert_blocked_node_disconnected(self, node_ip_address, node_port):
         control_connection = self.cluster.control_connection
-        active_control_connection = control_connection._connection if control_connection else None
-        if active_control_connection and \
-                active_control_connection.endpoint.address == node_ip_address and \
-                active_control_connection.endpoint.port == node_port:
-            assert active_control_connection.is_closed or active_control_connection.is_defunct
+        active_control_connection = (
+            control_connection._connection if control_connection else None
+        )
+        if (
+            active_control_connection
+            and active_control_connection.endpoint.address == node_ip_address
+            and active_control_connection.endpoint.port == node_port
+        ):
+            assert (
+                active_control_connection.is_closed
+                or active_control_connection.is_defunct
+            )
 
-        pools = getattr(self.session, '_pools', None) or {}
+        pools = getattr(self.session, "_pools", None) or {}
         for host, pool in pools.items():
-            if host.endpoint.address != node_ip_address or host.endpoint.port != node_port:
+            if (
+                host.endpoint.address != node_ip_address
+                or host.endpoint.port != node_port
+            ):
                 continue
 
             open_connections = [
-                connection for connection in pool._connections.values()
+                connection
+                for connection in pool._connections.values()
                 if not (connection.is_closed or connection.is_defunct)
             ]
             assert not open_connections
 
             pending_connections = [
-                connection for connection in pool._pending_connections
+                connection
+                for connection in pool._pending_connections
                 if not (connection.is_closed or connection.is_defunct)
             ]
             assert not pending_connections
@@ -188,18 +213,24 @@ class TestShardAwareIntegration(unittest.TestCase):
         self.create_ks_and_cf()
 
         number_of_clients = 15
-        session_list = [self.session] + [self.cluster.connect() for _ in range(number_of_clients)]
+        session_list = [self.session] + [
+            self.cluster.connect() for _ in range(number_of_clients)
+        ]
 
         with ThreadPoolExecutor(number_of_clients) as pool:
-            futures = [pool.submit(self.create_data, session) for session in session_list]
+            futures = [
+                pool.submit(self.create_data, session) for session in session_list
+            ]
             for result in as_completed(futures):
                 print(result)
 
-            futures = [pool.submit(self.query_data, session) for session in session_list]
+            futures = [
+                pool.submit(self.query_data, session) for session in session_list
+            ]
             for result in as_completed(futures):
                 print(result)
 
-    @pytest.mark.skip(reason='https://github.com/scylladb/python-driver/issues/221')
+    @pytest.mark.skip(reason="https://github.com/scylladb/python-driver/issues/221")
     def test_closing_connections(self):
         """
         Verify that reconnection is working as expected, when connection are being closed.
@@ -217,18 +248,20 @@ class TestShardAwareIntegration(unittest.TestCase):
             pool._connections.get(shard_id).close()
             wait_until_not_raised(
                 lambda: self.query_data(self.session, verify_in_tracing=False),
-                delay=0.5, max_attempts=30)
+                delay=0.5,
+                max_attempts=30,
+            )
 
         wait_until_not_raised(
-            lambda: self.query_data(self.session),
-            delay=0.5, max_attempts=60)
+            lambda: self.query_data(self.session), delay=0.5, max_attempts=60
+        )
 
     @pytest.mark.skip
     def test_blocking_connections(self):
         """
         Verify that reconnection is working as expected, when connection are being blocked.
         """
-        res = run('which iptables'.split(' '))
+        res = run("which iptables".split(" "))
         if not res.returncode == 0:
             self.skipTest("iptables isn't installed")
 
@@ -236,26 +269,37 @@ class TestShardAwareIntegration(unittest.TestCase):
         self.create_data(self.session)
         self.query_data(self.session)
 
-        node1_ip_address, node1_port = get_node(1).network_interfaces['binary']
+        node1_ip_address, node1_port = get_node(1).network_interfaces["binary"]
 
         def remove_iptables():
-            run(('sudo iptables -t filter -D INPUT -p tcp --dport {node1_port} '
-                 '--destination {node1_ip_address}/32 -j REJECT --reject-with icmp-port-unreachable'
-                 ).format(node1_ip_address=node1_ip_address, node1_port=node1_port).split(' ')
+            run(
+                (
+                    "sudo iptables -t filter -D INPUT -p tcp --dport {node1_port} "
+                    "--destination {node1_ip_address}/32 -j REJECT --reject-with icmp-port-unreachable"
                 )
+                .format(node1_ip_address=node1_ip_address, node1_port=node1_port)
+                .split(" ")
+            )
 
         self.addCleanup(remove_iptables)
 
         for i in range(3):
-            run(('sudo iptables -t filter -A INPUT -p tcp --dport {node1_port} '
-                 '--destination {node1_ip_address}/32 -j REJECT --reject-with icmp-port-unreachable'
-                 ).format(node1_ip_address=node1_ip_address, node1_port=node1_port).split(' ')
+            run(
+                (
+                    "sudo iptables -t filter -A INPUT -p tcp --dport {node1_port} "
+                    "--destination {node1_ip_address}/32 -j REJECT --reject-with icmp-port-unreachable"
                 )
+                .format(node1_ip_address=node1_ip_address, node1_port=node1_port)
+                .split(" ")
+            )
 
             wait_until_not_raised(
-                lambda: self._assert_blocked_node_disconnected(node1_ip_address, node1_port),
+                lambda: self._assert_blocked_node_disconnected(
+                    node1_ip_address, node1_port
+                ),
                 delay=0.1,
-                max_attempts=50)
+                max_attempts=50,
+            )
             try:
                 self.query_data(self.session, verify_in_tracing=False)
             except OperationTimedOut:
@@ -263,6 +307,8 @@ class TestShardAwareIntegration(unittest.TestCase):
             remove_iptables()
             wait_until_not_raised(
                 lambda: self.query_data(self.session, verify_in_tracing=False),
-                delay=0.5, max_attempts=30)
+                delay=0.5,
+                max_attempts=30,
+            )
 
         self.query_data(self.session)

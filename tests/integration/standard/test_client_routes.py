@@ -54,6 +54,7 @@ from tests.util import wait_until_not_raised
 
 log = logging.getLogger(__name__)
 
+
 class TcpProxy:
     """
     A simple TCP proxy that forwards connections from a local listen port
@@ -84,12 +85,19 @@ class TcpProxy:
         self._server_sock.listen(128)
         self._server_sock.setblocking(False)
         self._running = True
-        self._thread = threading.Thread(target=self._run, daemon=True,
-                                        name="proxy-%s:%d" % (self.listen_host, self.listen_port))
+        self._thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name="proxy-%s:%d" % (self.listen_host, self.listen_port),
+        )
         self._thread.start()
-        log.info("TcpProxy started %s:%d -> %s:%d",
-                 self.listen_host, self.listen_port,
-                 self.target_host, self.target_port)
+        log.info(
+            "TcpProxy started %s:%d -> %s:%d",
+            self.listen_host,
+            self.listen_port,
+            self.target_host,
+            self.target_port,
+        )
 
     def stop(self):
         self._running = False
@@ -115,8 +123,13 @@ class TcpProxy:
         """Change the backend target for new connections (existing ones keep the old target)."""
         self.target_host = new_host
         self.target_port = new_port
-        log.info("TcpProxy %s:%d retargeted to %s:%d",
-                 self.listen_host, self.listen_port, new_host, new_port)
+        log.info(
+            "TcpProxy %s:%d retargeted to %s:%d",
+            self.listen_host,
+            self.listen_port,
+            new_host,
+            new_port,
+        )
 
     def drop_connections(self):
         """Forcibly close all active connections."""
@@ -124,7 +137,9 @@ class TcpProxy:
             for csock, tsock in list(self._connections):
                 self._close_pair(csock, tsock)
             self._connections.clear()
-        log.info("TcpProxy %s:%d dropped all connections", self.listen_host, self.listen_port)
+        log.info(
+            "TcpProxy %s:%d dropped all connections", self.listen_host, self.listen_port
+        )
 
     def _run(self):
         while self._running:
@@ -147,9 +162,14 @@ class TcpProxy:
             target_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             target_sock.connect((target_host, target_port))
         except Exception as e:
-            log.warning("TcpProxy %s:%d failed to connect to target %s:%d: %s",
-                        self.listen_host, self.listen_port,
-                        target_host, target_port, e)
+            log.warning(
+                "TcpProxy %s:%d failed to connect to target %s:%d: %s",
+                self.listen_host,
+                self.listen_port,
+                target_host,
+                target_port,
+                e,
+            )
             client_sock.close()
             return
 
@@ -157,9 +177,9 @@ class TcpProxy:
             self._connections.add((client_sock, target_sock))
             self.total_connections += 1
 
-        t = threading.Thread(target=self._forward_loop,
-                             args=(client_sock, target_sock),
-                             daemon=True)
+        t = threading.Thread(
+            target=self._forward_loop, args=(client_sock, target_sock), daemon=True
+        )
         t.start()
 
     def _forward_loop(self, client_sock, target_sock):
@@ -215,10 +235,9 @@ class NLBEmulator:
 
     LISTEN_HOST = "127.254.254.101"
 
-    def __init__(self, discovery_port=0,
-                 per_node_base=0,
-                 native_port=9042,
-                 node_addresses=None):
+    def __init__(
+        self, discovery_port=0, per_node_base=0, native_port=9042, node_addresses=None
+    ):
         self.discovery_port = discovery_port
         self.per_node_base = per_node_base
         self.native_port = native_port
@@ -244,8 +263,10 @@ class NLBEmulator:
 
             first_addr = list(node_addresses.values())[0]
             self._discovery_proxy = TcpProxy(
-                self.LISTEN_HOST, self.discovery_port,
-                first_addr, self.native_port,
+                self.LISTEN_HOST,
+                self.discovery_port,
+                first_addr,
+                self.native_port,
             )
             self._discovery_proxy.start()
             self.discovery_port = self._discovery_proxy.listen_port
@@ -262,12 +283,18 @@ class NLBEmulator:
             idx = self._rr_index % len(addrs)
             self._rr_index += 1
             addr = addrs[idx]
-            original_handler(client_sock, target_host=addr, target_port=self.native_port)
+            original_handler(
+                client_sock, target_host=addr, target_port=self.native_port
+            )
 
         self._discovery_proxy._handle_new_connection = rr_handler
 
-        log.info("NLB started: discovery=%s:%d, %d node proxies",
-                 self.LISTEN_HOST, self.discovery_port, len(self._node_proxies))
+        log.info(
+            "NLB started: discovery=%s:%d, %d node proxies",
+            self.LISTEN_HOST,
+            self.discovery_port,
+            len(self._node_proxies),
+        )
         return self
 
     def __enter__(self):
@@ -324,12 +351,19 @@ class NLBEmulator:
         proxy.start()
         with self._lock:
             self._node_proxies[node_id] = proxy
-        log.info("NLB added node %d: %s:%d -> %s:%d",
-                 node_id, self.LISTEN_HOST, port, addr, self.native_port)
+        log.info(
+            "NLB added node %d: %s:%d -> %s:%d",
+            node_id,
+            self.LISTEN_HOST,
+            port,
+            addr,
+            self.native_port,
+        )
 
     def _live_addresses(self):
         """IPs of nodes with active proxies."""
         return [p.target_host for p in self._node_proxies.values()]
+
 
 def post_client_routes(contact_point, routes):
     """
@@ -395,12 +429,14 @@ def build_routes_for_nlb(connection_id, host_id_map, nlb):
     for ip, host_id in host_id_map.items():
         node_id = int(ip.split(".")[-1])
         port = nlb.node_port(node_id)
-        routes.append({
-            "connection_id": connection_id,
-            "host_id": host_id,
-            "address": NLBEmulator.LISTEN_HOST,
-            "port": port,
-        })
+        routes.append(
+            {
+                "connection_id": connection_id,
+                "host_id": host_id,
+                "address": NLBEmulator.LISTEN_HOST,
+                "port": port,
+            }
+        )
     return routes
 
 
@@ -410,7 +446,10 @@ def post_routes_for_nlb(contact_point, connection_id, host_id_map, nlb):
     post_client_routes(contact_point, routes)
     return routes
 
-def wait_for_routes_visible(session, connection_id, expected_count, timeout=10, poll_interval=0.1):
+
+def wait_for_routes_visible(
+    session, connection_id, expected_count, timeout=10, poll_interval=0.1
+):
     """
     Poll system.client_routes on **every** node until each one sees at
     least *expected_count* rows for *connection_id*.
@@ -431,11 +470,13 @@ def wait_for_routes_visible(session, connection_id, expected_count, timeout=10, 
     while True:
         pending_hosts = []
         for host in all_hosts:
-            rows = list(session.execute(
-                "SELECT * FROM system.client_routes WHERE connection_id = %s",
-                (connection_id,),
-                host=host,
-            ))
+            rows = list(
+                session.execute(
+                    "SELECT * FROM system.client_routes WHERE connection_id = %s",
+                    (connection_id,),
+                    host=host,
+                )
+            )
             if len(rows) < expected_count:
                 pending_hosts.append((host, len(rows)))
         if not pending_hosts:
@@ -475,18 +516,21 @@ def assert_routes_via_nlb(test, cluster, nlb, expected_node_ids):
             continue
         resolved_addr, resolved_port = ep.resolve()
         test.assertEqual(
-            resolved_addr, nlb_listen_host,
+            resolved_addr,
+            nlb_listen_host,
             "Node %d endpoint should resolve to NLB address %s, got %s"
             % (node_id, nlb_listen_host, resolved_addr),
         )
         test.assertEqual(
-            resolved_port, nlb.node_port(node_id),
+            resolved_port,
+            nlb.node_port(node_id),
             "Node %d endpoint should resolve to NLB port %d, got %d"
             % (node_id, nlb.node_port(node_id), resolved_port),
         )
         seen_node_ids.add(node_id)
     test.assertEqual(
-        seen_node_ids, expected_node_ids,
+        seen_node_ids,
+        expected_node_ids,
         "Not all expected nodes found in metadata endpoints",
     )
 
@@ -508,12 +552,14 @@ def assert_routes_direct(test, cluster, expected_node_ids, direct_port=9042):
         resolved_addr, resolved_port = ep.resolve()
         expected_ip = "127.0.0.%d" % node_id
         test.assertEqual(
-            resolved_addr, expected_ip,
+            resolved_addr,
+            expected_ip,
             "Node %d endpoint should resolve to direct address %s, got %s"
             % (node_id, expected_ip, resolved_addr),
         )
         test.assertEqual(
-            resolved_port, direct_port,
+            resolved_port,
+            direct_port,
             "Node %d endpoint should resolve to direct port %d, got %d"
             % (node_id, direct_port, resolved_port),
         )
@@ -524,19 +570,22 @@ _saved_scylla_ext_opts = None
 
 def setup_module():
     global _saved_scylla_ext_opts
-    _saved_scylla_ext_opts = os.environ.get('SCYLLA_EXT_OPTS')
-    os.environ['SCYLLA_EXT_OPTS'] = "--smp 2 --memory 2048M"
-    use_cluster('shared_aware', [3], start=True)
+    _saved_scylla_ext_opts = os.environ.get("SCYLLA_EXT_OPTS")
+    os.environ["SCYLLA_EXT_OPTS"] = "--smp 2 --memory 2048M"
+    use_cluster("shared_aware", [3], start=True)
 
 
 def teardown_module():
     if _saved_scylla_ext_opts is None:
-        os.environ.pop('SCYLLA_EXT_OPTS', None)
+        os.environ.pop("SCYLLA_EXT_OPTS", None)
     else:
-        os.environ['SCYLLA_EXT_OPTS'] = _saved_scylla_ext_opts
+        os.environ["SCYLLA_EXT_OPTS"] = _saved_scylla_ext_opts
 
-@skip_scylla_version_lt(reason='scylladb/scylladb#26992 - system.client_routes is not yet supported',
-                        scylla_version="2026.1.0")
+
+@skip_scylla_version_lt(
+    reason="scylladb/scylladb#26992 - system.client_routes is not yet supported",
+    scylla_version="2026.1.0",
+)
 class TestGetHostPortMapping(unittest.TestCase):
     """
     Test _query_all_routes_for_connections and _query_routes_for_change_event
@@ -545,8 +594,11 @@ class TestGetHostPortMapping(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.cluster = TestCluster(client_routes_config=ClientRoutesConfig(
-            proxies=[ClientRouteProxy("conn_id", "127.0.0.1")]))
+        cls.cluster = TestCluster(
+            client_routes_config=ClientRoutesConfig(
+                proxies=[ClientRouteProxy("conn_id", "127.0.0.1")]
+            )
+        )
         cls.session = cls.cluster.connect()
 
         cls.host_ids = [uuid.uuid4() for _ in range(3)]
@@ -556,13 +608,15 @@ class TestGetHostPortMapping(unittest.TestCase):
         for idx, host_id in enumerate(cls.host_ids):
             ip = f"127.0.0.{idx + 1}"
             for connection_id in cls.connection_ids:
-                cls.expected.append({
-                    'connection_id': connection_id,
-                    'host_id': host_id,
-                    'address': ip,
-                    'port': 9042,
-                    'tls_port': 9142,
-                })
+                cls.expected.append(
+                    {
+                        "connection_id": connection_id,
+                        "host_id": host_id,
+                        "address": ip,
+                        "port": 9042,
+                        "tls_port": 9142,
+                    }
+                )
 
         cls._sort_routes(cls.expected)
         post_client_routes(cls.cluster.contact_points[0], cls.expected)
@@ -573,29 +627,31 @@ class TestGetHostPortMapping(unittest.TestCase):
 
     @staticmethod
     def _sort_routes(routes):
-        routes.sort(key=lambda r: (str(r['connection_id']), str(r['host_id'])))
+        routes.sort(key=lambda r: (str(r["connection_id"]), str(r["host_id"])))
 
     def _routes_to_dicts(self, routes):
         """Convert _Route objects to comparable dicts, adjusting port for ssl_enabled."""
         return [
             {
-                'connection_id': route.connection_id,
-                'host_id': route.host_id,
-                'address': route.address,
-                'port': route.port,
+                "connection_id": route.connection_id,
+                "host_id": route.host_id,
+                "address": route.address,
+                "port": route.port,
             }
             for route in routes
         ]
 
     def _expected_dicts(self, expected):
         """Build expected dicts with tls_port or port based on ssl_enabled."""
-        port_key = 'tls_port' if self.cluster._client_routes_handler.ssl_enabled else 'port'
+        port_key = (
+            "tls_port" if self.cluster._client_routes_handler.ssl_enabled else "port"
+        )
         return [
             {
-                'connection_id': e['connection_id'],
-                'host_id': e['host_id'],
-                'address': e['address'],
-                'port': e[port_key],
+                "connection_id": e["connection_id"],
+                "host_id": e["host_id"],
+                "address": e["address"],
+                "port": e[port_key],
             }
             for e in expected
         ]
@@ -604,7 +660,9 @@ class TestGetHostPortMapping(unittest.TestCase):
         """Querying all connection IDs returns every route."""
         cc = self.cluster.control_connection
         routes = self.cluster._client_routes_handler._query_all_routes_for_connections(
-            cc._connection, cc._timeout, self.connection_ids,
+            cc._connection,
+            cc._timeout,
+            self.connection_ids,
         )
         got = self._routes_to_dicts(routes)
         self._sort_routes(got)
@@ -616,12 +674,15 @@ class TestGetHostPortMapping(unittest.TestCase):
         """Querying a single connection ID returns only its routes."""
         cc = self.cluster.control_connection
         routes = self.cluster._client_routes_handler._query_all_routes_for_connections(
-            cc._connection, cc._timeout, [self.connection_ids[0]],
+            cc._connection,
+            cc._timeout,
+            [self.connection_ids[0]],
         )
         got = self._routes_to_dicts(routes)
         self._sort_routes(got)
-        filtered = [r for r in self.expected
-                    if r['connection_id'] == self.connection_ids[0]]
+        filtered = [
+            r for r in self.expected if r["connection_id"] == self.connection_ids[0]
+        ]
         expected = self._expected_dicts(filtered)
         self._sort_routes(expected)
         self.assertEqual(got, expected)
@@ -629,9 +690,11 @@ class TestGetHostPortMapping(unittest.TestCase):
     def test_get_routes_for_change_event_all_pairs(self):
         """Querying all (connection_id, host_id) pairs returns every route."""
         cc = self.cluster.control_connection
-        pairs = [(r['connection_id'], r['host_id']) for r in self.expected]
+        pairs = [(r["connection_id"], r["host_id"]) for r in self.expected]
         routes = self.cluster._client_routes_handler._query_routes_for_change_event(
-            cc._connection, cc._timeout, pairs,
+            cc._connection,
+            cc._timeout,
+            pairs,
         )
         got = self._routes_to_dicts(routes)
         self._sort_routes(got)
@@ -645,19 +708,26 @@ class TestGetHostPortMapping(unittest.TestCase):
         target_conn_id = self.connection_ids[0]
         target_host_id = self.host_ids[0]
         routes = self.cluster._client_routes_handler._query_routes_for_change_event(
-            cc._connection, cc._timeout, [(target_conn_id, target_host_id)],
+            cc._connection,
+            cc._timeout,
+            [(target_conn_id, target_host_id)],
         )
         got = self._routes_to_dicts(routes)
         self._sort_routes(got)
-        filtered = [r for r in self.expected
-                    if r['connection_id'] == target_conn_id
-                    and r['host_id'] == target_host_id]
+        filtered = [
+            r
+            for r in self.expected
+            if r["connection_id"] == target_conn_id and r["host_id"] == target_host_id
+        ]
         expected = self._expected_dicts(filtered)
         self._sort_routes(expected)
         self.assertEqual(got, expected)
 
-@skip_scylla_version_lt(reason='scylladb/scylladb#26992 - system.client_routes is not yet supported',
-                        scylla_version="2026.1.0")
+
+@skip_scylla_version_lt(
+    reason="scylladb/scylladb#26992 - system.client_routes is not yet supported",
+    scylla_version="2026.1.0",
+)
 class TestPrivateLinkConnectivity(unittest.TestCase):
     """
     Verifies the driver connects to all cluster nodes exclusively through
@@ -690,7 +760,9 @@ class TestPrivateLinkConnectivity(unittest.TestCase):
 
         cls.connection_id = str(uuid.uuid4())
         post_routes_for_nlb("127.0.0.1", cls.connection_id, cls.host_id_map, cls.nlb)
-        wait_for_routes_visible(cls.direct_session, cls.connection_id, len(cls.host_id_map))
+        wait_for_routes_visible(
+            cls.direct_session, cls.connection_id, len(cls.host_id_map)
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -718,22 +790,26 @@ class TestPrivateLinkConnectivity(unittest.TestCase):
                 session.execute("SELECT key FROM system.local")
 
             pool_state = session.get_pool_state()
-            self.assertEqual(len(pool_state), len(self.node_addrs),
-                             "Driver should have pools for all nodes")
+            self.assertEqual(
+                len(pool_state),
+                len(self.node_addrs),
+                "Driver should have pools for all nodes",
+            )
 
             for host, state in pool_state.items():
                 node_id = node_id_from_ip(host.address)
                 proxy = self.nlb.get_node_proxy(node_id)
                 self.assertIsNotNone(proxy, f"No proxy for node {node_id}")
-                open_count = state['open_count']
+                open_count = state["open_count"]
                 self.assertGreaterEqual(
-                    proxy.total_connections, open_count,
+                    proxy.total_connections,
+                    open_count,
                     f"Node {node_id} proxy saw {proxy.total_connections} "
                     f"connections but pool has {open_count} open — "
-                    f"some connections bypassed the proxy")
+                    f"some connections bypassed the proxy",
+                )
 
-            assert_routes_via_nlb(self, cluster, self.nlb,
-                                  self.node_addrs.keys())
+            assert_routes_via_nlb(self, cluster, self.nlb, self.node_addrs.keys())
 
     def test_queries_succeed_through_proxy(self):
         """Queries should work normally through the proxy."""
@@ -741,7 +817,7 @@ class TestPrivateLinkConnectivity(unittest.TestCase):
             session = cluster.connect()
             session.execute(
                 "CREATE KEYSPACE IF NOT EXISTS test_cr_ks "
-                "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}"
+                "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
             )
             session.execute(
                 "CREATE TABLE IF NOT EXISTS test_cr_ks.t (k int PRIMARY KEY, v text)"
@@ -750,8 +826,7 @@ class TestPrivateLinkConnectivity(unittest.TestCase):
             row = session.execute("SELECT v FROM test_cr_ks.t WHERE k = 1").one()
             self.assertEqual(row.v, "hello")
 
-            assert_routes_via_nlb(self, cluster, self.nlb,
-                                  self.node_addrs.keys())
+            assert_routes_via_nlb(self, cluster, self.nlb, self.node_addrs.keys())
 
     def test_connection_recovery_after_proxy_drop(self):
         """
@@ -762,8 +837,7 @@ class TestPrivateLinkConnectivity(unittest.TestCase):
             session = cluster.connect(wait_for_all_pools=True)
             session.execute("SELECT key FROM system.local")
 
-            assert_routes_via_nlb(self, cluster, self.nlb,
-                                  self.node_addrs.keys())
+            assert_routes_via_nlb(self, cluster, self.nlb, self.node_addrs.keys())
 
             self.nlb.drop_all_connections()
 
@@ -772,11 +846,13 @@ class TestPrivateLinkConnectivity(unittest.TestCase):
 
             wait_until_not_raised(query_ok, 1, 30)
 
-            assert_routes_via_nlb(self, cluster, self.nlb,
-                                  self.node_addrs.keys())
+            assert_routes_via_nlb(self, cluster, self.nlb, self.node_addrs.keys())
 
-@skip_scylla_version_lt(reason='scylladb/scylladb#26992 - system.client_routes is not yet supported',
-                        scylla_version="2026.1.0")
+
+@skip_scylla_version_lt(
+    reason="scylladb/scylladb#26992 - system.client_routes is not yet supported",
+    scylla_version="2026.1.0",
+)
 class TestDynamicRouteUpdates(unittest.TestCase):
     """
     Verify that when routes are updated (e.g. port changes), the driver
@@ -808,20 +884,28 @@ class TestDynamicRouteUpdates(unittest.TestCase):
         3. Drop v1 connections.
         4. Driver should reconnect through v2 ports.
         """
-        with NLBEmulator(
-            node_addresses=self.node_addrs,
-        ) as nlb_v1, NLBEmulator(
-            node_addresses=self.node_addrs,
-        ) as nlb_v2:
-            post_routes_for_nlb("127.0.0.1", self.connection_id,
-                                self.host_id_map, nlb_v1)
-            wait_for_routes_visible(self.direct_session, self.connection_id, len(self.host_id_map))
+        with (
+            NLBEmulator(
+                node_addresses=self.node_addrs,
+            ) as nlb_v1,
+            NLBEmulator(
+                node_addresses=self.node_addrs,
+            ) as nlb_v2,
+        ):
+            post_routes_for_nlb(
+                "127.0.0.1", self.connection_id, self.host_id_map, nlb_v1
+            )
+            wait_for_routes_visible(
+                self.direct_session, self.connection_id, len(self.host_id_map)
+            )
 
             with Cluster(
                 contact_points=[NLBEmulator.LISTEN_HOST],
                 port=nlb_v1.discovery_port,
                 client_routes_config=ClientRoutesConfig(
-                    proxies=[ClientRouteProxy(self.connection_id, NLBEmulator.LISTEN_HOST)],
+                    proxies=[
+                        ClientRouteProxy(self.connection_id, NLBEmulator.LISTEN_HOST)
+                    ],
                 ),
                 load_balancing_policy=RoundRobinPolicy(),
             ) as cluster:
@@ -830,12 +914,13 @@ class TestDynamicRouteUpdates(unittest.TestCase):
 
                 for node_id in self.node_addrs:
                     self.assertGreater(
-                        nlb_v1.get_node_proxy(node_id).total_connections, 0)
-                assert_routes_via_nlb(self, cluster, nlb_v1,
-                                      self.node_addrs.keys())
+                        nlb_v1.get_node_proxy(node_id).total_connections, 0
+                    )
+                assert_routes_via_nlb(self, cluster, nlb_v1, self.node_addrs.keys())
 
-                post_routes_for_nlb("127.0.0.1", self.connection_id,
-                                    self.host_id_map, nlb_v2)
+                post_routes_for_nlb(
+                    "127.0.0.1", self.connection_id, self.host_id_map, nlb_v2
+                )
                 time.sleep(2)  # let CLIENT_ROUTES_CHANGE propagate
 
                 # Stop v1 per-node proxies entirely so v1 ports become
@@ -849,13 +934,13 @@ class TestDynamicRouteUpdates(unittest.TestCase):
                 def all_nodes_via_v2():
                     session.execute("SELECT key FROM system.local")
                     for nid in self.node_addrs:
-                        assert nlb_v2.get_node_proxy(nid).total_connections > 0, \
+                        assert nlb_v2.get_node_proxy(nid).total_connections > 0, (
                             "NLB v2 node %d proxy has no connections yet" % nid
+                        )
 
                 wait_until_not_raised(all_nodes_via_v2, 1, 30)
 
-                assert_routes_via_nlb(self, cluster, nlb_v2,
-                                      self.node_addrs.keys())
+                assert_routes_via_nlb(self, cluster, nlb_v2, self.node_addrs.keys())
 
 
 def _generate_ssl_certs(cert_dir, node_ips):
@@ -873,7 +958,9 @@ def _generate_ssl_certs(cert_dir, node_ips):
     :param node_ips: list of IP strings to include as SANs (e.g. ["127.0.0.1", "127.0.0.2"])
     """
     if shutil.which("openssl") is None:
-        raise unittest.SkipTest("openssl not found on PATH; skipping SSL cert generation")
+        raise unittest.SkipTest(
+            "openssl not found on PATH; skipping SSL cert generation"
+        )
 
     san_cnf = os.path.join(cert_dir, "san.cnf")
     san_value = ",".join("IP:%s" % ip for ip in node_ips)
@@ -883,26 +970,73 @@ def _generate_ssl_certs(cert_dir, node_ips):
     def _run(cmd):
         result = subprocess.run(cmd, cwd=cert_dir, capture_output=True, text=True)
         if result.returncode != 0:
-            raise RuntimeError("Command failed: %s\n%s" % (" ".join(cmd), result.stderr))
+            raise RuntimeError(
+                "Command failed: %s\n%s" % (" ".join(cmd), result.stderr)
+            )
 
-    _run(["openssl", "req", "-x509", "-newkey", "rsa:2048",
-          "-keyout", "ca.key", "-out", "ca.crt",
-          "-days", "1", "-nodes", "-subj", "/CN=Test CA"])
+    _run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            "ca.key",
+            "-out",
+            "ca.crt",
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=Test CA",
+        ]
+    )
 
-    _run(["openssl", "req", "-newkey", "rsa:2048",
-          "-keyout", "ccm_node.key", "-out", "ccm_node.csr",
-          "-nodes", "-subj", "/CN=Test Server"])
+    _run(
+        [
+            "openssl",
+            "req",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            "ccm_node.key",
+            "-out",
+            "ccm_node.csr",
+            "-nodes",
+            "-subj",
+            "/CN=Test Server",
+        ]
+    )
 
-    _run(["openssl", "x509", "-req",
-          "-in", "ccm_node.csr", "-CA", "ca.crt", "-CAkey", "ca.key",
-          "-CAcreateserial", "-out", "ccm_node.pem",
-          "-days", "1", "-extfile", "san.cnf"])
+    _run(
+        [
+            "openssl",
+            "x509",
+            "-req",
+            "-in",
+            "ccm_node.csr",
+            "-CA",
+            "ca.crt",
+            "-CAkey",
+            "ca.key",
+            "-CAcreateserial",
+            "-out",
+            "ccm_node.pem",
+            "-days",
+            "1",
+            "-extfile",
+            "san.cnf",
+        ]
+    )
 
     log.info("Generated SSL certs in %s with SANs: %s", cert_dir, san_value)
 
 
-@skip_scylla_version_lt(reason='scylladb/scylladb#26992 - system.client_routes is not yet supported',
-                        scylla_version="2026.1.0")
+@skip_scylla_version_lt(
+    reason="scylladb/scylladb#26992 - system.client_routes is not yet supported",
+    scylla_version="2026.1.0",
+)
 class TestMixedDirectAndNlbConnections(unittest.TestCase):
     """
     Verify the cluster works when some nodes are accessed through the NLB
@@ -940,19 +1074,23 @@ class TestMixedDirectAndNlbConnections(unittest.TestCase):
             node_addresses={proxied_node_id: proxied_ip},
         ) as nlb:
             proxied_host_id = self.host_id_map[proxied_ip]
-            routes = [{
-                "connection_id": self.connection_id,
-                "host_id": proxied_host_id,
-                "address": NLBEmulator.LISTEN_HOST,
-                "port": nlb.node_port(proxied_node_id),
-            }]
+            routes = [
+                {
+                    "connection_id": self.connection_id,
+                    "host_id": proxied_host_id,
+                    "address": NLBEmulator.LISTEN_HOST,
+                    "port": nlb.node_port(proxied_node_id),
+                }
+            ]
             post_client_routes("127.0.0.1", routes)
             time.sleep(1)
 
             with Cluster(
                 contact_points=["127.0.0.1"],
                 client_routes_config=ClientRoutesConfig(
-                    proxies=[ClientRouteProxy(self.connection_id, NLBEmulator.LISTEN_HOST)],
+                    proxies=[
+                        ClientRouteProxy(self.connection_id, NLBEmulator.LISTEN_HOST)
+                    ],
                 ),
                 load_balancing_policy=RoundRobinPolicy(),
             ) as cluster:
@@ -961,19 +1099,23 @@ class TestMixedDirectAndNlbConnections(unittest.TestCase):
                 for _ in range(50):
                     session.execute("SELECT key FROM system.local")
 
-                assert_routes_via_nlb(self, cluster, nlb,
-                                      [proxied_node_id])
+                assert_routes_via_nlb(self, cluster, nlb, [proxied_node_id])
 
                 direct_node_ids = set(self.node_addrs.keys()) - {proxied_node_id}
                 assert_routes_direct(self, cluster, direct_node_ids)
 
                 proxy = nlb.get_node_proxy(proxied_node_id)
-                self.assertGreater(proxy.total_connections, 0,
-                                   "Proxied node should have connections through NLB")
+                self.assertGreater(
+                    proxy.total_connections,
+                    0,
+                    "Proxied node should have connections through NLB",
+                )
 
 
-@skip_scylla_version_lt(reason='scylladb/scylladb#26992 - system.client_routes is not yet supported',
-                        scylla_version="2026.1.0")
+@skip_scylla_version_lt(
+    reason="scylladb/scylladb#26992 - system.client_routes is not yet supported",
+    scylla_version="2026.1.0",
+)
 class TestSslThroughNlb(unittest.TestCase):
     """
     Verify SSL with check_hostname=False works through the NLB proxy.
@@ -1007,23 +1149,27 @@ class TestSslThroughNlb(unittest.TestCase):
 
         cls.ccm_cluster = get_cluster()
         cls.ccm_cluster.stop()
-        cls.ccm_cluster.set_configuration_options({
-            'client_encryption_options': {
-                'enabled': True,
-                'certificate': os.path.join(cls.cert_dir, "ccm_node.pem"),
-                'keyfile': os.path.join(cls.cert_dir, "ccm_node.key"),
+        cls.ccm_cluster.set_configuration_options(
+            {
+                "client_encryption_options": {
+                    "enabled": True,
+                    "certificate": os.path.join(cls.cert_dir, "ccm_node.pem"),
+                    "keyfile": os.path.join(cls.cert_dir, "ccm_node.key"),
+                }
             }
-        })
+        )
         cls.ccm_cluster.start(wait_for_binary_proto=True)
 
     @classmethod
     def tearDownClass(cls):
         cls.ccm_cluster.stop()
-        cls.ccm_cluster.set_configuration_options({
-            'client_encryption_options': {
-                'enabled': False,
+        cls.ccm_cluster.set_configuration_options(
+            {
+                "client_encryption_options": {
+                    "enabled": False,
+                }
             }
-        })
+        )
         cls.ccm_cluster.start(wait_for_binary_proto=True)
 
         shutil.rmtree(cls.cert_dir, ignore_errors=True)
@@ -1041,7 +1187,9 @@ class TestSslThroughNlb(unittest.TestCase):
             node_addresses=self.node_addrs,
         ) as nlb:
             routes = build_routes_for_nlb(
-                self.connection_id, self.host_id_map, nlb,
+                self.connection_id,
+                self.host_id_map,
+                nlb,
             )
             for route in routes:
                 route["tls_port"] = route["port"]
@@ -1049,29 +1197,35 @@ class TestSslThroughNlb(unittest.TestCase):
 
             ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ssl_ctx.check_hostname = False
-            ssl_ctx.load_verify_locations(os.path.join(self.cert_dir, 'ca.crt'))
+            ssl_ctx.load_verify_locations(os.path.join(self.cert_dir, "ca.crt"))
 
-            self.assertFalse(ssl_ctx.check_hostname,
-                             "check_hostname must be False for this test")
-            self.assertEqual(ssl_ctx.verify_mode, ssl.CERT_REQUIRED,
-                             "verify_mode must be CERT_REQUIRED")
+            self.assertFalse(
+                ssl_ctx.check_hostname, "check_hostname must be False for this test"
+            )
+            self.assertEqual(
+                ssl_ctx.verify_mode,
+                ssl.CERT_REQUIRED,
+                "verify_mode must be CERT_REQUIRED",
+            )
 
             def routes_visible():
                 with TestCluster(
                     contact_points=["127.0.0.1"],
-                    ssl_context=ssl_ctx, connect_timeout=30,
+                    ssl_context=ssl_ctx,
+                    connect_timeout=30,
                 ) as c:
                     session = c.connect()
                     rs = session.execute(
                         "SELECT * FROM system.client_routes "
                         "WHERE connection_id = %s ALLOW FILTERING",
-                        (self.connection_id,)
+                        (self.connection_id,),
                     )
                     return len(list(rs)) >= len(self.host_id_map)
 
             wait_until_not_raised(
                 lambda: self.assertTrue(routes_visible()),
-                1, 30,
+                1,
+                30,
             )
 
             with Cluster(
@@ -1079,7 +1233,9 @@ class TestSslThroughNlb(unittest.TestCase):
                 port=nlb.discovery_port,
                 ssl_context=ssl_ctx,
                 client_routes_config=ClientRoutesConfig(
-                    proxies=[ClientRouteProxy(self.connection_id, NLBEmulator.LISTEN_HOST)],
+                    proxies=[
+                        ClientRouteProxy(self.connection_id, NLBEmulator.LISTEN_HOST)
+                    ],
                 ),
                 load_balancing_policy=RoundRobinPolicy(),
             ) as cluster:
@@ -1091,8 +1247,7 @@ class TestSslThroughNlb(unittest.TestCase):
                     ).one()
                     self.assertIsNotNone(row)
 
-                assert_routes_via_nlb(self, cluster, nlb,
-                                      self.node_addrs.keys())
+                assert_routes_via_nlb(self, cluster, nlb, self.node_addrs.keys())
 
     def test_ssl_with_hostname_verification_raises_error(self):
         """
@@ -1100,7 +1255,7 @@ class TestSslThroughNlb(unittest.TestCase):
         is used with SSL hostname verification enabled.
         """
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_ctx.load_verify_locations(os.path.join(self.cert_dir, 'ca.crt'))
+        ssl_ctx.load_verify_locations(os.path.join(self.cert_dir, "ca.crt"))
         self.assertTrue(ssl_ctx.check_hostname)
 
         with self.assertRaises(ValueError) as cm:
@@ -1113,8 +1268,11 @@ class TestSslThroughNlb(unittest.TestCase):
             )
         self.assertIn("check_hostname", str(cm.exception))
 
-@skip_scylla_version_lt(reason='scylladb/scylladb#26992 - system.client_routes is not yet supported',
-                        scylla_version="2026.1.0")
+
+@skip_scylla_version_lt(
+    reason="scylladb/scylladb#26992 - system.client_routes is not yet supported",
+    scylla_version="2026.1.0",
+)
 class TestFullNodeReplacementThroughNlb(unittest.TestCase):
     """
     End-to-end test: creates a session through an NLB proxy with client routes,
@@ -1128,9 +1286,9 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls._saved_scylla_ext_opts = os.environ.get('SCYLLA_EXT_OPTS')
-        os.environ['SCYLLA_EXT_OPTS'] = "--smp 2 --memory 2048M"
-        use_cluster('test_client_routes_replacement', [3], start=True)
+        cls._saved_scylla_ext_opts = os.environ.get("SCYLLA_EXT_OPTS")
+        os.environ["SCYLLA_EXT_OPTS"] = "--smp 2 --memory 2048M"
+        use_cluster("test_client_routes_replacement", [3], start=True)
 
         cls.direct_cluster = TestCluster()
         cls.direct_session = cls.direct_cluster.connect()
@@ -1147,9 +1305,9 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
     def tearDownClass(cls):
         cls.direct_cluster.shutdown()
         if cls._saved_scylla_ext_opts is None:
-            os.environ.pop('SCYLLA_EXT_OPTS', None)
+            os.environ.pop("SCYLLA_EXT_OPTS", None)
         else:
-            os.environ['SCYLLA_EXT_OPTS'] = cls._saved_scylla_ext_opts
+            os.environ["SCYLLA_EXT_OPTS"] = cls._saved_scylla_ext_opts
 
     def test_should_survive_full_node_replacement_through_nlb(self):
         """
@@ -1163,10 +1321,14 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
             node_addresses=self.node_addrs,
         ) as nlb:
             # ---- Stage 1: Set up NLB for initial nodes ----
-            log.info("Stage 1: Setting up NLB for %d initial nodes", len(original_node_ids))
+            log.info(
+                "Stage 1: Setting up NLB for %d initial nodes", len(original_node_ids)
+            )
 
             post_routes_for_nlb("127.0.0.1", self.connection_id, self.host_id_map, nlb)
-            wait_for_routes_visible(self.direct_session, self.connection_id, len(self.host_id_map))
+            wait_for_routes_visible(
+                self.direct_session, self.connection_id, len(self.host_id_map)
+            )
 
             # ---- Stage 2: Create session through NLB ----
             log.info("Stage 2: Creating session through NLB")
@@ -1174,7 +1336,9 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
                 contact_points=[NLBEmulator.LISTEN_HOST],
                 port=nlb.discovery_port,
                 client_routes_config=ClientRoutesConfig(
-                    proxies=[ClientRouteProxy(self.connection_id, NLBEmulator.LISTEN_HOST)],
+                    proxies=[
+                        ClientRouteProxy(self.connection_id, NLBEmulator.LISTEN_HOST)
+                    ],
                 ),
                 load_balancing_policy=RoundRobinPolicy(),
             ) as cluster:
@@ -1184,10 +1348,11 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
                 handler = cluster._client_routes_handler
                 self.assertIsNotNone(handler)
 
-                assert_routes_via_nlb(self, cluster, nlb,
-                                         original_node_ids)
-                log.info("Stage 2: Session created, all %d nodes via NLB",
-                         len(original_node_ids))
+                assert_routes_via_nlb(self, cluster, nlb, original_node_ids)
+                log.info(
+                    "Stage 2: Session created, all %d nodes via NLB",
+                    len(original_node_ids),
+                )
 
                 # ---- Stage 3: Bootstrap new nodes ----
                 new_node_ids = [max(original_node_ids) + 1, max(original_node_ids) + 2]
@@ -1195,7 +1360,7 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
                 ccm_cluster = get_cluster()
 
                 for node_id in new_node_ids:
-                    self._bootstrap_node(ccm_cluster, node_id, data_center='dc1')
+                    self._bootstrap_node(ccm_cluster, node_id, data_center="dc1")
 
                 expected_total = len(original_node_ids) + len(new_node_ids)
                 self._wait_for_condition(
@@ -1213,10 +1378,12 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
 
                 handler.initialize(
                     cluster.control_connection._connection,
-                    cluster.control_connection._timeout)
+                    cluster.control_connection._timeout,
+                )
 
                 self._wait_for_condition(
-                    lambda: sum(1 for h in cluster.metadata.all_hosts() if h.is_up) >= expected_total,
+                    lambda: sum(1 for h in cluster.metadata.all_hosts() if h.is_up)
+                    >= expected_total,
                     timeout_seconds=60,
                     description="all %d nodes up" % expected_total,
                 )
@@ -1225,11 +1392,14 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
 
                 all_node_ids = set(original_node_ids) | set(new_node_ids)
                 assert_routes_via_nlb(self, cluster, nlb, all_node_ids)
-                log.info("Stage 3: All %d nodes via NLB after expansion",
-                         len(all_node_ids))
+                log.info(
+                    "Stage 3: All %d nodes via NLB after expansion", len(all_node_ids)
+                )
 
                 # ---- Stage 4: Decommission original nodes ----
-                log.info("Stage 4: Decommissioning original nodes %s", original_node_ids)
+                log.info(
+                    "Stage 4: Decommissioning original nodes %s", original_node_ids
+                )
 
                 remaining_node_ids = set(all_node_ids)
                 remaining_host_ids = dict(all_host_ids)
@@ -1245,11 +1415,15 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
                     surviving_ips = list(remaining_host_ids.keys())
                     if surviving_ips:
                         post_routes_for_nlb(
-                            surviving_ips[0], self.connection_id,
-                            remaining_host_ids, nlb,
+                            surviving_ips[0],
+                            self.connection_id,
+                            remaining_host_ids,
+                            nlb,
                         )
 
-                    expected_remaining = expected_total - (original_node_ids.index(node_id) + 1)
+                    expected_remaining = expected_total - (
+                        original_node_ids.index(node_id) + 1
+                    )
                     self._wait_for_condition(
                         lambda er=expected_remaining: (
                             len(cluster.metadata.all_hosts()) <= er
@@ -1264,32 +1438,43 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
                     # killed the old control connection).
                     handler.initialize(
                         cluster.control_connection._connection,
-                        cluster.control_connection._timeout)
+                        cluster.control_connection._timeout,
+                    )
 
-                    assert_routes_via_nlb(self, cluster, nlb,
-                                             remaining_node_ids)
-                    log.info("Node %d decommissioned, %d nodes still via NLB",
-                             node_id, len(remaining_node_ids))
+                    assert_routes_via_nlb(self, cluster, nlb, remaining_node_ids)
+                    log.info(
+                        "Node %d decommissioned, %d nodes still via NLB",
+                        node_id,
+                        len(remaining_node_ids),
+                    )
 
                 # ---- Stage 5: Verify with only new nodes ----
-                log.info("Stage 5: Verifying session works with only new nodes %s", new_node_ids)
+                log.info(
+                    "Stage 5: Verifying session works with only new nodes %s",
+                    new_node_ids,
+                )
                 self._assert_query_works(session)
 
                 hosts = cluster.metadata.all_hosts()
                 self.assertEqual(
-                    len(hosts), len(new_node_ids),
-                    "Expected %d hosts, got %d" % (len(new_node_ids), len(hosts))
+                    len(hosts),
+                    len(new_node_ids),
+                    "Expected %d hosts, got %d" % (len(new_node_ids), len(hosts)),
                 )
 
                 for _ in range(10):
                     self._assert_query_works(session)
 
                 assert_routes_via_nlb(self, cluster, nlb, new_node_ids)
-                log.info("PASS: Full node replacement, all %d new nodes via NLB",
-                         len(new_node_ids))
+                log.info(
+                    "PASS: Full node replacement, all %d new nodes via NLB",
+                    len(new_node_ids),
+                )
 
     def _assert_query_works(self, session):
-        rs = session.execute("SELECT release_version FROM system.local WHERE key='local'")
+        rs = session.execute(
+            "SELECT release_version FROM system.local WHERE key='local'"
+        )
         row = rs.one()
         self.assertIsNotNone(row, "Query via NLB should return a result")
 
@@ -1304,7 +1489,7 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
         node_type = type(next(iter(ccm_cluster.nodes.values())))
         ip = "127.0.0.%d" % node_id
         node_instance = node_type(
-            'node%s' % node_id,
+            "node%s" % node_id,
             ccm_cluster,
             auto_bootstrap=True,
             thrift_interface=(ip, 9160),
@@ -1318,14 +1503,17 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
         # cassandra-rackdc.properties is written correctly.  Without this the
         # snitch fails to parse the empty properties file and the node crashes
         # on startup.
-        ccm_cluster.add(node_instance, is_seed=False,
-                        data_center=data_center, rack=rack)
+        ccm_cluster.add(
+            node_instance, is_seed=False, data_center=data_center, rack=rack
+        )
         node_instance.start(wait_for_binary_proto=True, wait_other_notice=True)
         wait_for_node_socket(node_instance, 120)
         log.info("Node %d bootstrapped successfully", node_id)
 
     @staticmethod
-    def _wait_for_condition(predicate, timeout_seconds, poll_interval=2, description="condition"):
+    def _wait_for_condition(
+        predicate, timeout_seconds, poll_interval=2, description="condition"
+    ):
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
             if predicate():

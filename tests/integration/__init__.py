@@ -38,8 +38,15 @@ import shutil
 import pytest
 
 
-from cassandra import OperationTimedOut, ReadTimeout, ReadFailure, WriteTimeout, WriteFailure, AlreadyExists,\
-    InvalidRequest
+from cassandra import (
+    OperationTimedOut,
+    ReadTimeout,
+    ReadFailure,
+    WriteTimeout,
+    WriteFailure,
+    AlreadyExists,
+    InvalidRequest,
+)
 from cassandra.protocol import ConfigurationException
 from cassandra import ProtocolVersion
 
@@ -54,9 +61,9 @@ except ImportError as e:
 
 log = logging.getLogger(__name__)
 
-CLUSTER_NAME = 'test_cluster'
-SINGLE_NODE_CLUSTER_NAME = 'single_node'
-MULTIDC_CLUSTER_NAME = 'multidc_test_cluster'
+CLUSTER_NAME = "test_cluster"
+SINGLE_NODE_CLUSTER_NAME = "single_node"
+MULTIDC_CLUSTER_NAME = "multidc_test_cluster"
 
 # When use_single_interface is specified ccm will assign distinct port numbers to each
 # node in the cluster.  This value specifies the default port value used for the first
@@ -64,11 +71,11 @@ MULTIDC_CLUSTER_NAME = 'multidc_test_cluster'
 #
 # TODO: In the future we may want to make this configurable, but this should only apply
 # if a non-standard port were specified when starting up the cluster.
-DEFAULT_SINGLE_INTERFACE_PORT=9046
+DEFAULT_SINGLE_INTERFACE_PORT = 9046
 
 CCM_CLUSTER = None
 
-path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'ccm')
+path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "ccm")
 if not os.path.exists(path):
     os.mkdir(path)
 
@@ -88,7 +95,9 @@ def get_server_versions():
 
     c = TestCluster()
     s = c.connect()
-    row = s.execute("SELECT cql_version, release_version FROM system.local WHERE key='local'").one()
+    row = s.execute(
+        "SELECT cql_version, release_version FROM system.local WHERE key='local'"
+    ).one()
 
     cass_version = _tuple_version(row.release_version)
     cql_version = _tuple_version(row.cql_version)
@@ -99,41 +108,46 @@ def get_server_versions():
 
 
 def get_scylla_version(scylla_ccm_version_string):
-    """ get scylla version from ccm before starting a cluster"""
-    ccm_repo_cache_dir, _ = ccmlib.scylla_repository.setup(version=scylla_ccm_version_string)
-    return  ccmlib.common.get_version_from_build(ccm_repo_cache_dir)
+    """get scylla version from ccm before starting a cluster"""
+    ccm_repo_cache_dir, _ = ccmlib.scylla_repository.setup(
+        version=scylla_ccm_version_string
+    )
+    return ccmlib.common.get_version_from_build(ccm_repo_cache_dir)
 
 
 def _tuple_version(version_string):
-    if '-' in version_string:
-        version_string = version_string[:version_string.index('-')]
+    if "-" in version_string:
+        version_string = version_string[: version_string.index("-")]
 
-    return tuple([int(p) for p in version_string.split('.')])
+    return tuple([int(p) for p in version_string.split(".")])
 
 
 def cmd_line_args_to_dict(env_var):
     cmd_args_env = os.environ.get(env_var, None)
     args = {}
     if cmd_args_env:
-        cmd_args = cmd_args_env.strip().split(' ')
+        cmd_args = cmd_args_env.strip().split(" ")
         while cmd_args:
             cmd_arg = cmd_args.pop(0)
-            cmd_arg_value = True if cmd_arg.startswith('--') else cmd_args.pop(0)
-            args[cmd_arg.lstrip('-')] = cmd_arg_value
+            cmd_arg_value = True if cmd_arg.startswith("--") else cmd_args.pop(0)
+            args[cmd_arg.lstrip("-")] = cmd_arg_value
     return args
 
-USE_CASS_EXTERNAL = bool(os.getenv('USE_CASS_EXTERNAL', False))
-KEEP_TEST_CLUSTER = bool(os.getenv('KEEP_TEST_CLUSTER', False))
-SIMULACRON_JAR = os.getenv('SIMULACRON_JAR', None)
+
+USE_CASS_EXTERNAL = bool(os.getenv("USE_CASS_EXTERNAL", False))
+KEEP_TEST_CLUSTER = bool(os.getenv("KEEP_TEST_CLUSTER", False))
+SIMULACRON_JAR = os.getenv("SIMULACRON_JAR", None)
 
 # Supported Clusters: Cassandra, Scylla
-SCYLLA_VERSION = os.getenv('SCYLLA_VERSION', None)
+SCYLLA_VERSION = os.getenv("SCYLLA_VERSION", None)
 if SCYLLA_VERSION:
     cv_string = SCYLLA_VERSION
-    mcv_string = os.getenv('MAPPED_SCYLLA_VERSION', '3.11.4') # Assume that scylla matches cassandra `3.11.4` behavior
+    mcv_string = os.getenv(
+        "MAPPED_SCYLLA_VERSION", "3.11.4"
+    )  # Assume that scylla matches cassandra `3.11.4` behavior
 else:
-    cv_string = os.getenv('CASSANDRA_VERSION', None)
-    mcv_string = os.getenv('MAPPED_CASSANDRA_VERSION', None)
+    cv_string = os.getenv("CASSANDRA_VERSION", None)
+    mcv_string = os.getenv("MAPPED_CASSANDRA_VERSION", None)
 try:
     cassandra_version = Version(cv_string)  # env var is set to test-dse for DDAC
 except:
@@ -143,67 +157,71 @@ except:
 CASSANDRA_VERSION = Version(mcv_string) if mcv_string else cassandra_version
 CCM_VERSION = mcv_string if mcv_string else cv_string
 
-CASSANDRA_IP = os.getenv('CLUSTER_IP', '127.0.0.1')
-CASSANDRA_DIR = os.getenv('CASSANDRA_DIR', None)
+CASSANDRA_IP = os.getenv("CLUSTER_IP", "127.0.0.1")
+CASSANDRA_DIR = os.getenv("CASSANDRA_DIR", None)
 
 CCM_KWARGS = {}
 if CASSANDRA_DIR:
     log.info("Using Cassandra dir: %s", CASSANDRA_DIR)
-    CCM_KWARGS['install_dir'] = CASSANDRA_DIR
-elif os.getenv('SCYLLA_VERSION'):
-    CCM_KWARGS['cassandra_version'] = os.path.join(os.getenv('SCYLLA_VERSION'))
+    CCM_KWARGS["install_dir"] = CASSANDRA_DIR
+elif os.getenv("SCYLLA_VERSION"):
+    CCM_KWARGS["cassandra_version"] = os.path.join(os.getenv("SCYLLA_VERSION"))
 else:
-    log.info('Using Cassandra version: %s', CCM_VERSION)
-    CCM_KWARGS['version'] = CCM_VERSION
+    log.info("Using Cassandra version: %s", CCM_VERSION)
+    CCM_KWARGS["version"] = CCM_VERSION
 
 
 ALLOW_BETA_PROTOCOL = False
 
 
 def get_default_protocol():
-    if CASSANDRA_VERSION >= Version('4.0-a'):
+    if CASSANDRA_VERSION >= Version("4.0-a"):
         return ProtocolVersion.V5
-    if CASSANDRA_VERSION >= Version('3.10'):
+    if CASSANDRA_VERSION >= Version("3.10"):
         return 4
-    if CASSANDRA_VERSION >= Version('2.2'):
+    if CASSANDRA_VERSION >= Version("2.2"):
         return 4
-    elif CASSANDRA_VERSION >= Version('2.1'):
+    elif CASSANDRA_VERSION >= Version("2.1"):
         return 3
     else:
-        raise Exception("Running tests with an unsupported Cassandra version: {0}".format(CASSANDRA_VERSION))
+        raise Exception(
+            "Running tests with an unsupported Cassandra version: {0}".format(
+                CASSANDRA_VERSION
+            )
+        )
 
 
 def get_scylla_default_protocol():
     if len(CASSANDRA_VERSION.release) == 4:
         # An enterprise, i.e. 2021.1.6
-        if CASSANDRA_VERSION > Version('2019'):
+        if CASSANDRA_VERSION > Version("2019"):
             return 4
         return 3
-    if CASSANDRA_VERSION >= Version('3.0'):
+    if CASSANDRA_VERSION >= Version("3.0"):
         return 4
     return 3
 
 
 def get_supported_protocol_versions():
     """
-    2.1 -> 3
-    2.2 -> 4, 3
-    3.X -> 4, 3
-    3.10(C*) -> 5(beta),4,3
-    4.0(C*) -> 6(beta),5,4,3
-`   """
-    if CASSANDRA_VERSION >= Version('4.0-beta5'):
+        2.1 -> 3
+        2.2 -> 4, 3
+        3.X -> 4, 3
+        3.10(C*) -> 5(beta),4,3
+        4.0(C*) -> 6(beta),5,4,3
+    `"""
+    if CASSANDRA_VERSION >= Version("4.0-beta5"):
         return (3, 4, 5)
-    if CASSANDRA_VERSION >= Version('4.0-a'):
-       return (3, 4, 5)
-    elif CASSANDRA_VERSION >= Version('3.10'):
+    if CASSANDRA_VERSION >= Version("4.0-a"):
+        return (3, 4, 5)
+    elif CASSANDRA_VERSION >= Version("3.10"):
         return (3, 4)
-    elif CASSANDRA_VERSION >= Version('3.0'):
+    elif CASSANDRA_VERSION >= Version("3.0"):
         return (3, 4)
-    elif CASSANDRA_VERSION >= Version('2.2'):
+    elif CASSANDRA_VERSION >= Version("2.2"):
         return (3, 4)
-    elif CASSANDRA_VERSION >= Version('2.1'):
-        return (3)
+    elif CASSANDRA_VERSION >= Version("2.1"):
+        return 3
     else:
         return (3,)
 
@@ -215,7 +233,7 @@ def get_unsupported_lower_protocol():
     """
     if SCYLLA_VERSION is not None:
         return 2
-    if CASSANDRA_VERSION >= Version('3.0'):
+    if CASSANDRA_VERSION >= Version("3.0"):
         return 2
     else:
         return None
@@ -229,29 +247,31 @@ def get_unsupported_upper_protocol():
     if SCYLLA_VERSION is not None:
         return 5
 
-    if CASSANDRA_VERSION >= Version('4.0-a'):
+    if CASSANDRA_VERSION >= Version("4.0-a"):
         return ProtocolVersion.DSE_V1
-    if CASSANDRA_VERSION >= Version('3.10'):
+    if CASSANDRA_VERSION >= Version("3.10"):
         return 5
-    if CASSANDRA_VERSION >= Version('2.2'):
+    if CASSANDRA_VERSION >= Version("2.2"):
         return 5
-    elif CASSANDRA_VERSION >= Version('2.1'):
+    elif CASSANDRA_VERSION >= Version("2.1"):
         return 4
-    elif CASSANDRA_VERSION >= Version('2.0'):
+    elif CASSANDRA_VERSION >= Version("2.0"):
         return 3
     else:
         return 2
 
 
-default_protocol_version = get_scylla_default_protocol() if SCYLLA_VERSION else get_default_protocol()
+default_protocol_version = (
+    get_scylla_default_protocol() if SCYLLA_VERSION else get_default_protocol()
+)
 
 
-PROTOCOL_VERSION = int(os.getenv('PROTOCOL_VERSION', default_protocol_version))
+PROTOCOL_VERSION = int(os.getenv("PROTOCOL_VERSION", default_protocol_version))
 
 
 def local_decorator_creator():
     if USE_CASS_EXTERNAL or not CASSANDRA_IP.startswith("127.0.0."):
-        return unittest.skip('Tests only runs against local C*')
+        return unittest.skip("Tests only runs against local C*")
 
     def _id_and_mark(f):
         f.local = True
@@ -259,64 +279,130 @@ def local_decorator_creator():
 
     return _id_and_mark
 
-def xfail_scylla_version(filter: Callable[[Version], bool], reason: str, *args, **kwargs):
+
+def xfail_scylla_version(
+    filter: Callable[[Version], bool], reason: str, *args, **kwargs
+):
     if SCYLLA_VERSION is None:
-        return pytest.mark.skipif(False, reason="It is just a NoOP Decor, should not skip anything")
+        return pytest.mark.skipif(
+            False, reason="It is just a NoOP Decor, should not skip anything"
+        )
     current_version = Version(get_scylla_version(SCYLLA_VERSION))
 
     return pytest.mark.xfail(filter(current_version), reason=reason, *args, **kwargs)
 
-local = local_decorator_creator()
-notprotocolv1 = unittest.skipUnless(PROTOCOL_VERSION > 1, 'Protocol v1 not supported')
-greaterthanprotocolv3 = unittest.skipUnless(PROTOCOL_VERSION >= 4, 'Protocol versions less than 4 are not supported')
 
-greaterthancass20 = unittest.skipUnless(CASSANDRA_VERSION >= Version('2.1'), 'Cassandra version 2.1 or greater required')
-greaterthancass21 = unittest.skipUnless(CASSANDRA_VERSION >= Version('2.2'), 'Cassandra version 2.2 or greater required')
-greaterthanorequalcass30 = unittest.skipUnless(CASSANDRA_VERSION >= Version('3.0'), 'Cassandra version 3.0 or greater required')
-greaterthanorequalcass31 = unittest.skipUnless(CASSANDRA_VERSION >= Version('3.1'), 'Cassandra version 3.1 or greater required')
-greaterthanorequalcass36 = unittest.skipUnless(CASSANDRA_VERSION >= Version('3.6'), 'Cassandra version 3.6 or greater required')
-greaterthanorequalcass3_10 = unittest.skipUnless(CASSANDRA_VERSION >= Version('3.10'), 'Cassandra version 3.10 or greater required')
-greaterthanorequalcass3_11 = unittest.skipUnless(CASSANDRA_VERSION >= Version('3.11'), 'Cassandra version 3.11 or greater required')
-greaterthanorequalcass40 = unittest.skipUnless(CASSANDRA_VERSION >= Version('4.0'), 'Cassandra version 4.0 or greater required')
-greaterthanorequalcass50 = unittest.skipUnless(CASSANDRA_VERSION >= Version('5.0-beta'), 'Cassandra version 5.0 or greater required')
+local = local_decorator_creator()
+notprotocolv1 = unittest.skipUnless(PROTOCOL_VERSION > 1, "Protocol v1 not supported")
+greaterthanprotocolv3 = unittest.skipUnless(
+    PROTOCOL_VERSION >= 4, "Protocol versions less than 4 are not supported"
+)
+
+greaterthancass20 = unittest.skipUnless(
+    CASSANDRA_VERSION >= Version("2.1"), "Cassandra version 2.1 or greater required"
+)
+greaterthancass21 = unittest.skipUnless(
+    CASSANDRA_VERSION >= Version("2.2"), "Cassandra version 2.2 or greater required"
+)
+greaterthanorequalcass30 = unittest.skipUnless(
+    CASSANDRA_VERSION >= Version("3.0"), "Cassandra version 3.0 or greater required"
+)
+greaterthanorequalcass31 = unittest.skipUnless(
+    CASSANDRA_VERSION >= Version("3.1"), "Cassandra version 3.1 or greater required"
+)
+greaterthanorequalcass36 = unittest.skipUnless(
+    CASSANDRA_VERSION >= Version("3.6"), "Cassandra version 3.6 or greater required"
+)
+greaterthanorequalcass3_10 = unittest.skipUnless(
+    CASSANDRA_VERSION >= Version("3.10"), "Cassandra version 3.10 or greater required"
+)
+greaterthanorequalcass3_11 = unittest.skipUnless(
+    CASSANDRA_VERSION >= Version("3.11"), "Cassandra version 3.11 or greater required"
+)
+greaterthanorequalcass40 = unittest.skipUnless(
+    CASSANDRA_VERSION >= Version("4.0"), "Cassandra version 4.0 or greater required"
+)
+greaterthanorequalcass50 = unittest.skipUnless(
+    CASSANDRA_VERSION >= Version("5.0-beta"),
+    "Cassandra version 5.0 or greater required",
+)
+
+
 def _has_vector_type():
     if SCYLLA_VERSION is not None:
-        return Version(get_scylla_version(SCYLLA_VERSION)) >= Version('2025.4')
-    return CASSANDRA_VERSION >= Version('5.0-beta')
+        return Version(get_scylla_version(SCYLLA_VERSION)) >= Version("2025.4")
+    return CASSANDRA_VERSION >= Version("5.0-beta")
 
-lessthanorequalcass40 = unittest.skipUnless(CASSANDRA_VERSION <= Version('4.0'), 'Cassandra version less or equal to 4.0 required')
-lessthancass40 = unittest.skipUnless(CASSANDRA_VERSION < Version('4.0'), 'Cassandra version less than 4.0 required')
-lessthancass30 = unittest.skipUnless(CASSANDRA_VERSION < Version('3.0'), 'Cassandra version less then 3.0 required')
+
+lessthanorequalcass40 = unittest.skipUnless(
+    CASSANDRA_VERSION <= Version("4.0"),
+    "Cassandra version less or equal to 4.0 required",
+)
+lessthancass40 = unittest.skipUnless(
+    CASSANDRA_VERSION < Version("4.0"), "Cassandra version less than 4.0 required"
+)
+lessthancass30 = unittest.skipUnless(
+    CASSANDRA_VERSION < Version("3.0"), "Cassandra version less then 3.0 required"
+)
 
 # pytest.mark.xfail instead of unittest.expectedFailure because
 # 1. unittest doesn't skip setUpClass when used on class and we need it sometimes
 # 2. unittest doesn't have conditional xfail, and I prefer to use pytest than custom decorator
 # 3. unittest doesn't have a reason argument, so you don't see the reason in pytest report
-requires_collection_indexes = pytest.mark.skipif(SCYLLA_VERSION is not None and Version(get_scylla_version(SCYLLA_VERSION)) < Version('5.2'),
-                                              reason='Scylla supports collection indexes from 5.2 onwards')
-requires_custom_indexes = pytest.mark.skipif(SCYLLA_VERSION is not None,
-                                          reason='Scylla does not support SASI or any other CUSTOM INDEX class')
-requires_java_udf = pytest.mark.skipif(SCYLLA_VERSION is not None,
-                                    reason='Scylla does not support UDFs written in Java')
-requires_composite_type = pytest.mark.skipif(SCYLLA_VERSION is not None,
-                                            reason='Scylla does not support composite types')
-requires_custom_payload = pytest.mark.skipif(SCYLLA_VERSION is not None or PROTOCOL_VERSION < 4,
-                                            reason='Scylla does not support custom payloads. Cassandra requires native protocol v4.0+')
+requires_collection_indexes = pytest.mark.skipif(
+    SCYLLA_VERSION is not None
+    and Version(get_scylla_version(SCYLLA_VERSION)) < Version("5.2"),
+    reason="Scylla supports collection indexes from 5.2 onwards",
+)
+requires_custom_indexes = pytest.mark.skipif(
+    SCYLLA_VERSION is not None,
+    reason="Scylla does not support SASI or any other CUSTOM INDEX class",
+)
+requires_java_udf = pytest.mark.skipif(
+    SCYLLA_VERSION is not None, reason="Scylla does not support UDFs written in Java"
+)
+requires_composite_type = pytest.mark.skipif(
+    SCYLLA_VERSION is not None, reason="Scylla does not support composite types"
+)
+requires_custom_payload = pytest.mark.skipif(
+    SCYLLA_VERSION is not None or PROTOCOL_VERSION < 4,
+    reason="Scylla does not support custom payloads. Cassandra requires native protocol v4.0+",
+)
 requires_vector_type = unittest.skipUnless(
-    _has_vector_type(),
-    'Cassandra >= 5.0 or Scylla >= 2025.4 required')
-xfail_scylla = lambda reason, *args, **kwargs: pytest.mark.xfail(SCYLLA_VERSION is not None, reason=reason, *args, **kwargs)
-incorrect_test = lambda reason='This test seems to be incorrect and should be fixed', *args, **kwargs: pytest.mark.xfail(reason=reason, *args, **kwargs)
+    _has_vector_type(), "Cassandra >= 5.0 or Scylla >= 2025.4 required"
+)
+xfail_scylla = lambda reason, *args, **kwargs: pytest.mark.xfail(
+    SCYLLA_VERSION is not None, reason=reason, *args, **kwargs
+)
+incorrect_test = (
+    lambda reason="This test seems to be incorrect and should be fixed",
+    *args,
+    **kwargs: pytest.mark.xfail(reason=reason, *args, **kwargs)
+)
 
-pypy = unittest.skipUnless(platform.python_implementation() == "PyPy", "Test is skipped unless it's on PyPy")
-requiresmallclockgranularity = unittest.skipIf("Windows" in platform.system() or "asyncore" in EVENT_LOOP_MANAGER,
-                                               "This test is not suitible for environments with large clock granularity")
-requiressimulacron = unittest.skipIf(SIMULACRON_JAR is None or CASSANDRA_VERSION < Version("2.1"), "Simulacron jar hasn't been specified or C* version is 2.0")
-requirescompactstorage = xfail_scylla_version(lambda v: v >= Version('2025.1.0'), reason="ScyllaDB deprecated compact storage", raises=InvalidRequest)
-libevtest = unittest.skipUnless(EVENT_LOOP_MANAGER=="libev", "Test timing designed for libev loop")
+pypy = unittest.skipUnless(
+    platform.python_implementation() == "PyPy", "Test is skipped unless it's on PyPy"
+)
+requiresmallclockgranularity = unittest.skipIf(
+    "Windows" in platform.system() or "asyncore" in EVENT_LOOP_MANAGER,
+    "This test is not suitible for environments with large clock granularity",
+)
+requiressimulacron = unittest.skipIf(
+    SIMULACRON_JAR is None or CASSANDRA_VERSION < Version("2.1"),
+    "Simulacron jar hasn't been specified or C* version is 2.0",
+)
+requirescompactstorage = xfail_scylla_version(
+    lambda v: v >= Version("2025.1.0"),
+    reason="ScyllaDB deprecated compact storage",
+    raises=InvalidRequest,
+)
+libevtest = unittest.skipUnless(
+    EVENT_LOOP_MANAGER == "libev", "Test timing designed for libev loop"
+)
+
 
 def wait_for_node_socket(node, timeout):
-    binary_itf = node.network_interfaces['binary']
+    binary_itf = node.network_interfaces["binary"]
     if not common.check_socket_listening(binary_itf, timeout=timeout):
         log.warning("Unable to connect to binary socket for node " + node.name)
     else:
@@ -333,12 +419,12 @@ def check_socket_listening(itf, timeout=60):
             return True
         except socket.error:
             # Try again in another 200ms
-            time.sleep(.2)
+            time.sleep(0.2)
             continue
     return False
 
 
-USE_SINGLE_INTERFACE = os.getenv('USE_SINGLE_INTERFACE', False)
+USE_SINGLE_INTERFACE = os.getenv("USE_SINGLE_INTERFACE", False)
 
 
 def get_cluster():
@@ -346,7 +432,7 @@ def get_cluster():
 
 
 def get_node(node_id):
-    return CCM_CLUSTER.nodes['node%s' % node_id]
+    return CCM_CLUSTER.nodes["node%s" % node_id]
 
 
 def use_multidc(dc_list, workloads=None):
@@ -354,22 +440,36 @@ def use_multidc(dc_list, workloads=None):
 
 
 def use_singledc(start=True, workloads=None, use_single_interface=USE_SINGLE_INTERFACE):
-    use_cluster(CLUSTER_NAME, [3], start=start, workloads=workloads, use_single_interface=use_single_interface)
+    use_cluster(
+        CLUSTER_NAME,
+        [3],
+        start=start,
+        workloads=workloads,
+        use_single_interface=use_single_interface,
+    )
 
 
-def use_single_node(start=True, workloads=None, configuration_options=None, dse_options=None):
-    use_cluster(SINGLE_NODE_CLUSTER_NAME, [1], start=start, workloads=workloads,
-                configuration_options=configuration_options, dse_options=dse_options)
+def use_single_node(
+    start=True, workloads=None, configuration_options=None, dse_options=None
+):
+    use_cluster(
+        SINGLE_NODE_CLUSTER_NAME,
+        [1],
+        start=start,
+        workloads=workloads,
+        configuration_options=configuration_options,
+        dse_options=dse_options,
+    )
 
 
 def check_log_error():
     global CCM_CLUSTER
     log.debug("Checking log error of cluster {0}".format(CCM_CLUSTER.name))
     for node in CCM_CLUSTER.nodelist():
-            errors = node.grep_log_for_errors()
-            for error in errors:
-                for line in error:
-                    print(line)
+        errors = node.grep_log_for_errors()
+        for error in errors:
+            for line in error:
+                print(line)
 
 
 def remove_cluster():
@@ -388,7 +488,11 @@ def remove_cluster():
                 return
             except OSError:
                 ex_type, ex, tb = sys.exc_info()
-                log.warning("{0}: {1} Backtrace: {2}".format(ex_type.__name__, ex, traceback.extract_tb(tb)))
+                log.warning(
+                    "{0}: {1} Backtrace: {2}".format(
+                        ex_type.__name__, ex, traceback.extract_tb(tb)
+                    )
+                )
                 del tb
                 tries += 1
                 time.sleep(1)
@@ -399,10 +503,12 @@ def remove_cluster():
 def is_current_cluster(cluster_name, node_counts, workloads):
     global CCM_CLUSTER
     if CCM_CLUSTER and CCM_CLUSTER.name == cluster_name:
-        if [len(list(nodes)) for dc, nodes in
-                groupby(CCM_CLUSTER.nodelist(), lambda n: n.data_center)] == node_counts:
+        if [
+            len(list(nodes))
+            for dc, nodes in groupby(CCM_CLUSTER.nodelist(), lambda n: n.data_center)
+        ] == node_counts:
             for node in CCM_CLUSTER.nodelist():
-                if set(getattr(node, 'workloads', [])) != set(workloads):
+                if set(getattr(node, "workloads", [])) != set(workloads):
                     print("node workloads don't match creating new cluster")
                     return False
             return True
@@ -418,8 +524,18 @@ def start_cluster_wait_for_up(cluster):
     log.debug("Binary port are open")
 
 
-def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, set_keyspace=True, ccm_options=None,
-                configuration_options=None, dse_options=None, use_single_interface=USE_SINGLE_INTERFACE):
+def use_cluster(
+    cluster_name,
+    nodes,
+    ipformat=None,
+    start=True,
+    workloads=None,
+    set_keyspace=True,
+    ccm_options=None,
+    configuration_options=None,
+    dse_options=None,
+    use_single_interface=USE_SINGLE_INTERFACE,
+):
     configuration_options = configuration_options or {}
     dse_options = dse_options or {}
     workloads = workloads or []
@@ -427,7 +543,7 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
     if ccm_options is None:
         ccm_options = CCM_KWARGS.copy()
 
-    cassandra_version = ccm_options.get('version', CCM_VERSION)
+    cassandra_version = ccm_options.get("version", CCM_VERSION)
 
     global CCM_CLUSTER
     if USE_CASS_EXTERNAL:
@@ -449,7 +565,11 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
         log.debug("Using existing cluster, matching topology: {0}".format(cluster_name))
     else:
         if CCM_CLUSTER:
-            log.debug("Stopping existing cluster, topology mismatch: {0}".format(CCM_CLUSTER.name))
+            log.debug(
+                "Stopping existing cluster, topology mismatch: {0}".format(
+                    CCM_CLUSTER.name
+                )
+            )
             CCM_CLUSTER.stop()
 
         try:
@@ -461,12 +581,20 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
             CCM_CLUSTER.set_dse_configuration_options(dse_options)
         except Exception:
             ex_type, ex, tb = sys.exc_info()
-            log.warning("{0}: {1} Backtrace: {2}".format(ex_type.__name__, ex, traceback.extract_tb(tb)))
+            log.warning(
+                "{0}: {1} Backtrace: {2}".format(
+                    ex_type.__name__, ex, traceback.extract_tb(tb)
+                )
+            )
             del tb
 
-            ccm_options.update(cmd_line_args_to_dict('CCM_ARGS'))
+            ccm_options.update(cmd_line_args_to_dict("CCM_ARGS"))
 
-            log.debug("Creating new CCM cluster, {0}, with args {1}".format(cluster_name, ccm_options))
+            log.debug(
+                "Creating new CCM cluster, {0}, with args {1}".format(
+                    cluster_name, ccm_options
+                )
+            )
 
             # Make sure we cleanup old cluster dir if it exists
             cluster_path = os.path.join(path, cluster_name)
@@ -478,30 +606,48 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
                 # CDC is causing an issue (can't start cluster with multiple seeds)
                 # Selecting only features we need for tests, i.e. anything but CDC.
                 CCM_CLUSTER = CCMScyllaCluster(path, cluster_name, **ccm_options)
-                CCM_CLUSTER.set_configuration_options({'experimental_features': ['lwt', 'udf'], 'start_native_transport': True})
+                CCM_CLUSTER.set_configuration_options(
+                    {
+                        "experimental_features": ["lwt", "udf"],
+                        "start_native_transport": True,
+                    }
+                )
 
-                CCM_CLUSTER.set_configuration_options({'skip_wait_for_gossip_to_settle': 0})
+                CCM_CLUSTER.set_configuration_options(
+                    {"skip_wait_for_gossip_to_settle": 0}
+                )
                 # Permit IS NOT NULL restriction on non-primary key columns of a materialized view
                 # This allows `test_metadata_with_quoted_identifiers` to run
-                CCM_CLUSTER.set_configuration_options({'strict_is_not_null_in_views': False})
+                CCM_CLUSTER.set_configuration_options(
+                    {"strict_is_not_null_in_views": False}
+                )
             else:
-                ccm_cluster_clz = CCMCluster if Version(cassandra_version) < Version(
-                    '4.1') else Cassandra41CCMCluster
+                ccm_cluster_clz = (
+                    CCMCluster
+                    if Version(cassandra_version) < Version("4.1")
+                    else Cassandra41CCMCluster
+                )
                 CCM_CLUSTER = ccm_cluster_clz(path, cluster_name, **ccm_options)
-                CCM_CLUSTER.set_configuration_options({'start_native_transport': True})
-            if Version(cassandra_version) >= Version('2.2'):
-                CCM_CLUSTER.set_configuration_options({'enable_user_defined_functions': True})
-                if Version(cassandra_version) >= Version('3.0'):
+                CCM_CLUSTER.set_configuration_options({"start_native_transport": True})
+            if Version(cassandra_version) >= Version("2.2"):
+                CCM_CLUSTER.set_configuration_options(
+                    {"enable_user_defined_functions": True}
+                )
+                if Version(cassandra_version) >= Version("3.0"):
                     # The config.yml option below is deprecated in C* 4.0 per CASSANDRA-17280
-                    if Version(cassandra_version) < Version('4.0'):
-                        CCM_CLUSTER.set_configuration_options({'enable_scripted_user_defined_functions': True})
+                    if Version(cassandra_version) < Version("4.0"):
+                        CCM_CLUSTER.set_configuration_options(
+                            {"enable_scripted_user_defined_functions": True}
+                        )
                     else:
                         # Cassandra version >= 4.0
-                        CCM_CLUSTER.set_configuration_options({
-                            'enable_materialized_views': True,
-                            'enable_sasi_indexes': True,
-                            'enable_transient_replication': True,
-                        })
+                        CCM_CLUSTER.set_configuration_options(
+                            {
+                                "enable_materialized_views": True,
+                                "enable_sasi_indexes": True,
+                                "enable_transient_replication": True,
+                            }
+                        )
 
             common.switch_cluster(path, cluster_name)
             CCM_CLUSTER.set_configuration_options(configuration_options)
@@ -513,17 +659,21 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
 
         # This will enable the Mirroring query handler which will echo our custom payload k,v pairs back
 
-        if 'graph' in workloads:
-            jvm_args += ['-Xms1500M', '-Xmx1500M']
+        if "graph" in workloads:
+            jvm_args += ["-Xms1500M", "-Xmx1500M"]
         else:
             if PROTOCOL_VERSION >= 4 and not SCYLLA_VERSION:
-                jvm_args = [" -Dcassandra.custom_query_handler_class=org.apache.cassandra.cql3.CustomPayloadMirroringQueryHandler"]
+                jvm_args = [
+                    " -Dcassandra.custom_query_handler_class=org.apache.cassandra.cql3.CustomPayloadMirroringQueryHandler"
+                ]
         if len(workloads) > 0:
             for node in CCM_CLUSTER.nodes.values():
                 node.set_workloads(workloads)
         if start:
             log.debug("Starting CCM cluster: {0}".format(cluster_name))
-            CCM_CLUSTER.start(jvm_args=jvm_args, wait_for_binary_proto=True, wait_other_notice=True)
+            CCM_CLUSTER.start(
+                jvm_args=jvm_args, wait_for_binary_proto=True, wait_other_notice=True
+            )
             # Added to wait for slow nodes to start up
             log.debug("Cluster started waiting for binary ports")
             for node in CCM_CLUSTER.nodes.values():
@@ -559,12 +709,12 @@ def teardown_package():
             cluster = CCMClusterFactory.load(path, cluster_name)
             try:
                 cluster.remove()
-                log.info('Removed cluster: %s' % cluster_name)
+                log.info("Removed cluster: %s" % cluster_name)
             except Exception:
-                log.exception('Failed to remove cluster: %s' % cluster_name)
+                log.exception("Failed to remove cluster: %s" % cluster_name)
 
         except Exception:
-            log.warning('Did not find cluster: %s' % cluster_name)
+            log.warning("Did not find cluster: %s" % cluster_name)
 
 
 def execute_until_pass(session, query):
@@ -573,12 +723,24 @@ def execute_until_pass(session, query):
         try:
             return session.execute(query)
         except (ConfigurationException, AlreadyExists, InvalidRequest):
-            log.warning("Received already exists from query {0}   not exiting".format(query))
+            log.warning(
+                "Received already exists from query {0}   not exiting".format(query)
+            )
             # keyspace/table was already created/dropped
             return
-        except (OperationTimedOut, ReadTimeout, ReadFailure, WriteTimeout, WriteFailure):
+        except (
+            OperationTimedOut,
+            ReadTimeout,
+            ReadFailure,
+            WriteTimeout,
+            WriteFailure,
+        ):
             ex_type, ex, tb = sys.exc_info()
-            log.warning("{0}: {1} Backtrace: {2}".format(ex_type.__name__, ex, traceback.extract_tb(tb)))
+            log.warning(
+                "{0}: {1} Backtrace: {2}".format(
+                    ex_type.__name__, ex, traceback.extract_tb(tb)
+                )
+            )
             del tb
             tries += 1
 
@@ -591,12 +753,24 @@ def execute_with_long_wait_retry(session, query, timeout=30):
         try:
             return session.execute(query, timeout=timeout)
         except (ConfigurationException, AlreadyExists):
-            log.warning("Received already exists from query {0}    not exiting".format(query))
+            log.warning(
+                "Received already exists from query {0}    not exiting".format(query)
+            )
             # keyspace/table was already created/dropped
             return
-        except (OperationTimedOut, ReadTimeout, ReadFailure, WriteTimeout, WriteFailure):
+        except (
+            OperationTimedOut,
+            ReadTimeout,
+            ReadFailure,
+            WriteTimeout,
+            WriteFailure,
+        ):
             ex_type, ex, tb = sys.exc_info()
-            log.warning("{0}: {1} Backtrace: {2}".format(ex_type.__name__, ex, traceback.extract_tb(tb)))
+            log.warning(
+                "{0}: {1} Backtrace: {2}".format(
+                    ex_type.__name__, ex, traceback.extract_tb(tb)
+                )
+            )
             del tb
             tries += 1
 
@@ -614,7 +788,7 @@ def execute_with_retry_tolerant(session, query, retry_exceptions, escape_excepti
         except escape_exception:
             return
         except retry_exceptions:
-            time.sleep(.1)
+            time.sleep(0.1)
 
     raise RuntimeError("Failed to execute query after 100 attempts: {0}".format(query))
 
@@ -625,7 +799,11 @@ def drop_keyspace_shutdown_cluster(keyspace_name, session, cluster):
     except:
         log.warning("Error encountered when droping keyspace {0}".format(keyspace_name))
         ex_type, ex, tb = sys.exc_info()
-        log.warning("{0}: {1} Backtrace: {2}".format(ex_type.__name__, ex, traceback.extract_tb(tb)))
+        log.warning(
+            "{0}: {1} Backtrace: {2}".format(
+                ex_type.__name__, ex, traceback.extract_tb(tb)
+            )
+        )
         del tb
     finally:
         log.warning("Shutting down cluster")
@@ -641,39 +819,41 @@ def setup_keyspace(ipformat=None, protocol_version=None, port=9042):
     if not ipformat:
         cluster = TestCluster(protocol_version=_protocol_version, port=port)
     else:
-        cluster = TestCluster(contact_points=["::1"], protocol_version=_protocol_version, port=port)
+        cluster = TestCluster(
+            contact_points=["::1"], protocol_version=_protocol_version, port=port
+        )
     session = cluster.connect()
 
     try:
-        for ksname in ('test1rf', 'test2rf', 'test3rf'):
+        for ksname in ("test1rf", "test2rf", "test3rf"):
             if ksname in cluster.metadata.keyspaces:
                 execute_until_pass(session, "DROP KEYSPACE %s" % ksname)
 
-        ddl = '''
+        ddl = """
             CREATE KEYSPACE test3rf
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}'''
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}"""
         execute_with_long_wait_retry(session, ddl)
 
-        ddl = '''
+        ddl = """
             CREATE KEYSPACE test2rf
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '2'}'''
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '2'}"""
         execute_with_long_wait_retry(session, ddl)
 
-        ddl = '''
+        ddl = """
             CREATE KEYSPACE test1rf
-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}'''
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}"""
         execute_with_long_wait_retry(session, ddl)
 
-        ddl_3f = '''
+        ddl_3f = """
             CREATE TABLE test3rf.test (
                 k int PRIMARY KEY,
-                v int )'''
+                v int )"""
         execute_with_long_wait_retry(session, ddl_3f)
 
-        ddl_1f = '''
+        ddl_1f = """
                     CREATE TABLE test1rf.test (
                         k int PRIMARY KEY,
-                        v int )'''
+                        v int )"""
         execute_with_long_wait_retry(session, ddl_1f)
 
     except Exception:
@@ -684,7 +864,7 @@ def setup_keyspace(ipformat=None, protocol_version=None, port=9042):
 
 
 def is_scylla_enterprise(version: Version) -> bool:
-    return version > Version('2000.1.1')
+    return version > Version("2000.1.1")
 
 
 def xfail_scylla_version_lt(reason, scylla_version, *args, **kwargs):
@@ -693,18 +873,27 @@ def xfail_scylla_version_lt(reason, scylla_version, *args, **kwargs):
     :param reason: message to fail test with
     :param scylla_version: str, version from which test supposed to succeed
     """
-    if not (reason.startswith("scylladb/scylladb#") or reason.startswith("scylladb/scylla-enterprise#")):
-        raise ValueError('reason should start with scylladb/scylladb#<issue-id> or scylladb/scylla-enterprise#<issue-id> to reference issue in scylla repo')
+    if not (
+        reason.startswith("scylladb/scylladb#")
+        or reason.startswith("scylladb/scylla-enterprise#")
+    ):
+        raise ValueError(
+            "reason should start with scylladb/scylladb#<issue-id> or scylladb/scylla-enterprise#<issue-id> to reference issue in scylla repo"
+        )
 
     if not isinstance(scylla_version, str):
-        raise ValueError('scylla_version should be a str')
+        raise ValueError("scylla_version should be a str")
 
     if SCYLLA_VERSION is None:
-        return pytest.mark.skipif(False, reason="It is just a NoOP Decor, should not skip anything")
+        return pytest.mark.skipif(
+            False, reason="It is just a NoOP Decor, should not skip anything"
+        )
 
     current_version = Version(get_scylla_version(SCYLLA_VERSION))
 
-    return pytest.mark.xfail(current_version < Version(scylla_version), reason=reason, *args, **kwargs)
+    return pytest.mark.xfail(
+        current_version < Version(scylla_version), reason=reason, *args, **kwargs
+    )
 
 
 def skip_scylla_version_lt(reason, scylla_version):
@@ -713,14 +902,21 @@ def skip_scylla_version_lt(reason, scylla_version):
     :param reason: message explaining why the test is skipped
     :param scylla_version: str, version from which test supposed to work
     """
-    if not (reason.startswith("scylladb/scylladb#") or reason.startswith("scylladb/scylla-enterprise#")):
-        raise ValueError('reason should start with scylladb/scylladb#<issue-id> or scylladb/scylla-enterprise#<issue-id> to reference issue in scylla repo')
+    if not (
+        reason.startswith("scylladb/scylladb#")
+        or reason.startswith("scylladb/scylla-enterprise#")
+    ):
+        raise ValueError(
+            "reason should start with scylladb/scylladb#<issue-id> or scylladb/scylla-enterprise#<issue-id> to reference issue in scylla repo"
+        )
 
     if not isinstance(scylla_version, str):
-        raise ValueError('scylla_version should be a str')
+        raise ValueError("scylla_version should be a str")
 
     if SCYLLA_VERSION is None:
-        return pytest.mark.skipif(False, reason="It is just a NoOP Decor, should not skip anything")
+        return pytest.mark.skipif(
+            False, reason="It is just a NoOP Decor, should not skip anything"
+        )
 
     current_version = Version(get_scylla_version(SCYLLA_VERSION))
 
@@ -728,7 +924,6 @@ def skip_scylla_version_lt(reason, scylla_version):
 
 
 class UpDownWaiter(object):
-
     def __init__(self, host):
         self.down_event = Event()
         self.up_event = Event()
@@ -752,6 +947,7 @@ class BasicKeyspaceUnitTestCase(unittest.TestCase):
     This is basic unit test case that provides various utility methods that can be leveraged for testcase setup and tear
     down
     """
+
     @property
     def keyspace_name(self):
         return self.ks_name
@@ -770,15 +966,21 @@ class BasicKeyspaceUnitTestCase(unittest.TestCase):
 
     @classmethod
     def drop_keyspace(cls):
-        execute_with_long_wait_retry(cls.session, "DROP KEYSPACE {0}".format(cls.ks_name))
+        execute_with_long_wait_retry(
+            cls.session, "DROP KEYSPACE {0}".format(cls.ks_name)
+        )
 
     @classmethod
     def create_keyspace(cls, rf):
-        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '{1}'}}".format(cls.ks_name, rf)
+        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': '{1}'}}".format(
+            cls.ks_name, rf
+        )
         execute_with_long_wait_retry(cls.session, ddl)
 
     @classmethod
-    def common_setup(cls, rf, keyspace_creation=True, create_class_table=False, **cluster_kwargs):
+    def common_setup(
+        cls, rf, keyspace_creation=True, create_class_table=False, **cluster_kwargs
+    ):
         cls.cluster = TestCluster(**cluster_kwargs)
         cls.session = cls.cluster.connect(wait_for_all_pools=True)
         cls.ks_name = cls.__name__.lower()
@@ -787,23 +989,22 @@ class BasicKeyspaceUnitTestCase(unittest.TestCase):
         cls.cass_version, cls.cql_version = get_server_versions()
 
         if create_class_table:
-
-            ddl = '''
+            ddl = """
                 CREATE TABLE {0}.{1} (
                     k int PRIMARY KEY,
-                    v int )'''.format(cls.ks_name, cls.ks_name)
+                    v int )""".format(cls.ks_name, cls.ks_name)
             execute_until_pass(cls.session, ddl)
 
     def create_function_table(self):
-            ddl = '''
+        ddl = """
                 CREATE TABLE {0}.{1} (
                     k int PRIMARY KEY,
-                    v int )'''.format(self.keyspace_name, self.function_table_name)
-            execute_until_pass(self.session, ddl)
+                    v int )""".format(self.keyspace_name, self.function_table_name)
+        execute_until_pass(self.session, ddl)
 
     def drop_function_table(self):
-            ddl = "DROP TABLE {0}.{1} ".format(self.keyspace_name, self.function_table_name)
-            execute_until_pass(self.session, ddl)
+        ddl = "DROP TABLE {0}.{1} ".format(self.keyspace_name, self.function_table_name)
+        execute_until_pass(self.session, ddl)
 
 
 class MockLoggingHandler(logging.Handler):
@@ -818,18 +1019,18 @@ class MockLoggingHandler(logging.Handler):
 
     def reset(self):
         self.messages = {
-            'debug': [],
-            'info': [],
-            'warning': [],
-            'error': [],
-            'critical': [],
+            "debug": [],
+            "info": [],
+            "warning": [],
+            "error": [],
+            "critical": [],
         }
 
     def get_message_count(self, level, sub_string):
         count = 0
         for msg in self.messages.get(level):
             if sub_string in msg:
-                count+=1
+                count += 1
         return count
 
     def set_module_name(self, module_name):
@@ -853,6 +1054,7 @@ class BasicExistingKeyspaceUnitTestCase(BasicKeyspaceUnitTestCase):
     """
     This is basic unit test defines class level teardown and setup methods. It assumes that keyspace is already defined, or created as part of the test.
     """
+
     @classmethod
     def setUpClass(cls):
         cls.common_setup(1, keyspace_creation=False)
@@ -867,6 +1069,7 @@ class BasicSharedKeyspaceUnitTestCase(BasicKeyspaceUnitTestCase):
     This is basic unit test case that can be leveraged to scope a keyspace to a specific test class.
     creates a keyspace named after the testclass with a rf of 1.
     """
+
     @classmethod
     def setUpClass(cls):
         cls.common_setup(1)
@@ -881,6 +1084,7 @@ class BasicSharedKeyspaceUnitTestCaseRF1(BasicSharedKeyspaceUnitTestCase):
     This is basic unit test case that can be leveraged to scope a keyspace to a specific test class.
     creates a keyspace named after the testclass with a rf of 1
     """
+
     @classmethod
     def setUpClass(self):
         self.common_setup(1, True)
@@ -891,6 +1095,7 @@ class BasicSharedKeyspaceUnitTestCaseRF2(BasicSharedKeyspaceUnitTestCase):
     This is basic unit test case that can be leveraged to scope a keyspace to a specific test class.
     creates a keyspace named after the test class with a rf of 2, and a table named after the class
     """
+
     @classmethod
     def setUpClass(self):
         self.common_setup(2)
@@ -901,6 +1106,7 @@ class BasicSharedKeyspaceUnitTestCaseRF3(BasicSharedKeyspaceUnitTestCase):
     This is basic unit test case that can be leveraged to scope a keyspace to a specific test class.
     creates a keyspace named after the test class with a rf of 3
     """
+
     @classmethod
     def setUpClass(self):
         self.common_setup(3)
@@ -911,6 +1117,7 @@ class BasicSharedKeyspaceUnitTestCaseRF3WM(BasicSharedKeyspaceUnitTestCase):
     This is basic unit test case that can be leveraged to scope a keyspace to a specific test class.
     creates a keyspace named after the test class with a rf of 3 with metrics enabled
     """
+
     @classmethod
     def setUpClass(self):
         self.common_setup(3, True, True, metrics_enabled=True)
@@ -921,12 +1128,13 @@ class BasicSharedKeyspaceUnitTestCaseRF3WM(BasicSharedKeyspaceUnitTestCase):
 
 
 class BasicSharedKeyspaceUnitTestCaseWFunctionTable(BasicSharedKeyspaceUnitTestCase):
-    """"
+    """ "
     This is basic unit test case that can be leveraged to scope a keyspace to a specific test class.
     creates a keyspace named after the test class with a rf of 3 and a table named after the class
     the table is scoped to just the unit test and will be removed.
 
     """
+
     def setUp(self):
         self.create_function_table()
 
@@ -940,6 +1148,7 @@ class BasicSegregatedKeyspaceUnitTestCase(BasicKeyspaceUnitTestCase):
     It has overhead and should only be used with complex unit test were sharing a keyspace will
     cause issues.
     """
+
     def setUp(self):
         self.common_setup(1)
 
@@ -953,6 +1162,7 @@ class BasicExistingSegregatedKeyspaceUnitTestCase(BasicKeyspaceUnitTestCase):
     or created as part of a test.
     It has some overhead and should only be used when sharing cluster/session is not feasible.
     """
+
     def setUp(self):
         self.common_setup(1, keyspace_creation=False)
 
@@ -968,22 +1178,23 @@ class TestCluster(object):
     DEFAULT_ALLOW_BETA = ALLOW_BETA_PROTOCOL
 
     def __new__(cls, **kwargs):
-        if 'protocol_version' not in kwargs:
-            kwargs['protocol_version'] = cls.DEFAULT_PROTOCOL_VERSION
-        if 'contact_points' not in kwargs:
-            kwargs['contact_points'] = [cls.DEFAULT_CASSANDRA_IP]
-        if 'allow_beta_protocol_version' not in kwargs:
-            kwargs['allow_beta_protocol_version'] = cls.DEFAULT_ALLOW_BETA
+        if "protocol_version" not in kwargs:
+            kwargs["protocol_version"] = cls.DEFAULT_PROTOCOL_VERSION
+        if "contact_points" not in kwargs:
+            kwargs["contact_points"] = [cls.DEFAULT_CASSANDRA_IP]
+        if "allow_beta_protocol_version" not in kwargs:
+            kwargs["allow_beta_protocol_version"] = cls.DEFAULT_ALLOW_BETA
         return Cluster(**kwargs)
+
 
 # Subclass of CCMCluster (i.e. ccmlib.cluster.Cluster) which transparently performs
 # conversion of cassandra.yml directives into something matching the new syntax
 # introduced by CASSANDRA-15234
 class Cassandra41CCMCluster(CCMCluster):
     __test__ = False
-    IN_MS_REGEX = re.compile('^(\w+)_in_ms$')
-    IN_KB_REGEX = re.compile('^(\w+)_in_kb$')
-    ENABLE_REGEX = re.compile('^enable_(\w+)$')
+    IN_MS_REGEX = re.compile("^(\w+)_in_ms$")
+    IN_KB_REGEX = re.compile("^(\w+)_in_kb$")
+    ENABLE_REGEX = re.compile("^enable_(\w+)$")
 
     def _get_config_key(self, k, v):
         if "." in k:
@@ -1009,5 +1220,10 @@ class Cassandra41CCMCluster(CCMCluster):
         return v
 
     def set_configuration_options(self, values=None, *args, **kwargs):
-        new_values = {self._get_config_key(k, str(v)):self._get_config_val(k, str(v)) for (k,v) in values.items()}
-        super(Cassandra41CCMCluster, self).set_configuration_options(values=new_values, *args, **kwargs)
+        new_values = {
+            self._get_config_key(k, str(v)): self._get_config_val(k, str(v))
+            for (k, v) in values.items()
+        }
+        super(Cassandra41CCMCluster, self).set_configuration_options(
+            values=new_values, *args, **kwargs
+        )

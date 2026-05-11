@@ -19,28 +19,37 @@ from tests.integration import use_singledc, TestCluster
 
 from cassandra.policies import ColDesc
 
-from cassandra.column_encryption.policies import AES256ColumnEncryptionPolicy, \
-    AES256_KEY_SIZE_BYTES, AES256_BLOCK_SIZE_BYTES
+from cassandra.column_encryption.policies import (
+    AES256ColumnEncryptionPolicy,
+    AES256_KEY_SIZE_BYTES,
+    AES256_BLOCK_SIZE_BYTES,
+)
+
 
 def setup_module():
     use_singledc()
 
-@unittest.skip("Skip until https://github.com/scylladb/python-driver/issues/365 is sorted out")
-class ColumnEncryptionPolicyTest(unittest.TestCase):
 
+@unittest.skip(
+    "Skip until https://github.com/scylladb/python-driver/issues/365 is sorted out"
+)
+class ColumnEncryptionPolicyTest(unittest.TestCase):
     def _recreate_keyspace(self, session):
         session.execute("drop keyspace if exists foo")
-        session.execute("CREATE KEYSPACE foo WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}")
-        session.execute("CREATE TABLE foo.bar(encrypted blob, unencrypted int, primary key(unencrypted))")
+        session.execute(
+            "CREATE KEYSPACE foo WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}"
+        )
+        session.execute(
+            "CREATE TABLE foo.bar(encrypted blob, unencrypted int, primary key(unencrypted))"
+        )
 
-    def _create_policy(self, key, iv = None):
+    def _create_policy(self, key, iv=None):
         cl_policy = AES256ColumnEncryptionPolicy()
-        col_desc = ColDesc('foo','bar','encrypted')
+        col_desc = ColDesc("foo", "bar", "encrypted")
         cl_policy.add_column(col_desc, key, "int")
         return (col_desc, cl_policy)
 
     def test_end_to_end_prepared(self):
-
         # We only currently perform testing on a single type/expected value pair since CLE functionality is essentially
         # independent of the underlying type.  We intercept data after it's been encoded when it's going out and before it's
         # encoded when coming back; the actual types of the data involved don't impact us.
@@ -52,24 +61,30 @@ class ColumnEncryptionPolicyTest(unittest.TestCase):
         session = cluster.connect()
         self._recreate_keyspace(session)
 
-        prepared = session.prepare("insert into foo.bar (encrypted, unencrypted) values (?,?)")
+        prepared = session.prepare(
+            "insert into foo.bar (encrypted, unencrypted) values (?,?)"
+        )
         for i in range(100):
             session.execute(prepared, (i, i))
 
         # A straight select from the database will now return the decrypted bits.  We select both encrypted and unencrypted
         # values here to confirm that we don't interfere with regular processing of unencrypted vals.
-        (encrypted,unencrypted) = session.execute("select encrypted, unencrypted from foo.bar where unencrypted = %s allow filtering", (expected,)).one()
+        (encrypted, unencrypted) = session.execute(
+            "select encrypted, unencrypted from foo.bar where unencrypted = %s allow filtering",
+            (expected,),
+        ).one()
         assert expected == encrypted
         assert expected == unencrypted
 
         # Confirm the same behaviour from a subsequent prepared statement as well
-        prepared = session.prepare("select encrypted, unencrypted from foo.bar where unencrypted = ? allow filtering")
-        (encrypted,unencrypted) = session.execute(prepared, [expected]).one()
+        prepared = session.prepare(
+            "select encrypted, unencrypted from foo.bar where unencrypted = ? allow filtering"
+        )
+        (encrypted, unencrypted) = session.execute(prepared, [expected]).one()
         assert expected == encrypted
         assert expected == unencrypted
 
     def test_end_to_end_simple(self):
-
         expected = 1
 
         key = os.urandom(AES256_KEY_SIZE_BYTES)
@@ -79,20 +94,28 @@ class ColumnEncryptionPolicyTest(unittest.TestCase):
         self._recreate_keyspace(session)
 
         # Use encode_and_encrypt helper function to populate date
-        for i in range(1,100):
+        for i in range(1, 100):
             assert i is not None
             encrypted = cl_policy.encode_and_encrypt(col_desc, i)
-            session.execute("insert into foo.bar (encrypted, unencrypted) values (%s,%s)", (encrypted, i))
+            session.execute(
+                "insert into foo.bar (encrypted, unencrypted) values (%s,%s)",
+                (encrypted, i),
+            )
 
         # A straight select from the database will now return the decrypted bits.  We select both encrypted and unencrypted
         # values here to confirm that we don't interfere with regular processing of unencrypted vals.
-        (encrypted,unencrypted) = session.execute("select encrypted, unencrypted from foo.bar where unencrypted = %s allow filtering", (expected,)).one()
+        (encrypted, unencrypted) = session.execute(
+            "select encrypted, unencrypted from foo.bar where unencrypted = %s allow filtering",
+            (expected,),
+        ).one()
         assert expected == encrypted
         assert expected == unencrypted
 
         # Confirm the same behaviour from a subsequent prepared statement as well
-        prepared = session.prepare("select encrypted, unencrypted from foo.bar where unencrypted = ? allow filtering")
-        (encrypted,unencrypted) = session.execute(prepared, [expected]).one()
+        prepared = session.prepare(
+            "select encrypted, unencrypted from foo.bar where unencrypted = ? allow filtering"
+        )
+        (encrypted, unencrypted) = session.execute(prepared, [expected]).one()
         assert expected == encrypted
         assert expected == unencrypted
 
@@ -118,10 +141,13 @@ class ColumnEncryptionPolicyTest(unittest.TestCase):
         self._recreate_keyspace(session1)
 
         # Use encode_and_encrypt helper function to populate date
-        for i in range(1,100):
+        for i in range(1, 100):
             assert i is not None
             encrypted = cl_policy1.encode_and_encrypt(col_desc1, i)
-            session1.execute("insert into foo.bar (encrypted, unencrypted) values (%s,%s)", (encrypted, i))
+            session1.execute(
+                "insert into foo.bar (encrypted, unencrypted) values (%s,%s)",
+                (encrypted, i),
+            )
         session1.shutdown()
         cluster1.shutdown()
 
@@ -135,7 +161,10 @@ class ColumnEncryptionPolicyTest(unittest.TestCase):
         (_, cl_policy2) = self._create_policy(key, iv=iv2)
         cluster2 = TestCluster(column_encryption_policy=cl_policy2)
         session2 = cluster2.connect()
-        (encrypted,unencrypted) = session2.execute("select encrypted, unencrypted from foo.bar where unencrypted = %s allow filtering", (expected,)).one()
+        (encrypted, unencrypted) = session2.execute(
+            "select encrypted, unencrypted from foo.bar where unencrypted = %s allow filtering",
+            (expected,),
+        ).one()
         assert expected == encrypted
         assert expected == unencrypted
 
@@ -153,7 +182,10 @@ class ColumnEncryptionPolicyTest(unittest.TestCase):
         self._recreate_keyspace(session)
 
         # Use encode_and_encrypt helper function to populate date
-        session.execute("insert into foo.bar (encrypted, unencrypted) values (%s,%s)",(cl_policy.encode_and_encrypt(col_desc, expected), expected))
+        session.execute(
+            "insert into foo.bar (encrypted, unencrypted) values (%s,%s)",
+            (cl_policy.encode_and_encrypt(col_desc, expected), expected),
+        )
 
         # We now open a new session _without_ the CLE policy specified.  We should _not_ be able to read decrypted bits from this session.
         cluster2 = TestCluster()
@@ -161,11 +193,16 @@ class ColumnEncryptionPolicyTest(unittest.TestCase):
 
         # A straight select from the database will now return the decrypted bits.  We select both encrypted and unencrypted
         # values here to confirm that we don't interfere with regular processing of unencrypted vals.
-        (encrypted,unencrypted) = session2.execute("select encrypted, unencrypted from foo.bar where unencrypted = %s allow filtering", (expected,)).one()
+        (encrypted, unencrypted) = session2.execute(
+            "select encrypted, unencrypted from foo.bar where unencrypted = %s allow filtering",
+            (expected,),
+        ).one()
         assert cl_policy.encode_and_encrypt(col_desc, expected) == encrypted
         assert expected == unencrypted
 
         # Confirm the same behaviour from a subsequent prepared statement as well
-        prepared = session2.prepare("select encrypted, unencrypted from foo.bar where unencrypted = ? allow filtering")
-        (encrypted,unencrypted) = session2.execute(prepared, [expected]).one()
+        prepared = session2.prepare(
+            "select encrypted, unencrypted from foo.bar where unencrypted = ? allow filtering"
+        )
+        (encrypted, unencrypted) = session2.execute(prepared, [expected]).one()
         assert cl_policy.encode_and_encrypt(col_desc, expected) == encrypted

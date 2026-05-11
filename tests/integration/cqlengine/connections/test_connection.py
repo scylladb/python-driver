@@ -19,11 +19,22 @@ from cassandra import ConsistencyLevel
 from cassandra.cqlengine.models import Model
 from cassandra.cqlengine import columns, connection, models
 from cassandra.cqlengine.management import sync_table
-from cassandra.cluster import ExecutionProfile, _clusters_for_shutdown, _ConfigMode, EXEC_PROFILE_DEFAULT
+from cassandra.cluster import (
+    ExecutionProfile,
+    _clusters_for_shutdown,
+    _ConfigMode,
+    EXEC_PROFILE_DEFAULT,
+)
 from cassandra.policies import RoundRobinPolicy
 from cassandra.query import dict_factory
 
-from tests.integration import CASSANDRA_IP, PROTOCOL_VERSION, execute_with_long_wait_retry, local, TestCluster
+from tests.integration import (
+    CASSANDRA_IP,
+    PROTOCOL_VERSION,
+    execute_with_long_wait_retry,
+    local,
+    TestCluster,
+)
 from tests.integration.cqlengine.base import BaseCassEngTestCase
 from tests.integration.cqlengine import DEFAULT_KEYSPACE, setup_connection
 
@@ -42,12 +53,18 @@ class ConnectionTest(unittest.TestCase):
     @local
     def test_connection_setup_with_setup(self):
         connection.setup(hosts=None, default_keyspace=None)
-        assert connection.get_connection("default").cluster.metadata.get_host("127.0.0.1") is not None
+        assert (
+            connection.get_connection("default").cluster.metadata.get_host("127.0.0.1")
+            is not None
+        )
 
     @local
     def test_connection_setup_with_default(self):
         connection.default()
-        assert connection.get_connection("default").cluster.metadata.get_host("127.0.0.1") is not None
+        assert (
+            connection.get_connection("default").cluster.metadata.get_host("127.0.0.1")
+            is not None
+        )
 
     def test_only_one_connection_is_created(self):
         """
@@ -67,24 +84,31 @@ class ConnectionTest(unittest.TestCase):
 
 
 class SeveralConnectionsTest(BaseCassEngTestCase):
-
     @classmethod
     def setUpClass(cls):
-        connection.unregister_connection('default')
-        cls.keyspace1 = 'ctest1'
-        cls.keyspace2 = 'ctest2'
+        connection.unregister_connection("default")
+        cls.keyspace1 = "ctest1"
+        cls.keyspace2 = "ctest2"
         super(SeveralConnectionsTest, cls).setUpClass()
         cls.setup_cluster = TestCluster()
         cls.setup_session = cls.setup_cluster.connect()
-        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '{1}'}}".format(cls.keyspace1, 1)
+        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': '{1}'}}".format(
+            cls.keyspace1, 1
+        )
         execute_with_long_wait_retry(cls.setup_session, ddl)
-        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '{1}'}}".format(cls.keyspace2, 1)
+        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': '{1}'}}".format(
+            cls.keyspace2, 1
+        )
         execute_with_long_wait_retry(cls.setup_session, ddl)
 
     @classmethod
     def tearDownClass(cls):
-        execute_with_long_wait_retry(cls.setup_session, "DROP KEYSPACE {0}".format(cls.keyspace1))
-        execute_with_long_wait_retry(cls.setup_session, "DROP KEYSPACE {0}".format(cls.keyspace2))
+        execute_with_long_wait_retry(
+            cls.setup_session, "DROP KEYSPACE {0}".format(cls.keyspace1)
+        )
+        execute_with_long_wait_retry(
+            cls.setup_session, "DROP KEYSPACE {0}".format(cls.keyspace2)
+        )
         models.DEFAULT_KEYSPACE = DEFAULT_KEYSPACE
         cls.setup_cluster.shutdown()
         setup_connection(DEFAULT_KEYSPACE)
@@ -141,13 +165,17 @@ class ConnectionInitTest(unittest.TestCase):
         connection.setup(
             hosts=[CASSANDRA_IP],
             default_keyspace=DEFAULT_KEYSPACE,
-            consistency=ConsistencyLevel.LOCAL_ONE
+            consistency=ConsistencyLevel.LOCAL_ONE,
         )
         conn = connection.get_connection()
         assert conn.cluster._config_mode == _ConfigMode.LEGACY
 
     def test_connection_from_session_with_execution_profile(self):
-        cluster = TestCluster(execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=dict_factory)})
+        cluster = TestCluster(
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=dict_factory)
+            }
+        )
         session = cluster.connect()
         connection.default()
         connection.set_session(session)
@@ -174,23 +202,27 @@ class ConnectionInitTest(unittest.TestCase):
         connection.setup(
             hosts=[CASSANDRA_IP],
             default_keyspace=DEFAULT_KEYSPACE,
-            consistency=ConsistencyLevel.LOCAL_ONE
+            consistency=ConsistencyLevel.LOCAL_ONE,
         )
         assert connection.get_connection().cluster._config_mode == _ConfigMode.LEGACY
 
         sync_table(ConnectionModel)
-        ConnectionModel.objects.create(key=0, some_data='text0')
-        ConnectionModel.objects.create(key=1, some_data='text1')
-        assert ConnectionModel.objects(key=0)[0].some_data == 'text0'
+        ConnectionModel.objects.create(key=0, some_data="text0")
+        ConnectionModel.objects.create(key=1, some_data="text1")
+        assert ConnectionModel.objects(key=0)[0].some_data == "text0"
 
     def test_execution_profile_insert_query(self):
-        cluster = TestCluster(execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=dict_factory)})
+        cluster = TestCluster(
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=dict_factory)
+            }
+        )
         session = cluster.connect()
         connection.default()
         connection.set_session(session)
         assert connection.get_connection().cluster._config_mode == _ConfigMode.PROFILES
 
         sync_table(ConnectionModel)
-        ConnectionModel.objects.create(key=0, some_data='text0')
-        ConnectionModel.objects.create(key=1, some_data='text1')
-        assert ConnectionModel.objects(key=0)[0].some_data == 'text0'
+        ConnectionModel.objects.create(key=0, some_data="text0")
+        ConnectionModel.objects.create(key=1, some_data="text1")
+        assert ConnectionModel.objects(key=0)[0].some_data == "text0"

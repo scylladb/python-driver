@@ -17,9 +17,11 @@
 import logging
 
 log = logging.getLogger()
-log.setLevel('DEBUG')
+log.setLevel("DEBUG")
 handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+)
 log.addHandler(handler)
 
 from cassandra import ConsistencyLevel
@@ -30,14 +32,17 @@ KEYSPACE = "testkeyspace"
 
 
 def main():
-    cluster = Cluster(['127.0.0.1'])
+    cluster = Cluster(["127.0.0.1"])
     session = cluster.connect()
 
     log.info("creating keyspace...")
-    session.execute("""
+    session.execute(
+        """
         CREATE KEYSPACE IF NOT EXISTS %s
-        WITH replication = { 'class': 'SimpleStrategy', 'replication_factor': '2' }
-        """ % KEYSPACE)
+        WITH replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': '2' }
+        """
+        % KEYSPACE
+    )
 
     log.info("setting keyspace...")
     session.set_keyspace(KEYSPACE)
@@ -52,10 +57,13 @@ def main():
         )
         """)
 
-    query = SimpleStatement("""
+    query = SimpleStatement(
+        """
         INSERT INTO mytable (thekey, col1, col2)
         VALUES (%(key)s, %(a)s, %(b)s)
-        """, consistency_level=ConsistencyLevel.ONE)
+        """,
+        consistency_level=ConsistencyLevel.ONE,
+    )
 
     prepared = session.prepare("""
         INSERT INTO mytable (thekey, col1, col2)
@@ -64,8 +72,8 @@ def main():
 
     for i in range(10):
         log.info("inserting row %d" % i)
-        session.execute(query, dict(key="key%d" % i, a='a', b='b'))
-        session.execute(prepared, ("key%d" % i, 'b', 'b'))
+        session.execute(query, dict(key="key%d" % i, a="a", b="b"))
+        session.execute(prepared, ("key%d" % i, "b", "b"))
 
     future = session.execute_async("SELECT * FROM mytable")
     log.info("key\tcol1\tcol2")
@@ -78,9 +86,10 @@ def main():
         return
 
     for row in rows:
-        log.info('\t'.join(row))
+        log.info("\t".join(row))
 
     session.execute("DROP KEYSPACE " + KEYSPACE)
+
 
 if __name__ == "__main__":
     main()

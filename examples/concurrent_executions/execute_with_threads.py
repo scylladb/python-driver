@@ -33,15 +33,20 @@ COUNTER_LOCK = threading.Lock()
 cluster = Cluster()
 session = cluster.connect()
 
-session.execute(("CREATE KEYSPACE IF NOT EXISTS examples "
-                 "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1' }"))
+session.execute(
+    (
+        "CREATE KEYSPACE IF NOT EXISTS examples "
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1' }"
+    )
+)
 session.execute("USE examples")
-session.execute("CREATE TABLE IF NOT EXISTS tbl_sample_kv (id uuid, value text, PRIMARY KEY (id))")
+session.execute(
+    "CREATE TABLE IF NOT EXISTS tbl_sample_kv (id uuid, value text, PRIMARY KEY (id))"
+)
 prepared_insert = session.prepare("INSERT INTO tbl_sample_kv (id, value) VALUES (?, ?)")
 
 
 class SimpleQueryExecutor(threading.Thread):
-
     def run(self):
         global COUNTER
 
@@ -68,5 +73,8 @@ for thread in threads:
     thread.join()
 end = time.time()
 
-print("Finished executing {} queries with a concurrency level of {} in {:.2f} seconds.".
-      format(TOTAL_QUERIES, CONCURRENCY_LEVEL, (end-start)))
+print(
+    "Finished executing {} queries with a concurrency level of {} in {:.2f} seconds.".format(
+        TOTAL_QUERIES, CONCURRENCY_LEVEL, (end - start)
+    )
+)

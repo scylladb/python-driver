@@ -23,8 +23,13 @@ import requests
 
 
 from cassandra.protocol import ConfigurationException
-from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster, greaterthanorequalcass40, \
-    xfail_scylla_version_lt
+from tests.integration import (
+    use_singledc,
+    PROTOCOL_VERSION,
+    TestCluster,
+    greaterthanorequalcass40,
+    xfail_scylla_version_lt,
+)
 from tests.integration.datatype_utils import update_datatypes
 
 
@@ -38,7 +43,8 @@ class ControlConnectionTests(unittest.TestCase):
         if PROTOCOL_VERSION < 3:
             raise unittest.SkipTest(
                 "Native protocol 3,0+ is required for UDTs using %r"
-                % (PROTOCOL_VERSION,))
+                % (PROTOCOL_VERSION,)
+            )
         self.cluster = TestCluster()
 
     def tearDown(self):
@@ -68,7 +74,7 @@ class ControlConnectionTests(unittest.TestCase):
         self.session = self.cluster.connect()
         self.session.execute("""
             CREATE KEYSPACE keyspacetodrop
-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
+            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
             """)
         self.session.set_keyspace("keyspacetodrop")
         self.session.execute("CREATE TYPE user (age int, name text)")
@@ -134,8 +140,10 @@ class ControlConnectionTests(unittest.TestCase):
             assert 9042 == host.broadcast_rpc_port
             assert 7000 == host.broadcast_port
 
-    @xfail_scylla_version_lt(reason='scylladb/scylladb#26992 - system.client_routes is not yet supported',
-                             scylla_version="2026.1.0")
+    @xfail_scylla_version_lt(
+        reason="scylladb/scylladb#26992 - system.client_routes is not yet supported",
+        scylla_version="2026.1.0",
+    )
     def test_client_routes_change_event(self):
         cluster = TestCluster()
 
@@ -145,7 +153,10 @@ class ControlConnectionTests(unittest.TestCase):
         flag = Event()
 
         connection_ids = ["anytext", "11510f50-f906-4844-8c74-49ddab9ac6a9"]
-        host_ids = ["1a13fa42-c45b-410f-8ba5-58b42ada9c12", "aa13fa42-c45b-410f-8ba5-58b42ada9c12"]
+        host_ids = [
+            "1a13fa42-c45b-410f-8ba5-58b42ada9c12",
+            "aa13fa42-c45b-410f-8ba5-58b42ada9c12",
+        ]
         got_connection_ids = []
         got_host_ids = []
 
@@ -159,12 +170,16 @@ class ControlConnectionTests(unittest.TestCase):
             finally:
                 flag.set()
 
-        self.session.cluster.control_connection._connection.register_watchers({"CLIENT_ROUTES_CHANGE": on_event})
+        self.session.cluster.control_connection._connection.register_watchers(
+            {"CLIENT_ROUTES_CHANGE": on_event}
+        )
 
         try:
             payload = [
                 {
-                    "connection_id": connection_ids[0],  # Should be a UUID if API requires that
+                    "connection_id": connection_ids[
+                        0
+                    ],  # Should be a UUID if API requires that
                     "host_id": host_ids[0],
                     "address": "localhost",
                     "port": 9042,
@@ -174,7 +189,7 @@ class ControlConnectionTests(unittest.TestCase):
                     "host_id": host_ids[1],
                     "address": "localhost",
                     "port": 9042,
-                }
+                },
             ]
             response = requests.post(
                 "http://" + cluster.contact_points[0] + ":10000/v2/client-routes",
@@ -182,9 +197,12 @@ class ControlConnectionTests(unittest.TestCase):
                 headers={
                     "Content-Type": "application/json",
                     "Accept": "application/json",
-                })
+                },
+            )
             assert response.status_code == 200
-            assert flag.wait(20), "Schema change event was not received after registering watchers"
+            assert flag.wait(20), (
+                "Schema change event was not received after registering watchers"
+            )
             assert set(got_connection_ids) == set(connection_ids)
             assert set(got_host_ids) == set(host_ids)
         finally:

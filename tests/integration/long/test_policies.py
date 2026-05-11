@@ -22,15 +22,16 @@ import pytest
 
 
 def setup_module():
-    use_cluster('test_cluster', [4])
+    use_cluster("test_cluster", [4])
 
 
 class RetryPolicyTests(unittest.TestCase):
-
     @classmethod
     def tearDownClass(cls):
         cluster = get_cluster()
-        cluster.start(wait_for_binary_proto=True, wait_other_notice=True)  # make sure other nodes are restarted
+        cluster.start(
+            wait_for_binary_proto=True, wait_other_notice=True
+        )  # make sure other nodes are restarted
 
     def test_should_rethrow_on_unvailable_with_default_policy_if_cas(self):
         """
@@ -42,15 +43,24 @@ class RetryPolicyTests(unittest.TestCase):
 
         @test_category policy
         """
-        ep = ExecutionProfile(consistency_level=ConsistencyLevel.ALL,
-                              serial_consistency_level=ConsistencyLevel.SERIAL)
+        ep = ExecutionProfile(
+            consistency_level=ConsistencyLevel.ALL,
+            serial_consistency_level=ConsistencyLevel.SERIAL,
+        )
 
         cluster = TestCluster(execution_profiles={EXEC_PROFILE_DEFAULT: ep})
         session = cluster.connect()
 
-        session.execute("CREATE KEYSPACE test_retry_policy_cas WITH replication = {'class':'SimpleStrategy','replication_factor': 3};")
-        session.execute("CREATE TABLE test_retry_policy_cas.t (id int PRIMARY KEY, data text);")
-        session.execute('INSERT INTO test_retry_policy_cas.t ("id", "data") VALUES (%(0)s, %(1)s)', {'0': 42, '1': 'testing'})
+        session.execute(
+            "CREATE KEYSPACE test_retry_policy_cas WITH replication = {'class':'NetworkTopologyStrategy','replication_factor': 3};"
+        )
+        session.execute(
+            "CREATE TABLE test_retry_policy_cas.t (id int PRIMARY KEY, data text);"
+        )
+        session.execute(
+            'INSERT INTO test_retry_policy_cas.t ("id", "data") VALUES (%(0)s, %(1)s)',
+            {"0": 42, "1": "testing"},
+        )
 
         get_node(2).stop()
         get_node(4).stop()
@@ -60,7 +70,9 @@ class RetryPolicyTests(unittest.TestCase):
 
         # after fix: cassandra.Unavailable (expected since replicas are down)
         with pytest.raises(Unavailable) as cm:
-            session.execute("update test_retry_policy_cas.t set data = 'staging' where id = 42 if data ='testing'")
+            session.execute(
+                "update test_retry_policy_cas.t set data = 'staging' where id = 42 if data ='testing'"
+            )
 
         exception = cm.value
         assert exception.consistency == ConsistencyLevel.SERIAL

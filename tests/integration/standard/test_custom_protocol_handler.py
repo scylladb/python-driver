@@ -14,17 +14,37 @@
 
 import unittest
 
-from cassandra.protocol import ProtocolHandler, ResultMessage, QueryMessage, UUIDType, read_int
+from cassandra.protocol import (
+    ProtocolHandler,
+    ResultMessage,
+    QueryMessage,
+    UUIDType,
+    read_int,
+)
 from cassandra.query import tuple_factory, SimpleStatement
-from cassandra.cluster import (ResponseFuture, ExecutionProfile, EXEC_PROFILE_DEFAULT,
-    ContinuousPagingOptions, NoHostAvailable)
+from cassandra.cluster import (
+    ResponseFuture,
+    ExecutionProfile,
+    EXEC_PROFILE_DEFAULT,
+    ContinuousPagingOptions,
+    NoHostAvailable,
+)
 from cassandra import ProtocolVersion, ConsistencyLevel
 
-from tests.integration import use_single_node, drop_keyspace_shutdown_cluster, \
-    greaterthanorequalcass30, execute_with_long_wait_retry, greaterthanorequalcass3_10, \
-    TestCluster, greaterthanorequalcass40
+from tests.integration import (
+    use_single_node,
+    drop_keyspace_shutdown_cluster,
+    greaterthanorequalcass30,
+    execute_with_long_wait_retry,
+    greaterthanorequalcass3_10,
+    TestCluster,
+    greaterthanorequalcass40,
+)
 from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES
-from tests.integration.standard.utils import create_table_with_all_types, get_all_primitive_params
+from tests.integration.standard.utils import (
+    create_table_with_all_types,
+    get_all_primitive_params,
+)
 
 import uuid
 from unittest import mock
@@ -37,12 +57,13 @@ def setup_module():
 
 
 class CustomProtocolHandlerTest(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         cls.cluster = TestCluster()
         cls.session = cls.cluster.connect()
-        cls.session.execute("CREATE KEYSPACE custserdes WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
+        cls.session.execute(
+            "CREATE KEYSPACE custserdes WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1'}"
+        )
         cls.session.set_keyspace("custserdes")
 
     @classmethod
@@ -66,24 +87,32 @@ class CustomProtocolHandlerTest(unittest.TestCase):
 
         # Ensure that we get normal uuid back first
         cluster = TestCluster(
-            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)
+            }
         )
         session = cluster.connect(keyspace="custserdes")
 
-        result = session.execute("SELECT schema_version FROM system.local WHERE key='local'")
+        result = session.execute(
+            "SELECT schema_version FROM system.local WHERE key='local'"
+        )
         uuid_type = result.one()[0]
         assert type(uuid_type) == uuid.UUID
 
         # use our custom protocol handlder
         session.client_protocol_handler = CustomTestRawRowType
-        result_set = session.execute("SELECT schema_version FROM system.local WHERE key='local'")
+        result_set = session.execute(
+            "SELECT schema_version FROM system.local WHERE key='local'"
+        )
         raw_value = result_set.one()[0]
         assert isinstance(raw_value, bytes)
         assert len(raw_value) == 16
 
         # Ensure that we get normal uuid back when we re-connect
         session.client_protocol_handler = ProtocolHandler
-        result_set = session.execute("SELECT schema_version FROM system.local WHERE key='local'")
+        result_set = session.execute(
+            "SELECT schema_version FROM system.local WHERE key='local'"
+        )
         uuid_type = result_set.one()[0]
         assert type(uuid_type) == uuid.UUID
         cluster.shutdown()
@@ -104,7 +133,9 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         """
         # Connect using a custom protocol handler that tracks the various types the result message is used with.
         cluster = TestCluster(
-            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+            execution_profiles={
+                EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)
+            }
         )
         session = cluster.connect(keyspace="custserdes")
         session.client_protocol_handler = CustomProtocolHandlerResultMessageTracked
@@ -114,11 +145,16 @@ class CustomProtocolHandlerTest(unittest.TestCase):
 
         # verify data
         params = get_all_primitive_params(0)
-        results = session.execute("SELECT {0} FROM alltypes WHERE primkey=0".format(columns_string)).one()
+        results = session.execute(
+            "SELECT {0} FROM alltypes WHERE primkey=0".format(columns_string)
+        ).one()
         for expected, actual in zip(params, results):
             assert actual == expected
         # Ensure we have covered the various primitive types
-        assert len(CustomResultMessageTracked.checked_rev_row_set) == len(PRIMITIVE_DATATYPES)-1
+        assert (
+            len(CustomResultMessageTracked.checked_rev_row_set)
+            == len(PRIMITIVE_DATATYPES) - 1
+        )
         cluster.shutdown()
 
     @greaterthanorequalcass30
@@ -133,8 +169,9 @@ class CustomProtocolHandlerTest(unittest.TestCase):
 
         @test_category connection
         """
-        self._protocol_divergence_fail_by_flag_uses_int(ProtocolVersion.V4, uses_int_query_flag=False,
-                                                        int_flag=True)
+        self._protocol_divergence_fail_by_flag_uses_int(
+            ProtocolVersion.V4, uses_int_query_flag=False, int_flag=True
+        )
 
     @unittest.expectedFailure
     @greaterthanorequalcass40
@@ -147,8 +184,9 @@ class CustomProtocolHandlerTest(unittest.TestCase):
 
         @test_category connection
         """
-        self._protocol_divergence_fail_by_flag_uses_int(ProtocolVersion.V5, uses_int_query_flag=True, beta=True,
-                                                        int_flag=True)
+        self._protocol_divergence_fail_by_flag_uses_int(
+            ProtocolVersion.V5, uses_int_query_flag=True, beta=True, int_flag=True
+        )
 
     @unittest.expectedFailure
     @greaterthanorequalcass40
@@ -161,8 +199,9 @@ class CustomProtocolHandlerTest(unittest.TestCase):
 
         @test_category connection
         """
-        self._protocol_divergence_fail_by_flag_uses_int(ProtocolVersion.V5, uses_int_query_flag=False, beta=True,
-                                                        int_flag=False)
+        self._protocol_divergence_fail_by_flag_uses_int(
+            ProtocolVersion.V5, uses_int_query_flag=False, beta=True, int_flag=False
+        )
 
     def _send_query_message(self, session, timeout, **kwargs):
         query = "SELECT * FROM test3rf.test"
@@ -171,8 +210,12 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         future.send_request()
         return future
 
-    def _protocol_divergence_fail_by_flag_uses_int(self, version, uses_int_query_flag, int_flag = True, beta=False):
-        cluster = TestCluster(protocol_version=version, allow_beta_protocol_version=beta)
+    def _protocol_divergence_fail_by_flag_uses_int(
+        self, version, uses_int_query_flag, int_flag=True, beta=False
+    ):
+        cluster = TestCluster(
+            protocol_version=version, allow_beta_protocol_version=beta
+        )
         session = cluster.connect()
 
         query_one = SimpleStatement("INSERT INTO test3rf.test (k, v) VALUES (1, 1)")
@@ -181,9 +224,13 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         execute_with_long_wait_retry(session, query_one)
         execute_with_long_wait_retry(session, query_two)
 
-        with mock.patch('cassandra.protocol.ProtocolVersion.uses_int_query_flags', new=mock.Mock(return_value=int_flag)):
-            future = self._send_query_message(session, 10,
-                                              consistency_level=ConsistencyLevel.ONE, fetch_size=1)
+        with mock.patch(
+            "cassandra.protocol.ProtocolVersion.uses_int_query_flags",
+            new=mock.Mock(return_value=int_flag),
+        ):
+            future = self._send_query_message(
+                session, 10, consistency_level=ConsistencyLevel.ONE, fetch_size=1
+            )
 
             response = future.result()
 
@@ -199,17 +246,27 @@ class CustomResultMessageRaw(ResultMessage):
     This is a custom Result Message that is used to return raw results, rather then
     results which contain objects.
     """
+
     my_type_codes = ResultMessage.type_codes.copy()
-    my_type_codes[0xc] = UUIDType
+    my_type_codes[0xC] = UUIDType
     type_codes = my_type_codes
 
-    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
-            self.recv_results_metadata(f, user_type_map)
-            column_metadata = self.column_metadata or result_metadata
-            rowcount = read_int(f)
-            self.parsed_rows = [self.recv_row(f, len(column_metadata)) for _ in range(rowcount)]
-            self.column_names = [c[2] for c in column_metadata]
-            self.column_types = [c[3] for c in column_metadata]
+    def recv_results_rows(
+        self,
+        f,
+        protocol_version,
+        user_type_map,
+        result_metadata,
+        column_encryption_policy,
+    ):
+        self.recv_results_metadata(f, user_type_map)
+        column_metadata = self.column_metadata or result_metadata
+        rowcount = read_int(f)
+        self.parsed_rows = [
+            self.recv_row(f, len(column_metadata)) for _ in range(rowcount)
+        ]
+        self.column_names = [c[2] for c in column_metadata]
+        self.column_types = [c[3] for c in column_metadata]
 
 
 class CustomTestRawRowType(ProtocolHandler):
@@ -217,6 +274,7 @@ class CustomTestRawRowType(ProtocolHandler):
     This is the a custom protocol handler that will substitute the the
     customResultMesageRowRaw Result message for our own implementation
     """
+
     my_opcodes = ProtocolHandler.message_types_by_opcode.copy()
     my_opcodes[CustomResultMessageRaw.opcode] = CustomResultMessageRaw
     message_types_by_opcode = my_opcodes
@@ -227,12 +285,20 @@ class CustomResultMessageTracked(ResultMessage):
     This is a custom Result Message that is use to track what primitive types
     have been processed when it receives results
     """
+
     my_type_codes = ResultMessage.type_codes.copy()
-    my_type_codes[0xc] = UUIDType
+    my_type_codes[0xC] = UUIDType
     type_codes = my_type_codes
     checked_rev_row_set = set()
 
-    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
+    def recv_results_rows(
+        self,
+        f,
+        protocol_version,
+        user_type_map,
+        result_metadata,
+        column_encryption_policy,
+    ):
         self.recv_results_metadata(f, user_type_map)
         column_metadata = self.column_metadata or result_metadata
         rowcount = read_int(f)
@@ -241,9 +307,12 @@ class CustomResultMessageTracked(ResultMessage):
         self.column_types = [c[3] for c in column_metadata]
         self.checked_rev_row_set.update(self.column_types)
         self.parsed_rows = [
-            tuple(ctype.from_binary(val, protocol_version)
-                  for ctype, val in zip(self.column_types, row))
-            for row in rows]
+            tuple(
+                ctype.from_binary(val, protocol_version)
+                for ctype, val in zip(self.column_types, row)
+            )
+            for row in rows
+        ]
 
 
 class CustomProtocolHandlerResultMessageTracked(ProtocolHandler):
@@ -251,6 +320,7 @@ class CustomProtocolHandlerResultMessageTracked(ProtocolHandler):
     This is the a custom protocol handler that will substitute the the
     CustomTestRawRowTypeTracked Result message for our own implementation
     """
+
     my_opcodes = ProtocolHandler.message_types_by_opcode.copy()
     my_opcodes[CustomResultMessageTracked.opcode] = CustomResultMessageTracked
     message_types_by_opcode = my_opcodes
