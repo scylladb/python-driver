@@ -63,7 +63,7 @@ def create_schema(cluster, session, keyspace, simple_strategy=True,
 
     if simple_strategy:
         ddl = "CREATE KEYSPACE %s WITH replication" \
-              " = {'class': 'SimpleStrategy', 'replication_factor': '%s'}"
+              " = {'class': 'NetworkTopologyStrategy', 'replication_factor': '%s'}"
         session.execute(ddl % (keyspace, replication_factor), timeout=10)
     else:
         if not replication_strategy:

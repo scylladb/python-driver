@@ -48,7 +48,7 @@ class RetryPolicyTests(unittest.TestCase):
         cluster = TestCluster(execution_profiles={EXEC_PROFILE_DEFAULT: ep})
         session = cluster.connect()
 
-        session.execute("CREATE KEYSPACE test_retry_policy_cas WITH replication = {'class':'SimpleStrategy','replication_factor': 3};")
+        session.execute("CREATE KEYSPACE test_retry_policy_cas WITH replication = {'class':'NetworkTopologyStrategy','replication_factor': 3};")
         session.execute("CREATE TABLE test_retry_policy_cas.t (id int PRIMARY KEY, data text);")
         session.execute('INSERT INTO test_retry_policy_cas.t ("id", "data") VALUES (%(0)s, %(1)s)', {'0': 42, '1': 'testing'})
 

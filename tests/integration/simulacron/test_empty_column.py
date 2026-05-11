@@ -140,9 +140,9 @@ class EmptyColumnTests(SimulacronCluster):
             'delay_in_ms': 0,
             'rows': [
                 {
-                    "strategy_class": "SimpleStrategy",  # C* 2.2
+                    "strategy_class": "NetworkTopologyStrategy",  # C* 2.2
                     "strategy_options": '{}',  # C* 2.2
-                    "replication": {'strategy': 'SimpleStrategy', 'replication_factor': 1},
+                    "replication": {'strategy': 'NetworkTopologyStrategy', 'replication_factor': 1},
                     "durable_writes": True,
                     "keyspace_name": "testks"
                 }

@@ -91,7 +91,7 @@ New Error Types
     session = cluster.connect()
     session.execute("""
         CREATE KEYSPACE IF NOT EXISTS keyspace1 
-        WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
+        WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
     """)
 
     session.execute("USE keyspace1")
