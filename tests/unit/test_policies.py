@@ -944,6 +944,35 @@ class TokenAwarePolicyTest(unittest.TestCase):
             assert patched_shuffle.call_count == 1
 
 
+    @patch('cassandra.policies.shuffle')
+    def test_no_shuffle_for_serial_consistency(self, patched_shuffle):
+        """
+        Test to validate that replicas are not shuffled when the statement
+        has SERIAL or LOCAL_SERIAL consistency level, since such statements
+        should be routed like LWT requests.
+        @jira_ticket PYTHON-1394
+        @expected_result shuffle should not be called for serial consistency
+
+        @test_category policy
+        """
+        for cl in (ConsistencyLevel.SERIAL, ConsistencyLevel.LOCAL_SERIAL):
+            for cluster in (self._prepare_cluster_with_vnodes(), self._prepare_cluster_with_tablets()):
+                patched_shuffle.reset_mock()
+                hosts = cluster.metadata.all_hosts()
+                child_policy = Mock()
+                child_policy.make_query_plan.return_value = hosts
+                child_policy.distance.return_value = HostDistance.LOCAL
+
+                policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+                policy.populate(cluster, hosts)
+
+                query = Statement(routing_key='routing_key')
+                query.consistency_level = cl
+                list(policy.make_query_plan('keyspace', query))
+                assert patched_shuffle.call_count == 0, \
+                    "shuffle should not be called for consistency level %s" % cl
+
+
 class ConvictionPolicyTest(unittest.TestCase):
     def test_not_implemented(self):
         """
