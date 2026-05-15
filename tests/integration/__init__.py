@@ -707,6 +707,17 @@ def xfail_scylla_version_lt(reason, scylla_version, *args, **kwargs):
     return pytest.mark.xfail(current_version < Version(scylla_version), reason=reason, *args, **kwargs)
 
 
+def get_tablets_disabled_ddl_suffix(scylla_version='2026.1'):
+    """
+    Returns DDL option string for disabling tablets on ScyllaDB versions older than scylla_version.
+    Used to work around features not yet supported with tablets (e.g. MVs, secondary indexes, counters).
+    :param scylla_version: str, version from which tablets support the feature
+    """
+    if SCYLLA_VERSION is not None and Version(get_scylla_version(SCYLLA_VERSION)) < Version(scylla_version):
+        return " AND tablets = {'enabled': false}"
+    return ""
+
+
 def skip_scylla_version_lt(reason, scylla_version):
     """
     Skip tests on scylla versions older than the specified thresholds.
