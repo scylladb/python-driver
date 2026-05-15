@@ -45,7 +45,7 @@ from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, exec
                                lessthancass40,
                                TestCluster, requires_java_udf, requires_composite_type,
                                requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, xfail_scylla_version_lt,
-                               requirescompactstorage)
+                               requirescompactstorage, get_tablets_disabled_ddl_suffix, execute_with_long_wait_retry)
 
 from tests.util import wait_until, assertRegex, assertDictEqual, assertListEqual, assert_startswith_diff
 
@@ -140,6 +140,12 @@ class MetaDataRemovalTest(unittest.TestCase):
 
 
 class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+
+    @classmethod
+    def create_keyspace(cls, rf):
+        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': '{1}'}}{2}".format(
+            cls.ks_name, rf, get_tablets_disabled_ddl_suffix())
+        execute_with_long_wait_retry(cls.session, ddl)
 
     def test_schema_metadata_disable(self):
         """
@@ -448,8 +454,6 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         tablemeta = self.get_table_metadata()
         self.check_create_statement(tablemeta, create_statement)
 
-    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Counters are not yet supported with tablets',
-                             scylla_version="2026.1")
     def test_counter(self):
         create_statement = (
             "CREATE TABLE {keyspace}.{table} ("
@@ -724,8 +728,6 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         cluster2.shutdown()
 
     @greaterthanorequalcass30
-    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
-                             scylla_version="2026.1")
     def test_refresh_metadata_for_mv(self):
         """
         test for synchronously refreshing materialized view metadata
@@ -935,8 +937,6 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
     @greaterthanorequalcass30
     @requires_collection_indexes
-    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
-                             scylla_version="2026.1")
     def test_multiple_indices(self):
         """
         test multiple indices on the same column.
@@ -970,8 +970,6 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         assert index_2.keyspace_name == "schemametadatatests"
 
     @greaterthanorequalcass30
-    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
-                             scylla_version="2026.1")
     def test_table_extensions(self):
         s = self.session
         ks = self.keyspace_name
@@ -1204,8 +1202,6 @@ CREATE TABLE export_udts.users (
         cluster.shutdown()
 
     @greaterthancass21
-    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
-                             scylla_version="2026.1")
     def test_case_sensitivity(self):
         """
         Test that names that need to be escaped in CREATE statements are
@@ -1218,10 +1214,9 @@ CREATE TABLE export_udts.users (
         cfname = 'AnInterestingTable'
 
         session.execute("DROP KEYSPACE IF EXISTS {0}".format(ksname))
-        session.execute("""
-            CREATE KEYSPACE "%s"
-            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
-            """ % (ksname,))
+        session.execute(
+            ("CREATE KEYSPACE \"%s\" WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}" +
+             get_tablets_disabled_ddl_suffix()) % (ksname,))
         session.execute("""
             CREATE TABLE "%s"."%s" (
                 k int,
@@ -1442,11 +1437,9 @@ class IndexMapTests(unittest.TestCase):
             if cls.keyspace_name in cls.cluster.metadata.keyspaces:
                 cls.session.execute("DROP KEYSPACE %s" % cls.keyspace_name)
 
-            cls.session.execute(
-                """
-                CREATE KEYSPACE %s
-                WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'};
-                """ % cls.keyspace_name)
+            ddl = ("CREATE KEYSPACE %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}" +
+                   get_tablets_disabled_ddl_suffix())
+            cls.session.execute(ddl % cls.keyspace_name)
             cls.session.set_keyspace(cls.keyspace_name)
         except Exception:
             cls.cluster.shutdown()
@@ -1465,8 +1458,6 @@ class IndexMapTests(unittest.TestCase):
     def drop_basic_table(self):
         self.session.execute("DROP TABLE %s" % self.table_name)
 
-    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
-                             scylla_version="2026.1")
     def test_index_updates(self):
         self.create_basic_table()
 
@@ -1508,8 +1499,6 @@ class IndexMapTests(unittest.TestCase):
         assert 'a_idx' not in ks_meta.indexes
         assert 'b_idx' not in ks_meta.indexes
 
-    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
-                             scylla_version="2026.1")
     def test_index_follows_alter(self):
         self.create_basic_table()
 
@@ -2019,7 +2008,8 @@ class BadMetaTest(unittest.TestCase):
         cls.cluster = TestCluster()
         cls.keyspace_name = cls.__name__.lower()
         cls.session = cls.cluster.connect()
-        cls.session.execute("CREATE KEYSPACE %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}" % cls.keyspace_name)
+        ddl = "CREATE KEYSPACE %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}" + get_tablets_disabled_ddl_suffix()
+        cls.session.execute(ddl % cls.keyspace_name)
         cls.session.set_keyspace(cls.keyspace_name)
         connection = cls.cluster.control_connection._connection
 
@@ -2051,8 +2041,6 @@ class BadMetaTest(unittest.TestCase):
             assert m._exc_info[0] is self.BadMetaException
             assert "/*\nWarning:" in m.export_as_string()
 
-    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
-                             scylla_version="2026.1")
     def test_bad_index(self):
         self.session.execute('CREATE TABLE %s (k int PRIMARY KEY, v int)' % self.function_name)
         self.session.execute('CREATE INDEX ON %s(v)' % self.function_name)
@@ -2144,9 +2132,14 @@ class DynamicCompositeTypeTest(BasicSharedKeyspaceUnitTestCase):
 
 
 @greaterthanorequalcass30
-@xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
-                         scylla_version="2026.1")
 class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
+
+    @classmethod
+    def create_keyspace(cls, rf):
+        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': '{1}'}}{2}".format(
+            cls.ks_name, rf, get_tablets_disabled_ddl_suffix())
+        execute_with_long_wait_retry(cls.session, ddl)
+
 
     def setUp(self):
         self.session.execute("CREATE TABLE {0}.{1} (pk int PRIMARY KEY, c int)".format(self.keyspace_name, self.function_table_name))
@@ -2234,9 +2227,14 @@ class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
 
 
 @greaterthanorequalcass30
-@xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
-                             scylla_version="2026.1")
 class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
+
+    @classmethod
+    def create_keyspace(cls, rf):
+        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': '{1}'}}{2}".format(
+            cls.ks_name, rf, get_tablets_disabled_ddl_suffix())
+        execute_with_long_wait_retry(cls.session, ddl)
+
     def test_create_view_metadata(self):
         """
         test to ensure that materialized view metadata is properly constructed

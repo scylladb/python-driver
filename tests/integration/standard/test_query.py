@@ -26,7 +26,8 @@ from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DE
 from cassandra.policies import HostDistance, RoundRobinPolicy, WhiteListRoundRobinPolicy
 from tests.integration import use_singledc, PROTOCOL_VERSION, BasicSharedKeyspaceUnitTestCase, \
     greaterthanprotocolv3, MockLoggingHandler, get_supported_protocol_versions, local, get_cluster, setup_keyspace, \
-    USE_CASS_EXTERNAL, greaterthanorequalcass40, TestCluster, xfail_scylla, xfail_scylla_version_lt
+    USE_CASS_EXTERNAL, greaterthanorequalcass40, TestCluster, xfail_scylla, xfail_scylla_version_lt, \
+    get_tablets_disabled_ddl_suffix, execute_with_long_wait_retry
 from tests import notwindows
 from tests.integration import greaterthanorequalcass30, get_node
 from tests.util import assertListEqual, wait_until
@@ -1166,9 +1167,13 @@ class BatchStatementDefaultRoutingKeyTests(unittest.TestCase):
 
 
 @greaterthanorequalcass30
-@xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Materialized views and secondary indexes are not supported on base tables with tablets.',
-                         scylla_version='2026.1')
 class MaterializedViewQueryTest(BasicSharedKeyspaceUnitTestCase):
+
+    @classmethod
+    def create_keyspace(cls, rf):
+        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': '{1}'}}{2}".format(
+            cls.ks_name, rf, get_tablets_disabled_ddl_suffix())
+        execute_with_long_wait_retry(cls.session, ddl)
 
     def test_mv_filtering(self):
         """
