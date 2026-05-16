@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock, ANY, call, patch
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
+from cassandra.connection import ConnectionShutdown
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
 from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.pool import Host
@@ -635,6 +636,48 @@ class ControlConnectionTest(unittest.TestCase):
         assert self.cluster.added_hosts[0].broadcast_port == None
         assert self.cluster.added_hosts[0].datacenter == "dc1"
         assert self.cluster.added_hosts[0].rack == "rack1"
+
+    def test_wait_for_schema_agreement_recovers_from_closed_control_connection(self):
+        """
+        Reproduces https://github.com/scylladb/python-driver/issues/604
+
+        When wait_for_schema_agreement() is called without an explicit connection
+        and the control connection is closed mid-wait (e.g. the node was stopped),
+        the function should transparently pick up the new control connection and
+        succeed rather than propagating ConnectionShutdown to the caller.
+        """
+        # Build a second (replacement) connection whose schema queries succeed.
+        new_connection = MockConnection()
+        new_connection.endpoint = DefaultEndPoint("192.168.1.1")
+
+        # The initial connection raises ConnectionShutdown on the first query,
+        # simulating the node being stopped while we wait.
+        def first_call_raises(*args, **kwargs):
+            # Swap the control connection to the replacement before raising,
+            # just as the driver's reconnect logic would do.
+            self.control_connection._connection = new_connection
+            raise ConnectionShutdown("Connection is already closed")
+
+        self.connection.wait_for_responses = Mock(side_effect=first_call_raises)
+
+        # Before the fix this raised ConnectionShutdown; after the fix it should
+        # recover and return True.
+        result = self.control_connection.wait_for_schema_agreement()
+        assert result is True
+
+        # The replacement connection must have been queried exactly once.
+        assert new_connection.wait_for_responses.call_count == 1
+
+    def test_wait_for_schema_agreement_explicit_connection_raises_on_shutdown(self):
+        """
+        When an explicit connection is passed (DDL path, coordinator must be queried),
+        ConnectionShutdown should still propagate — there is no safe fallback.
+        """
+        self.connection.wait_for_responses = Mock(
+            side_effect=ConnectionShutdown("Connection is already closed"))
+
+        with self.assertRaises(ConnectionShutdown):
+            self.control_connection.wait_for_schema_agreement(connection=self.connection)
 
 
 class EventTimingTest(unittest.TestCase):
