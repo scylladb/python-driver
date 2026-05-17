@@ -226,36 +226,42 @@ class BatchQuery(object):
             self._execute_callbacks()
             return
 
-        batch_type = None if self.batch_type is CBatchType.LOGGED else self.batch_type
-        opener = 'BEGIN ' + (str(batch_type) + ' ' if batch_type else '') + ' BATCH'
+        # Map cqlengine batch_type to core BatchType
+        if self.batch_type is None or self.batch_type is CBatchType.LOGGED:
+            batch_type = CBatchType.LOGGED
+        elif self.batch_type == 'UNLOGGED' or self.batch_type is CBatchType.UNLOGGED:
+            batch_type = CBatchType.UNLOGGED
+        elif self.batch_type == 'COUNTER' or self.batch_type is CBatchType.COUNTER:
+            batch_type = CBatchType.COUNTER
+        else:
+            batch_type = CBatchType.LOGGED
+
+        # Calculate timestamp in microseconds if set
+        timestamp = None
         if self.timestamp:
+            if isinstance(self.timestamp, timedelta):
+                ts = datetime.now() + self.timestamp
+                timestamp = int(time.mktime(ts.timetuple()) * 1e+6 + ts.microsecond)
+            elif isinstance(self.timestamp, datetime):
+                timestamp = int(time.mktime(self.timestamp.timetuple()) * 1e+6 + self.timestamp.microsecond)
 
-            if isinstance(self.timestamp, int):
-                ts = self.timestamp
-            elif isinstance(self.timestamp, (datetime, timedelta)):
-                ts = self.timestamp
-                if isinstance(self.timestamp, timedelta):
-                    ts += datetime.now()  # Apply timedelta
-                ts = int(time.mktime(ts.timetuple()) * 1e+6 + ts.microsecond)
-            else:
-                raise ValueError("Batch expects a long, a timedelta, or a datetime")
+        # Create BatchStatement
+        batch = BatchStatement(
+            batch_type=batch_type,
+            consistency_level=self._consistency,
+            timestamp=timestamp
+        )
 
-            opener += ' USING TIMESTAMP {0}'.format(ts)
-
-        query_list = [opener]
-        parameters = {}
-        ctx_counter = 0
+        # Add each query as a SimpleStatement with parameters
         for query in self.queries:
-            query.update_context_id(ctx_counter)
-            ctx = query.get_context()
-            ctx_counter += len(ctx)
-            query_list.append('  ' + str(query))
-            parameters.update(ctx)
+            query.update_context_id(0)  # Reset context for each query
+            params = query.get_context()
+            stmt = SimpleStatement(str(query))
+            batch.add(stmt, params)
 
-        query_list.append('APPLY BATCH;')
-
-        tmp = conn.execute('\n'.join(query_list), parameters, self._consistency, self._timeout, connection=self._connection)
-        check_applied(tmp)
+        # Execute the batch
+        result = conn.execute(batch, timeout=self._timeout, connection=self._connection)
+        check_applied(result)
 
         self.queries = []
         self._execute_callbacks()

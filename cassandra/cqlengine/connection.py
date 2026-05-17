@@ -17,7 +17,7 @@ import logging
 import threading
 
 from cassandra.cluster import Cluster, _ConfigMode, _NOT_SET, NoHostAvailable, UserTypeDoesNotExist, ConsistencyLevel
-from cassandra.query import SimpleStatement, dict_factory
+from cassandra.query import SimpleStatement, BatchStatement, dict_factory
 
 from cassandra.cqlengine import CQLEngineException
 from cassandra.cqlengine.statements import BaseCQLStatement
@@ -340,7 +340,12 @@ def execute(query, params=None, consistency_level=None, timeout=NOT_SET, connect
     if not conn.session:
         raise CQLEngineException("It is required to setup() cqlengine before executing queries")
 
-    if isinstance(query, SimpleStatement):
+    if isinstance(query, BatchStatement):
+        log.debug(format_log_context('Executing BatchStatement with {} statements'.format(
+            len(query._statements_and_parameters)), connection=connection))
+        result = conn.session.execute(query, timeout=timeout)
+        return result
+    elif isinstance(query, SimpleStatement):
         pass  #
     elif isinstance(query, BaseCQLStatement):
         params = query.get_context()
