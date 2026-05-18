@@ -23,6 +23,24 @@ from datetime import datetime, timedelta, timezone
 import re
 import struct
 import time
+
+# Regex to detect LWT (Lightweight Transaction) queries in CQL strings.
+# Matches: INSERT ... IF NOT EXISTS, UPDATE/DELETE ... IF EXISTS,
+# and conditional updates/deletes (e.g. UPDATE ... IF col = ...,
+# UPDATE ... IF "col" = ...).
+# Uses word boundaries and case-insensitive matching.
+# This is a best-effort heuristic for SimpleStatement; PreparedStatement
+# gets the authoritative is_lwt flag from the server.
+_LWT_PATTERN = re.compile(
+    r'\bIF\s+(?:NOT\s+)?EXISTS\b'   # IF [NOT] EXISTS
+    r'|\bIF\s+[a-zA-Z_"]',            # IF <column_name> or IF "<column_name>" (conditional)
+    re.IGNORECASE
+)
+
+# DML verbs that can be LWT queries. Only these statement types can contain
+# Paxos/LWT clauses. DDL statements (CREATE/ALTER/DROP) also use IF [NOT] EXISTS
+# but those are not LWT operations.
+_LWT_DML_VERBS = frozenset({'INSERT', 'UPDATE', 'DELETE', 'BEGIN'})
 import warnings
 
 from cassandra import ConsistencyLevel, OperationTimedOut
@@ -415,6 +433,32 @@ class SimpleStatement(Statement):
         return (u'<SimpleStatement query="%s", consistency=%s>' %
                 (self.query_string, consistency))
     __repr__ = __str__
+
+    def is_lwt(self):
+        """
+        Detect whether this query is a Lightweight Transaction (LWT) by
+        inspecting the query string for ``IF [NOT] EXISTS`` or ``IF <condition>``
+        clauses in DML statements (INSERT, UPDATE, DELETE, BEGIN BATCH).
+
+        DDL statements like ``CREATE TABLE IF NOT EXISTS`` are excluded.
+
+        This is a best-effort heuristic. For authoritative LWT detection,
+        use :class:`.PreparedStatement` which gets the ``is_lwt`` flag from
+        the server during PREPARE.
+
+        The result is cached after the first call.
+        """
+        try:
+            return self._cached_is_lwt
+        except AttributeError:
+            # Quick check: only DML statements can be LWT
+            query = self._query_string.lstrip()
+            first_word = query.split(None, 1)[0].upper() if query else ''
+            if first_word not in _LWT_DML_VERBS:
+                self._cached_is_lwt = False
+            else:
+                self._cached_is_lwt = bool(_LWT_PATTERN.search(query))
+            return self._cached_is_lwt
 
 
 class PreparedStatement(object):
