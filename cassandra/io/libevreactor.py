@@ -316,10 +316,18 @@ class LibevConnection(Connection):
             msg = "Connection to %s was closed" % self.endpoint
             if self.last_error:
                 msg += ": %s" % (self.last_error,)
-            self.error_all_requests(ConnectionShutdown(msg))
+            shutdown_exc = ConnectionShutdown(msg)
+            self.error_all_requests(shutdown_exc)
+            # Preserve the error for factory() to detect dead connections
+            # that died before connected_event was set.
+            if not self.connected_event.is_set():
+                self.last_error = shutdown_exc
             self.connected_event.set()
 
     def handle_write(self, watcher, revents, errno=None):
+        if self.is_closed or self.is_defunct:
+            return
+
         if revents & libev.EV_ERROR:
             if errno:
                 exc = IOError(errno, os.strerror(errno))
@@ -361,6 +369,9 @@ class LibevConnection(Connection):
                         return
 
     def handle_read(self, watcher, revents, errno=None):
+        if self.is_closed or self.is_defunct:
+            return
+
         if revents & libev.EV_ERROR:
             if errno:
                 exc = IOError(errno, os.strerror(errno))
@@ -394,6 +405,8 @@ class LibevConnection(Connection):
             self.process_io_buffer()
         else:
             log.debug("Connection %s closed by server", self)
+            self.last_error = ConnectionShutdown(
+                "Connection to %s was closed by server" % self.endpoint)
             self.close()
 
     def push(self, data):
