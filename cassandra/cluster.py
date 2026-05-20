@@ -5437,7 +5437,17 @@ class ResponseFuture(object):
         if self._metrics is not None:
             self._metrics.on_retry()
         if consistency_level is not None:
-            self.message.consistency_level = consistency_level
+            # Never downgrade from serial to non-serial consistency, as that
+            # would break serial read (Paxos) guarantees.
+            original_cl = self.message.consistency_level
+            if ConsistencyLevel.is_serial(original_cl) and not ConsistencyLevel.is_serial(consistency_level):
+                log.debug(
+                    "Retry policy attempted to downgrade serial consistency %s to %s; "
+                    "keeping original consistency level.",
+                    ConsistencyLevel.value_to_name.get(original_cl, original_cl),
+                    ConsistencyLevel.value_to_name.get(consistency_level, consistency_level))
+            else:
+                self.message.consistency_level = consistency_level
 
         # don't retry on the event loop thread
         self.session.cluster.scheduler.schedule(delay, self._retry_task, reuse_connection, host)
