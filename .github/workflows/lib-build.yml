@@ -111,7 +111,7 @@ jobs:
 
       - name: Install Conan
         if: runner.os == 'Windows'
-        uses: turtlebrowser/get-conan@e41c1e039be765c0ed9d9d38cc2a287566e1d8b3 # v1.2
+        uses: turtlebrowser/get-conan@c171f295f3f507360ee018736a6608731aa2109d # v1.2
 
       - name: Configure libev for Windows
         if: runner.os == 'Windows'
