@@ -23,10 +23,7 @@ Core Driver
    cassandra/timestamps
    cassandra/io/asyncioreactor
    cassandra/io/asyncorereactor
-   cassandra/io/eventletreactor
    cassandra/io/libevreactor
-   cassandra/io/geventreactor
-   cassandra/io/twistedreactor
 
 .. _om_api:
 

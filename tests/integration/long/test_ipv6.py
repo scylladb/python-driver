@@ -23,18 +23,12 @@ try:
 except DependencyException:
     AsyncoreConnection = None
 
-from tests import is_monkey_patched
 from tests.integration import use_cluster, remove_cluster, TestCluster
 
 try:
     from cassandra.io.libevreactor import LibevConnection
 except DependencyException:
     LibevConnection = None
-
-
-if is_monkey_patched():
-    LibevConnection = None
-    AsyncoreConnection = None
 
 
 import unittest

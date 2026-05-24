@@ -34,8 +34,6 @@ try:
 except (ImportError, DependencyException):
     LibevConnection = None
 
-from tests import is_monkey_patched
-
 
 class LibevAtexitCleanupTest(unittest.TestCase):
     """
@@ -47,8 +45,6 @@ class LibevAtexitCleanupTest(unittest.TestCase):
     """
 
     def setUp(self):
-        if is_monkey_patched():
-            raise unittest.SkipTest("Can't test libev with monkey patching")
         if LibevConnection is None:
             raise unittest.SkipTest('libev does not appear to be installed correctly')
 
@@ -194,8 +190,6 @@ class LibevShutdownRaceConditionTest(unittest.TestCase):
     """
 
     def setUp(self):
-        if is_monkey_patched():
-            raise unittest.SkipTest("Can't test libev with monkey patching")
         if LibevConnection is None:
             raise unittest.SkipTest('libev does not appear to be installed correctly')
 

@@ -24,8 +24,7 @@ try:
 except (ImportError, DependencyException):
     LibevConnection = None  # noqa
 
-from tests import is_monkey_patched
-from tests.unit.io.utils import ReactorTestMixin, TimerTestMixin, noop_if_monkey_patched
+from tests.unit.io.utils import ReactorTestMixin, TimerTestMixin
 
 
 class LibevConnectionTest(ReactorTestMixin, unittest.TestCase):
@@ -35,8 +34,6 @@ class LibevConnectionTest(ReactorTestMixin, unittest.TestCase):
     null_handle_function_args = None, 0
 
     def setUp(self):
-        if is_monkey_patched():
-            raise unittest.SkipTest("Can't test libev with monkey patching")
         if LibevConnection is None:
             raise unittest.SkipTest('libev does not appear to be installed correctly')
         LibevConnection.initialize_reactor()
@@ -101,7 +98,6 @@ class LibevConnectionTest(ReactorTestMixin, unittest.TestCase):
 class LibevTimerPatcher(unittest.TestCase):
 
     @classmethod
-    @noop_if_monkey_patched
     def setUpClass(cls):
         if LibevConnection is None:
             raise unittest.SkipTest('libev does not appear to be installed correctly')
@@ -113,7 +109,6 @@ class LibevTimerPatcher(unittest.TestCase):
             p.start()
 
     @classmethod
-    @noop_if_monkey_patched
     def tearDownClass(cls):
         for p in cls.patchers:
             try:
@@ -141,8 +136,6 @@ class LibevTimerTest(TimerTestMixin, LibevTimerPatcher):
         return c
 
     def setUp(self):
-        if is_monkey_patched():
-            raise unittest.SkipTest("Can't test libev with monkey patching.")
         if LibevConnection is None:
             raise unittest.SkipTest('libev does not appear to be installed correctly')
 

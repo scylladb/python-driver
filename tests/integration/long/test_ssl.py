@@ -20,10 +20,8 @@ from cassandra.connection import DefaultEndPoint
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
-from OpenSSL import SSL, crypto
-
 from tests.integration import (
-    get_cluster, remove_cluster, use_single_node, start_cluster_wait_for_up, EVENT_LOOP_MANAGER, TestCluster
+    get_cluster, remove_cluster, use_single_node, start_cluster_wait_for_up, TestCluster
 )
 import pytest
 
@@ -49,20 +47,9 @@ DRIVER_KEYFILE_ENCRYPTED = os.path.abspath("tests/integration/long/ssl/client_en
 DRIVER_CERTFILE = os.path.abspath("tests/integration/long/ssl/client.crt_signed")
 DRIVER_CERTFILE_BAD = os.path.abspath("tests/integration/long/ssl/client_bad.key")
 
-USES_PYOPENSSL = "twisted" in EVENT_LOOP_MANAGER or "eventlet" in EVENT_LOOP_MANAGER
-if "twisted" in EVENT_LOOP_MANAGER:
-    import OpenSSL
-    ssl_version = OpenSSL.SSL.TLS_METHOD
-    verify_certs = {'cert_reqs': SSL.VERIFY_PEER,
-                    'check_hostname': True}
-else:
-    ssl_version = ssl.PROTOCOL_TLS
-    verify_certs = {'cert_reqs': ssl.CERT_REQUIRED,
-                    'check_hostname': True}
-
-
-def verify_callback(connection, x509, errnum, errdepth, ok):
-    return ok
+ssl_version = ssl.PROTOCOL_TLS
+verify_certs = {'cert_reqs': ssl.CERT_REQUIRED,
+                'check_hostname': True}
 
 
 def setup_cluster_ssl(client_auth=False):
@@ -311,17 +298,10 @@ class SSLConnectionAuthTests(unittest.TestCase):
 
         ssl_options = {'ca_certs': CLIENT_CA_CERTS,
                        'ssl_version': ssl_version,
-                       'keyfile': DRIVER_KEYFILE}
+                       'keyfile': DRIVER_KEYFILE,
+                       'certfile': DRIVER_CERTFILE_BAD}
 
-        if not USES_PYOPENSSL:
-            # I don't set the bad certfile for pyopenssl because it hangs
-            ssl_options['certfile'] = DRIVER_CERTFILE_BAD
-
-        cluster = TestCluster(
-            ssl_options={'ca_certs': CLIENT_CA_CERTS,
-                         'ssl_version': ssl_version,
-                         'keyfile': DRIVER_KEYFILE}
-        )
+        cluster = TestCluster(ssl_options=ssl_options)
 
         with pytest.raises(NoHostAvailable):
             cluster.connect()
@@ -401,13 +381,9 @@ class SSLConnectionWithSSLContextTests(unittest.TestCase):
 
         @test_category connection:ssl
         """
-        if USES_PYOPENSSL:
-            ssl_context = SSL.Context(SSL.TLS_CLIENT_METHOD)
-            ssl_context.load_verify_locations(CLIENT_CA_CERTS)
-        else:
-            ssl_context = ssl.SSLContext(ssl_version)
-            ssl_context.load_verify_locations(CLIENT_CA_CERTS)
-            ssl_context.verify_mode = ssl.CERT_REQUIRED
+        ssl_context = ssl.SSLContext(ssl_version)
+        ssl_context.load_verify_locations(CLIENT_CA_CERTS)
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
         validate_ssl_options(ssl_context=ssl_context)
 
     def test_can_connect_with_ssl_client_auth_password_private_key(self):
@@ -425,19 +401,11 @@ class SSLConnectionWithSSLContextTests(unittest.TestCase):
         abs_driver_certfile = os.path.abspath(DRIVER_CERTFILE)
         ssl_options = {}
 
-        if USES_PYOPENSSL:
-            ssl_context = SSL.Context(SSL.TLS_CLIENT_METHOD)
-            ssl_context.use_certificate_file(abs_driver_certfile)
-            with open(abs_driver_keyfile) as keyfile:
-                key = crypto.load_privatekey(crypto.FILETYPE_PEM, keyfile.read(), b'cassandra')
-            ssl_context.use_privatekey(key)
-            ssl_context.set_verify(SSL.VERIFY_NONE, verify_callback)
-        else:
-            ssl_context = ssl.SSLContext(ssl_version)
-            ssl_context.load_cert_chain(certfile=abs_driver_certfile,
-                                        keyfile=abs_driver_keyfile,
-                                        password="cassandra")
-            ssl_context.verify_mode = ssl.CERT_NONE
+        ssl_context = ssl.SSLContext(ssl_version)
+        ssl_context.load_cert_chain(certfile=abs_driver_certfile,
+                                    keyfile=abs_driver_keyfile,
+                                    password="cassandra")
+        ssl_context.verify_mode = ssl.CERT_NONE
         validate_ssl_options(ssl_context=ssl_context, ssl_options=ssl_options)
 
     def test_can_connect_with_ssl_context_ca_host_match(self):
@@ -446,52 +414,33 @@ class SSLConnectionWithSSLContextTests(unittest.TestCase):
         using client auth, an encrypted keyfile, and host matching
         """
         ssl_options = {}
-        if USES_PYOPENSSL:
-            ssl_context = SSL.Context(SSL.TLS_CLIENT_METHOD)
-            ssl_context.use_certificate_file(DRIVER_CERTFILE)
-            with open(DRIVER_KEYFILE_ENCRYPTED) as keyfile:
-                key = crypto.load_privatekey(crypto.FILETYPE_PEM, keyfile.read(), b'cassandra')
-            ssl_context.use_privatekey(key)
-            ssl_context.load_verify_locations(CLIENT_CA_CERTS)
-            ssl_options["check_hostname"] = True
-        else:
-            ssl_context = ssl.SSLContext(ssl_version)
-            ssl_context.verify_mode = ssl.CERT_REQUIRED
-            ssl_context.load_verify_locations(CLIENT_CA_CERTS)
-            ssl_context.load_cert_chain(
-                certfile=DRIVER_CERTFILE,
-                keyfile=DRIVER_KEYFILE_ENCRYPTED,
-                password="cassandra",
-            )
-            ssl_context.verify_mode = ssl.CERT_REQUIRED
-            ssl_options["check_hostname"] = True
+        ssl_context = ssl.SSLContext(ssl_version)
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
+        ssl_context.load_verify_locations(CLIENT_CA_CERTS)
+        ssl_context.load_cert_chain(
+            certfile=DRIVER_CERTFILE,
+            keyfile=DRIVER_KEYFILE_ENCRYPTED,
+            password="cassandra",
+        )
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
+        ssl_options["check_hostname"] = True
         validate_ssl_options(ssl_context=ssl_context, ssl_options=ssl_options)
 
     def test_cannot_connect_ssl_context_with_invalid_hostname(self):
         ssl_options = {}
-        if USES_PYOPENSSL:
-            ssl_context = SSL.Context(SSL.TLS_CLIENT_METHOD)
-            ssl_context.use_certificate_file(DRIVER_CERTFILE)
-            with open(DRIVER_KEYFILE_ENCRYPTED) as keyfile:
-                key = crypto.load_privatekey(crypto.FILETYPE_PEM, keyfile.read(), b"cassandra")
-            ssl_context.use_privatekey(key)
-            ssl_context.load_verify_locations(CLIENT_CA_CERTS)
-            ssl_options["check_hostname"] = True
-        else:
-            ssl_context = ssl.SSLContext(ssl_version)
-            ssl_context.verify_mode = ssl.CERT_REQUIRED
-            ssl_context.load_verify_locations(CLIENT_CA_CERTS)
-            ssl_context.load_cert_chain(
-                certfile=DRIVER_CERTFILE,
-                keyfile=DRIVER_KEYFILE_ENCRYPTED,
-                password="cassandra",
-            )
-            ssl_context.verify_mode = ssl.CERT_REQUIRED
-            ssl_options["check_hostname"] = True
+        ssl_context = ssl.SSLContext(ssl_version)
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
+        ssl_context.load_verify_locations(CLIENT_CA_CERTS)
+        ssl_context.load_cert_chain(
+            certfile=DRIVER_CERTFILE,
+            keyfile=DRIVER_KEYFILE_ENCRYPTED,
+            password="cassandra",
+        )
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
+        ssl_options["check_hostname"] = True
         with pytest.raises(Exception):
             validate_ssl_options(ssl_context=ssl_context, ssl_options=ssl_options, hostname="localhost")
 
-    @unittest.skipIf(USES_PYOPENSSL, "This test is for the built-in ssl.Context")
     def test_can_connect_with_sslcontext_default_context(self):
         """
         Test to validate that we are able to connect to a cluster using a SSLContext created from create_default_context().

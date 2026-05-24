@@ -14,8 +14,6 @@
 
 import unittest
 import logging
-import sys
-import socket
 import platform
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -24,30 +22,6 @@ from cassandra import DependencyException
 
 log = logging.getLogger()
 
-def is_eventlet_monkey_patched():
-    if 'eventlet.patcher' not in sys.modules:
-        return False
-    try:
-        import eventlet.patcher
-        return eventlet.patcher.is_monkey_patched('socket')
-    # Yet another case related to PYTHON-1364
-    except AttributeError:
-        return False
-
-def is_gevent_monkey_patched():
-    if 'gevent.monkey' not in sys.modules:
-        return False
-    try:
-        import gevent.socket
-    except AttributeError:
-        return False
-    return socket.socket is gevent.socket.socket
-
-
-def is_monkey_patched():
-    return is_gevent_monkey_patched() or is_eventlet_monkey_patched()
-
-MONKEY_PATCH_LOOP = bool(os.getenv('MONKEY_PATCH_LOOP', False))
 EVENT_LOOP_MANAGER = os.getenv('EVENT_LOOP_MANAGER', '')
 
 
@@ -60,30 +34,9 @@ if(cython_env == 'True'):
 
 thread_pool_executor_class = ThreadPoolExecutor
 
-if "gevent" in EVENT_LOOP_MANAGER:
-    import gevent.monkey
-    gevent.monkey.patch_all()
-    from cassandra.io.geventreactor import GeventConnection
-    connection_class = GeventConnection
-elif "eventlet" in EVENT_LOOP_MANAGER:
-    from eventlet import monkey_patch
-    monkey_patch()
-
-    from cassandra.io.eventletreactor import EventletConnection
-    connection_class = EventletConnection
-
-    try:
-        from futurist import GreenThreadPoolExecutor
-        thread_pool_executor_class = GreenThreadPoolExecutor
-    except:
-        # futurist is installed only with python >=3.7
-        pass
-elif "asyncore" in EVENT_LOOP_MANAGER:
+if "asyncore" in EVENT_LOOP_MANAGER:
     from cassandra.io.asyncorereactor import AsyncoreConnection
     connection_class = AsyncoreConnection
-elif "twisted" in EVENT_LOOP_MANAGER:
-    from cassandra.io.twistedreactor import TwistedConnection
-    connection_class = TwistedConnection
 elif "asyncio" in EVENT_LOOP_MANAGER:
     from cassandra.io.asyncioreactor import AsyncioConnection
     connection_class = AsyncioConnection
