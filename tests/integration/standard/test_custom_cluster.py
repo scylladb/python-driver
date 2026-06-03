@@ -14,7 +14,7 @@
 
 from cassandra.cluster import NoHostAvailable
 from tests.integration import use_singledc, get_cluster, remove_cluster, local, TestCluster
-from tests.util import wait_until, wait_until_not_raised
+from tests.util import wait_until
 
 import unittest
 import pytest

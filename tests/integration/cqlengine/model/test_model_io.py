@@ -19,7 +19,6 @@ from datetime import datetime, date, time, timezone
 from decimal import Decimal
 from operator import itemgetter
 
-import cassandra
 from cassandra.cqlengine import columns
 from cassandra.cqlengine import CQLEngineException
 from cassandra.cqlengine.management import sync_table

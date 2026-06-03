@@ -11,11 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import unittest
 
 from collections import namedtuple, OrderedDict
 
-from cassandra import ProtocolVersion
 from cassandra.cluster import Cluster, EXEC_PROFILE_DEFAULT
 from cassandra.query import (named_tuple_factory, tuple_factory,
                              dict_factory, ordered_dict_factory)
