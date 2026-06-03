@@ -45,8 +45,7 @@ import uuid
 import weakref
 from weakref import WeakValueDictionary
 
-from cassandra import (ConsistencyLevel, AuthenticationFailed, InvalidRequest,
-                       OperationTimedOut, UnsupportedOperation,
+from cassandra import (ConsistencyLevel, AuthenticationFailed, OperationTimedOut, UnsupportedOperation,
                        SchemaTargetType, DriverException, ProtocolVersion,
                        UnresolvableContactPoints, DependencyException)
 from cassandra.auth import _proxy_execute_key, PlainTextAuthProvider
@@ -85,7 +84,7 @@ from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
                              named_tuple_factory, dict_factory, tuple_factory, FETCH_SIZE_UNSET,
                              HostTargetingStatement)
 from cassandra.marshal import int64_pack
-from cassandra.tablets import Tablet, Tablets
+from cassandra.tablets import Tablet
 from cassandra.timestamps import MonotonicTimestampGenerator
 from cassandra.util import _resolve_contact_points_to_string_map, Version, maybe_add_timeout_to_query
 

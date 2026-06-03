@@ -27,14 +27,17 @@ from cassandra import (Unavailable, WriteTimeout, RateLimitReached, ReadTimeout,
                        AlreadyExists, InvalidRequest, Unauthorized,
                        UnsupportedOperation, UserFunctionDescriptor,
                        UserAggregateDescriptor, SchemaTargetType)
-from cassandra.cqltypes import (AsciiType, BytesType, BooleanType,
-                                CounterColumnType, DateType, DecimalType,
-                                DoubleType, FloatType, Int32Type,
-                                InetAddressType, IntegerType, ListType,
-                                LongType, MapType, SetType, TimeUUIDType,
-                                UTF8Type, VarcharType, UUIDType, UserType,
-                                TupleType, lookup_casstype, SimpleDateType,
-                                TimeType, ByteType, ShortType, DurationType)
+# NOTE: many of these names are not referenced directly, but are required in module
+# scope because ResultMessage.type_codes resolves them dynamically via globals()[name]
+# (see the type_codes mapping below). Do not remove as "unused imports".
+from cassandra.cqltypes import (AsciiType, BytesType, BooleanType,  # noqa: F401
+                                CounterColumnType, DateType, DecimalType,  # noqa: F401
+                                DoubleType, FloatType, Int32Type,  # noqa: F401
+                                InetAddressType, IntegerType, ListType,  # noqa: F401
+                                LongType, MapType, SetType, TimeUUIDType,  # noqa: F401
+                                UTF8Type, VarcharType, UUIDType, UserType,  # noqa: F401
+                                TupleType, lookup_casstype, SimpleDateType,  # noqa: F401
+                                TimeType, ByteType, ShortType, DurationType)  # noqa: F401
 from cassandra.marshal import (int32_pack, int32_unpack, uint16_pack, uint16_unpack,
                                uint8_pack, int8_unpack, uint64_pack,
                                v3_header_pack, uint32_pack, uint32_le_unpack, uint32_le_pack)

@@ -17,7 +17,6 @@ from collections import namedtuple
 from heapq import heappush, heappop
 from itertools import cycle
 from threading import Condition
-import sys
 
 from cassandra.cluster import ResultSet, EXEC_PROFILE_DEFAULT
 

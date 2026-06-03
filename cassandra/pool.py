@@ -18,11 +18,9 @@ Connection pooling and host management.
 from concurrent.futures import Future
 from functools import total_ordering
 import logging
-import socket
 import time
 import random
 import copy
-import uuid
 from threading import Lock, RLock, Condition
 import weakref
 try:
