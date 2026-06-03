@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from tests.integration import CCM_KWARGS, use_cluster, remove_cluster, MockLoggingHandler
+from tests.integration import use_cluster, remove_cluster, MockLoggingHandler
 from tests.integration import setup_keyspace
 
 from cassandra.cluster import Cluster

@@ -23,7 +23,7 @@ from cassandra import ConsistencyLevel, Unavailable, InvalidRequest, cluster
 from cassandra.query import (PreparedStatement, BoundStatement, SimpleStatement,
                              BatchStatement, BatchType, dict_factory, TraceUnavailable)
 from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DEFAULT, Cluster
-from cassandra.policies import HostDistance, RoundRobinPolicy, WhiteListRoundRobinPolicy
+from cassandra.policies import RoundRobinPolicy, WhiteListRoundRobinPolicy
 from tests.integration import use_singledc, PROTOCOL_VERSION, BasicSharedKeyspaceUnitTestCase, \
     greaterthanprotocolv3, MockLoggingHandler, get_supported_protocol_versions, local, get_cluster, setup_keyspace, \
     USE_CASS_EXTERNAL, greaterthanorequalcass40, TestCluster, xfail_scylla, xfail_scylla_version_lt, \

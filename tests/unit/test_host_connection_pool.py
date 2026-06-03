@@ -13,7 +13,6 @@
 # limitations under the License.
 from concurrent.futures import ThreadPoolExecutor
 import logging
-import time
 import uuid
 from cassandra.protocol_features import ProtocolFeatures
 
