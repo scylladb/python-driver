@@ -20,7 +20,6 @@ import socket
 import sys
 from threading import Lock, Thread, Event
 import time
-import weakref
 import sys
 import ssl
 

@@ -15,7 +15,6 @@
 import os
 import logging
 import json
-import sys
 import tempfile
 import shutil
 from urllib.request import urlopen
