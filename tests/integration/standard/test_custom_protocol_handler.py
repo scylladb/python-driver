@@ -16,19 +16,16 @@ import unittest
 
 from cassandra.protocol import ProtocolHandler, ResultMessage, QueryMessage, UUIDType, read_int
 from cassandra.query import tuple_factory, SimpleStatement
-from cassandra.cluster import (ResponseFuture, ExecutionProfile, EXEC_PROFILE_DEFAULT,
-    ContinuousPagingOptions, NoHostAvailable)
+from cassandra.cluster import (ResponseFuture, ExecutionProfile, EXEC_PROFILE_DEFAULT)
 from cassandra import ProtocolVersion, ConsistencyLevel
 
 from tests.integration import use_single_node, drop_keyspace_shutdown_cluster, \
-    greaterthanorequalcass30, execute_with_long_wait_retry, greaterthanorequalcass3_10, \
-    TestCluster, greaterthanorequalcass40
+    greaterthanorequalcass30, execute_with_long_wait_retry, TestCluster, greaterthanorequalcass40
 from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES
 from tests.integration.standard.utils import create_table_with_all_types, get_all_primitive_params
 
 import uuid
 from unittest import mock
-import pytest
 
 
 def setup_module():

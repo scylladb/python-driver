@@ -14,7 +14,6 @@
 
 import json
 import subprocess
-import time
 from urllib.request import build_opener, Request, HTTPHandler
 
 from cassandra.metadata import SchemaParserV4, SchemaParserDSE68

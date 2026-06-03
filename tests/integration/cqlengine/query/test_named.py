@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 
 from cassandra import ConsistencyLevel
 from cassandra.cqlengine import operators
@@ -22,7 +21,7 @@ from cassandra.cqlengine.query import ResultObject
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.cqlengine import models
 
-from tests.integration.cqlengine import setup_connection, execute_count
+from tests.integration.cqlengine import execute_count
 from tests.integration.cqlengine.base import BaseCassEngTestCase
 from tests.integration.cqlengine.query.test_queryset import BaseQuerySetUsage
 

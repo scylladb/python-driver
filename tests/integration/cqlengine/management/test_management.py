@@ -14,7 +14,6 @@
 import unittest
 
 from unittest import mock
-import logging
 from packaging.version import Version
 from cassandra.cqlengine.connection import get_session, get_cluster
 from cassandra.cqlengine import CQLEngineException

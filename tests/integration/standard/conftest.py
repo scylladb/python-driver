@@ -1,4 +1,3 @@
-import pytest
 import logging
 
 # Cluster topology groups for test ordering.

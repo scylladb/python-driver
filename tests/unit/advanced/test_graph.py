@@ -19,7 +19,7 @@ import unittest
 
 from cassandra import ConsistencyLevel
 from cassandra.policies import RetryPolicy
-from cassandra.graph import (SimpleGraphStatement, GraphOptions, GraphProtocol, Result,
+from cassandra.graph import (SimpleGraphStatement, GraphOptions, Result,
                        graph_result_row_factory, single_object_row_factory,
                        Vertex, Edge, Path, VertexProperty)
 from cassandra.datastax.graph.query import _graph_options

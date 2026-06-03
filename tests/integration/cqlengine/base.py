@@ -13,7 +13,6 @@
 # limitations under the License.
 import unittest
 
-import sys
 
 from cassandra.cqlengine.connection import get_session
 from cassandra.cqlengine.models import Model
