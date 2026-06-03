@@ -17,12 +17,12 @@ from cassandra.cluster import NoHostAvailable
 from cassandra.cqlengine import columns, CQLEngineException
 from cassandra.cqlengine import connection as conn
 from cassandra.cqlengine.management import drop_keyspace, sync_table, drop_table, create_keyspace_simple
-from cassandra.cqlengine.models import Model, QuerySetDescriptor
+from cassandra.cqlengine.models import Model
 from cassandra.cqlengine.query import ContextQuery, BatchQuery, ModelQuerySet
 from tests.integration.cqlengine import setup_connection, DEFAULT_KEYSPACE
 from tests.integration.cqlengine.base import BaseCassEngTestCase
 from tests.integration.cqlengine.query import test_queryset
-from tests.integration import local, CASSANDRA_IP, TestCluster
+from tests.integration import CASSANDRA_IP, TestCluster
 import pytest
 
 

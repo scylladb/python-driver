@@ -18,7 +18,7 @@ from uuid import uuid4
 from cassandra.cqlengine import columns
 from cassandra.cqlengine.management import sync_table, drop_table
 from cassandra.cqlengine.models import Model
-from cassandra.cqlengine.query import BatchQuery, BatchType, LWTException, IfExistsWithCounterColumn
+from cassandra.cqlengine.query import BatchQuery, LWTException, IfExistsWithCounterColumn
 
 from tests.integration.cqlengine.base import BaseCassEngTestCase
 from tests.integration import PROTOCOL_VERSION

@@ -21,18 +21,12 @@ from unittest.mock import sentinel
 
 from cassandra import ConsistencyLevel
 from cassandra.cluster import (
-    ExecutionProfile, GraphExecutionProfile, ProfileManager,
-    GraphAnalyticsExecutionProfile,
-    EXEC_PROFILE_DEFAULT, EXEC_PROFILE_GRAPH_DEFAULT,
-    EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT,
-    EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT
+    ExecutionProfile, GraphExecutionProfile, GraphAnalyticsExecutionProfile
 )
 from cassandra.datastax.graph.query import GraphOptions
 from cassandra.datastax.insights.registry import insights_registry
 from cassandra.datastax.insights.serializers import initialize_registry
-from cassandra.datastax.insights.util import namespace
 from cassandra.policies import (
-    RoundRobinPolicy,
     LoadBalancingPolicy,
     DCAwareRoundRobinPolicy,
     TokenAwarePolicy,

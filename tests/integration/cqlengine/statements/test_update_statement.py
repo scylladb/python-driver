@@ -15,9 +15,7 @@ import unittest
 
 from cassandra.cqlengine.columns import Column, Set, List, Text
 from cassandra.cqlengine.operators import *
-from cassandra.cqlengine.statements import (UpdateStatement, WhereClause,
-                                  AssignmentClause, SetUpdateClause,
-                                  ListUpdateClause)
+from cassandra.cqlengine.statements import (UpdateStatement)
 
 
 class UpdateStatementTests(unittest.TestCase):

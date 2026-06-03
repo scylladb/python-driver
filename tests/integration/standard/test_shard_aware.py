@@ -23,7 +23,7 @@ import pytest
 
 from cassandra.cluster import Cluster
 from cassandra.policies import TokenAwarePolicy, RoundRobinPolicy, ConstantReconnectionPolicy
-from cassandra import OperationTimedOut, ConsistencyLevel
+from cassandra import OperationTimedOut
 
 from tests.integration import use_cluster, get_node, PROTOCOL_VERSION
 from tests.util import wait_until_not_raised
