@@ -663,20 +663,22 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         s.encoder.mapping[tuple] = s.encoder.cql_encode_tuple
 
         # create a table with multiple sizes of nested tuples
-        # Note: Scylla limits CQL expression nesting depth to 12, so the
-        # deepest tuple tested here is 12 levels deep.
+        # Note: Scylla limits CQL expression nesting depth to 12 (every
+        # recursive `term` counts, including the innermost scalar value), so a
+        # nested tuple literal can be at most 11 levels deep before the server
+        # rejects it with "expression nested too deeply".
         s.execute("CREATE TABLE nested_tuples ("
                   "k int PRIMARY KEY, "
                   "v_1 frozen<%s>,"
                   "v_2 frozen<%s>,"
                   "v_3 frozen<%s>,"
-                  "v_12 frozen<%s>"
+                  "v_11 frozen<%s>"
                   ")" % (self.nested_tuples_schema_helper(1),
                          self.nested_tuples_schema_helper(2),
                          self.nested_tuples_schema_helper(3),
-                         self.nested_tuples_schema_helper(12)))
+                         self.nested_tuples_schema_helper(11)))
 
-        for i in (1, 2, 3, 12):
+        for i in (1, 2, 3, 11):
             # create tuple
             created_tuple = self.nested_tuples_creator_helper(i)
 
