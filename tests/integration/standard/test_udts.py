@@ -389,7 +389,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         with self._cluster_default_dict_factory() as c:
             s = c.connect(self.keyspace_name, wait_for_all_pools=True)
 
-            max_nesting_depth = 16
+            max_nesting_depth = 12
 
             # create the schema
             self.nested_udt_schema_helper(s, max_nesting_depth)
@@ -417,7 +417,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         with self._cluster_default_dict_factory() as c:
             s = c.connect(self.keyspace_name, wait_for_all_pools=True)
 
-            max_nesting_depth = 16
+            max_nesting_depth = 12
 
             # create the schema
             self.nested_udt_schema_helper(s, max_nesting_depth)
@@ -454,7 +454,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         with self._cluster_default_dict_factory() as c:
             s = c.connect(self.keyspace_name, wait_for_all_pools=True)
 
-            max_nesting_depth = 16
+            max_nesting_depth = 12
 
             # create the schema
             self.nested_udt_schema_helper(s, max_nesting_depth)
