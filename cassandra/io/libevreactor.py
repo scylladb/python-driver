@@ -361,6 +361,8 @@ class LibevConnection(Connection):
                         return
 
     def handle_read(self, watcher, revents, errno=None):
+        if self.is_closed:
+            return
         if revents & libev.EV_ERROR:
             if errno:
                 exc = IOError(errno, os.strerror(errno))
