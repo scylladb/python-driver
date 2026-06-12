@@ -986,6 +986,8 @@ class Connection(object):
             conn.close()
             raise OperationTimedOut("Timed out creating connection (%s seconds)" % timeout,
                                     timeout=timeout)
+        elif conn.is_closed:
+            raise ConnectionShutdown("Connection to %s was closed by server" % conn.endpoint)
         else:
             return conn
 
