@@ -1,3 +1,22 @@
+3.29.11
+=======
+Jun 15, 2026
+
+Features
+--------
+* asyncio backend now supports TLS
+
+Bug Fixes
+---------
+* Race conditions in libev backend resulting in EBADF error have been fixed
+
+Testing / CI
+------------
+* Integration tests now use ``NetworkTopologyStrategy`` instead of ``SimpleStrategy``
+* All actions used in CI are now hash-pinned to decrease risk of supply-chain attacks
+* Various fixes to make CI tests work with various versions of Scylla - mostly related to tablets and LWT
+* Bumped Scylla version used in CI to 2026.1
+
 3.29.10
 =======
 May 10, 2026

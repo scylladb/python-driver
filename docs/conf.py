@@ -29,17 +29,17 @@ TAGS = [
     '3.29.6-scylla',
     '3.29.7-scylla',
     '3.29.8-scylla',
-    '3.29.10-scylla',
+    '3.29.11-scylla',
 ]
 BRANCHES = ['master']
 # Set the latest version.
-LATEST_VERSION = '3.29.10-scylla'
+LATEST_VERSION = '3.29.11-scylla'
 # Set which versions are not released yet.
 UNSTABLE_VERSIONS = ['master']
 # Set which versions are deprecated
 DEPRECATED_VERSIONS = ['3.21.0-scylla', '3.22.3-scylla', '3.24.8-scylla', '3.25.4-scylla', '3.25.11-scylla', '3.26.9-scylla', '3.28.1-scylla', '3.29.1-scylla']
 
-# -- General configuration 
+# -- General configuration
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
@@ -157,7 +157,7 @@ html_use_index = False
 # Output file base name for HTML help builder.
 htmlhelp_basename = 'CassandraDriverdoc'
 
-# URL which points to the root of the HTML documentation. 
+# URL which points to the root of the HTML documentation.
 html_baseurl = 'https://python-driver.docs.scylladb.com'
 
 # Dictionary of values to pass into the template engine’s context for all pages
