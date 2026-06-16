@@ -3888,14 +3888,13 @@ class ControlConnection(object):
                   "registering watchers and refreshing schema and topology",
                   connection)
 
-        # Indirect way to determine if conencted to a ScyllaDB cluster, which does not support peers_v2
-        # If sharding information is available, it's a ScyllaDB cluster, so do not use peers_v2 table.
-        if connection.features.sharding_info is not None:
+        # ScyllaDB does not support peers_v2.  Use is_scylla (not sharding_info)
+        # so that clusters with shard-awareness disabled are still detected correctly.
+        if connection.features.is_scylla:
             self._uses_peers_v2 = False
 
-        # Only ScyllaDB supports "USING TIMEOUT"
-        # Sharding information signals it is ScyllaDB
-        self._metadata_request_timeout = None if connection.features.sharding_info is None or not self._cluster.metadata_request_timeout \
+        # Only ScyllaDB supports "USING TIMEOUT".  Use is_scylla for the same reason.
+        self._metadata_request_timeout = None if not connection.features.is_scylla or not self._cluster.metadata_request_timeout \
             else datetime.timedelta(seconds=self._cluster.metadata_request_timeout)
 
         self._tablets_routing_v1 = connection.features.tablets_routing_v1

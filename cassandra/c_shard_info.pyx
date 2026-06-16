@@ -29,10 +29,10 @@ cdef class ShardingInfo():
 
     def __init__(self, shard_id, shards_count, partitioner, sharding_algorithm, sharding_ignore_msb, shard_aware_port,
                  shard_aware_port_ssl):
-        self.shards_count = int(shards_count)
+        self.shards_count = int(shards_count) if shards_count else 0
         self.partitioner = partitioner
         self.sharding_algorithm = sharding_algorithm
-        self.sharding_ignore_msb = int(sharding_ignore_msb)
+        self.sharding_ignore_msb = int(sharding_ignore_msb) if sharding_ignore_msb else 0
         self.shard_aware_port = int(shard_aware_port) if shard_aware_port else 0
         self.shard_aware_port_ssl = int(shard_aware_port_ssl) if shard_aware_port_ssl else 0
 
