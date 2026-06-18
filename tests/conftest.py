@@ -16,8 +16,42 @@ import importlib.machinery
 import os
 import warnings
 
+import pytest
+
 # Directory containing the Cython-compiled driver modules.
 _CASSANDRA_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "cassandra")
+
+# When set (e.g. in CI) a skipped test is turned into a failure. Tests skip
+# themselves when their requirements are missing (a library is not installed,
+# the wrong event loop is selected, ...). That is convenient locally, but in CI
+# it is a footgun: a test may be silently skipped because we forgot to install
+# something. Enabling this forces every skip to be explicit on the command line
+# (via -k / --ignore / --deselect) instead of being hidden in the output.
+_NO_SKIP = bool(os.environ.get("CASS_DRIVER_NO_SKIP"))
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Turn skips into failures when CASS_DRIVER_NO_SKIP is set.
+
+    xfailed tests (which are reported as skipped) are left untouched so that
+    ``xfail_strict`` keeps working as configured.
+    """
+    outcome = yield
+    if not _NO_SKIP:
+        return
+    report = outcome.get_result()
+    if report.skipped and not hasattr(report, "wasxfail"):
+        reason = ""
+        if isinstance(report.longrepr, tuple) and len(report.longrepr) == 3:
+            reason = report.longrepr[2]
+        report.outcome = "failed"
+        report.longrepr = (
+            "Test was skipped but skipping is disabled in this environment "
+            "(CASS_DRIVER_NO_SKIP is set). Run it in a suitable configuration "
+            "or deselect it explicitly on the command line. "
+            "Original skip reason: {!r}".format(reason)
+        )
 
 
 def pytest_configure(config):

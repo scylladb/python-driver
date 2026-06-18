@@ -157,21 +157,46 @@ enable = ["pypy"]
 [tool.cibuildwheel.linux]
 
 before-build = "rm -rf ~/.pyxbld && rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux && yum install -y libffi-devel libev libev-devel openssl openssl-devel"
+# Install the optional lz4 compression dependency so the lz4 segment tests run
+# (and fail loudly under CASS_DRIVER_NO_SKIP) instead of skipping silently.
+test-extras = ["compress-lz4"]
+# Extensions are mandatory on Linux (CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST=yes),
+# so skipping is disabled (CASS_DRIVER_NO_SKIP=1): a missing dependency such as
+# libev fails loudly instead of being silently skipped. Tests that cannot run in
+# the default configuration are listed explicitly:
+#   * event-loop reactor tests are run separately with the matching
+#     EVENT_LOOP_MANAGER (gevent/eventlet/asyncio);
+#   * asyncore is deprecated and unavailable on modern Python, so it is ignored;
+#   * column_encryption is disabled upstream (scylladb/python-driver#365);
+#   * test_deserialize_date_range_month is disabled upstream (PYTHON-912).
+# eventlet is skipped on PyPy (@notpypy), so CASS_DRIVER_NO_SKIP is not set for it.
 test-command = [
-    "pytest {package}/tests/unit",
-    "EVENT_LOOP_MANAGER=gevent pytest {package}/tests/unit/io/test_geventreactor.py",
+    "CASS_DRIVER_NO_SKIP=1 pytest {package}/tests/unit -v --ignore={package}/tests/unit/column_encryption --ignore={package}/tests/unit/io/test_geventreactor.py --ignore={package}/tests/unit/io/test_eventletreactor.py --ignore={package}/tests/unit/io/test_asyncioreactor.py --ignore={package}/tests/unit/io/test_asyncorereactor.py -k 'not test_deserialize_date_range_month'",
+    "EVENT_LOOP_MANAGER=gevent CASS_DRIVER_NO_SKIP=1 pytest {package}/tests/unit/io/test_geventreactor.py -v",
+    "EVENT_LOOP_MANAGER=asyncio CASS_DRIVER_NO_SKIP=1 pytest {package}/tests/unit/io/test_asyncioreactor.py -v",
+    "EVENT_LOOP_MANAGER=eventlet pytest {package}/tests/unit/io/test_eventletreactor.py -v",
 ]
 
 [tool.cibuildwheel.macos]
 build-frontend = "build"
+# Install lz4 so the lz4 segment tests run instead of skipping (see Linux note).
+test-extras = ["compress-lz4"]
+# Same policy as Linux (extensions are mandatory here too, libev comes from
+# Homebrew). The extra -k exclusions are timing-sensitive tests that are flaky
+# on macOS runners. The gevent/eventlet/asyncio reactor test files only contain
+# those timing-sensitive timer tests, so they are not run separately here.
 test-command = [
-    "pytest {project}/tests/unit -k 'not (test_multi_timer_validation or test_empty_connections or test_timer_cancellation)'",
+    "CASS_DRIVER_NO_SKIP=1 pytest {project}/tests/unit -v --ignore={project}/tests/unit/column_encryption --ignore={project}/tests/unit/io/test_geventreactor.py --ignore={project}/tests/unit/io/test_eventletreactor.py --ignore={project}/tests/unit/io/test_asyncioreactor.py --ignore={project}/tests/unit/io/test_asyncorereactor.py -k 'not (test_multi_timer_validation or test_empty_connections or test_timer_cancellation or test_deserialize_date_range_month)'",
 ]
 
 [tool.cibuildwheel.windows]
 build-frontend = "build"
+# On Windows the C extensions are optional (CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST
+# is overridden to "no" below), so extension-dependent tests (e.g. libev) are
+# legitimately skipped here. CASS_DRIVER_NO_SKIP is therefore NOT enabled on
+# Windows; we only add -v so skips are visible in the log.
 test-command = [
-    "pytest {project}/tests/unit  -k \"not (test_deserialize_date_range_year or test_datetype or test_libevreactor)\"",
+    "pytest {project}/tests/unit -v -k \"not (test_deserialize_date_range_year or test_datetype or test_libevreactor)\"",
 ]
 
 # TODO: set CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST to yes when https://github.com/scylladb/python-driver/issues/429 is fixed
