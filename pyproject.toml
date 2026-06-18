@@ -49,6 +49,7 @@ dev = [
     "gevent",
     "eventlet>=0.33.3",
     "cython>=3.2",
+    "setuptools",
     "packaging>=25.0",
     "futurist",
     "pyyaml",
