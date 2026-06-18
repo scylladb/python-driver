@@ -201,3 +201,16 @@ test-command = [
 
 # TODO: set CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST to yes when https://github.com/scylladb/python-driver/issues/429 is fixed
 environment = { CASS_DRIVER_BUILD_CONCURRENCY = "2", CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "no" }
+
+# PyPy never builds the libev/cmurmur3/Cython C extensions (setup.py forces
+# is_pypy to skip them even when CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST=yes), so
+# the tests that depend on those extensions legitimately skip. Enforcing
+# CASS_DRIVER_NO_SKIP would turn those expected skips into failures, so it is
+# NOT enabled for PyPy (same reasoning as Windows). The reactor tests are not
+# run separately here because eventlet is unsupported on PyPy (@notpypy) and the
+# extension-backed reactors are unavailable; with no-skip off they simply skip.
+[[tool.cibuildwheel.overrides]]
+select = "pp*"
+test-command = [
+    "pytest {package}/tests/unit -v --ignore={package}/tests/unit/column_encryption -k 'not test_deserialize_date_range_month'",
+]
