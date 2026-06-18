@@ -87,6 +87,10 @@ class LibevConnectionTest(ReactorTestMixin, unittest.TestCase):
                 assert conn._read_watcher.stop.mock_calls
 
         _global_loop._shutdown = False
+        # _cleanup stopped the prepare watcher; restart it so the shared
+        # singleton loop is left in a working state for subsequent tests
+        # (otherwise timers would never be scheduled and tests would hang).
+        _global_loop._preparer.start()
 
 
 class LibevTimerPatcher(unittest.TestCase):
