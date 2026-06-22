@@ -214,8 +214,11 @@ environment = { CASS_DRIVER_BUILD_CONCURRENCY = "2", CASS_DRIVER_BUILD_EXTENSION
 # NOT enabled for PyPy (same reasoning as Windows). The reactor tests are not
 # run separately here because eventlet is unsupported on PyPy (@notpypy) and the
 # extension-backed reactors are unavailable; with no-skip off they simply skip.
+# test-extras is cleared (no compress-lz4): PyPy has no prebuilt lz4 wheel, so
+# pip would try to compile it from source and fail. The lz4 tests just skip here.
 [[tool.cibuildwheel.overrides]]
 select = "pp*"
+test-extras = []
 test-command = [
     "pytest {package}/tests/unit -v --ignore={package}/tests/unit/column_encryption -k 'not test_deserialize_date_range_month'",
 ]
