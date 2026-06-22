@@ -117,8 +117,11 @@ class LibevAtexitCleanupTest(unittest.TestCase):
 import sys
 import os
 
-# Add the driver path
-sys.path.insert(0, {driver_path!r})
+# Add the driver path as a fallback only. Append (not insert at 0) so that an
+# installed build of the driver (e.g. the compiled wheel under cibuildwheel)
+# takes precedence over the in-tree pure-Python source, which lacks the libev
+# C extension and would make the import fail.
+sys.path.append({driver_path!r})
 
 # Import and setup
 from cassandra.io import libevreactor
