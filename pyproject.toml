@@ -121,7 +121,12 @@ log_format = "%(asctime)s.%(msecs)03d %(levelname)s [%(module)s:%(lineno)s]: %(m
 log_level = "DEBUG"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 xfail_strict = true
-addopts = "-rf"
+# Use 'append' import mode so the installed package (e.g. the compiled wheel
+# under cibuildwheel) takes precedence on sys.path over the in-tree ``cassandra``
+# source directory. With the default 'prepend' mode pytest inserts the project
+# root at sys.path[0], which shadows the installed wheel with the uncompiled
+# source tree and makes every C-extension test (libev, cmurmur3, Cython) skip.
+addopts = "-rf --import-mode=append"
 markers = [
     "last: mark test to run last within its module group",
 ]
