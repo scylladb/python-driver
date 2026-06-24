@@ -139,11 +139,15 @@ class TwistedLoop(object):
 
 @implementer(IOpenSSLClientConnectionCreator)
 class _SSLCreator(object):
-    def __init__(self, endpoint, ssl_context, ssl_options, check_hostname, timeout):
+    def __init__(self, endpoint, ssl_context, ssl_options, check_hostname, timeout, ssl_session_cache=None):
         self.endpoint = endpoint
         self.ssl_options = ssl_options
         self.check_hostname = check_hostname
         self.timeout = timeout
+        self.ssl_session_cache = ssl_session_cache
+        # Populated by info_callback after every successful handshake; read by
+        # TwistedConnection._cache_tls_session_if_needed() after the first CQL exchange.
+        self._ssl_connection = None
 
         if ssl_context:
             self.context = ssl_context
@@ -170,12 +174,41 @@ class _SSLCreator(object):
             if self.check_hostname and self.endpoint.address != connection.get_peer_certificate().get_subject().commonName:
                 transport = connection.get_app_data()
                 transport.failVerification(Failure(ConnectionException("Hostname verification failed", self.endpoint)))
+                return
+            # Store the live SSL.Connection so that TwistedConnection._cache_tls_session_if_needed()
+            # can read the final session after the first CQL exchange.  Session caching is
+            # deliberately deferred to that point: for TLS 1.3 the resumable session ticket
+            # is only available after the first application-data record, which arrives with
+            # the CQL ReadyMessage or AuthSuccessMessage.
+            self._ssl_connection = connection
+            # For TLS 1.2 the session is already available at handshake completion; cache
+            # it immediately.  For TLS 1.3 get_session() returns None here and the deferred
+            # path in TwistedConnection._cache_tls_session_if_needed() handles it instead.
+            if self.ssl_session_cache is not None and not connection.session_reused():
+                session = connection.get_session()
+                if session is not None:
+                    self.ssl_session_cache.set(self.endpoint.tls_session_cache_key, session)
 
     def clientConnectionForTLS(self, tlsProtocol):
+        # Reset any reference from a previous connection attempt on this creator.
+        self._ssl_connection = None
+
         connection = SSL.Connection(self.context, None)
         connection.set_app_data(tlsProtocol)
         if self.ssl_options and "server_hostname" in self.ssl_options:
             connection.set_tlsext_host_name(self.ssl_options['server_hostname'].encode('ascii'))
+
+        # Apply cached TLS session for resumption (PyOpenSSL)
+        if self.ssl_session_cache is not None:
+            cached_session = self.ssl_session_cache.get(
+                self.endpoint.tls_session_cache_key)
+            if cached_session:
+                try:
+                    connection.set_session(cached_session)
+                    log.debug("Using cached TLS session for %s", self.endpoint)
+                except Exception:
+                    log.debug("Could not restore TLS session for %s", self.endpoint)
+
         return connection
 
 
@@ -212,6 +245,7 @@ class TwistedConnection(Connection):
         self.is_closed = True
         self.connector = None
         self.transport = None
+        self._ssl_creator = None  # set in add_connection() when SSL is used
 
         reactor.callFromThread(self.add_connection)
         self._loop.maybe_start()
@@ -241,7 +275,9 @@ class TwistedConnection(Connection):
                 self.ssl_options,
                 self._check_hostname,
                 self.connect_timeout,
+                ssl_session_cache=self._ssl_session_cache,
             )
+            self._ssl_creator = ssl_connection_creator
 
             endpoint = SSL4ClientEndpoint(
                 reactor,
@@ -258,6 +294,31 @@ class TwistedConnection(Connection):
                 timeout=self.connect_timeout
             )
         connectProtocol(endpoint, TwistedConnectionProtocol(self))
+
+    def _cache_tls_session_if_needed(self):
+        """
+        PyOpenSSL override of :meth:`.Connection._cache_tls_session_if_needed`.
+
+        Called by the base class at ReadyMessage / AuthSuccessMessage time —
+        after the first application-data exchange.  For TLS 1.3 this is the
+        earliest point at which the resumable session ticket is available;
+        for TLS 1.2 the session is also valid here.
+        """
+        if self._ssl_session_cache is None or self._ssl_creator is None:
+            return
+        ssl_conn = self._ssl_creator._ssl_connection
+        if ssl_conn is None:
+            return
+        try:
+            if ssl_conn.session_reused():
+                log.debug("TLS session was reused for %s", self.endpoint)
+            else:
+                session = ssl_conn.get_session()
+                if session is not None:
+                    self._ssl_session_cache.set(
+                        self.endpoint.tls_session_cache_key, session)
+        except Exception:
+            log.debug("Could not cache TLS session for %s", self.endpoint)
 
     def client_connection_made(self, transport):
         """
