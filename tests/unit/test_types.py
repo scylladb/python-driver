@@ -525,6 +525,97 @@ class VectorTests(unittest.TestCase):
         with pytest.raises(ValueError, match="Additional bytes remaining after vector deserialization completed"):
             ctype_four.deserialize(ctype_five_bytes, 0)
 
+    def test_vector_cython_deserializer_variable_size_subtype(self):
+        """
+        Test that DesVectorType falls back gracefully for variable-size subtypes.
+        Variable-size types (e.g. UTF8Type) are not supported by the Cython fast path
+        and should raise ValueError from DesVectorType._deserialize_generic.
+        The pure Python VectorType.deserialize handles these correctly.
+
+        Note: This test is forward-looking — it validates the Cython deserializer
+        that is introduced in a companion PR.  The skipTest guards below ensure
+        the test is silently skipped when the extension is not yet compiled.
+
+        @since 3.x
+        @expected_result Cython deserializer raises ValueError for variable-size subtypes;
+                         pure Python path correctly deserializes them
+
+        @test_category data_types:vector
+        """
+        try:
+            from cassandra.deserializers import find_deserializer, DesVectorType
+        except ImportError:
+            self.skipTest("Cython deserializers not available (no compiled extension)")
+
+        vt_text = VectorType.apply_parameters(["UTF8Type", 3], {})
+        des_text = find_deserializer(vt_text)
+        if not isinstance(des_text, DesVectorType):
+            self.skipTest(
+                "DesVectorType not available (Cython VectorType deserializer not compiled)"
+            )
+        self.assertEqual(des_text.__class__.__name__, "DesVectorType")
+
+        # Cython path should raise for variable-size subtypes
+        data = vt_text.serialize(["abc", "def", "ghi"], 5)
+        with self.assertRaises(ValueError) as cm:
+            des_text.deserialize_bytes(data, 5)
+        self.assertIn("variable-size subtype", str(cm.exception))
+
+        # Pure Python path should work correctly
+        result = vt_text.deserialize(data, 5)
+        self.assertEqual(result, ["abc", "def", "ghi"])
+
+    def test_vector_numpy_large_deserialization(self):
+        """
+        Test that large vectors (>= 32 elements) use the numpy deserialization path
+        and return correct results for all supported numeric types.
+
+        @since 3.x
+        @expected_result Large vectors are correctly deserialized (via numpy when available)
+
+        @test_category data_types:vector
+        """
+        import struct
+
+        vector_size = 64  # >= 32 threshold for numpy path
+
+        # Float vector
+        float_data = list(range(vector_size))
+        float_values = [float(x) for x in float_data]
+        vt_float = VectorType.apply_parameters(["FloatType", vector_size], {})
+        packed = struct.pack(">%df" % vector_size, *float_values)
+        result = vt_float.deserialize(packed, 5)
+        self.assertEqual(len(result), vector_size)
+        for i in range(vector_size):
+            self.assertAlmostEqual(result[i], float_values[i], places=5)
+
+        # Double vector
+        double_values = [float(x) * 1.1 for x in range(vector_size)]
+        vt_double = VectorType.apply_parameters(["DoubleType", vector_size], {})
+        packed = struct.pack(">%dd" % vector_size, *double_values)
+        result = vt_double.deserialize(packed, 5)
+        self.assertEqual(len(result), vector_size)
+        for i in range(vector_size):
+            self.assertAlmostEqual(result[i], double_values[i], places=10)
+
+        # Int32 vector
+        int32_values = list(range(vector_size))
+        vt_int32 = VectorType.apply_parameters(["Int32Type", vector_size], {})
+        packed = struct.pack(">%di" % vector_size, *int32_values)
+        result = vt_int32.deserialize(packed, 5)
+        self.assertEqual(result, int32_values)
+
+        # Int64/Long vector
+        int64_values = list(range(vector_size))
+        vt_int64 = VectorType.apply_parameters(["LongType", vector_size], {})
+        packed = struct.pack(">%dq" % vector_size, *int64_values)
+        result = vt_int64.deserialize(packed, 5)
+        self.assertEqual(result, int64_values)
+
+        # ShortType skipped: serial_size() returns None (pre-existing bug),
+        # so VectorType.deserialize takes the variable-size path which fails.
+        # ShortType struct.unpack works for small vectors via _vector_struct.
+
 
 ZERO = datetime.timedelta(0)
 
