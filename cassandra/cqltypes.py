@@ -33,6 +33,7 @@ from binascii import unhexlify
 import calendar
 from collections import namedtuple
 from decimal import Decimal
+import functools
 import io
 from itertools import chain
 import logging
@@ -185,6 +186,7 @@ def strip_frozen(cql):
     return cql
 
 
+@functools.lru_cache()
 def lookup_casstype_simple(casstype):
     """
     Given a Cassandra type name (either fully distinguished or not), hand
@@ -203,6 +205,7 @@ def lookup_casstype_simple(casstype):
     return typeclass
 
 
+@functools.lru_cache()
 def parse_casstype_args(typestring):
     tokens, remainder = casstype_scanner.scan(typestring)
     if remainder:
@@ -215,7 +218,7 @@ def parse_casstype_args(typestring):
             args.append(([], []))
         elif tok == ')':
             types, names = args.pop()
-            prev_types, prev_names = args[-1]
+            prev_types, _ = args[-1]
             prev_types[-1] = prev_types[-1].apply_parameters(types, names)
         else:
             types, names = args[-1]
