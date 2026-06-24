@@ -428,7 +428,7 @@ class ClientRoutesEndPoint(EndPoint):
     _host_id: uuid.UUID
     _handler: _ClientRoutesHandler
     _original_address: str
-    _original_port: int
+    _original_port: Optional[int]
 
     def __init__(self, host_id: uuid.UUID, handler: _ClientRoutesHandler, original_address: str, original_port: int = None) -> None:
         """
@@ -467,15 +467,24 @@ class ClientRoutesEndPoint(EndPoint):
 
     def __eq__(self, other):
         return (isinstance(other, ClientRoutesEndPoint) and
-                self._host_id == other._host_id and
-                self._original_address == other._original_address)
+                self._identity_key() == other._identity_key())
 
     def __hash__(self):
-        return hash((self._host_id, self._original_address))
+        return hash(self._identity_key())
 
     def __lt__(self, other):
-        return ((self._host_id, self._original_address) <
-                (other._host_id, other._original_address))
+        return self._ordering_key() < other._ordering_key()
+
+    def _identity_key(self):
+        return self._host_id, self._original_address, self._original_port
+
+    def _ordering_key(self):
+        return (
+            self._host_id,
+            self._original_address,
+            self._original_port is None,
+            self._original_port,
+        )
 
     def __str__(self):
         return str("%s (host_id=%s)" % (self._original_address, self._host_id))
