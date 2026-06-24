@@ -14,6 +14,7 @@
 
 
 from libc.stdint cimport int32_t, uint16_t
+from cpython.unicode cimport PyUnicode_DecodeASCII, PyUnicode_DecodeUTF8
 
 include 'cython_marshal.pyx'
 from cassandra.buffer cimport Buffer, to_bytes, slice_buffer
@@ -88,7 +89,7 @@ cdef class DesAsciiType(Deserializer):
     cdef deserialize(self, Buffer *buf, int protocol_version):
         if buf.size == 0:
             return ""
-        return to_bytes(buf).decode('ascii')
+        return PyUnicode_DecodeASCII(buf.ptr, buf.size, NULL)
 
 
 cdef class DesFloatType(Deserializer):
@@ -173,8 +174,7 @@ cdef class DesUTF8Type(Deserializer):
     cdef deserialize(self, Buffer *buf, int protocol_version):
         if buf.size == 0:
             return ""
-        cdef val = to_bytes(buf)
-        return val.decode('utf8')
+        return PyUnicode_DecodeUTF8(buf.ptr, buf.size, NULL)
 
 
 cdef class DesVarcharType(DesUTF8Type):
