@@ -773,7 +773,7 @@ class ConstantReconnectionPolicy(ReconnectionPolicy):
     in-between each reconnection attempt.
     """
 
-    def __init__(self, delay, max_attempts=64):
+    def __init__(self, delay, max_attempts=None):
         """
         `delay` should be a floating point number of seconds to wait in-between
         each attempt.
@@ -807,10 +807,7 @@ class ExponentialReconnectionPolicy(ReconnectionPolicy):
     trying to reconnect at exactly the same time.
     """
 
-    # TODO: max_attempts is 64 to preserve legacy default behavior
-    # consider changing to None in major release to prevent the policy
-    # giving up forever
-    def __init__(self, base_delay, max_delay, max_attempts=64):
+    def __init__(self, base_delay, max_delay, max_attempts=None):
         """
         `base_delay` and `max_delay` should be in floating point units of
         seconds.
