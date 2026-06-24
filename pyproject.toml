@@ -46,7 +46,10 @@ dev = [
     "PyYAML",
     "pure-sasl",
     "twisted[tls]",
-    "gevent",
+    # gevent free-threading support is still unsettled upstream; keep the
+    # version below 26.4.0 until gevent/gevent#2087 and gevent/gevent#2127
+    # are resolved for CPython 3.14t CI jobs.
+    "gevent<26.4.0",
     "eventlet>=0.33.3",
     "cython>=3.2",
     "packaging>=25.0",
