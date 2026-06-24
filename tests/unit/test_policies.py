@@ -944,6 +944,35 @@ class TokenAwarePolicyTest(unittest.TestCase):
             assert patched_shuffle.call_count == 1
 
 
+    @patch('cassandra.policies.shuffle')
+    def test_no_shuffle_for_serial_consistency(self, patched_shuffle):
+        """
+        Test to validate that replicas are not shuffled when the statement
+        has SERIAL or LOCAL_SERIAL consistency level, since such statements
+        should be routed like LWT requests.
+        @jira_ticket PYTHON-1394
+        @expected_result shuffle should not be called for serial consistency
+
+        @test_category policy
+        """
+        for cl in (ConsistencyLevel.SERIAL, ConsistencyLevel.LOCAL_SERIAL):
+            for cluster in (self._prepare_cluster_with_vnodes(), self._prepare_cluster_with_tablets()):
+                patched_shuffle.reset_mock()
+                hosts = cluster.metadata.all_hosts()
+                child_policy = Mock()
+                child_policy.make_query_plan.return_value = hosts
+                child_policy.distance.return_value = HostDistance.LOCAL
+
+                policy = TokenAwarePolicy(child_policy, shuffle_replicas=True)
+                policy.populate(cluster, hosts)
+
+                query = Statement(routing_key='routing_key')
+                query.consistency_level = cl
+                list(policy.make_query_plan('keyspace', query))
+                assert patched_shuffle.call_count == 0, \
+                    "shuffle should not be called for consistency level %s" % cl
+
+
 class ConvictionPolicyTest(unittest.TestCase):
     def test_not_implemented(self):
         """
@@ -1388,6 +1417,35 @@ class DowngradingConsistencyRetryPolicyTest(unittest.TestCase):
             query=None, consistency=ONE, required_replicas=3, alive_replicas=1, retry_num=0)
         assert retry == RetryPolicy.RETRY
         assert consistency == ConsistencyLevel.ONE
+
+    def test_serial_consistency_not_downgraded(self):
+        """
+        Test that SERIAL/LOCAL_SERIAL consistency is never downgraded
+        to a non-serial consistency level by the retry policy.
+        @jira_ticket PYTHON-1394
+        @expected_result retry policy should rethrow or retry on next host
+                        without downgrading serial consistency
+
+        @test_category policy
+        """
+        policy = DowngradingConsistencyRetryPolicy()
+
+        for cl in (ConsistencyLevel.SERIAL, ConsistencyLevel.LOCAL_SERIAL):
+            # on_read_timeout should rethrow for serial consistency
+            retry, consistency = policy.on_read_timeout(
+                query=None, consistency=cl, required_responses=3,
+                received_responses=1, data_retrieved=True, retry_num=0)
+            assert retry == RetryPolicy.RETHROW, \
+                "Expected RETHROW for serial consistency %s on read timeout" % cl
+            assert consistency is None
+
+            # on_unavailable should retry on next host without downgrading
+            retry, consistency = policy.on_unavailable(
+                query=None, consistency=cl, required_replicas=3,
+                alive_replicas=1, retry_num=0)
+            assert retry == RetryPolicy.RETRY_NEXT_HOST, \
+                "Expected RETRY_NEXT_HOST for serial consistency %s on unavailable" % cl
+            assert consistency is None
 
 
 class ExponentialRetryPolicyTest(unittest.TestCase):
