@@ -16,6 +16,7 @@ import gevent.event
 from gevent.queue import Queue
 from gevent import socket
 import gevent.ssl
+from greenlet import GreenletExit
 
 import logging
 import time
@@ -98,7 +99,10 @@ class GeventConnection(Connection):
             msg = "Connection to %s was closed" % self.endpoint
             if self.last_error:
                 msg += ": %s" % (self.last_error,)
-            self.error_all_requests(ConnectionShutdown(msg))
+            shutdown_exc = ConnectionShutdown(msg)
+            self.error_all_requests(shutdown_exc)
+            if not self.connected_event.is_set():
+                self.last_error = shutdown_exc
             # don't leave in-progress operations hanging
             self.connected_event.set()
 
@@ -115,6 +119,8 @@ class GeventConnection(Connection):
                 log.debug("Exception in send for %s: %s", self, err)
                 self.defunct(err)
                 return
+            except GreenletExit:
+                return
 
     def handle_read(self):
         while True:
@@ -125,11 +131,15 @@ class GeventConnection(Connection):
                 log.debug("Exception in read for %s: %s", self, err)
                 self.defunct(err)
                 return  # leave the read loop
+            except GreenletExit:
+                return
 
             if buf and self._iobuf.tell():
                 self.process_io_buffer()
             else:
                 log.debug("Connection %s closed by server", self)
+                self.last_error = ConnectionShutdown(
+                    "Connection to %s was closed by server" % self.endpoint)
                 self.close()
                 return
 
