@@ -16,7 +16,7 @@ from collections import defaultdict
 import logging
 import threading
 
-from cassandra.cluster import Cluster, _ConfigMode, _NOT_SET, NoHostAvailable, UserTypeDoesNotExist, ConsistencyLevel
+from cassandra.cluster import Cluster, _ConfigMode, _NOT_SET, NoHostAvailable, UserTypeDoesNotExist
 from cassandra.query import SimpleStatement, dict_factory
 
 from cassandra.cqlengine import CQLEngineException

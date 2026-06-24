@@ -16,7 +16,7 @@ import unittest
 
 from cassandra.metadata import (
     KeyspaceMetadata, TableMetadataDSE68,
-    VertexMetadata, EdgeMetadata, SchemaParserV22, _SchemaParser
+    VertexMetadata, EdgeMetadata, _SchemaParser
 )
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
 

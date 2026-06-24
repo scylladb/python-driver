@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import unittest
 from cassandra import ConsistencyLevel
 
 from cassandra.cqlengine import connection

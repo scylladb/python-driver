@@ -19,7 +19,6 @@ from cassandra.connection import DefaultEndPoint
 
 try:
     from twisted.test import proto_helpers
-    from twisted.python.failure import Failure
     from cassandra.io import twistedreactor
     from cassandra.io.twistedreactor import TwistedConnection
 except ImportError:

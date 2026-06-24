@@ -14,38 +14,31 @@
 
 import unittest
 
-from collections import defaultdict
-import difflib
 import logging
 import sys
 import time
 import os
-from typing import Optional
 
 from packaging.version import Version
 from unittest.mock import Mock, patch
 import pytest
 
 from cassandra import AlreadyExists, SignatureDescriptor, UserFunctionDescriptor, UserAggregateDescriptor
-from cassandra.connection import Connection
 
 from cassandra.encoder import Encoder
 from cassandra.metadata import (IndexMetadata, Token, murmur3, Function, Aggregate, protect_name, protect_names,
                                 RegisteredTableExtension, _RegisteredExtensionType, get_schema_parser,
                                 group_keys_by_replica, NO_VALID_REPLICA)
 from cassandra.protocol import QueryMessage, ProtocolHandler
-from cassandra.util import SortedSet
 
 from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, execute_until_pass,
                                BasicSegregatedKeyspaceUnitTestCase, BasicSharedKeyspaceUnitTestCase,
                                BasicExistingKeyspaceUnitTestCase, drop_keyspace_shutdown_cluster, CASSANDRA_VERSION,
                                greaterthanorequalcass30, lessthancass30, local,
                                get_supported_protocol_versions, greaterthancass20,
-                               greaterthancass21, greaterthanorequalcass40,
-                               lessthancass40,
+                               greaterthancass21, lessthancass40,
                                TestCluster, requires_java_udf, requires_composite_type,
-                               requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, xfail_scylla_version_lt,
-                               requirescompactstorage, get_tablets_disabled_ddl_suffix, execute_with_long_wait_retry)
+                               requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, requirescompactstorage, get_tablets_disabled_ddl_suffix, execute_with_long_wait_retry)
 
 from tests.util import wait_until, assertRegex, assertDictEqual, assertListEqual, assert_startswith_diff
 

@@ -25,7 +25,6 @@ import pytest
 from cassandra import ConsistencyLevel
 from cassandra.cluster import EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.concurrent import execute_concurrent, execute_concurrent_with_args
-from cassandra.policies import HostDistance
 from cassandra.query import SimpleStatement
 
 from tests.util import assertSequenceEqual

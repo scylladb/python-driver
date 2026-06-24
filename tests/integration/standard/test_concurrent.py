@@ -19,7 +19,6 @@ from cassandra import InvalidRequest, ConsistencyLevel, ReadTimeout, WriteTimeou
     ReadFailure, WriteFailure
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.concurrent import execute_concurrent, execute_concurrent_with_args, ExecutionResult
-from cassandra.policies import HostDistance
 from cassandra.query import dict_factory, tuple_factory, SimpleStatement
 
 from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster

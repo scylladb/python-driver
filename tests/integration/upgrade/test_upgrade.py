@@ -21,7 +21,6 @@ from cassandra.policies import ConstantSpeculativeExecutionPolicy
 from tests.integration.upgrade import UpgradeBase, UpgradeBaseAuth, UpgradePath, upgrade_paths
 from tests.util import wait_until
 
-import unittest
 import pytest
 
 

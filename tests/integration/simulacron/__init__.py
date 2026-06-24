@@ -18,7 +18,6 @@ from tests.integration.simulacron.utils import (
     clear_queries,
     start_and_prime_singledc,
     stop_simulacron,
-    start_and_prime_cluster_defaults,
 )
 
 from cassandra.cluster import Cluster
