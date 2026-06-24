@@ -31,8 +31,7 @@ For example, suppose Cassandra is setup with its default
 Custom Authenticators
 ^^^^^^^^^^^^^^^^^^^^^
 If you're using something other than Cassandra's ``PasswordAuthenticator``,
-:class:`~.SaslAuthProvider` is provided for generic SASL authentication mechanisms,
-utilizing the ``pure-sasl`` package.
+:class:`~.SaslAuthProvider` is provided for generic SASL authentication mechanisms.
 If these do not suit your needs, you may need to create your own subclasses of
 :class:`~.AuthProvider` and :class:`~.Authenticator`.  You can use the Sasl classes
 as example implementations.
