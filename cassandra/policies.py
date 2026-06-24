@@ -502,19 +502,29 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                 yield host
             return
 
+        is_lwt = query.is_lwt()
+
         replicas = []
         tablet = self._cluster_metadata._tablets.get_tablet_for_key(
             keyspace, query.table, self._cluster_metadata.token_map.token_class.from_key(query.routing_key))
 
         if tablet is not None:
-            replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
-            child_plan = child.make_query_plan(keyspace, query)
+            if is_lwt:
+                # For LWT queries, preserve the tablet's natural replica order
+                # so that the first replica (Paxos leader) is tried first.
+                # Using the child policy's round-robin order would lose this.
+                replicas = [self._cluster_metadata.get_host_by_host_id(host_id)
+                            for host_id, _shard in tablet.replicas]
+                replicas = [r for r in replicas if r is not None]
+            else:
+                replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
+                child_plan = child.make_query_plan(keyspace, query)
 
-            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+                replicas = [host for host in child_plan if host.host_id in replicas_mapped]
         else:
             replicas = self._cluster_metadata.get_replicas(keyspace, query.routing_key)
 
-        if self.shuffle_replicas and not query.is_lwt():
+        if self.shuffle_replicas and not is_lwt:
             shuffle(replicas)
 
         def yield_in_order(hosts):
@@ -523,10 +533,26 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                     if replica.is_up and child.distance(replica) == distance:
                         yield replica
 
-        # yield replicas: local_rack, local, remote
-        yield from yield_in_order(replicas)
-        # yield rest of the cluster: local_rack, local, remote
-        yield from yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas])
+        if is_lwt:
+            # For LWT queries, yield replicas in their natural token-ring order
+            # (first replica = Paxos leader). Do NOT re-sort by distance, as
+            # that could demote the Paxos leader when using RackAwareRoundRobinPolicy
+            # (the leader might be in a different rack than the client).
+            # Only skip hosts that are down or IGNORED by the child policy.
+            replicas_yielded = set()
+            for replica in replicas:
+                if replica.is_up and child.distance(replica) != HostDistance.IGNORED:
+                    replicas_yielded.add(replica)
+                    yield replica
+            # Yield remaining hosts (non-replicas) in distance order as fallback
+            yield from yield_in_order(
+                [host for host in child.make_query_plan(keyspace, query)
+                 if host not in replicas_yielded])
+        else:
+            # yield replicas: local_rack, local, remote
+            yield from yield_in_order(replicas)
+            # yield rest of the cluster: local_rack, local, remote
+            yield from yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas])
 
     def on_up(self, *args, **kwargs):
         return self._child_policy.on_up(*args, **kwargs)
