@@ -573,6 +573,9 @@ class _QueryMessage(_MessageType):
         if self.timestamp is not None:
             flags |= _PROTOCOL_TIMESTAMP_FLAG
 
+        if self.skip_meta:
+            flags |= _SKIP_METADATA_FLAG
+
         if self.keyspace is not None:
             if ProtocolVersion.uses_keyspace_flag(protocol_version):
                 flags |= _WITH_KEYSPACE_FLAG
@@ -629,9 +632,11 @@ class ExecuteMessage(_QueryMessage):
     def __init__(self, query_id, query_params, consistency_level,
                  serial_consistency_level=None, fetch_size=None,
                  paging_state=None, timestamp=None, skip_meta=False,
-                 continuous_paging_options=None, result_metadata_id=None):
+                 continuous_paging_options=None, result_metadata_id=None,
+                 use_metadata_id=False):
         self.query_id = query_id
         self.result_metadata_id = result_metadata_id
+        self.use_metadata_id = use_metadata_id
         super(ExecuteMessage, self).__init__(query_params, consistency_level, serial_consistency_level, fetch_size,
                                              paging_state, timestamp, skip_meta, continuous_paging_options)
 
@@ -640,8 +645,8 @@ class ExecuteMessage(_QueryMessage):
 
     def send_body(self, f, protocol_version):
         write_string(f, self.query_id)
-        if ProtocolVersion.uses_prepared_metadata(protocol_version):
-            write_string(f, self.result_metadata_id)
+        if ProtocolVersion.uses_prepared_metadata(protocol_version) or self.use_metadata_id:
+            write_string(f, self.result_metadata_id if self.result_metadata_id is not None else b'')
         self._write_query_params(f, protocol_version)
 
 
@@ -745,7 +750,7 @@ class ResultMessage(_MessageType):
 
     def recv_results_prepared(self, f, protocol_version, protocol_features, user_type_map):
         self.query_id = read_binary_string(f)
-        if ProtocolVersion.uses_prepared_metadata(protocol_version):
+        if ProtocolVersion.uses_prepared_metadata(protocol_version) or protocol_features.use_metadata_id:
             self.result_metadata_id = read_binary_string(f)
         else:
             self.result_metadata_id = None
