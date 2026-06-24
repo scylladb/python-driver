@@ -15,16 +15,19 @@
 import unittest
 
 from unittest.mock import Mock
+import io
+import struct
 
 from cassandra import ProtocolVersion, UnsupportedOperation
 from cassandra.protocol import (
     PrepareMessage, QueryMessage, ExecuteMessage, UnsupportedOperation,
     _PAGING_OPTIONS_FLAG, _WITH_SERIAL_CONSISTENCY_FLAG,
     _PAGE_SIZE_FLAG, _WITH_PAGING_STATE_FLAG,
-    BatchMessage
+    BatchMessage,
+    _UNSET_VALUE, write_value, ProtocolHandler
 )
 from cassandra.query import BatchType
-from cassandra.marshal import uint32_unpack
+from cassandra.marshal import uint32_unpack, int32_pack, uint16_pack
 from cassandra.cluster import ContinuousPagingOptions
 import pytest
 
@@ -167,7 +170,7 @@ class MessageTest(unittest.TestCase):
 
     def test_batch_message_with_keyspace(self):
         self.maxDiff = None
-        io = Mock(name='io')
+        buf = io.BytesIO()
         batch = BatchMessage(
             batch_type=BatchType.LOGGED,
             queries=((False, 'stmt a', ('param a',)),
@@ -177,15 +180,293 @@ class MessageTest(unittest.TestCase):
             consistency_level=3,
             keyspace='ks'
         )
-        batch.send_body(io, protocol_version=5)
-        self._check_calls(io,
-            ((b'\x00',), (b'\x00\x03',), (b'\x00',),
-             (b'\x00\x00\x00\x06',), (b'stmt a',),
-             (b'\x00\x01',), (b'\x00\x00\x00\x07',), ('param a',),
-             (b'\x00',), (b'\x00\x00\x00\x06',), (b'stmt b',),
-             (b'\x00\x01',), (b'\x00\x00\x00\x07',), ('param b',),
-             (b'\x00',), (b'\x00\x00\x00\x06',), (b'stmt c',),
-             (b'\x00\x01',), (b'\x00\x00\x00\x07',), ('param c',),
-             (b'\x00\x03',),
-             (b'\x00\x00\x00\x80',), (b'\x00\x02',), (b'ks',))
+        batch.send_body(buf, protocol_version=5)
+        expected = (
+            b'\x00'              # batch type LOGGED
+            b'\x00\x03'         # 3 queries
+            b'\x00'              # not prepared
+            b'\x00\x00\x00\x06' b'stmt a'  # longstring 'stmt a'
+            b'\x00\x01'         # 1 param
+            b'\x00\x00\x00\x07' b'param a'  # write_value 'param a'
+            b'\x00'              # not prepared
+            b'\x00\x00\x00\x06' b'stmt b'
+            b'\x00\x01'
+            b'\x00\x00\x00\x07' b'param b'
+            b'\x00'
+            b'\x00\x00\x00\x06' b'stmt c'
+            b'\x00\x01'
+            b'\x00\x00\x00\x07' b'param c'
+            b'\x00\x03'         # consistency level
+            b'\x00\x00\x00\x80'  # flags (keyspace)
+            b'\x00\x02' b'ks'   # keyspace
         )
+        self.assertEqual(buf.getvalue(), expected)
+
+
+class WriteQueryParamsBufferAccumulationTest(unittest.TestCase):
+    """
+    Tests for the buffer accumulation optimization in
+    _QueryMessage._write_query_params().
+
+    The optimization replaces per-parameter write_value(f, param) calls with
+    list.append + b"".join + single f.write().  These tests verify the
+    serialized bytes are identical to the original write_value() behaviour.
+    """
+
+    # -- helpers ----------------------------------------------------------
+
+    @staticmethod
+    def _reference_write_value_bytes(params):
+        """Build expected bytes using the original write_value() function."""
+        buf = io.BytesIO()
+        buf.write(uint16_pack(len(params)))
+        for p in params:
+            write_value(buf, p)
+        return buf.getvalue()
+
+    @staticmethod
+    def _execute_msg_bytes(msg, protocol_version):
+        """Serialize an ExecuteMessage and return the raw bytes."""
+        buf = io.BytesIO()
+        msg.send_body(buf, protocol_version)
+        return buf.getvalue()
+
+    # -- basic write_value parity -----------------------------------------
+
+    def test_normal_params(self):
+        """Normal (non-NULL, non-UNSET) byte-string parameters."""
+        params = [b'hello', b'world', b'\x00\x01\x02']
+        expected = self._reference_write_value_bytes(params)
+        msg = ExecuteMessage(query_id=b'qid', query_params=params,
+                             consistency_level=1)
+        raw = self._execute_msg_bytes(msg, protocol_version=4)
+        self.assertIn(expected, raw)
+
+    def test_null_params(self):
+        """NULL parameters must serialize as int32(-1)."""
+        params = [None, None]
+        expected = self._reference_write_value_bytes(params)
+        msg = ExecuteMessage(query_id=b'qid', query_params=params,
+                             consistency_level=1)
+        raw = self._execute_msg_bytes(msg, protocol_version=4)
+        self.assertIn(expected, raw)
+
+    def test_unset_params(self):
+        """UNSET parameters must serialize as int32(-2)."""
+        params = [_UNSET_VALUE, _UNSET_VALUE]
+        expected = self._reference_write_value_bytes(params)
+        msg = ExecuteMessage(query_id=b'qid', query_params=params,
+                             consistency_level=4)
+        raw = self._execute_msg_bytes(msg, protocol_version=4)
+        self.assertIn(expected, raw)
+
+    def test_mixed_params(self):
+        """Mix of normal, NULL and UNSET params in one message."""
+        params = [b'data', None, _UNSET_VALUE, b'more', None]
+        expected = self._reference_write_value_bytes(params)
+        msg = ExecuteMessage(query_id=b'qid', query_params=params,
+                             consistency_level=1)
+        raw = self._execute_msg_bytes(msg, protocol_version=4)
+        self.assertIn(expected, raw)
+
+    def test_empty_bytes_param(self):
+        """An empty bytes value (length 0) must differ from NULL (length -1)."""
+        params = [b'']
+        expected = self._reference_write_value_bytes(params)
+        msg = ExecuteMessage(query_id=b'qid', query_params=params,
+                             consistency_level=1)
+        raw = self._execute_msg_bytes(msg, protocol_version=4)
+        self.assertIn(expected, raw)
+        # Verify it's NOT serialized as NULL
+        null_bytes = int32_pack(-1)
+        param_section_start = raw.find(expected)
+        param_section = raw[param_section_start:param_section_start + len(expected)]
+        self.assertNotIn(null_bytes, param_section[2:])  # skip the uint16 count
+
+    def test_empty_query_params_list(self):
+        """An empty params list should write count=0 and nothing else."""
+        params = []
+        expected = self._reference_write_value_bytes(params)
+        self.assertEqual(expected, uint16_pack(0))
+        msg = ExecuteMessage(query_id=b'qid', query_params=params,
+                             consistency_level=1)
+        raw = self._execute_msg_bytes(msg, protocol_version=4)
+        self.assertIn(expected, raw)
+
+    def test_none_query_params(self):
+        """When query_params is None, no param block should be written."""
+        msg1 = ExecuteMessage(query_id=b'qid', query_params=None,
+                              consistency_level=1)
+        msg2 = ExecuteMessage(query_id=b'qid', query_params=[b'x'],
+                              consistency_level=1)
+        raw1 = self._execute_msg_bytes(msg1, protocol_version=4)
+        raw2 = self._execute_msg_bytes(msg2, protocol_version=4)
+        # raw1 should be shorter (no param section)
+        self.assertLess(len(raw1), len(raw2))
+
+    def test_large_vector_param(self):
+        """Large parameter simulating a high-dimensional vector embedding."""
+        # 768-dimensional float32 vector = 3072 bytes
+        vector_bytes = struct.pack('768f', *([0.123456] * 768))
+        params = [vector_bytes]
+        expected = self._reference_write_value_bytes(params)
+        msg = ExecuteMessage(query_id=b'qid', query_params=params,
+                             consistency_level=1)
+        raw = self._execute_msg_bytes(msg, protocol_version=4)
+        self.assertIn(expected, raw)
+
+    def test_query_message_with_params(self):
+        """QueryMessage (not just ExecuteMessage) uses the same code path."""
+        params = [b'val1', None, b'val2']
+        expected = self._reference_write_value_bytes(params)
+        msg = QueryMessage(query='SELECT * FROM t WHERE k=? AND v=? AND w=?',
+                           consistency_level=1,
+                           query_params=params)
+        raw = io.BytesIO()
+        msg.send_body(raw, protocol_version=4)
+        self.assertIn(expected, raw.getvalue())
+
+    def test_proto_v3_vs_v4_params(self):
+        """The param encoding should be identical across protocol versions."""
+        params = [b'abc', None, b'xyz']
+        msg_v3 = ExecuteMessage(query_id=b'qid', query_params=params,
+                                consistency_level=1)
+        msg_v4 = ExecuteMessage(query_id=b'qid', query_params=params,
+                                consistency_level=1)
+        raw_v3 = self._execute_msg_bytes(msg_v3, protocol_version=3)
+        raw_v4 = self._execute_msg_bytes(msg_v4, protocol_version=4)
+        expected = self._reference_write_value_bytes(params)
+        self.assertIn(expected, raw_v3)
+        self.assertIn(expected, raw_v4)
+
+    def test_encode_message_roundtrip(self):
+        """Full encode_message path exercises header + body framing."""
+        params = [b'roundtrip']
+        msg = QueryMessage(query='SELECT 1',
+                           consistency_level=1,
+                           query_params=params)
+        # encode_message returns the full on-wire frame
+        frame = ProtocolHandler.encode_message(msg, stream_id=1,
+                                               protocol_version=4,
+                                               compressor=None,
+                                               allow_beta_protocol_version=False)
+        # The frame should contain the param bytes somewhere inside
+        expected_param_bytes = self._reference_write_value_bytes(params)
+        # frame may be memoryview/bytearray; convert to bytes for assertIn
+        frame_bytes = bytes(frame)
+        self.assertIn(expected_param_bytes, frame_bytes)
+
+    def test_many_params(self):
+        """50 parameters to exercise the accumulation loop at scale."""
+        params = [b'param_%03d' % i for i in range(50)]
+        expected = self._reference_write_value_bytes(params)
+        msg = ExecuteMessage(query_id=b'qid', query_params=params,
+                             consistency_level=1)
+        raw = self._execute_msg_bytes(msg, protocol_version=4)
+        self.assertIn(expected, raw)
+
+    def test_single_null_param(self):
+        """Regression: a single NULL param should serialize correctly."""
+        params = [None]
+        expected = self._reference_write_value_bytes(params)
+        msg = ExecuteMessage(query_id=b'qid', query_params=params,
+                             consistency_level=1)
+        raw = self._execute_msg_bytes(msg, protocol_version=4)
+        self.assertIn(expected, raw)
+
+    def test_single_unset_param(self):
+        """Regression: a single UNSET param should serialize correctly."""
+        params = [_UNSET_VALUE]
+        expected = self._reference_write_value_bytes(params)
+        msg = ExecuteMessage(query_id=b'qid', query_params=params,
+                             consistency_level=4)
+        raw = self._execute_msg_bytes(msg, protocol_version=4)
+        self.assertIn(expected, raw)
+
+    # -- BatchMessage buffer accumulation tests ---------------------------
+
+    @staticmethod
+    def _batch_msg_bytes(queries, protocol_version=4, **kwargs):
+        """Serialize a BatchMessage and return the raw bytes."""
+        msg = BatchMessage(batch_type=BatchType.LOGGED, queries=queries,
+                           consistency_level=1, **kwargs)
+        buf = io.BytesIO()
+        msg.send_body(buf, protocol_version)
+        return buf.getvalue()
+
+    def test_batch_prepared_queries_with_params(self):
+        """Batch of prepared queries with byte params serializes correctly."""
+        queries = [
+            (True, b'\x01\x02\x03\x04', [b'val1', b'val2']),
+            (True, b'\x01\x02\x03\x04', [b'val3', None]),
+        ]
+        raw = self._batch_msg_bytes(queries)
+        self.assertIn(b'val1', raw)
+        self.assertIn(b'val2', raw)
+        self.assertIn(b'val3', raw)
+        self.assertIn(int32_pack(-1), raw)  # NULL
+
+    def test_batch_unprepared_queries(self):
+        """Batch of unprepared (string) queries serializes correctly."""
+        queries = [
+            (False, 'INSERT INTO t (k) VALUES (?)', [b'\x01']),
+            (False, 'INSERT INTO t (k) VALUES (?)', [b'\x02']),
+        ]
+        raw = self._batch_msg_bytes(queries)
+        self.assertIn(b'INSERT INTO t (k) VALUES (?)', raw)
+
+    def test_batch_mixed_prepared_unprepared(self):
+        """Batch mixing prepared and unprepared queries."""
+        queries = [
+            (False, 'SELECT 1', []),
+            (True, b'\xab\xcd', [b'data']),
+        ]
+        raw = self._batch_msg_bytes(queries)
+        self.assertIn(b'SELECT 1', raw)
+        self.assertIn(b'data', raw)
+
+    def test_batch_empty_queries(self):
+        """Batch with zero queries."""
+        raw = self._batch_msg_bytes([])
+        self.assertIn(uint16_pack(0), raw)
+
+    def test_batch_many_queries(self):
+        """Batch with 50 queries to exercise accumulation at scale."""
+        queries = [
+            (True, b'\x01\x02', [b'param_%03d' % i])
+            for i in range(50)
+        ]
+        raw = self._batch_msg_bytes(queries)
+        self.assertIn(uint16_pack(50), raw)
+        for i in range(50):
+            self.assertIn(b'param_%03d' % i, raw)
+
+    def test_batch_null_and_unset_params(self):
+        """Batch params with NULL and UNSET values."""
+        queries = [
+            (True, b'\x01', [None, _UNSET_VALUE, b'ok']),
+        ]
+        raw = self._batch_msg_bytes(queries, protocol_version=4)
+        self.assertIn(int32_pack(-1), raw)   # NULL
+        self.assertIn(int32_pack(-2), raw)   # UNSET
+        self.assertIn(b'ok', raw)
+
+    def test_batch_vector_params(self):
+        """Batch with large vector params (simulating bulk vector INSERT)."""
+        vector = struct.pack('128f', *([0.5] * 128))
+        queries = [
+            (True, b'\x01\x02', [int32_pack(i), vector])
+            for i in range(10)
+        ]
+        raw = self._batch_msg_bytes(queries)
+        # 10 copies of the vector should appear
+        count = 0
+        start = 0
+        while True:
+            idx = raw.find(vector, start)
+            if idx == -1:
+                break
+            count += 1
+            start = idx + 1
+        self.assertEqual(count, 10)
+

@@ -69,6 +69,10 @@ _message_types_by_opcode = {}
 
 _UNSET_VALUE = object()
 
+# Pre-computed packed constants for null/unset markers
+_INT32_NEG1 = int32_pack(-1)   # null value marker
+_INT32_NEG2 = int32_pack(-2)   # unset value marker
+
 
 def register_class(cls):
     _message_types_by_opcode[cls.opcode] = cls
@@ -587,9 +591,20 @@ class _QueryMessage(_MessageType):
             write_byte(f, flags)
 
         if self.query_params is not None:
-            write_short(f, len(self.query_params))
+            # Accumulate param bytes in a list and write once instead of
+            # 2*N+1 separate f.write() calls via write_value().
+            _int32_pack = int32_pack
+            parts = [uint16_pack(len(self.query_params))]
+            _parts_append = parts.append
             for param in self.query_params:
-                write_value(f, param)
+                if param is None:
+                    _parts_append(_INT32_NEG1)
+                elif param is _UNSET_VALUE:
+                    _parts_append(_INT32_NEG2)
+                else:
+                    _parts_append(_int32_pack(len(param)))
+                    _parts_append(param)
+            f.write(b"".join(parts))
         if self.fetch_size:
             write_int(f, self.fetch_size)
         if self.paging_state:
@@ -635,8 +650,8 @@ class ExecuteMessage(_QueryMessage):
         super(ExecuteMessage, self).__init__(query_params, consistency_level, serial_consistency_level, fetch_size,
                                              paging_state, timestamp, skip_meta, continuous_paging_options)
 
-    def _write_query_params(self, f, protocol_version):
-        super(ExecuteMessage, self)._write_query_params(f, protocol_version)
+    # _write_query_params inherited from _QueryMessage; removed redundant
+    # pass-through override to avoid extra MRO lookup per call.
 
     def send_body(self, f, protocol_version):
         write_string(f, self.query_id)
@@ -912,21 +927,36 @@ class BatchMessage(_MessageType):
         self.keyspace = keyspace
 
     def send_body(self, f, protocol_version):
-        write_byte(f, self.batch_type.value)
-        write_short(f, len(self.queries))
+        # Buffer accumulation: collect all bytes and write once.
+        _i32 = int32_pack
+        _u16 = uint16_pack
+        _u8 = uint8_pack
+        parts = [_u8(self.batch_type.value), _u16(len(self.queries))]
+        _p = parts.append
         for prepared, string_or_query_id, params in self.queries:
             if not prepared:
-                write_byte(f, 0)
-                write_longstring(f, string_or_query_id)
+                _p(_u8(0))
+                if isinstance(string_or_query_id, str):
+                    string_or_query_id = string_or_query_id.encode('utf8')
+                _p(_i32(len(string_or_query_id)))
+                _p(string_or_query_id)
             else:
-                write_byte(f, 1)
-                write_short(f, len(string_or_query_id))
-                f.write(string_or_query_id)
-            write_short(f, len(params))
+                _p(_u8(1))
+                _p(_u16(len(string_or_query_id)))
+                _p(string_or_query_id)
+            _p(_u16(len(params)))
             for param in params:
-                write_value(f, param)
+                if param is None:
+                    _p(_INT32_NEG1)
+                elif param is _UNSET_VALUE:
+                    _p(_INT32_NEG2)
+                else:
+                    if isinstance(param, str):
+                        param = param.encode('utf8')
+                    _p(_i32(len(param)))
+                    _p(param)
 
-        write_consistency_level(f, self.consistency_level)
+        _p(_u16(self.consistency_level))
         flags = 0
         if self.serial_consistency_level:
             flags |= _WITH_SERIAL_CONSISTENCY_FLAG
@@ -940,18 +970,24 @@ class BatchMessage(_MessageType):
                     "Keyspaces may only be set on queries with protocol version "
                     "5 or higher. Consider setting Cluster.protocol_version to 5.")
         if ProtocolVersion.uses_int_query_flags(protocol_version):
-            write_int(f, flags)
+            _p(_i32(flags))
         else:
-            write_byte(f, flags)
+            _p(_u8(flags))
 
         if self.serial_consistency_level:
-            write_consistency_level(f, self.serial_consistency_level)
+            _p(_u16(self.serial_consistency_level))
         if self.timestamp is not None:
-            write_long(f, self.timestamp)
+            _p(uint64_pack(self.timestamp))
 
         if ProtocolVersion.uses_keyspace_flag(protocol_version):
             if self.keyspace is not None:
-                write_string(f, self.keyspace)
+                ks = self.keyspace
+                if isinstance(ks, str):
+                    ks = ks.encode('utf8')
+                _p(_u16(len(ks)))
+                _p(ks)
+
+        f.write(b"".join(parts))
 
 
 known_event_types = frozenset((
