@@ -18,6 +18,7 @@ called on each query parameter.
 """
 
 import logging
+
 log = logging.getLogger(__name__)
 
 from binascii import hexlify
@@ -26,12 +27,23 @@ import calendar
 import datetime
 import math
 import sys
+
+_EPOCH_NAIVE = datetime.datetime(1970, 1, 1)
 import types
 from uuid import UUID
 import ipaddress
 
-from cassandra.util import (OrderedDict, OrderedMap, OrderedMapSerializedKey,
-                            sortedset, Time, Date, Point, LineString, Polygon)
+from cassandra.util import (
+    OrderedDict,
+    OrderedMap,
+    OrderedMapSerializedKey,
+    sortedset,
+    Time,
+    Date,
+    Point,
+    LineString,
+    Polygon,
+)
 
 
 def cql_quote(term):
@@ -83,28 +95,30 @@ class Encoder(object):
             ValueSequence: self.cql_encode_sequence,
             Point: self.cql_encode_str_quoted,
             LineString: self.cql_encode_str_quoted,
-            Polygon: self.cql_encode_str_quoted
+            Polygon: self.cql_encode_str_quoted,
         }
 
-        self.mapping.update({
-            memoryview: self.cql_encode_bytes,
-            bytes: self.cql_encode_bytes,
-            type(None): self.cql_encode_none,
-            ipaddress.IPv4Address: self.cql_encode_ipaddress,
-            ipaddress.IPv6Address: self.cql_encode_ipaddress
-        })
+        self.mapping.update(
+            {
+                memoryview: self.cql_encode_bytes,
+                bytes: self.cql_encode_bytes,
+                type(None): self.cql_encode_none,
+                ipaddress.IPv4Address: self.cql_encode_ipaddress,
+                ipaddress.IPv6Address: self.cql_encode_ipaddress,
+            }
+        )
 
     def cql_encode_none(self, val):
         """
         Converts :const:`None` to the string 'NULL'.
         """
-        return 'NULL'
+        return "NULL"
 
     def cql_encode_unicode(self, val):
         """
         Converts :class:`unicode` objects to UTF-8 encoded strings with quote escaping.
         """
-        return cql_quote(val.encode('utf-8'))
+        return cql_quote(val.encode("utf-8"))
 
     def cql_encode_str(self, val):
         """
@@ -116,7 +130,7 @@ class Encoder(object):
         return "'%s'" % val
 
     def cql_encode_bytes(self, val):
-        return (b'0x' + hexlify(val)).decode('utf-8')
+        return (b"0x" + hexlify(val)).decode("utf-8")
 
     def cql_encode_object(self, val):
         """
@@ -130,9 +144,9 @@ class Encoder(object):
         Encode floats using repr to preserve precision
         """
         if math.isinf(val):
-            return 'Infinity' if val > 0 else '-Infinity'
+            return "Infinity" if val > 0 else "-Infinity"
         elif math.isnan(val):
-            return 'NaN'
+            return "NaN"
         else:
             return repr(val)
 
@@ -141,15 +155,19 @@ class Encoder(object):
         Converts a :class:`datetime.datetime` object to a (string) integer timestamp
         with millisecond precision.
         """
-        timestamp = calendar.timegm(val.utctimetuple())
-        return str(timestamp * 1000 + getattr(val, 'microsecond', 0) // 1000)
+        utcoffset = val.utcoffset()
+        if utcoffset is not None:
+            val = val - utcoffset
+            val = val.replace(tzinfo=None)
+        td = val - _EPOCH_NAIVE
+        return str((td.days * 86400 + td.seconds) * 1000 + td.microseconds // 1000)
 
     def cql_encode_date(self, val):
         """
         Converts a :class:`datetime.date` object to a string with format
         ``YYYY-MM-DD``.
         """
-        return "'%s'" % val.strftime('%Y-%m-%d')
+        return "'%s'" % val.strftime("%Y-%m-%d")
 
     def cql_encode_time(self, val):
         """
@@ -163,15 +181,16 @@ class Encoder(object):
         Encodes a :class:`cassandra.util.Date` object as an integer
         """
         # using the int form in case the Date exceeds datetime.[MIN|MAX]YEAR
-        return str(val.days_from_epoch + 2 ** 31)
+        return str(val.days_from_epoch + 2**31)
 
     def cql_encode_sequence(self, val):
         """
         Converts a sequence to a string of the form ``(item1, item2, ...)``.  This
         is suitable for ``IN`` value lists.
         """
-        return '(%s)' % ', '.join(self.mapping.get(type(v), self.cql_encode_object)(v)
-                                     for v in val)
+        return "(%s)" % ", ".join(
+            self.mapping.get(type(v), self.cql_encode_object)(v) for v in val
+        )
 
     cql_encode_tuple = cql_encode_sequence
     """
@@ -184,24 +203,32 @@ class Encoder(object):
         Converts a dict into a string of the form ``{key1: val1, key2: val2, ...}``.
         This is suitable for ``map`` type columns.
         """
-        return '{%s}' % ', '.join('%s: %s' % (
-            self.mapping.get(type(k), self.cql_encode_object)(k),
-            self.mapping.get(type(v), self.cql_encode_object)(v)
-        ) for k, v in val.items())
+        return "{%s}" % ", ".join(
+            "%s: %s"
+            % (
+                self.mapping.get(type(k), self.cql_encode_object)(k),
+                self.mapping.get(type(v), self.cql_encode_object)(v),
+            )
+            for k, v in val.items()
+        )
 
     def cql_encode_list_collection(self, val):
         """
         Converts a sequence to a string of the form ``[item1, item2, ...]``.  This
         is suitable for ``list`` type columns.
         """
-        return '[%s]' % ', '.join(self.mapping.get(type(v), self.cql_encode_object)(v) for v in val)
+        return "[%s]" % ", ".join(
+            self.mapping.get(type(v), self.cql_encode_object)(v) for v in val
+        )
 
     def cql_encode_set_collection(self, val):
         """
         Converts a sequence to a string of the form ``{item1, item2, ...}``.  This
         is suitable for ``set`` type columns.
         """
-        return '{%s}' % ', '.join(self.mapping.get(type(v), self.cql_encode_object)(v) for v in val)
+        return "{%s}" % ", ".join(
+            self.mapping.get(type(v), self.cql_encode_object)(v) for v in val
+        )
 
     def cql_encode_all_types(self, val, as_text_type=False):
         """
@@ -210,7 +237,7 @@ class Encoder(object):
         """
         encoded = self.mapping.get(type(val), self.cql_encode_object)(val)
         if as_text_type and not isinstance(encoded, str):
-            return encoded.decode('utf-8')
+            return encoded.decode("utf-8")
         return encoded
 
     def cql_encode_ipaddress(self, val):

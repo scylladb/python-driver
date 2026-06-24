@@ -55,16 +55,5 @@ cdef varint_unpack(Buffer *term):
     """Unpack a variable-sized integer"""
     return varint_unpack_py3(to_bytes(term))
 
-# TODO: Optimize these two functions
 cdef varint_unpack_py3(bytes term):
-    val = int(''.join(["%02x" % i for i in term]), 16)
-    if (term[0] & 128) != 0:
-        shift = len(term) * 8  # * Note below
-        val -= 1 << shift
-    return val
-
-# * Note *
-# '1 << (len(term) * 8)' Cython tries to do native
-# integer shifts, which overflows. We need this to
-# emulate Python shifting, which will expand the long
-# to accommodate
+    return int.from_bytes(term, byteorder='big', signed=True)
