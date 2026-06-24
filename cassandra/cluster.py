@@ -3439,7 +3439,7 @@ class Session(object):
                 errors[pool.host] = host_errors
 
             if not remaining_callbacks:
-                callback(host_errors)
+                callback(errors)
 
         for pool in tuple(self._pools.values()):
             pool._set_keyspace_for_all_conns(keyspace, pool_finished_setting_keyspace)
@@ -3481,6 +3481,14 @@ class Session(object):
 
         if wait_time is not None and wait_time <= 0:
             raise ValueError("wait_time must be greater than 0")
+
+        try:
+            scope = SchemaAgreementScope(scope)
+        except ValueError:
+            raise ValueError(
+                "scope must be one of %s" % (
+                    [s.value for s in SchemaAgreementScope],)
+            )
 
         total_timeout = wait_time if wait_time is not None else self.cluster.max_schema_agreement_wait
         if total_timeout <= 0:
@@ -5325,7 +5333,7 @@ class ResponseFuture(object):
                     new_metadata_id = response.result_metadata_id
                     if new_metadata_id is not None:
                         self.prepared_statement.result_metadata_id = new_metadata_id
-                
+
                 # use self._query to re-use the same host and
                 # at the same time properly borrow the connection
                 if pool is None and connection is not None and connection.is_control_connection:

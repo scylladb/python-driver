@@ -98,4 +98,4 @@ jobs:
         if [[ "${{ matrix.python-version }}" =~ t$ ]]; then
           export PYTHON_GIL=0
         fi
-        uv run pytest tests/integration/standard/ tests/integration/cqlengine/
+        uv run pytest -v tests/integration/standard/ tests/integration/cqlengine/
