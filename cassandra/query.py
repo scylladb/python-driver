@@ -275,6 +275,7 @@ class Statement(object):
 
     _serial_consistency_level = None
     _routing_key = None
+    _routing_token = None
 
     def __init__(self, retry_policy=None, consistency_level=None, routing_key=None,
                  serial_consistency_level=None, fetch_size=FETCH_SIZE_UNSET, keyspace=None, custom_payload=None,
@@ -314,9 +315,12 @@ class Statement(object):
                 self._routing_key = b"".join(self._key_parts_packed(key))
         else:
             self._routing_key = key
+        # The memoized ring token is derived from the routing key; invalidate it.
+        self._routing_token = None
 
     def _del_routing_key(self):
         self._routing_key = None
+        self._routing_token = None
 
     routing_key = property(
         _get_routing_key,
@@ -330,6 +334,27 @@ class Statement(object):
         Each key component should be in its packed (binary) format, so all
         components should be strings.
         """)
+
+    def routing_token(self, token_class):
+        """
+        Return the ring token for this statement's :attr:`routing_key`, computed
+        at most once per statement.
+
+        The token is a pure function of the routing key and the cluster's
+        partitioner (``token_class``), both stable for a given statement, so the
+        (Murmur3) hash is memoized. A single request would otherwise recompute it
+        three times -- in the load balancing policy, when selecting the target
+        shard, and when building the tablet_version_block -- so caching keeps that
+        hot path to one hash. Returns ``None`` when there is no routing key.
+        """
+        routing_key = self.routing_key
+        if routing_key is None:
+            return None
+        token = self._routing_token
+        if token is None:
+            token = token_class.from_key(routing_key)
+            self._routing_token = token
+        return token
 
     def _get_serial_consistency_level(self):
         return self._serial_consistency_level
