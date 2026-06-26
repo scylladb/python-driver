@@ -15,10 +15,10 @@
 import unittest
 
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import Mock, ANY, call, patch
+from unittest.mock import Mock, ANY, call, patch, MagicMock
 
-from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
-from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
+from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType, ConsistencyLevel
+from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS, QueryMessage
 from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.pool import Host
 from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
@@ -168,6 +168,18 @@ class MockConnection(object):
         ]
         self.wait_for_responses = Mock(return_value=_node_meta_results(self.local_results, self.peer_results))
 
+        def wait_for_response_side_effect(query_msg, timeout=None, fail_on_error=True):
+            result = ResultMessage(kind=RESULT_KIND_ROWS)
+            if "peers" in query_msg.query.lower():
+                result.column_names = self.peer_results[0]
+                result.parsed_rows = self.peer_results[1]
+            else:
+                result.column_names = self.local_results[0]
+                result.parsed_rows = self.local_results[1]
+            result.paging_state = None
+            return result
+        self.wait_for_response = Mock(side_effect=wait_for_response_side_effect)
+
 
 class FakeTime(object):
 
@@ -312,6 +324,88 @@ class ControlConnectionTest(unittest.TestCase):
         cc._time = self.time
         assert cc._wait_for_schema_agreement()
 
+    def test_topology_queries_use_paging(self):
+        self.control_connection.refresh_node_list_and_token_map()
+        assert self.connection.wait_for_response.called
+        calls = self.connection.wait_for_response.call_args_list
+        for call in calls:
+            query_msg = call[0][0]
+            assert isinstance(query_msg, QueryMessage)
+            assert query_msg.fetch_size == self.control_connection._schema_meta_page_size
+
+    def test_topology_queries_fetch_all_pages(self):
+        from cassandra.cluster import _fetch_all_pages
+        mock_connection = MagicMock()
+        mock_connection.endpoint = DefaultEndPoint("192.168.1.0")
+        mock_connection.original_endpoint = mock_connection.endpoint
+        first_page = ResultMessage(kind=RESULT_KIND_ROWS)
+        first_page.column_names = ["rpc_address", "peer", "schema_version", "data_center", "rack", "tokens", "host_id"]
+        first_page.parsed_rows = [["192.168.1.1", "10.0.0.1", "a", "dc1", "rack1", ["1", "101", "201"], "uuid2"]]
+        first_page.paging_state = b"has_more_pages"
+        second_page = ResultMessage(kind=RESULT_KIND_ROWS)
+        second_page.column_names = ["rpc_address", "peer", "schema_version", "data_center", "rack", "tokens", "host_id"]
+        second_page.parsed_rows = [["192.168.1.2", "10.0.0.2", "a", "dc1", "rack1", ["2", "102", "202"], "uuid3"]]
+        second_page.paging_state = None
+        mock_connection.wait_for_response.side_effect = [first_page, second_page]
+        self.control_connection._connection = mock_connection
+        query_msg = QueryMessage(query="SELECT * FROM system.peers",
+                                consistency_level=ConsistencyLevel.ONE,
+                                fetch_size=self.control_connection._schema_meta_page_size)
+        result = _fetch_all_pages(mock_connection, query_msg, timeout=5)
+        assert len(result.parsed_rows) == 2
+        assert result.parsed_rows[0][0] == "192.168.1.1"
+        assert result.parsed_rows[1][0] == "192.168.1.2"
+        assert result.paging_state is None
+        assert mock_connection.wait_for_response.call_count == 2
+
+    def test_topology_queries_fetch_all_pages_fail_on_error_false(self):
+        from cassandra.cluster import _fetch_all_pages
+        mock_connection = MagicMock()
+        mock_connection.endpoint = DefaultEndPoint("192.168.1.0")
+        mock_connection.original_endpoint = mock_connection.endpoint
+        first_page = ResultMessage(kind=RESULT_KIND_ROWS)
+        first_page.column_names = ["rpc_address", "peer", "schema_version", "data_center", "rack", "tokens", "host_id"]
+        first_page.parsed_rows = [["192.168.1.1", "10.0.0.1", "a", "dc1", "rack1", ["1", "101", "201"], "uuid2"]]
+        first_page.paging_state = b"has_more_pages"
+        second_page = ResultMessage(kind=RESULT_KIND_ROWS)
+        second_page.column_names = ["rpc_address", "peer", "schema_version", "data_center", "rack", "tokens", "host_id"]
+        second_page.parsed_rows = [["192.168.1.2", "10.0.0.2", "a", "dc1", "rack1", ["2", "102", "202"], "uuid3"]]
+        second_page.paging_state = None
+        mock_connection.wait_for_response.side_effect = [
+            (True, first_page),
+            (True, second_page),
+        ]
+        query_msg = QueryMessage(query="SELECT * FROM system.peers",
+                                consistency_level=ConsistencyLevel.ONE,
+                                fetch_size=self.control_connection._schema_meta_page_size)
+        success, result = _fetch_all_pages(mock_connection, query_msg, timeout=5, fail_on_error=False)
+        assert success
+        assert len(result.parsed_rows) == 2
+        assert result.parsed_rows[0][0] == "192.168.1.1"
+        assert result.parsed_rows[1][0] == "192.168.1.2"
+        assert mock_connection.wait_for_response.call_count == 2
+
+    def test_topology_queries_fetch_all_pages_page_failure(self):
+        from cassandra.cluster import _fetch_all_pages
+        mock_connection = MagicMock()
+        mock_connection.endpoint = DefaultEndPoint("192.168.1.0")
+        mock_connection.original_endpoint = mock_connection.endpoint
+        first_page = ResultMessage(kind=RESULT_KIND_ROWS)
+        first_page.column_names = ["rpc_address", "peer", "schema_version", "data_center", "rack", "tokens", "host_id"]
+        first_page.parsed_rows = [["192.168.1.1", "10.0.0.1", "a", "dc1", "rack1", ["1", "101", "201"], "uuid2"]]
+        first_page.paging_state = b"has_more_pages"
+        mock_connection.wait_for_response.side_effect = [
+            (True, first_page),
+            (False, OperationTimedOut()),
+        ]
+        query_msg = QueryMessage(query="SELECT * FROM system.peers",
+                                consistency_level=ConsistencyLevel.ONE,
+                                fetch_size=self.control_connection._schema_meta_page_size)
+        success, error = _fetch_all_pages(mock_connection, query_msg, timeout=5, fail_on_error=False)
+        assert not success
+        assert isinstance(error, OperationTimedOut)
+        assert mock_connection.wait_for_response.call_count == 2
+
     def test_refresh_nodes_and_tokens(self):
         self.control_connection.refresh_node_list_and_token_map()
         meta = self.cluster.metadata
@@ -328,7 +422,7 @@ class ControlConnectionTest(unittest.TestCase):
             assert host.datacenter == "dc1"
             assert host.rack == "rack1"
 
-        assert self.connection.wait_for_responses.call_count == 1
+        assert self.connection.wait_for_response.call_count == 2
 
     def test_refresh_nodes_and_tokens_with_invalid_peers(self):
         def refresh_and_validate_added_hosts():
@@ -444,11 +538,11 @@ class ControlConnectionTest(unittest.TestCase):
 
     def test_refresh_nodes_and_tokens_timeout(self):
 
-        def bad_wait_for_responses(*args, **kwargs):
+        def bad_wait_for_response(*args, **kwargs):
             assert kwargs['timeout'] == self.control_connection._timeout
             raise OperationTimedOut()
 
-        self.connection.wait_for_responses = bad_wait_for_responses
+        self.connection.wait_for_response = Mock(side_effect=bad_wait_for_response)
         self.control_connection.refresh_node_list_and_token_map()
         self.cluster.executor.submit.assert_called_with(self.control_connection._reconnect)
 
