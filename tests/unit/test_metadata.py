@@ -32,10 +32,11 @@ from cassandra.metadata import (Murmur3Token, MD5Token,
                                 _UnknownStrategy, ColumnMetadata, TableMetadata,
                                 IndexMetadata, Function, Aggregate,
                                 Metadata, TokenMap, ReplicationFactor,
-                                SchemaParserDSE68)
+                                SchemaParserDSE68, SchemaParserV3)
 from cassandra.policies import SimpleConvictionPolicy
 from cassandra.pool import Host
 from cassandra.protocol import QueryMessage
+from cassandra.tablets import Tablet
 from tests.util import assertCountEqual
 import pytest
 
@@ -550,6 +551,100 @@ CREATE TYPE test.b (
     two int,
     three a
 );""" == keyspace.export_as_string()
+
+
+class KeyspaceConsistencyTabletInvalidationTest(unittest.TestCase):
+    """
+    Metadata._update_keyspace must drop cached tablets when a keyspace's
+    strong-consistency mode changes, not only when its replication strategy
+    changes. A tablet cached while the keyspace was eventually consistent has no
+    leader ordering, so it must not survive an eventual->global flip and then be
+    misread as a leader hint by TokenAwarePolicy.make_query_plan.
+    """
+
+    def _ks_meta(self, strongly_consistent):
+        meta = KeyspaceMetadata('ks', True, 'NetworkTopologyStrategy', {'replication_factor': '1'})
+        meta.strongly_consistent = strongly_consistent
+        return meta
+
+    def _add_cached_tablet(self, metadata):
+        tablet = Tablet(first_token=-100, last_token=100,
+                        replicas=[(uuid.uuid4(), 0)], tablet_version=1)
+        metadata._tablets.add_tablet('ks', 'tbl', tablet)
+
+    def test_consistency_flip_drops_tablets(self):
+        metadata = Metadata()
+        metadata._update_keyspace(self._ks_meta(strongly_consistent=False))
+        self._add_cached_tablet(metadata)
+        assert metadata._tablets.table_has_tablets('ks', 'tbl')
+
+        # Same replication strategy, consistency flips False -> True: the stale
+        # tablet cache must be dropped.
+        metadata._update_keyspace(self._ks_meta(strongly_consistent=True))
+        assert not metadata._tablets.table_has_tablets('ks', 'tbl')
+
+    def test_no_consistency_change_keeps_tablets(self):
+        metadata = Metadata()
+        metadata._update_keyspace(self._ks_meta(strongly_consistent=False))
+        self._add_cached_tablet(metadata)
+        assert metadata._tablets.table_has_tablets('ks', 'tbl')
+
+        # No replication change and no consistency change: cache is preserved.
+        metadata._update_keyspace(self._ks_meta(strongly_consistent=False))
+        assert metadata._tablets.table_has_tablets('ks', 'tbl')
+
+
+class ScyllaKeyspaceConsistencyParsingTest(unittest.TestCase):
+    """
+    SchemaParserV3._set_strong_consistency maps the server's per-keyspace
+    consistency option to the strongly_consistent flag. A transient failure
+    reading the consistency table propagates so the schema refresh aborts and
+    the previously known metadata is retried, rather than being reset to
+    eventual.
+    """
+
+    def _parser_with_consistency(self, consistency_by_ks):
+        # Build the parser without a connection: _set_strong_consistency only
+        # needs the cached consistency result.
+        parser = SchemaParserV3.__new__(SchemaParserV3)
+        parser._scylla_consistency_cache = consistency_by_ks
+        return parser
+
+    def _flag_for(self, parser, ks_name):
+        meta = KeyspaceMetadata(ks_name, True, 'NetworkTopologyStrategy', {'replication_factor': '1'})
+        parser._set_strong_consistency(meta)
+        return meta.strongly_consistent
+
+    def test_only_global_is_strongly_consistent(self):
+        # For now, strong consistency can only be used with 'global'
+        # consistency. To play it safe, we use the equivalence:
+        #   strongly consistent === uses global consistency,
+        # in the driver. This test verifies it.
+        # It should be modified or removed after 'local' consistency
+        # is implemented.
+        parser = self._parser_with_consistency(
+            {'g': 'global', 'l': 'local', 'e': 'eventual'})
+        assert self._flag_for(parser, 'g') is True
+        assert self._flag_for(parser, 'l') is False
+        assert self._flag_for(parser, 'e') is False
+        # A keyspace absent from the (successful) read defaults to eventual.
+        assert self._flag_for(parser, 'absent') is False
+
+    def test_read_failure_propagates(self):
+        # A transient failure reading system_schema.scylla_keyspaces must
+        # propagate (not be swallowed into "eventual"), so the schema refresh
+        # aborts and the previously known consistency modes are retried.
+        parser = SchemaParserV3.__new__(SchemaParserV3)
+        parser._scylla_consistency_cache = None
+        parser._is_not_scylla = lambda: False
+
+        def _raise_timeout(*args, **kwargs):
+            raise cassandra.OperationTimedOut("scylla_keyspaces read timed out")
+        parser._query_build_rows = _raise_timeout
+
+        meta = KeyspaceMetadata('g', True, 'NetworkTopologyStrategy', {'replication_factor': '1'})
+        with pytest.raises(cassandra.OperationTimedOut):
+            parser._set_strong_consistency(meta)
 
 
 class UserTypesTest(unittest.TestCase):
