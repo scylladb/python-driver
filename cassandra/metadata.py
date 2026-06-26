@@ -801,6 +801,14 @@ class KeyspaceMetadata(object):
     A string indicating whether a graph engine is enabled for this keyspace (Core/Classic).
     """
 
+    strongly_consistent = False
+    """
+    A boolean indicating whether this keyspace uses strongly-consistent (Raft-based)
+    tablets. ``True`` only for ScyllaDB keyspaces whose ``consistency`` option is
+    not eventual (i.e. ``local`` or ``global``). ``False`` for eventually-consistent
+    keyspaces and for non-ScyllaDB clusters.
+    """
+
     _exc_info = None
     """ set if metadata parsing failed """
 
@@ -815,6 +823,7 @@ class KeyspaceMetadata(object):
         self.aggregates = {}
         self.views = {}
         self.graph_engine = graph_engine
+        self.strongly_consistent = False
 
     @property
     def is_graph_enabled(self):
@@ -2577,6 +2586,11 @@ class SchemaParserV3(SchemaParserV22):
     _SELECT_AGGREGATES = "SELECT * FROM system_schema.aggregates"
     _SELECT_VIEWS = "SELECT * FROM system_schema.views"
 
+    # ScyllaDB-only: per-keyspace consistency option. The column is null for
+    # eventually-consistent keyspaces (and the whole table is absent on Cassandra
+    # and on Scylla versions without strongly-consistent tablets).
+    _SELECT_SCYLLA_KEYSPACES = "SELECT keyspace_name, consistency FROM system_schema.scylla_keyspaces"
+
     def _is_not_scylla(self):
         """Check if NOT connected to ScyllaDB by checking for shard awareness."""
         return getattr(getattr(self.connection, 'features', None), 'shard_id', None) is None
@@ -2610,12 +2624,61 @@ class SchemaParserV3(SchemaParserV22):
         self.indexes_result = []
         self.keyspace_table_index_rows = defaultdict(lambda: defaultdict(list))
         self.keyspace_view_rows = defaultdict(list)
+        self._scylla_consistency_cache = None
+
+    @staticmethod
+    def _is_strongly_consistent(consistency):
+        # The server stores the keyspace consistency option as 'eventual',
+        # 'local', or 'global' (null == eventual). Only non-eventual keyspaces
+        # have a leader, so treat those as strongly consistent.
+        return consistency not in (None, "eventual")
+
+    def _get_scylla_keyspaces_consistency(self):
+        """
+        Return a ``{keyspace_name: consistency}`` map read from
+        ``system_schema.scylla_keyspaces``.
+
+        Only ScyllaDB has this table, and only for keyspaces with a non-default
+        consistency option. Returns ``{}`` on non-Scylla clusters or when the
+        table/column is unavailable (older Scylla), in which case every keyspace
+        is treated as eventually consistent. The result is cached per parser
+        instance so it is fetched at most once per schema refresh.
+        """
+        if self._scylla_consistency_cache is not None:
+            return self._scylla_consistency_cache
+
+        if self._is_not_scylla():
+            self._scylla_consistency_cache = {}
+            return self._scylla_consistency_cache
+
+        consistency_by_ks = {}
+        try:
+            rows = self._query_build_rows(self._SELECT_SCYLLA_KEYSPACES, lambda row: row)
+            consistency_by_ks = {row["keyspace_name"]: row.get("consistency") for row in rows}
+        except Exception:
+            log.debug("Could not read system_schema.scylla_keyspaces; treating all "
+                      "keyspaces as eventually consistent", exc_info=True)
+
+        self._scylla_consistency_cache = consistency_by_ks
+        return consistency_by_ks
+
+    def _set_strong_consistency(self, keyspace_meta):
+        consistency = self._get_scylla_keyspaces_consistency().get(keyspace_meta.name)
+        keyspace_meta.strongly_consistent = self._is_strongly_consistent(consistency)
+        return keyspace_meta
+
+    def get_keyspace(self, keyspaces, keyspace):
+        keyspace_meta = super(SchemaParserV3, self).get_keyspace(keyspaces, keyspace)
+        if keyspace_meta is not None:
+            self._set_strong_consistency(keyspace_meta)
+        return keyspace_meta
 
     def get_all_keyspaces(self):
         for keyspace_meta in super(SchemaParserV3, self).get_all_keyspaces():
             for row in self.keyspace_view_rows[keyspace_meta.name]:
                 view_meta = self._build_view_metadata(row)
                 keyspace_meta._add_view_metadata(view_meta)
+            self._set_strong_consistency(keyspace_meta)
             yield keyspace_meta
 
     def get_table(self, keyspaces, keyspace, table):
