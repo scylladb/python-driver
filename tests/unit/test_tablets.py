@@ -1,6 +1,6 @@
 import unittest
 
-from cassandra.tablets import Tablets, Tablet
+from cassandra.tablets import Tablets, Tablet, choose_tablet_version_block, random_tablet_version_block
 
 class TabletsTest(unittest.TestCase):
     def compare_ranges(self, tablets, ranges):
@@ -124,3 +124,63 @@ class GetTabletForKeyTest(unittest.TestCase):
         # Token value 50 is not > first_token (100) of the tablet whose
         # last_token (200) is >= 50, so no match.
         self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))
+
+
+class TabletVersionBlockTest(unittest.TestCase):
+    """Tests for tablet_version_block encoding used by TABLETS_ROUTING_V2."""
+
+    def _server_block_matches(self, version, block):
+        """Reimplements the server's locator::compare_tablet_version_block."""
+        block_value = block & 0x0F
+        block_index = (block & 0xF0) >> 4
+        hash_block = (version >> (block_index * 4)) & 0x0F
+        return hash_block == block_value
+
+    def test_choose_tablet_version_block_matches_server(self):
+        """Every block produced by the driver must match the server's check."""
+        version = 0x0123456789ABCDEF
+        # The index is chosen randomly; sample enough times to exercise many indices.
+        for _ in range(256):
+            block = choose_tablet_version_block(version)
+            self.assertTrue(self._server_block_matches(version, block),
+                f"Block 0x{block:02X} did not match server check for version 0x{version:016X}")
+
+    def test_choose_tablet_version_block_index_in_range_and_value_correct(self):
+        """The block index must be in [0, 15] and its value nibble must equal the
+        corresponding nibble of the version (regardless of which index is picked)."""
+        version = 0x0123456789ABCDEF
+        for _ in range(256):
+            block = choose_tablet_version_block(version)
+            idx = (block >> 4) & 0xF
+            value = block & 0xF
+            self.assertTrue(0 <= idx <= 15)
+            self.assertEqual(value, (version >> (idx * 4)) & 0xF)
+
+    def test_choose_tablet_version_block_covers_all_indices(self):
+        """Over many calls the random index selection should probe every block
+        index, so that any server-side version change is eventually detected."""
+        version = 0xFFFFFFFFFFFFFFFF  # All nibbles are 0xF
+        seen_indices = set()
+        # 16 indices; 1000 draws makes a missing index astronomically unlikely.
+        for _ in range(1000):
+            block = choose_tablet_version_block(version)
+            seen_indices.add((block >> 4) & 0xF)
+        self.assertEqual(seen_indices, set(range(16)))
+
+    def test_random_tablet_version_block_returns_byte(self):
+        """Verify random_tablet_version_block returns a value in [0, 255]."""
+        for _ in range(100):
+            block = random_tablet_version_block()
+            self.assertIsInstance(block, int)
+            self.assertGreaterEqual(block, 0)
+            self.assertLessEqual(block, 255)
+
+    def test_from_row_stores_tablet_version(self):
+        """Tablet.from_row stores the tablet_version it is given (the V2 payload field)."""
+        version = 0xDEADBEEFCAFEBABE
+        tablet = Tablet.from_row(-100, 100, [("host1", 0), ("host2", 1)], tablet_version=version)
+        self.assertIsNotNone(tablet)
+        self.assertEqual(tablet.tablet_version, version)
+        self.assertEqual(tablet.first_token, -100)
+        self.assertEqual(tablet.last_token, 100)
+        self.assertEqual(len(tablet.replicas), 2)

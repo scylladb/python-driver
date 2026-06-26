@@ -85,7 +85,7 @@ from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
                              named_tuple_factory, dict_factory, tuple_factory, FETCH_SIZE_UNSET,
                              HostTargetingStatement)
 from cassandra.marshal import int64_pack
-from cassandra.tablets import Tablet, Tablets
+from cassandra.tablets import Tablet, Tablets, choose_tablet_version_block, random_tablet_version_block
 from cassandra.timestamps import MonotonicTimestampGenerator
 from cassandra.util import _resolve_contact_points_to_string_map, Version, maybe_add_timeout_to_query
 
@@ -3059,6 +3059,8 @@ class Session(object):
                 continuous_paging_options, statement_keyspace)
         elif isinstance(query, BoundStatement):
             prepared_statement = query.prepared_statement
+            # The tablet_version_block is filled in per-target-host at send time
+            # (see ResponseFuture._query), because V2 is negotiated per connection.
             message = ExecuteMessage(
                 prepared_statement.query_id, query.values, cl,
                 serial_cl, fetch_size, paging_state, timestamp,
@@ -3092,6 +3094,37 @@ class Session(object):
             prepared_statement=prepared_statement, retry_policy=retry_policy, row_factory=row_factory,
             load_balancer=load_balancing_policy, start_time=start_time, speculative_execution_plan=spec_exec_plan,
             continuous_paging_state=None, host=host)
+
+    def _compute_tablet_version_block(self, query):
+        """
+        Compute the tablet_version_block byte for a BoundStatement.
+        Returns an int in [0, 255] or None if V2 should not be used.
+        """
+        routing_key = query.routing_key
+        if routing_key is None:
+            return random_tablet_version_block()
+
+        keyspace = query.keyspace or self.keyspace
+        table = query.table
+        if not keyspace or not table:
+            return random_tablet_version_block()
+
+        # Skip the Murmur3 token hash + tablet lookup when we have no cached
+        # tablets for this table (vnode tables, or tablet tables on cold start);
+        # both correctly fall back to a random block below.
+        if not self.cluster.metadata._tablets.table_has_tablets(keyspace, table):
+            return random_tablet_version_block()
+
+        token_map = self.cluster.metadata.token_map
+        if token_map is None:
+            return random_tablet_version_block()
+
+        t = query.routing_token(token_map.token_class)
+        tablet = self.cluster.metadata._tablets.get_tablet_for_key(keyspace, table, t)
+        if tablet is None or tablet.tablet_version is None:
+            return random_tablet_version_block()
+
+        return choose_tablet_version_block(tablet.tablet_version)
 
     def get_execution_profile(self, name):
         """
@@ -3765,6 +3798,7 @@ class ControlConnection(object):
 
     _uses_peers_v2 = True
     _tablets_routing_v1 = False
+    _tablets_routing_v2 = False
 
     # for testing purposes
     _time = time
@@ -3899,6 +3933,7 @@ class ControlConnection(object):
             else datetime.timedelta(seconds=self._cluster.metadata_request_timeout)
 
         self._tablets_routing_v1 = connection.features.tablets_routing_v1
+        self._tablets_routing_v2 = connection.features.tablets_routing_v2
 
         # use weak references in both directions
         # _clear_watcher will be called when this ControlConnection is about to be finalized
@@ -4713,6 +4748,7 @@ class ResponseFuture(object):
     _host = None
     _control_connection_query_attempted = False
     _TABLET_ROUTING_CTYPE = None
+    _TABLET_ROUTING_V2_CTYPE = None
 
     _warned_timeout = False
 
@@ -5002,7 +5038,12 @@ class ResponseFuture(object):
         try:
             # TODO get connectTimeout from cluster settings
             if self.query:
-                connection, request_id = pool.borrow_connection(timeout=2.0, routing_key=self.query.routing_key, keyspace=self.query.keyspace, table=self.query.table)
+                # Pass the statement so the pool can reuse the ring token it
+                # memoized for this request instead of re-hashing the routing key.
+                connection, request_id = pool.borrow_connection(
+                    timeout=2.0, routing_key=self.query.routing_key,
+                    keyspace=self.query.keyspace, table=self.query.table,
+                    query=self.query)
             else:
                 connection, request_id = pool.borrow_connection(timeout=2.0)
             self._connection = connection
@@ -5010,6 +5051,28 @@ class ResponseFuture(object):
 
             if cb is None:
                 cb = partial(self._set_result, host, connection, pool)
+
+            if isinstance(message, ExecuteMessage):
+                # Attach the tablet_version_block only when the *specific connection*
+                # we are about to send on negotiated TABLETS_ROUTING_V2. The server
+                # reads the trailing tablet_version_block byte only on connections
+                # that negotiated V2 (gated on the cluster-wide feature), so keying
+                # off the borrowed connection -- which is already in hand here, since
+                # borrow_connection() ran above -- is both necessary and sufficient:
+                #   * a V2 connection always gets the block, even if this pool was
+                #     created (and any cached flag latched) before the cluster
+                #     feature was enabled, e.g. mid rolling-upgrade;
+                #   * a non-V2 connection never gets it, even if a sibling shard
+                #     connection in the same pool already negotiated V2 -- which can
+                #     happen transiently while connections opened before and after
+                #     the feature flip coexist. Attaching the block to a non-V2
+                #     connection would leave an unread trailing byte and desync the
+                #     frame, so a pool-level flag cannot get this right regardless of
+                #     how it is latched.
+                if connection.features.tablets_routing_v2:
+                    message.tablet_version_block = self.session._compute_tablet_version_block(self.query)
+                else:
+                    message.tablet_version_block = None
 
             self.request_encoded_size = connection.send_msg(message, request_id, cb=cb,
                                                             encoder=self._protocol_handler.encode_message,
@@ -5128,21 +5191,44 @@ class ResponseFuture(object):
             self._warnings = getattr(response, 'warnings', None)
             self._custom_payload = getattr(response, 'custom_payload', None)
 
-            if self._custom_payload and self.session.cluster.control_connection._tablets_routing_v1 and 'tablets-routing-v1' in self._custom_payload:
-                protocol = self.session.cluster.protocol_version
-                info = self._custom_payload.get('tablets-routing-v1')
-                ctype = ResponseFuture._TABLET_ROUTING_CTYPE
-                if ctype is None:
-                    ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
-                    ResponseFuture._TABLET_ROUTING_CTYPE = ctype
-                tablet_routing_info = ctype.from_binary(info, protocol)
-                first_token = tablet_routing_info[0]
-                last_token = tablet_routing_info[1]
-                tablet_replicas = tablet_routing_info[2]
-                tablet = Tablet.from_row(first_token, last_token, tablet_replicas)
-                keyspace = self.query.keyspace
-                table = self.query.table
-                self.session.cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
+            if self._custom_payload and connection is not None:
+                # Parse the routing payload according to what the connection that
+                # *served this request* negotiated, not the control connection:
+                # during a rolling upgrade connections may differ, and each
+                # payload key matches the extension its own connection negotiated.
+                if connection.features.tablets_routing_v2 and 'tablets-routing-v2' in self._custom_payload:
+                    protocol = self.session.cluster.protocol_version
+                    info = self._custom_payload.get('tablets-routing-v2')
+                    ctype = ResponseFuture._TABLET_ROUTING_V2_CTYPE
+                    if ctype is None:
+                        ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)), LongType)')
+                        ResponseFuture._TABLET_ROUTING_V2_CTYPE = ctype
+                    tablet_routing_info = ctype.from_binary(info, protocol)
+                    first_token = tablet_routing_info[0]
+                    last_token = tablet_routing_info[1]
+                    tablet_replicas = tablet_routing_info[2]
+                    tablet_version = tablet_routing_info[3]
+                    tablet = Tablet.from_row(first_token, last_token, tablet_replicas, tablet_version)
+                    keyspace = self.query.keyspace
+                    table = self.query.table
+                    if tablet:
+                        self.session.cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
+                elif connection.features.tablets_routing_v1 and 'tablets-routing-v1' in self._custom_payload:
+                    protocol = self.session.cluster.protocol_version
+                    info = self._custom_payload.get('tablets-routing-v1')
+                    ctype = ResponseFuture._TABLET_ROUTING_CTYPE
+                    if ctype is None:
+                        ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
+                        ResponseFuture._TABLET_ROUTING_CTYPE = ctype
+                    tablet_routing_info = ctype.from_binary(info, protocol)
+                    first_token = tablet_routing_info[0]
+                    last_token = tablet_routing_info[1]
+                    tablet_replicas = tablet_routing_info[2]
+                    tablet = Tablet.from_row(first_token, last_token, tablet_replicas)
+                    keyspace = self.query.keyspace
+                    table = self.query.table
+                    if tablet:
+                        self.session.cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
 
             if isinstance(response, ResultMessage):
                 if response.kind == RESULT_KIND_SET_KEYSPACE:
