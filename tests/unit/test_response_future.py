@@ -40,7 +40,6 @@ class ResponseFutureTests(unittest.TestCase):
     def make_basic_session(self):
         s = Mock(spec=Session)
         s.row_factory = lambda col_names, rows: [(col_names, rows)]
-        s.cluster.control_connection._tablets_routing_v1 = False
         s.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Disabled
         return s
 
@@ -64,6 +63,11 @@ class ResponseFutureTests(unittest.TestCase):
         connection.is_control_connection = True
         connection.get_request_id.return_value = 7
         connection.send_msg.return_value = 128
+        # These tests exercise control-connection query fallback, not tablet
+        # routing; default the tablet features off so _set_result skips
+        # tablet-payload parsing for the mocked responses.
+        connection.features.tablets_routing_v2 = False
+        connection.features.tablets_routing_v1 = False
         return connection
 
     def make_session(self):
@@ -93,7 +97,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf.send_request()
 
         rf.session._pools.get.assert_called_once_with('ip1')
-        pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY)
+        pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, query=ANY)
 
         connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
 
@@ -137,6 +141,9 @@ class ResponseFutureTests(unittest.TestCase):
                       kind=RESULT_KIND_SCHEMA_CHANGE,
                       schema_change_event=event_results)
         connection = Mock()
+        # Skip tablet-payload parsing for this mocked response/connection pair.
+        connection.features.tablets_routing_v2 = False
+        connection.features.tablets_routing_v1 = False
         rf._set_result(None, connection, None, result)
         session.submit.assert_called_once_with(ANY, ANY, rf, connection, **event_results)
 
@@ -284,7 +291,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf.send_request()
 
         rf.session._pools.get.assert_called_once_with('ip1')
-        pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY)
+        pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, query=ANY)
         connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
 
         result = Mock(spec=UnavailableErrorMessage, info={})
@@ -303,7 +310,7 @@ class ResponseFutureTests(unittest.TestCase):
         # it should try again with the same host since this was
         # an UnavailableException
         rf.session._pools.get.assert_called_with(host)
-        pool.borrow_connection.assert_called_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY)
+        pool.borrow_connection.assert_called_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, query=ANY)
         connection.send_msg.assert_called_with(rf.message, 2, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
 
     def test_retry_with_different_host(self):
@@ -318,7 +325,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf.send_request()
 
         rf.session._pools.get.assert_called_once_with('ip1')
-        pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY)
+        pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, query=ANY)
         connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
         assert ConsistencyLevel.QUORUM == rf.message.consistency_level
 
@@ -337,7 +344,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         # it should try with a different host
         rf.session._pools.get.assert_called_with('ip2')
-        pool.borrow_connection.assert_called_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY)
+        pool.borrow_connection.assert_called_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, query=ANY)
         connection.send_msg.assert_called_with(rf.message, 2, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
 
         # the consistency level should be the same
@@ -982,7 +989,7 @@ class ResponseFutureTests(unittest.TestCase):
         
         # Verify initial request was sent
         rf.session._pools.get.assert_called_once_with(specific_host)
-        pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY)
+        pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, query=ANY)
         connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
         
         # Simulate a ServerError response (which triggers RETRY_NEXT_HOST by default)

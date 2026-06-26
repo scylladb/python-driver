@@ -503,14 +503,33 @@ class TokenAwarePolicy(LoadBalancingPolicy):
             return
 
         replicas = []
-        tablet = self._cluster_metadata._tablets.get_tablet_for_key(
-            keyspace, query.table, self._cluster_metadata.token_map.token_class.from_key(query.routing_key))
+        leader_host = None
+        token = query.routing_token(self._cluster_metadata.token_map.token_class)
+        tablet = self._cluster_metadata._tablets.get_tablet_for_key(keyspace, query.table, token)
 
         if tablet is not None:
             replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
             child_plan = child.make_query_plan(keyspace, query)
 
             replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+
+            # The leader concept only exists for strongly-consistent keyspaces.
+            # TABLETS_ROUTING_V2 assigns a tablet_version to *every* tablet table
+            # (eventually- and strongly-consistent alike), so the version alone
+            # must not be used to infer a leader. Conversely, replicas[0] is only
+            # leader-ordered for a tablet that came from a V2 payload, so a
+            # versionless tablet (V1-sourced, or stale across a consistency flip)
+            # must not be treated as a leader hint either. Require both a
+            # strongly-consistent keyspace and a versioned tablet; otherwise keep
+            # normal token-aware/shuffled ordering.
+            ks_meta = self._cluster_metadata.keyspaces.get(keyspace)
+            if (ks_meta is not None and ks_meta.strongly_consistent
+                    and tablet.tablet_version is not None and tablet.replicas):
+                leader_host_id = tablet.replicas[0][0]
+                for host in replicas:
+                    if host.host_id == leader_host_id:
+                        leader_host = host
+                        break
         else:
             replicas = self._cluster_metadata.get_replicas(keyspace, query.routing_key)
 
@@ -523,10 +542,21 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                     if replica.is_up and child.distance(replica) == distance:
                         yield replica
 
-        # yield replicas: local_rack, local, remote
-        yield from yield_in_order(replicas)
+        # If we have a leader hint, yield it first -- but respect the child
+        # policy's own filter: never front-run a host the child policy would
+        # exclude (e.g. one a custom policy reports as IGNORED).
+        if (leader_host is not None and leader_host.is_up
+                and child.distance(leader_host) != HostDistance.IGNORED):
+            yield leader_host
+
+        # yield replicas: local_rack, local, remote (skipping leader already yielded)
+        for host in yield_in_order(replicas):
+            if host is not leader_host:
+                yield host
         # yield rest of the cluster: local_rack, local, remote
-        yield from yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas])
+        for host in yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas]):
+            if host is not leader_host:
+                yield host
 
     def on_up(self, *args, **kwargs):
         return self._child_policy.on_up(*args, **kwargs)
