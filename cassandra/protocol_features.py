@@ -10,19 +10,26 @@ LWT_ADD_METADATA_MARK = "SCYLLA_LWT_ADD_METADATA_MARK"
 LWT_OPTIMIZATION_META_BIT_MASK = "LWT_OPTIMIZATION_META_BIT_MASK"
 RATE_LIMIT_ERROR_EXTENSION = "SCYLLA_RATE_LIMIT_ERROR"
 TABLETS_ROUTING_V1 = "TABLETS_ROUTING_V1"
+# The server advertises and expects this exact extension name in SUPPORTED/STARTUP
+# (see scylladb transport/cql_protocol_extension.cc). While the feature is gated
+# behind the server's `strongly-consistent-tables` experimental flag, the wire
+# name carries the `_EXPERIMENTAL` suffix.
+TABLETS_ROUTING_V2 = "TABLETS_ROUTING_V2_EXPERIMENTAL"
 
 class ProtocolFeatures(object):
     rate_limit_error = None
     shard_id = 0
     sharding_info = None
     tablets_routing_v1 = False
+    tablets_routing_v2 = False
     lwt_info = None
 
-    def __init__(self, rate_limit_error=None, shard_id=0, sharding_info=None, tablets_routing_v1=False, lwt_info=None):
+    def __init__(self, rate_limit_error=None, shard_id=0, sharding_info=None, tablets_routing_v1=False, tablets_routing_v2=False, lwt_info=None):
         self.rate_limit_error = rate_limit_error
         self.shard_id = shard_id
         self.sharding_info = sharding_info
         self.tablets_routing_v1 = tablets_routing_v1
+        self.tablets_routing_v2 = tablets_routing_v2
         self.lwt_info = lwt_info
 
     @staticmethod
@@ -30,8 +37,9 @@ class ProtocolFeatures(object):
         rate_limit_error = ProtocolFeatures.maybe_parse_rate_limit_error(supported)
         shard_id, sharding_info = ProtocolFeatures.parse_sharding_info(supported)
         tablets_routing_v1 = ProtocolFeatures.parse_tablets_info(supported)
+        tablets_routing_v2 = ProtocolFeatures.parse_tablets_v2_info(supported)
         lwt_info = ProtocolFeatures.parse_lwt_info(supported)
-        return ProtocolFeatures(rate_limit_error, shard_id, sharding_info, tablets_routing_v1, lwt_info)
+        return ProtocolFeatures(rate_limit_error, shard_id, sharding_info, tablets_routing_v1, tablets_routing_v2, lwt_info)
 
     @staticmethod
     def maybe_parse_rate_limit_error(supported):
@@ -53,7 +61,11 @@ class ProtocolFeatures(object):
     def add_startup_options(self, options):
         if self.rate_limit_error is not None:
             options[RATE_LIMIT_ERROR_EXTENSION] = ""
-        if self.tablets_routing_v1:
+        # Only one of TABLETS_ROUTING_V{1,2} should be negotiated
+        # per connection. Hence the if-else branch.
+        if self.tablets_routing_v2:
+            options[TABLETS_ROUTING_V2] = ""
+        elif self.tablets_routing_v1:
             options[TABLETS_ROUTING_V1] = ""
         if self.lwt_info is not None:
             options[LWT_ADD_METADATA_MARK] = str(self.lwt_info.lwt_meta_bit_mask)
@@ -80,6 +92,10 @@ class ProtocolFeatures(object):
     @staticmethod
     def parse_tablets_info(options):
         return TABLETS_ROUTING_V1 in options
+
+    @staticmethod
+    def parse_tablets_v2_info(options):
+        return TABLETS_ROUTING_V2 in options
 
     @staticmethod
     def parse_lwt_info(options):

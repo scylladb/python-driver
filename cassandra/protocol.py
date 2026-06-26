@@ -629,9 +629,11 @@ class ExecuteMessage(_QueryMessage):
     def __init__(self, query_id, query_params, consistency_level,
                  serial_consistency_level=None, fetch_size=None,
                  paging_state=None, timestamp=None, skip_meta=False,
-                 continuous_paging_options=None, result_metadata_id=None):
+                 continuous_paging_options=None, result_metadata_id=None,
+                 tablet_version_block=None):
         self.query_id = query_id
         self.result_metadata_id = result_metadata_id
+        self.tablet_version_block = tablet_version_block
         super(ExecuteMessage, self).__init__(query_params, consistency_level, serial_consistency_level, fetch_size,
                                              paging_state, timestamp, skip_meta, continuous_paging_options)
 
@@ -643,6 +645,8 @@ class ExecuteMessage(_QueryMessage):
         if ProtocolVersion.uses_prepared_metadata(protocol_version):
             write_string(f, self.result_metadata_id)
         self._write_query_params(f, protocol_version)
+        if self.tablet_version_block is not None:
+            write_byte(f, self.tablet_version_block)
 
 
 CUSTOM_TYPE = object()
