@@ -1,5 +1,6 @@
 from bisect import bisect_left
 from operator import attrgetter
+from random import getrandbits
 from threading import Lock
 from typing import Optional
 from uuid import UUID
@@ -7,6 +8,32 @@ from uuid import UUID
 # C-accelerated attrgetter avoids per-call lambda allocation overhead
 _get_first_token = attrgetter("first_token")
 _get_last_token = attrgetter("last_token")
+
+
+def choose_tablet_version_block(tablet_version):
+    """
+    Encode a tablet_version_block byte from a cached tablet_version.
+    Picks a block index at random across calls.
+    Returns an int in [0, 255].
+
+    The byte layout: the high nibble is the block index, the low nibble is the value
+    of that block. Blocks are indexed from the least significant bits to the most
+    significant ones, so block `idx` occupies bits [idx*4, idx*4 + 4).
+    """
+    # Pick the block index in [0, 15]; getrandbits(4) is a fast C call with no
+    # application-level shared state.
+    idx = getrandbits(4)
+    # Extract the 4-bit nibble at block index `idx` (0 = least significant).
+    shift = idx * 4
+    nibble = (tablet_version >> shift) & 0xF
+    return (idx << 4) | nibble
+
+
+def random_tablet_version_block():
+    """
+    Generate a random tablet_version_block byte for cold start.
+    """
+    return getrandbits(8)
 
 
 class Tablet(object):
@@ -18,15 +45,17 @@ class Tablet(object):
     first_token = 0
     last_token = 0
     replicas = None
+    tablet_version = None  # uint64 hash; None means unknown (cold start)
 
-    def __init__(self, first_token=0, last_token=0, replicas=None):
+    def __init__(self, first_token=0, last_token=0, replicas=None, tablet_version=None):
         self.first_token = first_token
         self.last_token = last_token
         self.replicas = replicas
+        self.tablet_version = tablet_version
 
     def __str__(self):
-        return "<Tablet: first_token=%s last_token=%s replicas=%s>" \
-               % (self.first_token, self.last_token, self.replicas)
+        return "<Tablet: first_token=%s last_token=%s replicas=%s tablet_version=%s>" \
+               % (self.first_token, self.last_token, self.replicas, self.tablet_version)
     __repr__ = __str__
 
     @staticmethod
@@ -34,9 +63,9 @@ class Tablet(object):
         return replicas is not None and len(replicas) != 0
 
     @staticmethod
-    def from_row(first_token, last_token, replicas):
+    def from_row(first_token, last_token, replicas, tablet_version=None):
         if Tablet._is_valid_tablet(replicas):
-            tablet = Tablet(first_token, last_token, replicas)
+            tablet = Tablet(first_token, last_token, replicas, tablet_version)
             return tablet
         return None
 
