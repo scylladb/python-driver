@@ -21,15 +21,13 @@ import string
 import socket
 import uuid
 
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from functools import partial
 
-from packaging.version import Version
 
 import cassandra
 from cassandra import InvalidRequest
-from cassandra import util
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.cqltypes import Int32Type, EMPTY

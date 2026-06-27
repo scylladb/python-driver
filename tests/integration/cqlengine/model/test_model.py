@@ -20,7 +20,6 @@ from cassandra.cqlengine.management import sync_table, drop_table, create_keyspa
 from cassandra.cqlengine import models
 from cassandra.cqlengine.models import Model, ModelDefinitionException
 from uuid import uuid1
-from tests.integration import pypy
 from tests.integration.cqlengine.base import TestQueryUpdateModel
 import pytest
 

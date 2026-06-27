@@ -7,7 +7,7 @@ import logging
 import os
 import socket
 import ssl
-from threading import Lock, Thread, get_ident
+from threading import Lock, Thread
 
 
 log = logging.getLogger(__name__)

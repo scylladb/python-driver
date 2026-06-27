@@ -18,7 +18,7 @@ from functools import partial
 import time
 from warnings import warn
 
-from cassandra.query import SimpleStatement, BatchType as CBatchType, BatchStatement
+from cassandra.query import SimpleStatement, BatchType as CBatchType
 from cassandra.cqlengine import columns, CQLEngineException, ValidationError, UnicodeMixin
 from cassandra.cqlengine import connection as conn
 from cassandra.cqlengine.functions import Token, BaseQueryFunction, QueryValue

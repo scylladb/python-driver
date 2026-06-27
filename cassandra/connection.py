@@ -51,7 +51,7 @@ from cassandra.protocol import (ReadyMessage, AuthenticateMessage, OptionsMessag
                                 RegisterMessage, ReviseRequestMessage)
 from cassandra.segment import SegmentCodec, CrcException
 from cassandra.util import OrderedDict
-from cassandra.shard_info import ShardingInfo
+from cassandra.shard_info import ShardingInfo  # noqa: F401  # re-exported for cassandra.connection.ShardingInfo
 
 log = logging.getLogger(__name__)
 

@@ -19,13 +19,9 @@ from unittest.mock import Mock
 from cassandra import ProtocolVersion, UnsupportedOperation
 from cassandra.protocol import (
     PrepareMessage, QueryMessage, ExecuteMessage, UnsupportedOperation,
-    _PAGING_OPTIONS_FLAG, _WITH_SERIAL_CONSISTENCY_FLAG,
-    _PAGE_SIZE_FLAG, _WITH_PAGING_STATE_FLAG,
     BatchMessage
 )
 from cassandra.query import BatchType
-from cassandra.marshal import uint32_unpack
-from cassandra.cluster import ContinuousPagingOptions
 import pytest
 
 

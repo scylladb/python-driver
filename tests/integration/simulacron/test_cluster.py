@@ -11,15 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import unittest
 
-import logging
-from packaging.version import Version
 
 import cassandra
-from tests.integration.simulacron import SimulacronCluster, SimulacronBase
+from tests.integration.simulacron import SimulacronCluster
 from tests.integration import (requiressimulacron, PROTOCOL_VERSION, MockLoggingHandler)
-from tests.integration.simulacron.utils import prime_query, start_and_prime_singledc
+from tests.integration.simulacron.utils import prime_query
 
 from cassandra import (WriteTimeout, WriteType,
                        ConsistencyLevel, UnresolvableContactPoints)

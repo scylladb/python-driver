@@ -14,7 +14,7 @@
 import unittest
 
 from cassandra.cqlengine.columns import Column
-from cassandra.cqlengine.statements import SelectStatement, WhereClause
+from cassandra.cqlengine.statements import SelectStatement
 from cassandra.cqlengine.operators import *
 
 class SelectStatementTests(unittest.TestCase):
