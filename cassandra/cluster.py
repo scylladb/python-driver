@@ -3439,7 +3439,7 @@ class Session(object):
                 errors[pool.host] = host_errors
 
             if not remaining_callbacks:
-                callback(host_errors)
+                callback(errors)
 
         for pool in tuple(self._pools.values()):
             pool._set_keyspace_for_all_conns(keyspace, pool_finished_setting_keyspace)
