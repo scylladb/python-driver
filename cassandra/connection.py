@@ -1287,6 +1287,63 @@ class Connection(object):
             self.defunct(exc)
             raise
 
+    def fetch_all_pages(self, query_msg, timeout, fail_on_error=True):
+        """Fetch all pages for a query, following paging_state until exhausted.
+
+        Runs the given query and, if the response has a paging_state,
+        continues fetching subsequent pages until no paging_state remains.
+        Concatenates all parsed_rows into a single result.
+
+        Args:
+            query_msg: QueryMessage to execute (paging_state may be pre-set).
+            timeout: Per-request timeout passed to wait_for_response.
+            fail_on_error: If True (default), raises on error. If False,
+                           returns (success, result_or_error).
+
+        Returns:
+            When fail_on_error=True: the fully accumulated ResultMessage.
+            When fail_on_error=False: (True, ResultMessage) or
+                                      (False, Exception).
+        """
+        response = self.wait_for_response(query_msg, timeout=timeout, fail_on_error=fail_on_error)
+
+        if not fail_on_error:
+            success, result = response
+            if not success:
+                return response
+        else:
+            result = response
+
+        if not result or not result.paging_state:
+            return response if not fail_on_error else result
+
+        all_rows = result.parsed_rows
+        if all_rows is None:
+            all_rows = []
+        original_paging_state = query_msg.paging_state
+
+        try:
+            while result and result.paging_state:
+                query_msg.paging_state = result.paging_state
+                page_response = self.wait_for_response(query_msg, timeout=timeout, fail_on_error=fail_on_error)
+
+                if not fail_on_error:
+                    page_success, page_result = page_response
+                    if not page_success:
+                        return page_response
+                    result = page_result
+                else:
+                    result = page_response
+
+                if result and result.parsed_rows:
+                    all_rows.extend(result.parsed_rows)
+        finally:
+            query_msg.paging_state = original_paging_state
+
+        result.parsed_rows = all_rows
+
+        return (True, result) if not fail_on_error else result
+
     def register_watcher(self, event_type, callback, register_timeout=None):
         """
         Register a callback for a given event type.
