@@ -433,6 +433,7 @@ class ResponseFutureTests(unittest.TestCase):
         session._pools = {}
 
         def set_keyspace_for_all_pools(keyspace, callback):
+            connection.keyspace = keyspace
             session.keyspace = keyspace
             callback({})
 
@@ -566,7 +567,9 @@ class ResponseFutureTests(unittest.TestCase):
             query_string="SELECT * FROM foobar",
             keyspace="FooKeyspace",
             result_metadata=[],
-            result_metadata_id=None)
+            result_metadata_id=None,
+            _result_col_names=None,
+            _result_col_types=None)
         session.cluster._prepared_statements = {query_id: prepared_statement}
 
         connection = self.make_control_connection()

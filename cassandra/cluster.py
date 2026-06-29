@@ -3439,7 +3439,7 @@ class Session(object):
                 errors[pool.host] = host_errors
 
             if not remaining_callbacks:
-                callback(host_errors)
+                callback(errors)
 
         for pool in tuple(self._pools.values()):
             pool._set_keyspace_for_all_conns(keyspace, pool_finished_setting_keyspace)
@@ -3481,6 +3481,12 @@ class Session(object):
 
         if wait_time is not None and wait_time <= 0:
             raise ValueError("wait_time must be greater than 0")
+
+        if scope not in (SchemaAgreementScope.RACK, SchemaAgreementScope.DC, SchemaAgreementScope.CLUSTER):
+            raise ValueError(
+                "scope must be one of SchemaAgreementScope.RACK, "
+                "SchemaAgreementScope.DC, or SchemaAgreementScope.CLUSTER"
+            )
 
         total_timeout = wait_time if wait_time is not None else self.cluster.max_schema_agreement_wait
         if total_timeout <= 0:
