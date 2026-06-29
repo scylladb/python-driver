@@ -440,6 +440,13 @@ class ResponseFutureTests(unittest.TestCase):
         session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
         session._pools = {}
 
+        # Faithful to the real Session._set_keyspace_for_all_pools: it only
+        # updates session.keyspace and pooled connections (none here, since
+        # _pools is empty) -- it has no way to reach an out-of-pool
+        # connection such as the control connection's fallback connection.
+        # If this mock updated `connection` itself, it would mask a
+        # regression where _set_result stops updating a fallback control
+        # connection's keyspace directly.
         def set_keyspace_for_all_pools(keyspace, callback):
             session.keyspace = keyspace
             callback({})
