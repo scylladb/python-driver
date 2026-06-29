@@ -17,13 +17,15 @@ class ProtocolFeatures(object):
     sharding_info = None
     tablets_routing_v1 = False
     lwt_info = None
+    is_scylla = False
 
-    def __init__(self, rate_limit_error=None, shard_id=0, sharding_info=None, tablets_routing_v1=False, lwt_info=None):
+    def __init__(self, rate_limit_error=None, shard_id=0, sharding_info=None, tablets_routing_v1=False, lwt_info=None, is_scylla=False):
         self.rate_limit_error = rate_limit_error
         self.shard_id = shard_id
         self.sharding_info = sharding_info
         self.tablets_routing_v1 = tablets_routing_v1
         self.lwt_info = lwt_info
+        self.is_scylla = is_scylla
 
     @staticmethod
     def parse_from_supported(supported):
@@ -31,7 +33,27 @@ class ProtocolFeatures(object):
         shard_id, sharding_info = ProtocolFeatures.parse_sharding_info(supported)
         tablets_routing_v1 = ProtocolFeatures.parse_tablets_info(supported)
         lwt_info = ProtocolFeatures.parse_lwt_info(supported)
-        return ProtocolFeatures(rate_limit_error, shard_id, sharding_info, tablets_routing_v1, lwt_info)
+        is_scylla = ProtocolFeatures.detect_scylla(supported, sharding_info)
+        return ProtocolFeatures(rate_limit_error, shard_id, sharding_info, tablets_routing_v1, lwt_info, is_scylla)
+
+    @staticmethod
+    def detect_scylla(supported, sharding_info):
+        """Detect ScyllaDB from SUPPORTED extensions, independent of shard awareness.
+
+        ScyllaDB is identified by the presence of any known Scylla-specific
+        extension key in the SUPPORTED response.  Checking only shard-related
+        fields (SCYLLA_NR_SHARDS, etc.) is insufficient because those are
+        absent when shard-awareness is disabled on the server side
+        (allow_shard_aware_drivers: false), which would cause the driver to
+        misidentify a ScyllaDB cluster as Cassandra and, for example, try
+        to query the peers_v2 table that ScyllaDB does not support.
+        """
+        return (
+            LWT_ADD_METADATA_MARK in supported
+            or RATE_LIMIT_ERROR_EXTENSION in supported
+            or TABLETS_ROUTING_V1 in supported
+            or sharding_info is not None
+        )
 
     @staticmethod
     def maybe_parse_rate_limit_error(supported):
@@ -69,11 +91,11 @@ class ProtocolFeatures(object):
         shard_aware_port_ssl = options.get('SCYLLA_SHARD_AWARE_PORT_SSL', [''])[0] or None
         log.debug("Parsing sharding info from message options %s", options)
 
-        if not (shard_id or shards_count or partitioner == "org.apache.cassandra.dht.Murmur3Partitioner" or
-            sharding_algorithm == "biased-token-round-robin" or sharding_ignore_msb):
+        if not (shards_count and sharding_ignore_msb):
             return 0, None
 
-        return int(shard_id), _ShardingInfo(shard_id, shards_count, partitioner, sharding_algorithm, sharding_ignore_msb,
+        return int(shard_id) if shard_id is not None else 0, _ShardingInfo(shard_id if shard_id is not None else 0,
+                                            shards_count, partitioner, sharding_algorithm, sharding_ignore_msb,
                                             shard_aware_port, shard_aware_port_ssl)
 
 
