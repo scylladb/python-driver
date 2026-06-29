@@ -77,6 +77,9 @@ jobs:
     - name: Build driver
       run: uv sync
 
+    - name: Unit tests
+      run: uv run pytest tests/unit/test_*.py -x
+
     - name: Cache Scylla download
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
