@@ -2578,8 +2578,14 @@ class SchemaParserV3(SchemaParserV22):
     _SELECT_VIEWS = "SELECT * FROM system_schema.views"
 
     def _is_not_scylla(self):
-        """Check if NOT connected to ScyllaDB by checking for shard awareness."""
-        return getattr(getattr(self.connection, 'features', None), 'shard_id', None) is None
+        """Check if NOT connected to ScyllaDB.
+
+        Uses the is_scylla flag from ProtocolFeatures, which is set from the
+        presence of Scylla-specific extension keys in the SUPPORTED response
+        (e.g. SCYLLA_LWT_ADD_METADATA_MARK, SCYLLA_RATE_LIMIT_ERROR) and
+        therefore remains True even when shard-awareness is disabled.
+        """
+        return not getattr(getattr(self.connection, 'features', None), 'is_scylla', False)
 
     _table_name_col = 'table_name'
 
