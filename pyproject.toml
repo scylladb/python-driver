@@ -142,6 +142,7 @@ skip = [
     "cp3*t-*",
     "pp3*t-*",
     "*i686",
+    "*win32",
     "*musllinux*",
 ]
 build = ["cp3*", "pp3*"]
