@@ -703,6 +703,19 @@ class ResultMessage(_MessageType):
         self.custom_payload = None
         self.warnings = None
 
+    def __repr__(self):
+        slots = set()
+        for cls in type(self).__mro__:
+            slots.update(getattr(cls, '__slots__', ()))
+        params = ', '.join(
+            '%s=%r' % (s, getattr(self, s))
+            for s in slots
+            if not s.startswith('_')
+            and getattr(self, s) is not None
+            and getattr(self, s) is not False
+        )
+        return '<%s(%s)>' % (self.__class__.__name__, params)
+
     def recv(self, f, protocol_version, protocol_features, user_type_map, result_metadata, column_encryption_policy):
         if self.kind == RESULT_KIND_VOID:
             return
