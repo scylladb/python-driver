@@ -187,8 +187,12 @@ test-extras = ["compress-lz4"]
 #   * test_deserialize_date_range_month is disabled upstream (PYTHON-912).
 # PyPy uses the pp* override below. The Linux CPython reactor command runs with
 # CASS_DRIVER_NO_SKIP=1 so unexpected skips fail loudly.
+# test_datetype compares serialize() of a datetime vs. a raw float timestamp
+# taken microseconds apart; it can flake across a millisecond rounding boundary
+# on slower/emulated runners (e.g. linux-aarch64), same class of issue as the
+# macOS timing exclusions below.
 test-command = [
-    "CASS_DRIVER_NO_SKIP=1 pytest --import-mode=append {package}/tests/unit -v --ignore={package}/tests/unit/column_encryption --ignore={package}/tests/unit/io/test_asyncioreactor.py --ignore={package}/tests/unit/io/test_asyncorereactor.py -k 'not test_deserialize_date_range_month'",
+    "CASS_DRIVER_NO_SKIP=1 pytest --import-mode=append {package}/tests/unit -v --ignore={package}/tests/unit/column_encryption --ignore={package}/tests/unit/io/test_asyncioreactor.py --ignore={package}/tests/unit/io/test_asyncorereactor.py -k 'not (test_deserialize_date_range_month or test_datetype)'",
     "EVENT_LOOP_MANAGER=asyncio CASS_DRIVER_NO_SKIP=1 pytest --import-mode=append {package}/tests/unit/io/test_asyncioreactor.py -v",
 ]
 
