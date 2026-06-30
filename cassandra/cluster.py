@@ -3929,23 +3929,32 @@ class ControlConnection(object):
             sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
             sel_local = self._SELECT_LOCAL if self._token_meta_enabled else self._SELECT_LOCAL_NO_TOKENS
             peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                       consistency_level=ConsistencyLevel.ONE)
+                                       consistency_level=ConsistencyLevel.ONE,
+                                       fetch_size=self._schema_meta_page_size)
             local_query = QueryMessage(query=maybe_add_timeout_to_query(sel_local, self._metadata_request_timeout),
-                                       consistency_level=ConsistencyLevel.ONE)
-            (peers_success, peers_result), (local_success, local_result) = connection.wait_for_responses(
-                peers_query, local_query, timeout=self._timeout, fail_on_error=False)
+                                       consistency_level=ConsistencyLevel.ONE,
+                                       fetch_size=self._schema_meta_page_size)
 
-            if not local_success:
-                raise local_result
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                local_future = executor.submit(
+                    connection.fetch_all_pages, local_query, self._timeout, False)
+                peers_future = executor.submit(
+                    connection.fetch_all_pages, peers_query, self._timeout, False)
 
-            if not peers_success:
-                # error with the peers v2 query, fallback to peers v1
-                self._uses_peers_v2 = False
-                sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
-                peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                           consistency_level=ConsistencyLevel.ONE)
-                peers_result = connection.wait_for_response(
-                    peers_query, timeout=self._timeout)
+                local_success, local_result = local_future.result()
+
+                if not local_success:
+                    raise local_result
+
+                peers_success, peers_result = peers_future.result()
+
+                if not peers_success:
+                    self._uses_peers_v2 = False
+                    sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
+                    peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
+                                               consistency_level=ConsistencyLevel.ONE,
+                                               fetch_size=self._schema_meta_page_size)
+                    peers_result = connection.fetch_all_pages(peers_query, self._timeout)
 
             shared_results = (peers_result, local_result)
             self._refresh_node_list_and_token_map(connection, preloaded_results=shared_results)
@@ -4088,11 +4097,20 @@ class ControlConnection(object):
                 log.debug("[control connection] Refreshing node list and token map")
                 sel_local = self._SELECT_LOCAL
             peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                       consistency_level=cl)
+                                       consistency_level=cl,
+                                       fetch_size=self._schema_meta_page_size)
             local_query = QueryMessage(query=maybe_add_timeout_to_query(sel_local, self._metadata_request_timeout),
-                                       consistency_level=cl)
-            peers_result, local_result = connection.wait_for_responses(
-                peers_query, local_query, timeout=self._timeout)
+                                       consistency_level=cl,
+                                       fetch_size=self._schema_meta_page_size)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                peers_future = executor.submit(
+                    connection.fetch_all_pages, peers_query, self._timeout)
+                local_future = executor.submit(
+                    connection.fetch_all_pages, local_query, self._timeout)
+
+                peers_result = peers_future.result()
+                local_result = local_future.result()
 
         peers_result = dict_factory(peers_result.column_names, peers_result.parsed_rows)
 
