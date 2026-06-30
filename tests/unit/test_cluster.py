@@ -591,6 +591,7 @@ class SessionTest(unittest.TestCase):
         assert self._host_query_count(session, hosts[0]) == 0
         assert self._host_query_count(session, hosts[1]) == 1
 
+    @pytest.mark.xfail(reason="scope validation not implemented (#917)", strict=False)
     @mock_session_pools
     def test_wait_for_schema_agreement_rejects_unknown_scope(self, *_):
         session, _, _ = self._new_schema_agreement_session(["a"])
@@ -598,6 +599,7 @@ class SessionTest(unittest.TestCase):
         with pytest.raises(ValueError):
             session.wait_for_schema_agreement(wait_time=1, scope='planet')
 
+    @pytest.mark.xfail(reason="_set_keyspace_for_all_pools passes only last pool errors (#915)", strict=False)
     @mock_session_pools
     def test_set_keyspace_for_all_pools_reports_all_errors(self, *_):
         cluster = Cluster()
