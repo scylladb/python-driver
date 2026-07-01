@@ -1835,15 +1835,15 @@ class HeartbeatFuture(object):
                 self._exception = Exception("Failed to send heartbeat because connection 'in_flight' exceeds threshold")
                 self._event.set()
 
-    def wait(self, timeout):
+    def wait(self, timeout, original_timeout):
         self._event.wait(timeout)
         if self._event.is_set():
             if self._exception:
                 raise self._exception
         else:
-            raise OperationTimedOut("Connection heartbeat timeout after %s seconds" % (timeout,),
+            raise OperationTimedOut("Connection heartbeat timeout (total wait=%s seconds, this wait call=%s seconds)" % (original_timeout, timeout),
                                     self.connection.endpoint,
-                                    timeout=timeout,
+                                    timeout=original_timeout,
                                     in_flight=self.connection.in_flight)
 
     def _options_callback(self, response):
@@ -1902,13 +1902,13 @@ class ConnectionHeartbeat(Thread):
                     self._raise_if_stopped()
 
                 # Wait max `self._timeout` seconds for all HeartbeatFutures to complete
-                timeout = self._timeout
+                timeout_left = self._timeout
                 start_time = time.time()
                 for f in futures:
                     self._raise_if_stopped()
                     connection = f.connection
                     try:
-                        f.wait(timeout)
+                        f.wait(timeout_left, self._timeout)
                         # TODO: move this, along with connection locks in pool, down into Connection
                         with connection.lock:
                             connection.in_flight -= 1
@@ -1918,7 +1918,7 @@ class ConnectionHeartbeat(Thread):
                                     id(connection), connection.endpoint)
                         failed_connections.append((f.connection, f.owner, e))
 
-                    timeout = self._timeout - (time.time() - start_time)
+                    timeout_left = self._timeout - (time.time() - start_time)
 
                 for connection, owner, exc in failed_connections:
                     self._raise_if_stopped()
