@@ -943,6 +943,291 @@ class TokenAwarePolicyTest(unittest.TestCase):
                 child_policy.make_query_plan.assert_called_once_with(keyspace, query)
             assert patched_shuffle.call_count == 1
 
+    def test_leader_aware_routing_with_tablet_version(self):
+        """
+        For a strongly-consistent keyspace, the leader (first replica in the
+        tablet's replica list) must be yielded first in the query plan, even
+        when it is not the closest replica.
+        """
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for i, host in enumerate(hosts):
+            host.set_up()
+            host.set_location_info("dc1", f"rack{i + 1}")
+
+        # The leader is hosts[2] (first in tablet.replicas).
+        leader = hosts[2]
+        other_replica = hosts[3]
+        tablet = Tablet(
+            first_token=-100, last_token=100,
+            replicas=[(leader.host_id, 0), (other_replica.host_id, 1)],
+            tablet_version=0xDEADBEEF12345678
+        )
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = tablet
+        cluster.metadata.get_replicas.return_value = [leader, other_replica]
+        cluster.metadata.keyspaces = {'ks': Mock(strongly_consistent=True)}
+
+        child_policy = Mock()
+        # Put the leader last in the child plan and make it the farther replica
+        # by distance (LOCAL vs LOCAL_RACK). Without leader-first routing,
+        # other_replica would be yielded before the leader.
+        child_policy.make_query_plan.return_value = [hosts[0], hosts[1], other_replica, leader]
+        distances = {
+            leader: HostDistance.LOCAL,
+            other_replica: HostDistance.LOCAL_RACK,
+            hosts[0]: HostDistance.LOCAL,
+            hosts[1]: HostDistance.LOCAL,
+        }
+        child_policy.distance.side_effect = lambda host: distances.get(host, HostDistance.LOCAL)
+
+        # shuffle_replicas=False keeps replica ordering deterministic so the only
+        # thing that can pull the leader to the front is the leader-first logic.
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'\x00\x00\x00\x01', keyspace='ks', table='tbl')
+        qplan = list(policy.make_query_plan(None, query))
+
+        # Leader must be first, even though other_replica is closer (LOCAL_RACK
+        # vs LOCAL) and the leader is last in the child plan.
+        self.assertEqual(qplan[0], leader)
+        # The closer replica follows, and the leader appears exactly once.
+        self.assertEqual(qplan[1], other_replica)
+        self.assertEqual(qplan.count(leader), 1)
+
+    def test_leader_fallback_when_leader_is_down(self):
+        """
+        When the leader host is down, the driver should fall back to other
+        replicas without crashing. The leader should NOT appear in the plan.
+        """
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for i, host in enumerate(hosts):
+            host.set_up()
+            host.set_location_info("dc1", f"rack{i + 1}")
+
+        leader = hosts[2]
+        other_replica = hosts[3]
+        leader.set_down()  # Simulate leader being unreachable.
+
+        tablet = Tablet(
+            first_token=-100, last_token=100,
+            replicas=[(leader.host_id, 0), (other_replica.host_id, 1)],
+            tablet_version=0xCAFEBABE00000001
+        )
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = tablet
+        cluster.metadata.get_replicas.return_value = [leader, other_replica]
+        cluster.metadata.keyspaces = {'ks': Mock(strongly_consistent=True)}
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'\x00\x00\x00\x01', keyspace='ks', table='tbl')
+        qplan = list(policy.make_query_plan(None, query))
+
+        # Leader is down, should not appear in the plan.
+        self.assertNotIn(leader, qplan)
+        # Other replica should be first.
+        self.assertEqual(qplan[0], other_replica)
+
+    def test_no_leader_routing_without_tablet_version(self):
+        """
+        replicas[0] is only leader-ordered for a tablet that came from a
+        TABLETS_ROUTING_V2 payload. A versionless tablet (tablet_version=None,
+        e.g. cached from V1 or stale across a consistency flip) has arbitrary
+        replica order, so leader-first routing must NOT fire even for a
+        strongly-consistent keyspace. The version gate is the only thing that
+        should suppress it here.
+        """
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for i, host in enumerate(hosts):
+            host.set_up()
+            host.set_location_info("dc1", f"rack{i + 1}")
+
+        first_replica = hosts[2]
+        second_replica = hosts[3]
+        # Strongly-consistent keyspace but a versionless (V1-style) tablet.
+        tablet = Tablet(
+            first_token=-100, last_token=100,
+            replicas=[(first_replica.host_id, 0), (second_replica.host_id, 1)],
+            tablet_version=None
+        )
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = tablet
+        cluster.metadata.get_replicas.return_value = [first_replica, second_replica]
+        cluster.metadata.keyspaces = {'ks': Mock(strongly_consistent=True)}
+
+        child_policy = Mock()
+        # Order the child plan so the second replica comes before replicas[0]; if
+        # leader-first wrongly triggered, first_replica would be forced to front.
+        child_policy.make_query_plan.return_value = [second_replica, first_replica, hosts[0], hosts[1]]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        # shuffle_replicas=False keeps replica ordering deterministic so we can
+        # assert that no leader is forced to the front.
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'\x00\x00\x00\x01', keyspace='ks', table='tbl')
+        qplan = list(policy.make_query_plan(None, query))
+
+        # Leader-first must NOT apply without a tablet_version: ordering follows
+        # the child plan, so the second replica (not replicas[0]) stays first.
+        self.assertEqual(qplan[0], second_replica)
+        self.assertEqual(len(qplan), 4)
+
+    def test_no_leader_routing_for_eventually_consistent_keyspace(self):
+        """
+        A tablet_version is assigned to eventually-consistent tablet tables too
+        (TABLETS_ROUTING_V2), but the leader concept only exists for
+        strongly-consistent keyspaces. For an eventually-consistent keyspace the
+        leader-first optimization must NOT apply even when a tablet_version is
+        present.
+        """
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for i, host in enumerate(hosts):
+            host.set_up()
+            host.set_location_info("dc1", f"rack{i + 1}")
+
+        first_replica = hosts[2]
+        second_replica = hosts[3]
+        tablet = Tablet(
+            first_token=-100, last_token=100,
+            replicas=[(first_replica.host_id, 0), (second_replica.host_id, 1)],
+            tablet_version=0xDEADBEEF12345678
+        )
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = tablet
+        cluster.metadata.get_replicas.return_value = [first_replica, second_replica]
+        cluster.metadata.keyspaces = {'ks': Mock(strongly_consistent=False)}
+
+        child_policy = Mock()
+        # Order the child plan so the second replica comes before the first; if
+        # leader-first logic wrongly triggered, first_replica would be forced to
+        # the front instead.
+        child_policy.make_query_plan.return_value = [second_replica, first_replica, hosts[0], hosts[1]]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        # shuffle_replicas=False keeps replica ordering deterministic so we can
+        # assert that no leader is forced to the front.
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'\x00\x00\x00\x01', keyspace='ks', table='tbl')
+        qplan = list(policy.make_query_plan(None, query))
+
+        # Leader-first must NOT apply: ordering follows the child plan, so the
+        # second replica (not replicas[0]) stays first.
+        self.assertEqual(qplan[0], second_replica)
+        self.assertEqual(len(qplan), 4)
+
+    def test_no_leader_routing_when_keyspace_metadata_missing(self):
+        """
+        If keyspace metadata is unavailable (e.g. schema refresh disabled), the
+        policy must safely fall back to no leader-first routing rather than
+        crashing or guessing.
+        """
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for i, host in enumerate(hosts):
+            host.set_up()
+            host.set_location_info("dc1", f"rack{i + 1}")
+
+        first_replica = hosts[2]
+        second_replica = hosts[3]
+        tablet = Tablet(
+            first_token=-100, last_token=100,
+            replicas=[(first_replica.host_id, 0), (second_replica.host_id, 1)],
+            tablet_version=0xDEADBEEF12345678
+        )
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = tablet
+        cluster.metadata.get_replicas.return_value = [first_replica, second_replica]
+        cluster.metadata.keyspaces = {}  # no metadata for 'ks'
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = [second_replica, first_replica, hosts[0], hosts[1]]
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        # shuffle_replicas=False keeps replica ordering deterministic so we can
+        # assert that no leader is forced to the front.
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'\x00\x00\x00\x01', keyspace='ks', table='tbl')
+        qplan = list(policy.make_query_plan(None, query))
+
+        self.assertEqual(qplan[0], second_replica)
+        self.assertEqual(len(qplan), 4)
+
+    def test_leader_skipped_when_child_policy_ignores_it(self):
+        """
+        The leader is yielded first only if the child policy would actually use
+        it. If a (custom) child policy reports the leader as IGNORED, leader-first
+        routing must respect that and not front-run an excluded host. The leader
+        should not appear in the plan at all.
+        """
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for i, host in enumerate(hosts):
+            host.set_up()
+            host.set_location_info("dc1", f"rack{i + 1}")
+
+        leader = hosts[2]
+        other_replica = hosts[3]
+        tablet = Tablet(
+            first_token=-100, last_token=100,
+            replicas=[(leader.host_id, 0), (other_replica.host_id, 1)],
+            tablet_version=0xDEADBEEF12345678
+        )
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = tablet
+        cluster.metadata.get_replicas.return_value = [leader, other_replica]
+        cluster.metadata.keyspaces = {'ks': Mock(strongly_consistent=True)}
+
+        child_policy = Mock()
+        # The child policy yields the leader but reports it as IGNORED, i.e. it
+        # would never actually route to it.
+        child_policy.make_query_plan.return_value = [leader, other_replica, hosts[0], hosts[1]]
+        distances = {
+            leader: HostDistance.IGNORED,
+            other_replica: HostDistance.LOCAL,
+            hosts[0]: HostDistance.LOCAL,
+            hosts[1]: HostDistance.LOCAL,
+        }
+        child_policy.distance.side_effect = lambda host: distances.get(host, HostDistance.LOCAL)
+
+        # shuffle_replicas=False keeps replica ordering deterministic.
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=b'\x00\x00\x00\x01', keyspace='ks', table='tbl')
+        qplan = list(policy.make_query_plan(None, query))
+
+        # The IGNORED leader must not be front-run, nor appear at all.
+        self.assertNotIn(leader, qplan)
+        self.assertEqual(qplan[0], other_replica)
+
 
     @patch('cassandra.policies.shuffle')
     def test_no_shuffle_for_serial_consistency(self, patched_shuffle):
