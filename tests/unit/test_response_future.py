@@ -114,6 +114,34 @@ class ResponseFutureTests(unittest.TestCase):
         with pytest.raises(ConnectionException):
             rf.result()
 
+    def test_query_releases_request_id_when_send_fails_after_registration(self):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Connection('1.2.3.4')
+        connection.push = Mock(side_effect=ConnectionException("write failed"))
+
+        initial_request_ids = len(connection.request_ids)
+        request_id = connection.request_ids.popleft()
+        connection.in_flight += 1
+        pool.borrow_connection.return_value = (connection, request_id)
+
+        def return_connection(conn):
+            with conn.lock:
+                conn.in_flight -= 1
+
+        pool.return_connection.side_effect = return_connection
+
+        query = SimpleStatement("SELECT * FROM foo")
+        message = QueryMessage(query=query.query_string, consistency_level=ConsistencyLevel.ONE)
+        rf = ResponseFuture(session, message, query, 1)
+
+        assert rf._query('ip1') is None
+        pool.return_connection.assert_called_once_with(connection)
+        assert connection.in_flight == 0
+        assert len(connection.request_ids) == initial_request_ids
+        assert request_id in connection.request_ids
+        assert not connection._requests
+
     def test_set_keyspace_result(self):
         session = self.make_session()
         rf = self.make_response_future(session)
