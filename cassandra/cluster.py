@@ -5003,6 +5003,7 @@ class ResponseFuture(object):
         self._current_host = host
 
         connection = None
+        request_id = None
         try:
             # TODO get connectTimeout from cluster settings
             if self.query:
@@ -5027,15 +5028,25 @@ class ResponseFuture(object):
         except ConnectionBusy as exc:
             log.debug("Connection for host %s is busy, moving to the next host", host)
             self._errors[host] = exc
+            if connection:
+                self._return_connection_after_send_failure(pool, connection, request_id)
         except Exception as exc:
             log.debug("Error querying host %s", host, exc_info=True)
             self._errors[host] = exc
             if self._metrics is not None:
                 self._metrics.on_connection_error()
             if connection:
-                pool.return_connection(connection)
+                self._return_connection_after_send_failure(pool, connection, request_id)
 
         return None
+
+    def _return_connection_after_send_failure(self, pool, connection, request_id):
+        if request_id is not None:
+            with connection.lock:
+                connection._requests.pop(request_id, None)
+                if request_id not in connection.request_ids:
+                    connection.request_ids.append(request_id)
+        pool.return_connection(connection)
 
     @property
     def has_more_pages(self):
