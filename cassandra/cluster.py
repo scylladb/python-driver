@@ -4413,8 +4413,11 @@ class ControlConnection(object):
                 if schema_mismatches is None:
                     return True
 
+                elapsed = self._time.time() - start
                 log.debug("[control connection] Schemas mismatched, trying again")
-                self._time.sleep(0.2)
+                remaining = total_timeout - elapsed
+                if remaining > 0:
+                    self._time.sleep(min(0.2, remaining))
                 elapsed = self._time.time() - start
 
             log.warning("Node %s is reporting a schema disagreement: %s",

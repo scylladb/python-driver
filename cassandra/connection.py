@@ -642,16 +642,25 @@ class ContinuousPagingSession(object):
         if space_in_queue >= max_queue_size / 2:
             self.update_next_pages(space_in_queue)
 
+    def _send_revise_request(self, request, callback):
+        with self.connection.lock:
+            request_id = self.connection.get_request_id()
+            try:
+                self.connection.send_msg(request, request_id, callback)
+            except Exception:
+                if request_id not in self.connection._requests and request_id not in self.connection.request_ids:
+                    self.connection.request_ids.append(request_id)
+                raise
+
     def update_next_pages(self, num_next_pages):
         try:
             self._state.num_pages_requested += num_next_pages
             log.debug("Updating backpressure for session %s from %s", self.stream_id, self.connection.host)
-            with self.connection.lock:
-                self.connection.send_msg(ReviseRequestMessage(ReviseRequestMessage.RevisionType.PAGING_BACKPRESSURE,
-                                                              self.stream_id,
-                                                              next_pages=num_next_pages),
-                                         self.connection.get_request_id(),
-                                         self._on_backpressure_response)
+            self._send_revise_request(
+                ReviseRequestMessage(ReviseRequestMessage.RevisionType.PAGING_BACKPRESSURE,
+                                     self.stream_id,
+                                     next_pages=num_next_pages),
+                self._on_backpressure_response)
         except ConnectionShutdown as ex:
             log.debug("Failed to update backpressure for session %s from %s, connection is shutdown",
                       self.stream_id, self.connection.host)
@@ -668,11 +677,10 @@ class ContinuousPagingSession(object):
     def cancel(self):
         try:
             log.debug("Canceling paging session %s from %s", self.stream_id, self.connection.host)
-            with self.connection.lock:
-                self.connection.send_msg(ReviseRequestMessage(ReviseRequestMessage.RevisionType.PAGING_CANCEL,
-                                                              self.stream_id),
-                                         self.connection.get_request_id(),
-                                         self._on_cancel_response)
+            self._send_revise_request(
+                ReviseRequestMessage(ReviseRequestMessage.RevisionType.PAGING_CANCEL,
+                                     self.stream_id),
+                self._on_cancel_response)
         except ConnectionShutdown:
             log.debug("Failed to cancel session %s from %s, connection is shutdown",
                       self.stream_id, self.connection.host)
