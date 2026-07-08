@@ -543,7 +543,7 @@ class ConnectionHeartbeatTest(unittest.TestCase):
         connection.defunct.assert_has_calls([call(ANY)] * get_holders.call_count)
         exc = connection.defunct.call_args_list[0][0][0]
         assert isinstance(exc, OperationTimedOut)
-        assert exc.errors == 'Connection heartbeat timeout after 0.05 seconds'
+        assert exc.errors == 'Connection heartbeat timeout (total wait=0.05 seconds, this wait call=0.05 seconds)'
         assert exc.last_host == DefaultEndPoint('localhost')
         assert exc.timeout == 0.05
         assert isinstance(exc.in_flight, int)
