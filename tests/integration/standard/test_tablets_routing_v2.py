@@ -20,6 +20,7 @@ import pytest
 import cassandra.cqltypes as types
 from cassandra import ConsistencyLevel
 from cassandra.cluster import Cluster, ExecutionProfile, EXEC_PROFILE_DEFAULT
+from cassandra.metadata import _ConsistencyMode
 from cassandra.policies import ConstantReconnectionPolicy, RoundRobinPolicy, TokenAwarePolicy
 from cassandra.protocol import ExecuteMessage
 from cassandra.protocol_features import (
@@ -119,6 +120,24 @@ class TestTabletsRoutingV2Integration:
         prepared = session.prepare("INSERT INTO test_v2.t (pk, v) VALUES (?, ?)")
         for i in range(50):
             session.execute(prepared.bind((i, i)))
+
+        session.execute("DROP KEYSPACE IF EXISTS test_v2_sc")
+        session.execute(
+            """
+            CREATE KEYSPACE test_v2_sc
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}
+            AND tablets = {'initial': 8}
+            AND consistency = 'global'
+            """)
+        session.execute("CREATE TABLE test_v2_sc.t (pk int PRIMARY KEY, v int)")
+        prepared_sc = session.prepare("INSERT INTO test_v2_sc.t (pk, v) VALUES (?, ?)")
+        # Writes to a strongly-consistent (Raft) table are rejected unless they
+        # use QUORUM/LOCAL_QUORUM. The session default is LOCAL_ONE, so request
+        # LOCAL_QUORUM for these inserts; it propagates to every statement bound
+        # from this prepared one.
+        prepared_sc.consistency_level = ConsistencyLevel.LOCAL_QUORUM
+        for i in range(50):
+            session.execute(prepared_sc.bind((i, i)))
 
     # -- helpers ----------------------------------------------------------------
 
@@ -405,3 +424,125 @@ class TestTabletsRoutingV2Integration:
                 "V2 must take precedence (select_statement.cc)")
             # The correct V2 block also means no V2 payload.
             assert 'tablets-routing-v2' not in payload
+
+    # -- strongly-consistent (leader-aware) routing -----------------------------
+
+    def test_strongly_consistent_keyspace_metadata(self):
+        """
+        The driver must learn from system_schema.scylla_keyspaces which keyspaces
+        are strongly consistent: test_v2_sc (consistency='global') reports GLOBAL,
+        test_v2 (no consistency clause) reports EVENTUAL. A GLOBAL mode is the
+        precondition for leader-aware routing in
+        TokenAwarePolicy.make_query_plan.
+        """
+        self.session.cluster.refresh_schema_metadata()
+        keyspaces = self.session.cluster.metadata.keyspaces
+        assert keyspaces['test_v2_sc']._consistency_mode is _ConsistencyMode.GLOBAL
+        assert keyspaces['test_v2']._consistency_mode is _ConsistencyMode.EVENTUAL
+
+    def test_consistency_mode_tracks_dynamic_keyspace_changes(self):
+        """
+        The driver reads system_schema.scylla_keyspaces on every schema refresh
+        and sets KeyspaceMetadata._consistency_mode for each keyspace.
+
+        The mode is not a one-off computed at connect time -- it has to track the
+        live schema. Because the driver refreshes its metadata synchronously in
+        response to a DDL it executes (ResponseFuture handles
+        RESULT_KIND_SCHEMA_CHANGE by refreshing before returning), a keyspace
+        created or dropped *after* connecting is immediately reflected in
+        cluster.metadata.keyspaces, with no sleep or manual refresh required. A
+        keyspace created by some *other* client is picked up through the very same
+        refresh path, driven by the control connection's schema-change events
+        (subject to the schema refresh window); this test drives the changes
+        through the connected session so the assertions stay deterministic.
+        """
+        metadata = self.session.cluster.metadata
+        ec_ks = "dyn_ec_ks"   # eventually consistent (no consistency clause)
+        sc_ks = "dyn_sc_ks"   # strongly consistent (Raft, consistency='global')
+
+        # Start from a known-clean slate so the test is repeatable.
+        self.session.execute("DROP KEYSPACE IF EXISTS {0}".format(ec_ks))
+        self.session.execute("DROP KEYSPACE IF EXISTS {0}".format(sc_ks))
+        try:
+            assert ec_ks not in metadata.keyspaces
+            assert sc_ks not in metadata.keyspaces
+
+            # Create an eventually-consistent keyspace after connecting: it shows
+            # up in the map as EVENTUAL. This exercises the
+            # "absent from scylla_keyspaces -> eventual" path.
+            self.session.execute(
+                "CREATE KEYSPACE {0} WITH replication = "
+                "{{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                "AND tablets = {{'initial': 1}}".format(ec_ks))
+            assert ec_ks in metadata.keyspaces
+            assert metadata.keyspaces[ec_ks]._consistency_mode is _ConsistencyMode.EVENTUAL
+
+            # Create a strongly-consistent keyspace: same map, mode now GLOBAL.
+            # (RF is irrelevant here -- the mode only tracks the consistency option.)
+            self.session.execute(
+                "CREATE KEYSPACE {0} WITH replication = "
+                "{{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                "AND tablets = {{'initial': 1}} AND consistency = 'global'".format(sc_ks))
+            assert sc_ks in metadata.keyspaces
+            assert metadata.keyspaces[sc_ks]._consistency_mode is _ConsistencyMode.GLOBAL
+            # The previously-created keyspace keeps its EVENTUAL mode.
+            assert metadata.keyspaces[ec_ks]._consistency_mode is _ConsistencyMode.EVENTUAL
+
+            # A full refresh (the bulk get_all_keyspaces path, as opposed to the
+            # single-keyspace get_keyspace path the DDL above exercised) agrees.
+            self.session.cluster.refresh_schema_metadata()
+            assert metadata.keyspaces[ec_ks]._consistency_mode is _ConsistencyMode.EVENTUAL
+            assert metadata.keyspaces[sc_ks]._consistency_mode is _ConsistencyMode.GLOBAL
+
+            # Dropping a keyspace removes it from the map and leaves the other
+            # keyspace's mode untouched.
+            self.session.execute("DROP KEYSPACE {0}".format(sc_ks))
+            assert sc_ks not in metadata.keyspaces
+            assert metadata.keyspaces[ec_ks]._consistency_mode is _ConsistencyMode.EVENTUAL
+
+            self.session.execute("DROP KEYSPACE {0}".format(ec_ks))
+            assert ec_ks not in metadata.keyspaces
+        finally:
+            self.session.execute("DROP KEYSPACE IF EXISTS {0}".format(ec_ks))
+            self.session.execute("DROP KEYSPACE IF EXISTS {0}".format(sc_ks))
+
+    def test_leader_aware_routing_targets_the_raft_leader(self):
+        """
+        For a strongly-consistent table, the server orders the replica list with
+        the Raft leader first. Once that payload is cached, a TokenAwarePolicy
+        must route every leader-requiring request (here a LOCAL_QUORUM read) for
+        the tablet to replicas[0] (the leader), saving the extra
+        coordinator->leader hop. This is the strongly-consistent counterpart to
+        the eventually consistent test_v2 tests above, which never assert *which*
+        replica is hit.
+
+        A read at ONE/LOCAL_ONE is intentionally *not* pinned to the leader (any
+        single replica satisfies it); that carve-out is covered by the policy
+        unit tests.
+        """
+        select = self.session.prepare("SELECT v FROM test_v2_sc.t WHERE pk = ?")
+        bound = select.bind([2])
+        # Leader-first routing only applies to requests that actually need the
+        # leader, so request LOCAL_QUORUM (a strong read). The session default is
+        # LOCAL_ONE, which the policy would deliberately spread across replicas.
+        bound.consistency_level = ConsistencyLevel.LOCAL_QUORUM
+
+        tablet = self._ensure_cached(bound)
+        assert tablet.replicas, "strongly-consistent tablet has no replicas"
+        leader_host_id = tablet.replicas[0][0]
+
+        # Leader-first routing only triggers when the keyspace is known to be
+        # strongly consistent, i.e. when its consistency mode is GLOBAL.
+        ks_meta = self.session.cluster.metadata.keyspaces['test_v2_sc']
+        assert ks_meta._consistency_mode is _ConsistencyMode.GLOBAL
+
+        # With an up-to-date cache the block always matches, so the server returns
+        # no further payload and replicas[0] stays the leader; every request must
+        # therefore be coordinated by that leader.
+        for _ in range(10):
+            result = self.session.execute(bound)
+            coordinator = result.response_future.coordinator_host
+            assert coordinator is not None and coordinator.host_id == leader_host_id, (
+                "request coordinated by {} but the Raft leader is replicas[0]={}; "
+                "leader-aware routing did not target the leader".format(
+                    getattr(coordinator, 'host_id', None), leader_host_id))
