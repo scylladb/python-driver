@@ -340,8 +340,21 @@ On OSX, via homebrew:
 
                 self.extensions.extend(cythonize(
                     NoPatchExtension("*", ["cassandra/*.pyx"], extra_compile_args=compile_args),
+                    exclude=["cassandra/cython_lz4.pyx"],
                     nthreads=build_concurrency,
                     compiler_directives={'language_level': 3},
+                ))
+
+                # cython_lz4 needs to link against liblz4, so it gets its
+                # own Extension entry rather than riding the .pyx glob above.
+                self.extensions.extend(cythonize(
+                    Extension('cassandra.cython_lz4',
+                              ['cassandra/cython_lz4.pyx'],
+                              libraries=['lz4'],
+                              extra_compile_args=compile_args),
+                    nthreads=build_concurrency,
+                    compiler_directives={'language_level': 3},
+                    exclude_failures=not CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST,
                 ))
             except Exception:
                 sys.stderr.write("Failed to cythonize one or more modules. These will not be compiled as extensions (optional).\n")
