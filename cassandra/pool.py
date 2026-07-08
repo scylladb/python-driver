@@ -465,7 +465,8 @@ class HostConnection(object):
                 tablet = self._session.cluster.metadata._tablets.get_tablet_for_key(keyspace, table, t)
 
                 # In both V1 and V2 the request is sent to this host, so we pick
-                # the shard that this host owns for the tablet.
+                # the shard that this host owns for the tablet. Leader-aware host
+                # selection (V2) happens earlier, in the load balancing policy.
                 if tablet is not None:
                     for replica in tablet.replicas:
                         if replica[0] == self.host.host_id:
