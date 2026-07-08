@@ -1,5 +1,9 @@
 import unittest
+from io import BytesIO
 
+from cassandra import ConsistencyLevel, ProtocolVersion
+from cassandra.protocol import ExecuteMessage
+from cassandra.protocol_features import ProtocolFeatures
 from cassandra.tablets import Tablets, Tablet, choose_tablet_version_block, random_tablet_version_block
 
 class TabletsTest(unittest.TestCase):
@@ -189,3 +193,62 @@ class TabletVersionBlockTest(unittest.TestCase):
         self.assertEqual(tablet.first_token, -100)
         self.assertEqual(tablet.last_token, 100)
         self.assertEqual(len(tablet.replicas), 2)
+
+
+class ExecuteMessageSerializationTest(unittest.TestCase):
+    """ExecuteMessage.send_body decides whether to emit the tablet_version_block
+    from the serving connection's negotiated protocol features, so the message no
+    longer has to be copied per send attempt (TABLETS_ROUTING_V2)."""
+
+    # V4 keeps the encoding minimal: no prepared-metadata id, single-byte flags.
+    PROTOCOL_VERSION = ProtocolVersion.V4
+
+    def _make_message(self, tablet_version_block):
+        return ExecuteMessage(
+            query_id=b"\x01\x02\x03\x04",
+            query_params=[],
+            consistency_level=ConsistencyLevel.ONE,
+            tablet_version_block=tablet_version_block,
+        )
+
+    def _encode_body(self, message, protocol_features):
+        f = BytesIO()
+        message.send_body(f, self.PROTOCOL_VERSION, protocol_features)
+        return f.getvalue()
+
+    def test_block_appended_on_v2_connection(self):
+        """A V2 connection appends exactly one trailing byte carrying the
+        precomputed tablet_version_block."""
+        message = self._make_message(0x7A)
+        v2 = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=True))
+        plain = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=False))
+        self.assertEqual(v2, plain + bytes([0x7A]))
+
+    def test_block_absent_without_v2(self):
+        """No trailing byte when the connection did not negotiate V2, and passing
+        no features at all is equivalent to V2 being off."""
+        message = self._make_message(0x7A)
+        no_features = self._encode_body(message, None)
+        v2_off = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=False))
+        self.assertEqual(no_features, v2_off)
+        self.assertNotIn(bytes([0x7A]), no_features[-1:])
+
+    def test_missing_block_coalesces_to_zero_on_v2(self):
+        """On a V2 connection the server reads exactly one trailing byte per
+        EXECUTE, so a message whose block was never computed must still emit a
+        zero byte to keep the frame in sync."""
+        message = self._make_message(None)
+        v2 = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=True))
+        plain = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=False))
+        self.assertEqual(v2, plain + bytes([0x00]))
+
+    def test_same_message_encodes_consistently_across_connections(self):
+        """The same shared message instance yields the V2 or non-V2 framing purely
+        from the features argument, so it is safe to encode concurrently on
+        connections with different capabilities without copying it."""
+        message = self._make_message(0x3C)
+        first = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=True))
+        second_plain = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=False))
+        first_again = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=True))
+        self.assertEqual(first, first_again)
+        self.assertEqual(first, second_plain + bytes([0x3C]))
