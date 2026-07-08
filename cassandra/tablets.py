@@ -76,6 +76,33 @@ class Tablet(object):
             return tablet
         return None
 
+    @property
+    def leader(self) -> Optional[UUID]:
+        """
+        The ``host_id`` of this tablet's Raft leader, or ``None`` if there is
+        none to report.
+
+        A strongly-consistent tablet has one distinguished replica, the leader,
+        that coordinates its writes and its linearizable reads. The server does
+        not name it in a separate field: ``TABLETS_ROUTING_V2`` orders the
+        replica set so that the leader comes first, which is why this is simply
+        ``replicas[0]``.
+
+        That ordering only carries meaning for a tablet of a strongly-consistent
+        keyspace that was learned over V2. An eventually-consistent tablet has no
+        leader at all, and a tablet learned over ``TABLETS_ROUTING_V1`` -- which
+        reports no ``tablet_version``, so ``tablet_version`` is ``None`` -- has no
+        leader ordering either. Callers must establish both of those before
+        treating the result as a leader; this property only answers "which
+        replica is first, if any".
+
+        Returns ``None`` for a tablet with no replicas rather than raising, so
+        callers do not have to guard the lookup themselves.
+        """
+        if not self.replicas:
+            return None
+        return self.replicas[0][0]
+
     def replica_contains_host_id(self, uuid: UUID) -> bool:
         for replica in self.replicas:
             if replica[0] == uuid:

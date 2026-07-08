@@ -1,5 +1,6 @@
 import unittest
 from io import BytesIO
+from uuid import uuid4
 
 from cassandra import ConsistencyLevel, ProtocolVersion
 from cassandra.protocol import ExecuteMessage
@@ -128,6 +129,32 @@ class GetTabletForKeyTest(unittest.TestCase):
         # Token value 50 is not > first_token (100) of the tablet whose
         # last_token (200) is >= 50, so no match.
         self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))
+
+
+class TabletLeaderTest(unittest.TestCase):
+    """Tests for Tablet.leader, the leader-first replica ordering V2 provides."""
+
+    def test_leader_is_the_first_replica(self):
+        leader = uuid4()
+        follower = uuid4()
+        tablet = Tablet(first_token=-100, last_token=100,
+                        replicas=[(leader, 3), (follower, 7)], tablet_version=1)
+        assert tablet.leader == leader
+
+    def test_leader_is_none_without_replicas(self):
+        # An accessor that raised here would push the guard onto every caller;
+        # the load balancing policy relies on getting None instead.
+        assert Tablet(first_token=-100, last_token=100, replicas=[]).leader is None
+        assert Tablet(first_token=-100, last_token=100, replicas=None).leader is None
+
+    def test_leader_is_reported_regardless_of_version(self):
+        # Tablet.leader answers "which replica is first", nothing more: a
+        # versionless (V1-sourced) tablet has no meaningful leader, and deciding
+        # that is the caller's job, not this property's.
+        leader = uuid4()
+        tablet = Tablet(first_token=-100, last_token=100, replicas=[(leader, 0)])
+        assert tablet.tablet_version is None
+        assert tablet.leader == leader
 
 
 class TabletVersionBlockTest(unittest.TestCase):
