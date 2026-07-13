@@ -26,7 +26,7 @@ from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DE
 from cassandra.policies import RoundRobinPolicy, WhiteListRoundRobinPolicy
 from tests.integration import use_singledc, PROTOCOL_VERSION, BasicSharedKeyspaceUnitTestCase, \
     greaterthanprotocolv3, MockLoggingHandler, get_supported_protocol_versions, local, get_cluster, setup_keyspace, \
-    USE_CASS_EXTERNAL, greaterthanorequalcass40, TestCluster, xfail_scylla, xfail_scylla_version_lt, \
+    greaterthanorequalcass40, TestCluster, xfail_scylla, xfail_scylla_version_lt, \
     get_tablets_disabled_ddl_suffix, execute_with_long_wait_retry
 from tests import notwindows
 from tests.integration import greaterthanorequalcass30, get_node
@@ -43,15 +43,14 @@ log = logging.getLogger(__name__)
 
 
 def setup_module():
-    if not USE_CASS_EXTERNAL:
-        use_singledc(start=False)
-        ccm_cluster = get_cluster()
-        ccm_cluster.stop()
-        # This is necessary because test_too_many_statements may
-        # timeout otherwise
-        config_options = {'write_request_timeout_in_ms': '20000'}
-        ccm_cluster.set_configuration_options(config_options)
-        ccm_cluster.start(wait_for_binary_proto=True, wait_other_notice=True)
+    use_singledc(start=False)
+    ccm_cluster = get_cluster()
+    ccm_cluster.stop()
+    # This is necessary because test_too_many_statements may
+    # timeout otherwise
+    config_options = {'write_request_timeout_in_ms': '20000'}
+    ccm_cluster.set_configuration_options(config_options)
+    ccm_cluster.start(wait_for_binary_proto=True, wait_other_notice=True)
 
     setup_keyspace()
 

@@ -18,7 +18,7 @@ import pytest
 
 from cassandra.cluster import ControlConnectionQueryFallback, NoHostAvailable
 
-from tests.integration import USE_CASS_EXTERNAL, TestCluster, local, remove_cluster, use_cluster
+from tests.integration import TestCluster, local, remove_cluster, use_cluster
 
 
 _CLUSTER_NAME = "control_connection_query_fallback"
@@ -26,9 +26,6 @@ _UNREACHABLE_BROADCAST_RPC_ADDRESS = "127.255.255.1"
 
 
 def setup_module():
-    if USE_CASS_EXTERNAL:
-        return
-
     remove_cluster()
 
     ccm_cluster = use_cluster(_CLUSTER_NAME, [1], start=False)
@@ -39,9 +36,6 @@ def setup_module():
 
 
 def teardown_module():
-    if USE_CASS_EXTERNAL:
-        return
-
     remove_cluster()
 
 

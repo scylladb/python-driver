@@ -122,7 +122,6 @@ def cmd_line_args_to_dict(env_var):
             args[cmd_arg.lstrip('-')] = cmd_arg_value
     return args
 
-USE_CASS_EXTERNAL = bool(os.getenv('USE_CASS_EXTERNAL', False))
 KEEP_TEST_CLUSTER = bool(os.getenv('KEEP_TEST_CLUSTER', False))
 SIMULACRON_JAR = os.getenv('SIMULACRON_JAR', None)
 
@@ -250,7 +249,7 @@ PROTOCOL_VERSION = int(os.getenv('PROTOCOL_VERSION', default_protocol_version))
 
 
 def local_decorator_creator():
-    if USE_CASS_EXTERNAL or not CASSANDRA_IP.startswith("127.0.0."):
+    if not CASSANDRA_IP.startswith("127.0.0."):
         return unittest.skip('Tests only runs against local C*')
 
     def _id_and_mark(f):
@@ -373,7 +372,7 @@ def check_log_error():
 
 
 def remove_cluster():
-    if USE_CASS_EXTERNAL or KEEP_TEST_CLUSTER:
+    if KEEP_TEST_CLUSTER:
         return
 
     global CCM_CLUSTER
@@ -430,21 +429,6 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
     cassandra_version = ccm_options.get('version', CCM_VERSION)
 
     global CCM_CLUSTER
-    if USE_CASS_EXTERNAL:
-        if CCM_CLUSTER:
-            log.debug("Using external CCM cluster {0}".format(CCM_CLUSTER.name))
-        else:
-            ccm_path = os.getenv("CCM_PATH", None)
-            ccm_name = os.getenv("CCM_NAME", None)
-            if ccm_path and ccm_name:
-                CCM_CLUSTER = CCMClusterFactory.load(ccm_path, ccm_name)
-                log.debug("Using external CCM cluster {0}".format(CCM_CLUSTER.name))
-            else:
-                log.debug("Using unnamed external cluster")
-        if set_keyspace and start:
-            setup_keyspace(ipformat=ipformat)
-        return
-
     if is_current_cluster(cluster_name, nodes, workloads):
         log.debug("Using existing cluster, matching topology: {0}".format(cluster_name))
     else:
@@ -549,7 +533,7 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
 
 
 def teardown_package():
-    if USE_CASS_EXTERNAL or KEEP_TEST_CLUSTER:
+    if KEEP_TEST_CLUSTER:
         return
     # when multiple modules are run explicitly, this runs between them
     # need to make sure CCM_CLUSTER is properly cleared for that case
