@@ -20,6 +20,7 @@ import logging
 import pytest
 from cassandra import ProtocolVersion
 from cassandra import ConsistencyLevel, Unavailable, InvalidRequest, cluster
+from cassandra.protocol import SyntaxException
 from cassandra.query import (PreparedStatement, BoundStatement, SimpleStatement,
                              BatchStatement, BatchType, dict_factory, TraceUnavailable)
 from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DEFAULT, Cluster
@@ -35,6 +36,7 @@ from tests.util import assertListEqual, wait_until
 import time
 import random
 import re
+import uuid
 
 from unittest import mock
 
@@ -57,6 +59,25 @@ def setup_module():
 
 
 class QueryTests(BasicSharedKeyspaceUnitTestCase):
+
+    def test_select_without_from(self):
+        try:
+            result_set = self.session.execute("SELECT 1")
+        except (InvalidRequest, SyntaxException):
+            raise unittest.SkipTest("Server does not support SELECT without FROM")
+
+        assert result_set.column_names == ["1"]
+        assert result_set.one()[0] == 1
+
+        result_set = self.session.execute("SELECT now()")
+        assert result_set.column_names == ["now()"]
+        assert isinstance(result_set.one()[0], uuid.UUID)
+
+        prepared = self.session.prepare("SELECT 1")
+        assert self.session.execute(prepared.bind(())).one()[0] == 1
+
+        prepared = self.session.prepare("SELECT now()")
+        assert isinstance(self.session.execute(prepared.bind(())).one()[0], uuid.UUID)
 
     def test_query(self):
 
