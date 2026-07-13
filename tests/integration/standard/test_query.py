@@ -20,6 +20,7 @@ import logging
 import pytest
 from cassandra import ProtocolVersion
 from cassandra import ConsistencyLevel, Unavailable, InvalidRequest, WriteTimeout, WriteFailure, cluster
+from cassandra.protocol import SyntaxException
 from cassandra.query import (PreparedStatement, BoundStatement, SimpleStatement,
                              BatchStatement, BatchType, dict_factory, TraceUnavailable)
 from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DEFAULT, Cluster
@@ -35,6 +36,7 @@ from tests.util import assertListEqual, wait_until
 import time
 import random
 import re
+import uuid
 
 from unittest import mock
 
@@ -53,6 +55,47 @@ def setup_module():
     ccm_cluster.start(wait_for_binary_proto=True, wait_other_notice=True)
 
     setup_keyspace()
+
+
+class SelectWithoutFromTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cluster = TestCluster()
+        cls.addClassCleanup(cls.cluster.shutdown)
+        cls.session = cls.cluster.connect()
+        try:
+            cls.session.execute("SELECT 1")
+        except SyntaxException:
+            raise unittest.SkipTest("Server does not support SELECT without FROM")
+
+    def check_result(self, result, selector):
+        assert self.session.keyspace is None
+        assert result.column_names == (["1"] if selector == "1" else ["system.now()"])
+        rows = list(result)
+        assert len(rows) == 1
+        assert len(rows[0]) == 1
+        if selector == "1":
+            assert result.column_types[0].typename == 'int'
+            assert type(rows[0][0]) is int
+            assert rows[0][0] == 1
+        else:
+            assert result.column_types[0].typename == 'timeuuid'
+            assert isinstance(rows[0][0], uuid.UUID)
+            assert rows[0][0].version == 1
+
+    def test_simple(self):
+        for selector in ("1", "now()"):
+            with self.subTest(selector=selector):
+                result = self.session.execute(SimpleStatement("SELECT " + selector))
+                self.check_result(result, selector)
+
+    def test_prepared(self):
+        for selector in ("1", "now()"):
+            with self.subTest(selector=selector):
+                prepared = self.session.prepare("SELECT " + selector)
+                result = self.session.execute(prepared.bind(()))
+                self.check_result(result, selector)
 
 
 class QueryTests(BasicSharedKeyspaceUnitTestCase):
