@@ -22,7 +22,7 @@ from cassandra.cluster import NoHostAvailable
 from cassandra.auth import PlainTextAuthProvider, SASLClient, SaslAuthProvider
 
 from tests.integration import use_singledc, get_cluster, remove_cluster, PROTOCOL_VERSION, \
-    CASSANDRA_IP, CASSANDRA_VERSION, USE_CASS_EXTERNAL, start_cluster_wait_for_up, TestCluster
+    CASSANDRA_IP, CASSANDRA_VERSION, start_cluster_wait_for_up, TestCluster
 from tests.integration.util import assert_quiescent_pool_state
 
 import unittest
@@ -40,7 +40,7 @@ _saved_scylla_ext_opts = None
 def setup_module():
     global _saved_scylla_ext_opts
     _saved_scylla_ext_opts = os.environ.get('SCYLLA_EXT_OPTS')
-    if CASSANDRA_IP.startswith("127.0.0.") and not USE_CASS_EXTERNAL:
+    if CASSANDRA_IP.startswith("127.0.0."):
         use_singledc(start=False)
         ccm_cluster = get_cluster()
         ccm_cluster.stop()

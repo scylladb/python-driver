@@ -20,7 +20,7 @@ def cleanup_clusters():
                              'cluster_tests', 'shared_aware', 'sni_proxy', 'test_ip_change', 'test_client_routes_replacement']:
             try:
                 cluster = CCMClusterFactory.load(ccm_path, cluster_name)
-                logging.debug("Using external CCM cluster {0}".format(cluster.name))
+                logging.debug("Clearing CCM cluster {0}".format(cluster.name))
                 cluster.clear()
             except FileNotFoundError:
                 pass
