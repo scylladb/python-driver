@@ -265,13 +265,11 @@ class MetricsNamespaceTest(BasicSharedKeyspaceUnitTestCaseRF3WM):
         """
         cluster2 = TestCluster(
             metrics_enabled=True,
-            monitor_reporting_enabled=False,
             execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(retry_policy=FallthroughRetryPolicy())}
         )
 
         cluster3 = TestCluster(
             metrics_enabled=True,
-            monitor_reporting_enabled=False,
             execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(retry_policy=FallthroughRetryPolicy())}
         )
 
@@ -358,7 +356,7 @@ class MetricsRequestSize(BasicExistingKeyspaceUnitTestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.common_setup(1, keyspace_creation=False, monitor_reporting_enabled=False)
+        cls.common_setup(1, keyspace_creation=False)
 
     def wait_for_count(self, ra, expected_count, error=False):
         for _ in range(10):

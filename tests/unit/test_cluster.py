@@ -205,7 +205,6 @@ class ClusterTest(unittest.TestCase):
     def test_control_connection_query_fallback_no_node_pool_mode_skips_pool_creation(self):
         cluster = Cluster(
             allow_control_connection_query_fallback=ControlConnectionQueryFallback.SkipPoolCreation,
-            monitor_reporting_enabled=False,
         )
         host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
 
@@ -220,7 +219,6 @@ class ClusterTest(unittest.TestCase):
     def test_control_connection_query_fallback_fallback_tolerates_empty_initial_pools(self):
         cluster = Cluster(
             allow_control_connection_query_fallback=ControlConnectionQueryFallback.Fallback,
-            monitor_reporting_enabled=False,
         )
         host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
         future = Future()

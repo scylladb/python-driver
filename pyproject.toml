@@ -63,7 +63,6 @@ packages = [
     'cassandra.cqlengine',
     'cassandra.graph',
     'cassandra.datastax',
-    'cassandra.datastax.insights',
     'cassandra.datastax.graph',
     'cassandra.datastax.graph.fluent',
     'cassandra.datastax.cloud',

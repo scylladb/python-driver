@@ -62,7 +62,6 @@ class ControlConnectionQueryFallbackIntegrationTests(unittest.TestCase):
         self.cluster = TestCluster(
             allow_control_connection_query_fallback=ControlConnectionQueryFallback.Disabled,
             connect_timeout=1,
-            monitor_reporting_enabled=False,
         )
 
         with pytest.raises(NoHostAvailable):
@@ -76,7 +75,6 @@ class ControlConnectionQueryFallbackIntegrationTests(unittest.TestCase):
         self.cluster = TestCluster(
             allow_control_connection_query_fallback=ControlConnectionQueryFallback.Fallback,
             connect_timeout=1,
-            monitor_reporting_enabled=False,
         )
 
         session = self.cluster.connect()
@@ -94,7 +92,6 @@ class ControlConnectionQueryFallbackIntegrationTests(unittest.TestCase):
         self.cluster = TestCluster(
             allow_control_connection_query_fallback=ControlConnectionQueryFallback.SkipPoolCreation,
             connect_timeout=1,
-            monitor_reporting_enabled=False,
         )
 
         session = self.cluster.connect()
