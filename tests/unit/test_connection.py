@@ -291,6 +291,26 @@ class ConnectionTest(unittest.TestCase):
         assert query_msg.query == 'USE "my""ks"', (
             "Double quotes in keyspace name must be escaped as double-double quotes")
 
+    def test_send_msg_passes_negotiated_features_to_encoder(self):
+        """
+        send_msg must hand the connection's negotiated ProtocolFeatures to the
+        encoder, so message serialization can emit fields belonging to protocol
+        extensions exactly on the connections that negotiated them.
+        """
+        c = self.make_connection()
+        c.push = Mock()
+        captured = {}
+
+        def encoder(msg, stream_id, protocol_version, compressor, allow_beta_protocol_version,
+                    protocol_features=None):
+            captured['protocol_features'] = protocol_features
+            return b'encoded-frame'
+
+        c.send_msg(Mock(), 1, cb=Mock(), encoder=encoder, decoder=Mock())
+
+        assert captured['protocol_features'] is c.features
+        c.push.assert_called_once_with(b'encoded-frame')
+
     def test_set_connection_class(self):
         cluster = Cluster(connection_class='test')
         assert 'test' == cluster.connection_class

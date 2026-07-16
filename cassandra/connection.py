@@ -1222,7 +1222,8 @@ class Connection(object):
         # this allows us to inject custom functions per request to encode, decode messages
         self._requests[request_id] = (cb, decoder, result_metadata)
         msg = encoder(msg, request_id, self.protocol_version, compressor=self.compressor,
-                      allow_beta_protocol_version=self.allow_beta_protocol_version)
+                      allow_beta_protocol_version=self.allow_beta_protocol_version,
+                      protocol_features=self.features)
 
         if self._is_checksumming_enabled:
             buffer = io.BytesIO()
