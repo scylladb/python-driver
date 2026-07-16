@@ -31,6 +31,7 @@ import sys
 import time
 import traceback
 import platform
+from pathlib import Path
 from threading import Event
 from subprocess import call
 from itertools import groupby
@@ -72,8 +73,69 @@ path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'ccm')
 if not os.path.exists(path):
     os.mkdir(path)
 
+_failed_reports = []
+_preserved_ccm_log_scopes = set()
+_log_artifact_dir = os.environ.get('INTEGRATION_LOG_ARTIFACT_DIR', 'integration-test-logs')
+_preserved_file_extensions = ('.conf', '.log', '.yaml', '.yml')
+
 cass_version = None
 cql_version = None
+
+
+def record_failed_test_report(report):
+    if report.failed:
+        _failed_reports.append(report)
+
+
+def _forget_preserved_ccm_log_scope(cluster_name=None):
+    _preserved_ccm_log_scopes.discard(cluster_name)
+    _preserved_ccm_log_scopes.discard(None)
+
+
+def preserve_ccm_logs_on_failure(cluster_name=None):
+    if not _failed_reports:
+        return
+
+    ccm_root = Path(path)
+    if cluster_name:
+        ccm_root = ccm_root / cluster_name
+    if not ccm_root.is_dir():
+        return
+
+    destination = Path(_log_artifact_dir).resolve()
+    ccm_destination = destination / 'ccm'
+    if cluster_name:
+        ccm_destination = ccm_destination / cluster_name
+    ccm_destination.mkdir(parents=True, exist_ok=True)
+
+    with (destination / 'failed-tests.txt').open('w') as failed_tests:
+        for report in _failed_reports:
+            failed_tests.write('%s %s\n' % (report.when, report.nodeid))
+
+    if (cluster_name in _preserved_ccm_log_scopes or
+            (cluster_name and None in _preserved_ccm_log_scopes)):
+        log.debug("CCM logs already preserved for %s", cluster_name or ccm_root)
+        return
+
+    # Preserve CCM logs/configs before cleanup removes the cluster directories.
+    for source_file in ccm_root.rglob('*'):
+        if not source_file.is_file():
+            continue
+
+        rel_file = source_file.relative_to(ccm_root)
+        preserve_all = bool({'conf', 'logs'}.intersection(rel_file.parts))
+        if not preserve_all and not source_file.name.endswith(_preserved_file_extensions):
+            continue
+
+        destination_file = ccm_destination / rel_file
+        try:
+            destination_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, destination_file)
+        except OSError as exc:
+            log.warning("Failed to preserve file %s: %s", source_file, exc)
+
+    _preserved_ccm_log_scopes.add(cluster_name)
+    log.info("Preserved ccm logs for failed tests under %s", destination)
 
 
 def get_server_versions():
@@ -383,7 +445,10 @@ def remove_cluster():
         tries = 0
         while tries < 100:
             try:
+                cluster_name = CCM_CLUSTER.name
+                preserve_ccm_logs_on_failure(CCM_CLUSTER.name)
                 CCM_CLUSTER.remove()
+                _forget_preserved_ccm_log_scope(cluster_name)
                 CCM_CLUSTER = None
                 return
             except OSError:
@@ -455,7 +520,9 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
         try:
             CCM_CLUSTER = CCMClusterFactory.load(path, cluster_name)
             log.debug("Found existing CCM cluster, {0}; clearing.".format(cluster_name))
+            preserve_ccm_logs_on_failure(cluster_name)
             CCM_CLUSTER.clear()
+            _forget_preserved_ccm_log_scope(cluster_name)
             CCM_CLUSTER.set_install_dir(**ccm_options)
             CCM_CLUSTER.set_configuration_options(configuration_options)
             CCM_CLUSTER.set_dse_configuration_options(dse_options)
@@ -471,7 +538,9 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
             # Make sure we cleanup old cluster dir if it exists
             cluster_path = os.path.join(path, cluster_name)
             if os.path.exists(cluster_path):
+                preserve_ccm_logs_on_failure(cluster_name)
                 shutil.rmtree(cluster_path)
+                _forget_preserved_ccm_log_scope(cluster_name)
 
             if SCYLLA_VERSION:
                 # `experimental: True` enable all experimental features.
@@ -553,6 +622,7 @@ def teardown_package():
         return
     # when multiple modules are run explicitly, this runs between them
     # need to make sure CCM_CLUSTER is properly cleared for that case
+    preserve_ccm_logs_on_failure()
     remove_cluster()
     for cluster_name in [CLUSTER_NAME, MULTIDC_CLUSTER_NAME]:
         try:
