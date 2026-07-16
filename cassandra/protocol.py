@@ -424,7 +424,7 @@ class StartupMessage(_MessageType):
         self.cqlversion = cqlversion
         self.options = options
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features=None):
         optmap = self.options.copy()
         optmap['CQL_VERSION'] = self.cqlversion
         write_stringmap(f, optmap)
@@ -459,7 +459,7 @@ class CredentialsMessage(_MessageType):
     def __init__(self, creds):
         self.creds = creds
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features=None):
         if protocol_version > 1:
             raise UnsupportedOperation(
                 "Credentials-based authentication is not supported with "
@@ -490,7 +490,7 @@ class AuthResponseMessage(_MessageType):
     def __init__(self, response):
         self.response = response
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features=None):
         write_longstring(f, self.response)
 
 
@@ -510,7 +510,7 @@ class OptionsMessage(_MessageType):
     opcode = 0x05
     name = 'OPTIONS'
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features=None):
         pass
 
 
@@ -558,7 +558,7 @@ class _QueryMessage(_MessageType):
         self.skip_meta = skip_meta
         self.keyspace = keyspace
 
-    def _write_query_params(self, f, protocol_version):
+    def _write_query_params(self, f, protocol_version, protocol_features=None):
         write_consistency_level(f, self.consistency_level)
         flags = 0x00
         if self.query_params is not None:
@@ -620,9 +620,9 @@ class QueryMessage(_QueryMessage):
         super(QueryMessage, self).__init__(query_params, consistency_level, serial_consistency_level, fetch_size,
                                            paging_state, timestamp, False, continuous_paging_options, keyspace)
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features=None):
         write_longstring(f, self.query)
-        self._write_query_params(f, protocol_version)
+        self._write_query_params(f, protocol_version, protocol_features)
 
 
 class ExecuteMessage(_QueryMessage):
@@ -638,14 +638,14 @@ class ExecuteMessage(_QueryMessage):
         super(ExecuteMessage, self).__init__(query_params, consistency_level, serial_consistency_level, fetch_size,
                                              paging_state, timestamp, skip_meta, continuous_paging_options)
 
-    def _write_query_params(self, f, protocol_version):
-        super(ExecuteMessage, self)._write_query_params(f, protocol_version)
+    def _write_query_params(self, f, protocol_version, protocol_features=None):
+        super(ExecuteMessage, self)._write_query_params(f, protocol_version, protocol_features)
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features=None):
         write_string(f, self.query_id)
         if ProtocolVersion.uses_prepared_metadata(protocol_version):
             write_string(f, self.result_metadata_id)
-        self._write_query_params(f, protocol_version)
+        self._write_query_params(f, protocol_version, protocol_features)
 
 
 CUSTOM_TYPE = object()
@@ -870,7 +870,7 @@ class PrepareMessage(_MessageType):
         self.query = query
         self.keyspace = keyspace
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features=None):
         write_longstring(f, self.query)
 
         flags = 0x00
@@ -914,7 +914,7 @@ class BatchMessage(_MessageType):
         self.timestamp = timestamp
         self.keyspace = keyspace
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features=None):
         write_byte(f, self.batch_type.value)
         write_short(f, len(self.queries))
         for prepared, string_or_query_id, params in self.queries:
@@ -972,7 +972,7 @@ class RegisterMessage(_MessageType):
     def __init__(self, event_list):
         self.event_list = event_list
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features=None):
         write_stringlist(f, self.event_list)
 
 
@@ -1046,7 +1046,7 @@ class ReviseRequestMessage(_MessageType):
         self.op_id = op_id
         self.next_pages = next_pages
 
-    def send_body(self, f, protocol_version):
+    def send_body(self, f, protocol_version, protocol_features=None):
         write_int(f, self.op_type)
         write_int(f, self.op_id)
         if self.op_type == ReviseRequestMessage.RevisionType.PAGING_BACKPRESSURE:
@@ -1079,7 +1079,8 @@ class _ProtocolHandler(object):
     """Instance of :class:`cassandra.policies.ColumnEncryptionPolicy` in use by this handler"""
 
     @classmethod
-    def encode_message(cls, msg, stream_id, protocol_version, compressor, allow_beta_protocol_version):
+    def encode_message(cls, msg, stream_id, protocol_version, compressor, allow_beta_protocol_version,
+                       protocol_features):
         """
         Encodes a message using the specified frame parameters, and compressor
 
@@ -1087,6 +1088,11 @@ class _ProtocolHandler(object):
         :param stream_id: protocol stream id for the frame header
         :param protocol_version: version for the frame header, and used encoding contents
         :param compressor: optional compression function to be used on the body
+        :param protocol_features: :class:`~cassandra.protocol_features.ProtocolFeatures` negotiated on the connection
+            this message is sent over, forwarded to ``send_body``. Messages carry
+            connection-independent request data; ``send_body`` decides the wire format from
+            ``(protocol_version, protocol_features)``, so fields belonging to a negotiated
+            protocol extension are emitted exactly on the connections that negotiated it.
         """
         flags = 0
         if msg.custom_payload:
@@ -1108,7 +1114,7 @@ class _ProtocolHandler(object):
             body = io.BytesIO()
             if msg.custom_payload:
                 write_bytesmap(body, msg.custom_payload)
-            msg.send_body(body, protocol_version)
+            msg.send_body(body, protocol_version, protocol_features)
             body = body.getvalue()
 
             if len(body) > 0:
@@ -1120,7 +1126,7 @@ class _ProtocolHandler(object):
         else:
             if msg.custom_payload:
                 write_bytesmap(buff, msg.custom_payload)
-            msg.send_body(buff, protocol_version)
+            msg.send_body(buff, protocol_version, protocol_features)
 
             length = buff.tell() - 9
 
