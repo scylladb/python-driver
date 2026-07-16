@@ -18,7 +18,9 @@ class ProtocolFeatures(object):
     tablets_routing_v1 = False
     lwt_info = None
 
-    def __init__(self, rate_limit_error=None, shard_id=0, sharding_info=None, tablets_routing_v1=False, lwt_info=None):
+    # Keyword-only so that independently developed protocol extensions can add
+    # new fields without conflicting over positional-argument order.
+    def __init__(self, *, rate_limit_error=None, shard_id=0, sharding_info=None, tablets_routing_v1=False, lwt_info=None):
         self.rate_limit_error = rate_limit_error
         self.shard_id = shard_id
         self.sharding_info = sharding_info
@@ -31,7 +33,8 @@ class ProtocolFeatures(object):
         shard_id, sharding_info = ProtocolFeatures.parse_sharding_info(supported)
         tablets_routing_v1 = ProtocolFeatures.parse_tablets_info(supported)
         lwt_info = ProtocolFeatures.parse_lwt_info(supported)
-        return ProtocolFeatures(rate_limit_error, shard_id, sharding_info, tablets_routing_v1, lwt_info)
+        return ProtocolFeatures(rate_limit_error=rate_limit_error, shard_id=shard_id, sharding_info=sharding_info,
+                                tablets_routing_v1=tablets_routing_v1, lwt_info=lwt_info)
 
     @staticmethod
     def maybe_parse_rate_limit_error(supported):
