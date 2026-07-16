@@ -1,8 +1,19 @@
 Unreleased
 ==========
 
+Features
+--------
+* Negotiate and implement the ``SCYLLA_USE_METADATA_ID`` protocol extension: prepared
+  statements skip re-sending result metadata on EXECUTE, and the driver automatically
+  refreshes cached metadata when the server detects a schema change (DRIVER-153)
+
 Others
 ------
+* ``PreparedStatement.result_metadata`` and ``PreparedStatement.result_metadata_id`` are
+  now read-only. They are replaced together by
+  ``PreparedStatement.update_result_metadata()``, so a request can never observe a metadata
+  id paired with result metadata from a different schema version. Code that assigned either
+  attribute directly must call ``update_result_metadata()`` instead.
 * Message serialization now receives the connection's negotiated ``ProtocolFeatures``:
   ``Connection.send_msg`` passes ``protocol_features`` to the encoder, and
   ``_ProtocolHandler.encode_message`` forwards it to each message's ``send_body``.
