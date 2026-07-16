@@ -27,6 +27,11 @@ See :meth:`.Session.execute`, :meth:`.Session.execute_async`, :attr:`.ResponseFu
 
     .. automethod:: decode_message
 
+.. note::
+    Both contracted methods receive the ``ProtocolFeatures`` negotiated on the connection
+    carrying the message: ``decode_message`` positionally, ``encode_message`` as the required
+    ``protocol_features`` keyword argument (overrides must keep that parameter name).
+
 .. _faster_deser:
 
 Faster Deserialization

@@ -1,3 +1,21 @@
+Unreleased
+==========
+
+Others
+------
+* Message serialization now receives the connection's negotiated ``ProtocolFeatures``:
+  ``Connection.send_msg`` passes ``protocol_features`` to the encoder, and
+  ``_ProtocolHandler.encode_message`` forwards it to each message's ``send_body``.
+  This changes the contracted signature of ``encode_message`` (and of ``send_body``).
+  Custom protocol handlers that override ``encode_message`` must accept a required
+  ``protocol_features`` keyword argument (adding ``**kwargs`` is recommended for
+  future-proofing), and custom encoders that delegate to ``msg.send_body`` should
+  forward it. There is deliberately no compatibility fallback: protocol extensions
+  are negotiated per connection at STARTUP, so an encoder unaware of
+  ``protocol_features`` could silently omit fields a negotiated extension requires.
+  This release emits no new bytes on the wire; the parameter is groundwork for
+  upcoming protocol extensions (``SCYLLA_USE_METADATA_ID``, ``TABLETS_ROUTING_V2``).
+
 3.29.11
 =======
 Jun 15, 2026
