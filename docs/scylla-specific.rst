@@ -156,3 +156,52 @@ https://github.com/scylladb/scylladb/blob/master/docs/dev/protocol-extensions.md
 
 Details on the sending tablet information to the drivers
 https://github.com/scylladb/scylladb/blob/master/docs/dev/protocol-extensions.md#sending-tablet-info-to-the-drivers
+
+
+Prepared Statement Metadata Caching (``SCYLLA_USE_METADATA_ID``)
+----------------------------------------------------------------
+
+When the ``SCYLLA_USE_METADATA_ID`` extension is negotiated, the driver requests the
+server to skip sending full result metadata with each prepared SELECT's EXECUTE
+response (the ``skip_meta`` optimization), relying instead on the metadata cached
+from the initial ``PREPARE`` call. Without change detection this would be unsafe: if
+the table schema changes after a statement is prepared (e.g., a column is added,
+removed, or its type is altered), the cached metadata becomes stale — leading to
+decoding errors or incorrect data.
+
+ScyllaDB solves this by backporting the ``metadata_id`` mechanism from CQL native
+protocol v5 as a v4 extension: ``SCYLLA_USE_METADATA_ID``. When this extension is
+negotiated, the server includes a hash of the result metadata in the ``PREPARE``
+response. The driver sends this hash back with every ``EXECUTE`` request. If the
+schema has changed, the server sets the ``METADATA_CHANGED`` flag and returns the
+new metadata hash together with the updated column definitions. The driver
+automatically updates its cache and uses the new metadata to decode the current
+response — all transparently, with no application code change required.
+
+**Behaviour summary:**
+
+- Automatically negotiated at connection time when the ScyllaDB node supports it.
+- ``skip_meta`` is enabled (metadata omitted from EXECUTE responses) only when it
+  is safe: the prepared statement must carry both a ``result_metadata_id`` and
+  usable cached result metadata from PREPARE, *and* the connection serving the
+  request must have negotiated ``SCYLLA_USE_METADATA_ID`` (or speak CQL v5) —
+  the latter is decided per connection when the request is serialized.
+- When a schema change is detected by the server, the driver refreshes both the
+  cached column metadata and the metadata hash for that prepared statement so that
+  all subsequent executions benefit immediately.
+- Statements prepared before the extension was negotiated (e.g., during a rolling
+  upgrade) start without a metadata hash, but acquire one automatically: on their
+  first execution over a connection with the extension, the driver sends an empty
+  hash, the server detects the mismatch and responds with the current hash and
+  full metadata, and the driver caches both. Subsequent executions get the
+  ``skip_meta`` optimization — no re-prepare or client restart is needed.
+
+**Current scope:** the optimization applies to any prepared statement whose
+``PREPARE`` response includes non-empty result columns — in practice, SELECT
+queries. UPDATE/INSERT/DELETE statements naturally return no result columns, so
+their ``result_metadata`` is always empty and ``skip_meta`` is never set for
+them. There is no code-level restriction to SELECT; the behaviour follows
+directly from the data.
+
+For full protocol details see the ScyllaDB CQL protocol extensions documentation:
+https://github.com/scylladb/scylladb/blob/master/docs/dev/protocol-extensions.md
