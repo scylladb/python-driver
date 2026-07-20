@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import itertools
+import ssl
 import unittest
 from io import BytesIO
 import time
@@ -80,6 +81,34 @@ class ConnectionTest(unittest.TestCase):
         endpoint = DefaultEndPoint('10.0.0.1')
         assert c.endpoint == endpoint
         assert c.endpoint.address == endpoint.address
+
+    def test_omitted_ssl_options_do_not_enable_ssl(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'))
+
+        assert c.ssl_context is None
+        assert not c._ssl_enabled
+
+    def test_empty_ssl_options_enable_ssl(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'), ssl_options={})
+
+        assert isinstance(c.ssl_context, ssl.SSLContext)
+        assert c.ssl_context.verify_mode == ssl.CERT_NONE
+        assert c.ssl_options == {}
+        assert c._ssl_enabled
+
+    def test_ssl_options_cert_reqs_applied_to_context(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'), ssl_options={'cert_reqs': ssl.CERT_REQUIRED})
+
+        assert isinstance(c.ssl_context, ssl.SSLContext)
+        assert c.ssl_context.verify_mode == ssl.CERT_REQUIRED
+
+    def test_ssl_options_check_hostname_requires_validation(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'), ssl_options={'check_hostname': True})
+
+        assert isinstance(c.ssl_context, ssl.SSLContext)
+        assert c.ssl_context.verify_mode == ssl.CERT_REQUIRED
+        assert c.ssl_context.check_hostname
+        assert c._check_hostname
 
     def test_bad_protocol_version(self, *args):
         c = self.make_connection()

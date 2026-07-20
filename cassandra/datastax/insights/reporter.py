@@ -33,6 +33,13 @@ from cassandra.datastax.insights.serializers  import initialize_registry
 log = logging.getLogger(__name__)
 
 
+def _ssl_options_cert_validation_enabled(ssl_options):
+    cert_reqs = ssl_options.get('cert_reqs')
+    if cert_reqs is not None:
+        return cert_reqs != ssl.CERT_NONE
+    return bool(ssl_options.get('ca_certs') or ssl_options.get('check_hostname', False))
+
+
 class MonitorReporter(Thread):
 
     def __init__(self, interval_sec, session):
@@ -141,14 +148,14 @@ class MonitorReporter(Thread):
 
         cert_validation = None
         try:
-            if self._session.cluster.ssl_context:
+            if self._session.cluster.ssl_context is not None:
                 if isinstance(self._session.cluster.ssl_context, ssl.SSLContext):
                     cert_validation = self._session.cluster.ssl_context.verify_mode == ssl.CERT_REQUIRED
                 else:  # pyopenssl
                     from OpenSSL import SSL
                     cert_validation = self._session.cluster.ssl_context.get_verify_mode() != SSL.VERIFY_NONE
-            elif self._session.cluster.ssl_options:
-                cert_validation = self._session.cluster.ssl_options.get('cert_reqs') == ssl.CERT_REQUIRED
+            elif self._session.cluster.ssl_options is not None:
+                cert_validation = _ssl_options_cert_validation_enabled(self._session.cluster.ssl_options)
         except Exception as e:
             log.debug('Unable to get the cert validation: {}'.format(e))
 
@@ -186,7 +193,8 @@ class MonitorReporter(Thread):
                 'compression': compression_type.upper() if compression_type else 'NONE',
                 'reconnectionPolicy': insights_registry.serialize(self._session.cluster.reconnection_policy),
                 'sslConfigured': {
-                    'enabled': bool(self._session.cluster.ssl_options or self._session.cluster.ssl_context),
+                    'enabled': (self._session.cluster.ssl_context is not None or
+                                self._session.cluster.ssl_options is not None),
                     'certValidation': cert_validation
                 },
                 'authProvider': {

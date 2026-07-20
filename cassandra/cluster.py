@@ -1298,7 +1298,8 @@ class Cluster(object):
 
         if cloud is not None:
             self.cloud = cloud
-            if contact_points is not _NOT_SET or endpoint_factory or ssl_context or ssl_options:
+            if (contact_points is not _NOT_SET or endpoint_factory or
+                    ssl_context is not None or ssl_options is not None):
                 raise ValueError("contact_points, endpoint_factory, ssl_context, and ssl_options "
                                  "cannot be specified with a cloud configuration")
 
@@ -1508,7 +1509,7 @@ class Cluster(object):
 
         self.metrics_enabled = metrics_enabled
 
-        if ssl_options and not ssl_context:
+        if ssl_options is not None and ssl_context is None:
             warn('Using ssl_options without ssl_context is '
                  'deprecated and will result in an error in '
                  'the next major release. Please use ssl_context '

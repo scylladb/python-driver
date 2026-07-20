@@ -16,18 +16,22 @@
 import unittest
 
 import logging
+import ssl
 import sys
-from unittest.mock import sentinel
+from unittest.mock import Mock, sentinel
 
 from cassandra import ConsistencyLevel
 from cassandra.cluster import (
     ExecutionProfile, GraphExecutionProfile, GraphAnalyticsExecutionProfile
 )
+from cassandra.connection import Connection
 from cassandra.datastax.graph.query import GraphOptions
+from cassandra.datastax.insights.reporter import MonitorReporter
 from cassandra.datastax.insights.registry import insights_registry
 from cassandra.datastax.insights.serializers import initialize_registry
 from cassandra.policies import (
     LoadBalancingPolicy,
+    HostDistance,
     DCAwareRoundRobinPolicy,
     TokenAwarePolicy,
     WhiteListRoundRobinPolicy,
@@ -87,6 +91,75 @@ class TestGetConfig(unittest.TestCase):
 
         # with default -- same behavior
         assert insights_registry.serialize(SubclassSentinel(), default=object()) is sentinel.serialized_superclass
+
+
+class TestMonitorReporterStartupData(unittest.TestCase):
+
+    def _get_startup_data(self, ssl_options=None, ssl_context=None):
+        reporter = MonitorReporter.__new__(MonitorReporter)
+        reporter._interval = 30
+
+        connection = Mock()
+        connection.host = '127.0.0.1'
+        connection._compression_type = 'NONE'
+        connection._socket.getsockname.return_value = ('127.0.0.1', 9042)
+
+        cluster = Mock()
+        cluster.auth_provider = None
+        cluster.client_id = 'client-id'
+        cluster.connection_class = Connection
+        cluster.control_connection._connection = connection
+        cluster.application_name = None
+        cluster.application_version = None
+        cluster._endpoint_map_for_insights = {}
+        cluster.idle_heartbeat_interval = 30
+        cluster.metadata.all_hosts.return_value = []
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.protocol_version = 4
+        cluster.reconnection_policy = object()
+        cluster.ssl_context = ssl_context
+        cluster.ssl_options = ssl_options
+
+        session = Mock()
+        session.cluster = cluster
+        session.hosts = []
+        session.session_id = 'session-id'
+
+        reporter._session = session
+        return reporter._get_startup_data()
+
+    def test_empty_ssl_options_reported_as_enabled(self):
+        startup_data = self._get_startup_data(ssl_options={})
+
+        assert startup_data['data']['sslConfigured']['enabled'] is True
+
+    def test_implicit_ssl_options_validation_reported(self):
+        startup_data = self._get_startup_data(ssl_options={'ca_certs': 'ca.pem'})
+
+        assert startup_data['data']['sslConfigured']['certValidation'] is True
+
+    def test_check_hostname_validation_reported(self):
+        startup_data = self._get_startup_data(ssl_options={'check_hostname': True})
+
+        assert startup_data['data']['sslConfigured']['certValidation'] is True
+
+    def test_empty_ssl_options_validation_reported_disabled(self):
+        startup_data = self._get_startup_data(ssl_options={})
+
+        assert startup_data['data']['sslConfigured']['certValidation'] is False
+
+    def test_omitted_ssl_options_reported_as_disabled(self):
+        startup_data = self._get_startup_data()
+
+        assert startup_data['data']['sslConfigured']['enabled'] is False
+
+    def test_ssl_context_reported_as_enabled(self):
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+        startup_data = self._get_startup_data(ssl_context=ssl_context)
+
+        assert startup_data['data']['sslConfigured']['enabled'] is True
+
 
 class TestConfigAsDict(unittest.TestCase):
 

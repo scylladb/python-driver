@@ -18,6 +18,7 @@ import errno
 from functools import wraps, partial, total_ordering
 from heapq import heappush, heappop
 import io
+import ipaddress
 import logging
 import socket
 import struct
@@ -54,6 +55,104 @@ from cassandra.util import OrderedDict
 from cassandra.shard_info import ShardingInfo  # noqa: F401  # re-exported for cassandra.connection.ShardingInfo
 
 log = logging.getLogger(__name__)
+
+
+def _pyopenssl_cert_to_ssl_cert(peer_cert):
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+
+    cert = peer_cert.to_cryptography()
+    ssl_cert = {}
+
+    subject = tuple((('commonName', attr.value),)
+                    for attr in cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME))
+    if subject:
+        ssl_cert['subject'] = subject
+
+    subject_alt_names = []
+    try:
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound:
+        pass
+    else:
+        subject_alt_names.extend(('DNS', name) for name in san.get_values_for_type(x509.DNSName))
+        subject_alt_names.extend(('IP Address', str(address))
+                                 for address in san.get_values_for_type(x509.IPAddress))
+
+    if subject_alt_names:
+        ssl_cert['subjectAltName'] = tuple(subject_alt_names)
+
+    return ssl_cert
+
+
+def _validate_pyopenssl_hostname(peer_cert, hostname):
+    cert = _pyopenssl_cert_to_ssl_cert(peer_cert)
+    try:
+        host_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        host_ip = None
+
+    names = []
+    for key, value in cert.get('subjectAltName', ()):
+        if key == 'DNS':
+            if host_ip is None and _dnsname_match(value, hostname):
+                return
+            names.append(value)
+        elif key == 'IP Address':
+            if host_ip is not None and _ipaddress_match(value, host_ip):
+                return
+            names.append(value)
+
+    if not names:
+        for subject in cert.get('subject', ()):
+            for key, value in subject:
+                if key == 'commonName':
+                    if _dnsname_match(value, hostname):
+                        return
+                    names.append(value)
+
+    if len(names) > 1:
+        raise ssl.CertificateError("hostname {!r} doesn't match either of {}".format(
+            hostname, ', '.join(map(repr, names))))
+    if len(names) == 1:
+        raise ssl.CertificateError("hostname {!r} doesn't match {!r}".format(hostname, names[0]))
+    raise ssl.CertificateError("no appropriate commonName or subjectAltName fields were found")
+
+
+def _dnsname_match(pattern, hostname):
+    if not pattern:
+        return False
+
+    wildcards = pattern.count('*')
+    if not wildcards:
+        return pattern.lower() == hostname.lower()
+    if wildcards > 1:
+        raise ssl.CertificateError(
+            "too many wildcards in certificate DNS name: {!r}.".format(pattern))
+
+    leftmost, sep, remainder = pattern.partition('.')
+    if '*' in remainder:
+        raise ssl.CertificateError(
+            "wildcard can only be present in the leftmost label: {!r}.".format(pattern))
+    if not sep:
+        raise ssl.CertificateError(
+            "sole wildcard without additional labels is not supported: {!r}.".format(pattern))
+    if leftmost != '*':
+        raise ssl.CertificateError(
+            "partial wildcards in leftmost label are not supported: {!r}.".format(pattern))
+
+    hostname_leftmost, sep, hostname_remainder = hostname.partition('.')
+    if not hostname_leftmost or not sep:
+        return False
+    return remainder.lower() == hostname_remainder.lower()
+
+
+def _ipaddress_match(pattern, host_ip):
+    try:
+        return ipaddress.ip_address(pattern) == host_ip
+    except ValueError:
+        return False
+
 
 segment_codec_no_compression = SegmentCodec()
 segment_codec_lz4 = None
@@ -803,6 +902,7 @@ class Connection(object):
     endpoint = None
     ssl_options = None
     ssl_context = None
+    _ssl_options_explicit = False
     last_error = None
 
     # The current number of operations that are in flight. More precisely,
@@ -885,7 +985,11 @@ class Connection(object):
         self.endpoint = host if isinstance(host, EndPoint) else DefaultEndPoint(host, port)
 
         self.authenticator = authenticator
-        self.ssl_options = ssl_options.copy() if ssl_options else {}
+        endpoint_ssl_options = self.endpoint.ssl_options
+        # Explicit ssl_options={} enables SSL with default options; omitted
+        # ssl_options=None leaves SSL disabled unless an endpoint supplies options.
+        self._ssl_options_explicit = ssl_options is not None
+        self.ssl_options = ssl_options.copy() if ssl_options is not None else {}
         self.ssl_context = ssl_context
         self.sockopts = sockopts
         self.compression = compression
@@ -905,10 +1009,13 @@ class Connection(object):
         self._on_orphaned_stream_released = on_orphaned_stream_released
         self._application_info = application_info
 
-        if ssl_options:
-            self.ssl_options.update(self.endpoint.ssl_options or {})
-        elif self.endpoint.ssl_options:
-            self.ssl_options = self.endpoint.ssl_options
+        if ssl_options is not None:
+            self.ssl_options.update(endpoint_ssl_options or {})
+        elif endpoint_ssl_options is not None:
+            self._ssl_options_explicit = True
+            self.ssl_options = endpoint_ssl_options
+        self._check_hostname = bool(self.ssl_options.get('check_hostname', False) or
+                                    getattr(self.ssl_context, 'check_hostname', False))
 
         # PYTHON-1331
         #
@@ -918,7 +1025,7 @@ class Connection(object):
         #
         # Note the use of pop() here; we are very deliberately removing these params from ssl_options if they're present.  After this
         # operation ssl_options should contain only args needed for the ssl_context.wrap_socket() call.
-        if not self.ssl_context and self.ssl_options:
+        if self.ssl_context is None and self._ssl_options_explicit:
             self.ssl_context = self._build_ssl_context_from_options()
 
         self.max_request_id = min(self.max_in_flight - 1, (2 ** 15) - 1)
@@ -941,6 +1048,10 @@ class Connection(object):
     @property
     def port(self):
         return self.endpoint.port
+
+    @property
+    def _ssl_enabled(self):
+        return self.ssl_context is not None or self._ssl_options_explicit
 
     @classmethod
     def initialize_reactor(cls):
@@ -1000,10 +1111,15 @@ class Connection(object):
         # Python >= 3.10 requires either PROTOCOL_TLS_CLIENT or PROTOCOL_TLS_SERVER so we'll get ahead of things by always
         # being explicit
         ssl_version = opts.get('ssl_version', None) or ssl.PROTOCOL_TLS_CLIENT
-        cert_reqs = opts.get('cert_reqs', None) or ssl.CERT_REQUIRED
+        cert_reqs = opts.get('cert_reqs', None)
+        if cert_reqs is None:
+            cert_reqs = (ssl.CERT_REQUIRED
+                         if (opts.get('ca_certs', None) or opts.get('check_hostname', False))
+                         else ssl.CERT_NONE)
         rv = ssl.SSLContext(protocol=int(ssl_version))
+        rv.check_hostname = False
+        rv.verify_mode = cert_reqs
         rv.check_hostname = bool(opts.get('check_hostname', False))
-        rv.options = int(cert_reqs)
 
         certfile = opts.get('certfile', None)
         keyfile = opts.get('keyfile', None)

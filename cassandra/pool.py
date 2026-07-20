@@ -691,10 +691,11 @@ class HostConnection(object):
         ssl_enabled = cluster.ssl_context is not None or cluster.ssl_options is not None
 
         endpoint = None
-        if ssl_enabled and self.host.sharding_info.shard_aware_port_ssl:
-            endpoint = copy.copy(self.host.endpoint)
-            endpoint._port = self.host.sharding_info.shard_aware_port_ssl
-        elif not ssl_enabled and self.host.sharding_info.shard_aware_port:
+        if ssl_enabled:
+            if self.host.sharding_info.shard_aware_port_ssl:
+                endpoint = copy.copy(self.host.endpoint)
+                endpoint._port = self.host.sharding_info.shard_aware_port_ssl
+        elif self.host.sharding_info.shard_aware_port:
             endpoint = copy.copy(self.host.endpoint)
             endpoint._port = self.host.sharding_info.shard_aware_port
 

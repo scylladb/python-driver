@@ -449,6 +449,21 @@ class TestClientRoutesSSLValidation(unittest.TestCase):
             )
         self.assertIn("check_hostname", str(cm.exception))
 
+    def test_empty_ssl_options_enable_tls_routes(self):
+        config = ClientRoutesConfig(
+            proxies=[ClientRouteProxy(str(uuid.uuid4()), "10.0.0.1")]
+        )
+        with self.assertWarns(DeprecationWarning):
+            cluster = Cluster(
+                contact_points=["10.0.0.1"],
+                ssl_options={},
+                client_routes_config=config,
+            )
+        try:
+            self.assertTrue(cluster._client_routes_handler.ssl_enabled)
+        finally:
+            cluster.shutdown()
+
     def test_disabled_check_hostname_with_client_routes_ok(self):
         """Cluster should allow check_hostname=False with client_routes_config."""
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)

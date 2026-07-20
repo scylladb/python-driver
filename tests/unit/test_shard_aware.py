@@ -73,6 +73,15 @@ class MockSession(MagicMock):
 
 
 class TestShardAware(unittest.TestCase):
+    def make_host(self, shard_aware_port=19042, shard_aware_port_ssl=19045):
+        host = MagicMock()
+        host.endpoint = DefaultEndPoint("1.2.3.4")
+        host.sharding_info = ShardingInfo(shard_id=1, shards_count=4, partitioner="",
+                                          sharding_algorithm="", sharding_ignore_msb=0,
+                                          shard_aware_port=shard_aware_port,
+                                          shard_aware_port_ssl=shard_aware_port_ssl)
+        return host
+
     def test_parsing_and_calculating_shard_id(self):
         """
         Testing the parsing of the options command
@@ -100,8 +109,7 @@ class TestShardAware(unittest.TestCase):
         Test that on given a `shard_aware_port` on the OPTIONS message (ShardInfo class)
         the next connections would be open using this port
         """
-        host = MagicMock()
-        host.endpoint = DefaultEndPoint("1.2.3.4")
+        host = self.make_host()
 
         for port, ssl_options, ssl_context in [
                 (19042, None, None),
@@ -128,8 +136,7 @@ class TestShardAware(unittest.TestCase):
         Test that SSL connections do not fall back to the plaintext
         shard-aware port when the SSL shard-aware port is unavailable.
         """
-        host = MagicMock()
-        host.endpoint = DefaultEndPoint("1.2.3.4")
+        host = self.make_host(shard_aware_port=19042, shard_aware_port_ssl=None)
         sharding_info = ShardingInfo(
             shard_id=1, shards_count=4, partitioner="", sharding_algorithm="",
             sharding_ignore_msb=0, shard_aware_port=19042,
@@ -160,8 +167,7 @@ class TestShardAware(unittest.TestCase):
         the deadline has passed. The hard-disable flag must suppress the endpoint
         unconditionally.
         """
-        host = MagicMock()
-        host.endpoint = DefaultEndPoint("1.2.3.4")
+        host = self.make_host()
         session = MockSession()
 
         pool = HostConnection(host=host, host_distance=HostDistance.REMOTE, session=session)

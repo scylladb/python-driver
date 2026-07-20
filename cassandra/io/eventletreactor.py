@@ -23,7 +23,8 @@ import logging
 from threading import Event
 import time
 
-from cassandra.connection import Connection, ConnectionShutdown, Timer, TimerManager
+from cassandra.connection import (Connection, ConnectionShutdown, Timer, TimerManager,
+                                  _validate_pyopenssl_hostname)
 try:
     from eventlet.green.OpenSSL import SSL
     _PYOPENSSL = True
@@ -35,12 +36,39 @@ except ImportError as e:
 log = logging.getLogger(__name__)
 
 
+def _default_ssl_method():
+    return getattr(SSL, 'TLS_CLIENT_METHOD',
+                   getattr(SSL, 'TLS_METHOD', SSL.TLSv1_METHOD))
+
+
 def _check_pyopenssl():
     if not _PYOPENSSL:
         raise ImportError(
             "{}, pyOpenSSL must be installed to enable "
             "SSL support with the Eventlet event loop".format(str(no_pyopenssl_error))
         )
+
+
+def _build_pyopenssl_context_from_options(ssl_options):
+    ssl_version = (ssl_options['ssl_version']
+                   if 'ssl_version' in ssl_options else _default_ssl_method())
+    context = SSL.Context(ssl_version)
+    if 'certfile' in ssl_options:
+        context.use_certificate_file(ssl_options['certfile'])
+    if 'keyfile' in ssl_options:
+        context.use_privatekey_file(ssl_options['keyfile'])
+    if 'ca_certs' in ssl_options:
+        context.load_verify_locations(ssl_options['ca_certs'])
+    cert_reqs = ssl_options.get('cert_reqs', None)
+    if cert_reqs is None:
+        cert_reqs = (SSL.VERIFY_PEER
+                     if (ssl_options.get('ca_certs', None) or ssl_options.get('check_hostname', False))
+                     else SSL.VERIFY_NONE)
+    context.set_verify(
+        cert_reqs,
+        callback=lambda _connection, _x509, _errnum, _errdepth, ok: ok
+    )
+    return context
 
 
 class EventletConnection(Connection):
@@ -92,7 +120,7 @@ class EventletConnection(Connection):
 
     def __init__(self, *args, **kwargs):
         Connection.__init__(self, *args, **kwargs)
-        self.uses_legacy_ssl_options = self.ssl_options and not self.ssl_context
+        self.uses_legacy_ssl_options = False
         self._write_queue = Queue()
 
         self._connect_socket()
@@ -108,23 +136,26 @@ class EventletConnection(Connection):
         if self.ssl_options and 'server_hostname' in self.ssl_options:
             # This is necessary for SNI
             self._socket.set_tlsext_host_name(self.ssl_options['server_hostname'].encode('ascii'))
+        return self._socket
 
     def _initiate_connection(self, sockaddr):
         if self.uses_legacy_ssl_options:
             super(EventletConnection, self)._initiate_connection(sockaddr)
         else:
             self._socket.connect(sockaddr)
-            if self.ssl_context or self.ssl_options:
+            if self._ssl_enabled:
                 self._socket.do_handshake()
 
-    def _match_hostname(self):
+    def _validate_hostname(self):
         if self.uses_legacy_ssl_options:
-            super(EventletConnection, self)._match_hostname()
+            super(EventletConnection, self)._validate_hostname()
         else:
-            cert_name = self._socket.get_peer_certificate().get_subject().commonName
-            if cert_name != self.endpoint.address:
-                raise Exception("Hostname verification failed! Certificate name '{}' "
-                                "doesn't endpoint '{}'".format(cert_name, self.endpoint.address))
+            expected_name = (self.ssl_options or {}).get('server_hostname') or self.endpoint.address
+            _validate_pyopenssl_hostname(self._socket.get_peer_certificate(), expected_name)
+
+    def _build_ssl_context_from_options(self):
+        _check_pyopenssl()
+        return _build_pyopenssl_context_from_options(self.ssl_options)
 
     def close(self):
         with self.lock:
