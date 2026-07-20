@@ -668,7 +668,7 @@ requires-dist = [
     { name = "sphinx-multiversion-scylla", specifier = ">=0.3.2,<1.0.0" },
     { name = "sphinx-scylladb-theme", specifier = ">=1.9.2" },
     { name = "sphinx-sitemap", specifier = ">=2.8.0,<3.0.0" },
-    { name = "tornado", specifier = ">=6.5,<7.0" },
+    { name = "tornado", specifier = ">=6.5.7,<7.0" },
 ]
 
 [package.metadata.requires-dev]
