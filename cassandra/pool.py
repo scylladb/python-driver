@@ -675,15 +675,26 @@ class HostConnection(object):
         self.advanced_shardaware_block_until = max(time.time() + secs, self.advanced_shardaware_block_until)
 
     def _get_shard_aware_endpoint(self):
+        """
+        Return an endpoint for the advertised shard-aware port, if usable.
+
+        Plaintext clusters use shard_aware_port. SSL-enabled clusters use only
+        shard_aware_port_ssl; if it is absent, return None so the pool opens a
+        regular SSL connection instead of falling back to the plaintext port.
+        Explicit ssl_options={}, like ssl_context, marks the cluster SSL-enabled.
+        """
         if (self.advanced_shardaware_block_until and self.advanced_shardaware_block_until > time.time()) or \
            self._session.cluster.shard_aware_options.disable_shardaware_port:
             return None
 
+        cluster = self._session.cluster
+        ssl_enabled = cluster.ssl_context is not None or cluster.ssl_options is not None
+
         endpoint = None
-        if self._session.cluster.ssl_options and self.host.sharding_info.shard_aware_port_ssl:
+        if ssl_enabled and self.host.sharding_info.shard_aware_port_ssl:
             endpoint = copy.copy(self.host.endpoint)
             endpoint._port = self.host.sharding_info.shard_aware_port_ssl
-        elif self.host.sharding_info.shard_aware_port:
+        elif not ssl_enabled and self.host.sharding_info.shard_aware_port:
             endpoint = copy.copy(self.host.endpoint)
             endpoint._port = self.host.sharding_info.shard_aware_port
 
@@ -918,5 +929,3 @@ class HostConnection(object):
     @property
     def _excess_connection_limit(self):
         return self.host.sharding_info.shards_count * self.max_excess_connections_per_shard_multiplier
-
-
