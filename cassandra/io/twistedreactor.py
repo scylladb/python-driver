@@ -41,8 +41,11 @@ log = logging.getLogger(__name__)
 
 
 def _default_ssl_method():
-    return getattr(SSL, "TLS_CLIENT_METHOD",
-                   getattr(SSL, "TLS_METHOD", SSL.TLSv1_METHOD))
+    for method_name in ("TLS_CLIENT_METHOD", "TLS_METHOD", "TLSv1_2_METHOD"):
+        method = getattr(SSL, method_name, None)
+        if method is not None:
+            return method
+    raise ImportError("pyOpenSSL does not expose a secure TLS client method")
 
 
 def _check_pyopenssl():

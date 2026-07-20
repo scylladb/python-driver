@@ -15,6 +15,7 @@
 import os
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 try:
@@ -76,12 +77,24 @@ class TwistedSSLContextTest(unittest.TestCase):
         context_mock.assert_called_once_with(twistedreactor.SSL.TLS_CLIENT_METHOD)
         assert context is context_mock.return_value
 
+    def test_default_ssl_method_falls_back_to_tls_method(self):
+        tls_method = object()
+
+        with patch.object(twistedreactor, 'SSL', SimpleNamespace(TLS_METHOD=tls_method)):
+            assert twistedreactor._default_ssl_method() is tls_method
+
+    def test_default_ssl_method_falls_back_to_tlsv1_2_method(self):
+        tlsv1_2_method = object()
+
+        with patch.object(twistedreactor, 'SSL', SimpleNamespace(TLSv1_2_METHOD=tlsv1_2_method)):
+            assert twistedreactor._default_ssl_method() is tlsv1_2_method
+
     def test_ssl_version_option_is_preserved(self):
         with patch.object(twistedreactor.SSL, 'Context') as context_mock:
             twistedreactor._build_pyopenssl_context_from_options(
-                {'ssl_version': twistedreactor.SSL.TLSv1_METHOD})
+                {'ssl_version': twistedreactor.SSL.TLSv1_2_METHOD})
 
-        context_mock.assert_called_once_with(twistedreactor.SSL.TLSv1_METHOD)
+        context_mock.assert_called_once_with(twistedreactor.SSL.TLSv1_2_METHOD)
 
     def test_ca_certs_default_to_required_validation(self):
         context = twistedreactor._build_pyopenssl_context_from_options({'ca_certs': CA_CERTS})

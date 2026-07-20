@@ -15,6 +15,7 @@
 import os
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from unittest.mock import Mock, patch
 
@@ -85,12 +86,24 @@ class EventletSSLContextTest(unittest.TestCase):
         context_mock.assert_called_once_with(eventletreactor.SSL.TLS_CLIENT_METHOD)
         assert context is context_mock.return_value
 
+    def test_default_ssl_method_falls_back_to_tls_method(self):
+        tls_method = object()
+
+        with patch.object(eventletreactor, 'SSL', SimpleNamespace(TLS_METHOD=tls_method)):
+            assert eventletreactor._default_ssl_method() is tls_method
+
+    def test_default_ssl_method_falls_back_to_tlsv1_2_method(self):
+        tlsv1_2_method = object()
+
+        with patch.object(eventletreactor, 'SSL', SimpleNamespace(TLSv1_2_METHOD=tlsv1_2_method)):
+            assert eventletreactor._default_ssl_method() is tlsv1_2_method
+
     def test_ssl_version_option_is_preserved(self):
         with patch.object(eventletreactor.SSL, 'Context') as context_mock:
             eventletreactor._build_pyopenssl_context_from_options(
-                {'ssl_version': eventletreactor.SSL.TLSv1_METHOD})
+                {'ssl_version': eventletreactor.SSL.TLSv1_2_METHOD})
 
-        context_mock.assert_called_once_with(eventletreactor.SSL.TLSv1_METHOD)
+        context_mock.assert_called_once_with(eventletreactor.SSL.TLSv1_2_METHOD)
 
     def test_ca_certs_default_to_required_validation(self):
         conn = EventletConnection.__new__(EventletConnection)

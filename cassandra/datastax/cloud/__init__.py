@@ -176,6 +176,14 @@ def _ssl_context_from_cert(ca_cert_location, cert_location, key_location):
     return ssl_context
 
 
+def _default_pyopenssl_ssl_method(ssl_module):
+    for method_name in ('TLS_CLIENT_METHOD', 'TLS_METHOD', 'TLSv1_2_METHOD'):
+        method = getattr(ssl_module, method_name, None)
+        if method is not None:
+            return method
+    raise ImportError('pyOpenSSL does not expose a secure TLS client method')
+
+
 def _pyopenssl_context_from_cert(ca_cert_location, cert_location, key_location):
     try:
         from OpenSSL import SSL
@@ -183,7 +191,7 @@ def _pyopenssl_context_from_cert(ca_cert_location, cert_location, key_location):
         raise ImportError(
             "PyOpenSSL must be installed to connect to Astra with the Eventlet or Twisted event loops")\
             .with_traceback(e.__traceback__)
-    ssl_context = SSL.Context(SSL.TLSv1_METHOD)
+    ssl_context = SSL.Context(_default_pyopenssl_ssl_method(SSL))
     ssl_context.set_verify(SSL.VERIFY_PEER, callback=lambda _1, _2, _3, _4, ok: ok)
     ssl_context.use_certificate_file(cert_location)
     ssl_context.use_privatekey_file(key_location)
