@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import ssl
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -127,7 +128,7 @@ class EventletSSLContextTest(unittest.TestCase):
         conn._socket = Mock()
         conn._socket.get_peer_certificate.return_value = _make_certificate('wrong.host')
 
-        with self.assertRaises(Exception):
+        with self.assertRaises(ssl.CertificateError):
             conn._validate_hostname()
 
     def test_validate_hostname_uses_server_hostname(self):
@@ -148,7 +149,7 @@ class EventletSSLContextTest(unittest.TestCase):
         conn._socket = Mock()
         conn._socket.get_peer_certificate.return_value = _make_certificate('sni.host', ['other.host'])
 
-        with self.assertRaises(Exception):
+        with self.assertRaises(ssl.CertificateError):
             conn._validate_hostname()
 
     def test_validate_hostname_matches_wildcard_san(self):
