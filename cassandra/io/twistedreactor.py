@@ -28,7 +28,8 @@ from twisted.internet.interfaces import IOpenSSLClientConnectionCreator
 from twisted.python.failure import Failure
 from zope.interface import implementer
 
-from cassandra.connection import Connection, ConnectionShutdown, Timer, TimerManager, ConnectionException
+from cassandra.connection import (Connection, ConnectionShutdown, Timer, TimerManager, ConnectionException,
+                                  _validate_pyopenssl_hostname)
 
 try:
     from OpenSSL import SSL
@@ -192,11 +193,17 @@ class _SSLCreator(object):
     def verify_callback(self, connection, x509, errnum, errdepth, ok):
         return ok
 
+    def _hostname_to_verify(self):
+        return self.ssl_options.get("server_hostname") or self.endpoint.address
+
     def info_callback(self, connection, where, ret):
         if where & SSL.SSL_CB_HANDSHAKE_DONE:
-            if self.check_hostname and self.endpoint.address != connection.get_peer_certificate().get_subject().commonName:
-                transport = connection.get_app_data()
-                transport.failVerification(Failure(ConnectionException("Hostname verification failed", self.endpoint)))
+            if self.check_hostname:
+                try:
+                    _validate_pyopenssl_hostname(connection.get_peer_certificate(), self._hostname_to_verify())
+                except Exception as exc:
+                    transport = connection.get_app_data()
+                    transport.failVerification(Failure(ConnectionException(str(exc), self.endpoint)))
 
     def clientConnectionForTLS(self, tlsProtocol):
         connection = SSL.Connection(self.context, None)

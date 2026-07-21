@@ -13,10 +13,21 @@
 # limitations under the License.
 
 import os
+import ssl
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from unittest.mock import Mock, patch
+
+try:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    from OpenSSL import crypto
+except ImportError:
+    crypto = None
 
 from tests.unit.io.utils import TimerTestMixin
 from tests import notpypy, EVENT_LOOP_MANAGER
@@ -34,6 +45,27 @@ from cassandra.connection import Connection, DefaultEndPoint
 
 CA_CERTS = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', '..', 'integration', 'long', 'ssl', 'rootCa.crt'))
+
+
+def _make_certificate(common_name, san_dns_names=None):
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+    ])
+    now = datetime.now(timezone.utc)
+    builder = (x509.CertificateBuilder()
+               .subject_name(subject)
+               .issuer_name(issuer)
+               .public_key(key.public_key())
+               .serial_number(x509.random_serial_number())
+               .not_valid_before(now - timedelta(days=1))
+               .not_valid_after(now + timedelta(days=1)))
+    if san_dns_names:
+        builder = builder.add_extension(
+            x509.SubjectAlternativeName([x509.DNSName(name) for name in san_dns_names]),
+            critical=False)
+
+    return crypto.X509.from_cryptography(builder.sign(key, hashes.SHA256()))
 
 
 @unittest.skipIf(EventletConnection is None, "eventlet is not available")
@@ -87,6 +119,48 @@ class EventletSSLContextTest(unittest.TestCase):
         Connection.__init__(conn, DefaultEndPoint('1.2.3.4'), ssl_options={'check_hostname': True})
 
         assert conn._check_hostname
+
+    def test_validate_hostname_rejects_mismatch(self):
+        conn = EventletConnection.__new__(EventletConnection)
+        conn.uses_legacy_ssl_options = False
+        conn.endpoint = DefaultEndPoint('1.2.3.4')
+        conn.ssl_options = {}
+        conn._socket = Mock()
+        conn._socket.get_peer_certificate.return_value = _make_certificate('wrong.host')
+
+        with self.assertRaises(ssl.CertificateError):
+            conn._validate_hostname()
+
+    def test_validate_hostname_uses_server_hostname(self):
+        conn = EventletConnection.__new__(EventletConnection)
+        conn.uses_legacy_ssl_options = False
+        conn.endpoint = DefaultEndPoint('proxy.host')
+        conn.ssl_options = {'server_hostname': 'sni.host'}
+        conn._socket = Mock()
+        conn._socket.get_peer_certificate.return_value = _make_certificate('proxy.host', ['sni.host'])
+
+        conn._validate_hostname()
+
+    def test_validate_hostname_prefers_san_over_common_name(self):
+        conn = EventletConnection.__new__(EventletConnection)
+        conn.uses_legacy_ssl_options = False
+        conn.endpoint = DefaultEndPoint('sni.host')
+        conn.ssl_options = {}
+        conn._socket = Mock()
+        conn._socket.get_peer_certificate.return_value = _make_certificate('sni.host', ['other.host'])
+
+        with self.assertRaises(ssl.CertificateError):
+            conn._validate_hostname()
+
+    def test_validate_hostname_matches_wildcard_san(self):
+        conn = EventletConnection.__new__(EventletConnection)
+        conn.uses_legacy_ssl_options = False
+        conn.endpoint = DefaultEndPoint('node.example.com')
+        conn.ssl_options = {}
+        conn._socket = Mock()
+        conn._socket.get_peer_certificate.return_value = _make_certificate('other.host', ['*.example.com'])
+
+        conn._validate_hostname()
 
     def test_wrap_socket_from_context_returns_wrapped_socket(self):
         conn = EventletConnection.__new__(EventletConnection)

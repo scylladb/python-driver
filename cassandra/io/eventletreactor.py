@@ -23,7 +23,8 @@ import logging
 from threading import Event
 import time
 
-from cassandra.connection import Connection, ConnectionShutdown, Timer, TimerManager
+from cassandra.connection import (Connection, ConnectionShutdown, Timer, TimerManager,
+                                  _validate_pyopenssl_hostname)
 try:
     from eventlet.green.OpenSSL import SSL
     _PYOPENSSL = True
@@ -152,10 +153,8 @@ class EventletConnection(Connection):
         if self.uses_legacy_ssl_options:
             super(EventletConnection, self)._validate_hostname()
         else:
-            cert_name = self._socket.get_peer_certificate().get_subject().commonName
-            if cert_name != self.endpoint.address:
-                raise Exception("Hostname verification failed! Certificate name '{}' "
-                                "doesn't endpoint '{}'".format(cert_name, self.endpoint.address))
+            expected_name = (self.ssl_options or {}).get('server_hostname') or self.endpoint.address
+            _validate_pyopenssl_hostname(self._socket.get_peer_certificate(), expected_name)
 
     def _build_ssl_context_from_options(self):
         _check_pyopenssl()
