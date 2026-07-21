@@ -18,7 +18,6 @@ import errno
 from functools import wraps, partial, total_ordering
 from heapq import heappush, heappop
 import io
-import ipaddress
 import logging
 import socket
 import struct
@@ -55,103 +54,6 @@ from cassandra.util import OrderedDict
 from cassandra.shard_info import ShardingInfo  # noqa: F401  # re-exported for cassandra.connection.ShardingInfo
 
 log = logging.getLogger(__name__)
-
-
-def _pyopenssl_cert_to_ssl_cert(peer_cert):
-    from cryptography import x509
-    from cryptography.x509.oid import NameOID
-
-    cert = peer_cert.to_cryptography()
-    ssl_cert = {}
-
-    subject = tuple((('commonName', attr.value),)
-                    for attr in cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME))
-    if subject:
-        ssl_cert['subject'] = subject
-
-    subject_alt_names = []
-    try:
-        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-    except x509.ExtensionNotFound:
-        pass
-    else:
-        subject_alt_names.extend(('DNS', name) for name in san.get_values_for_type(x509.DNSName))
-        subject_alt_names.extend(('IP Address', str(address))
-                                 for address in san.get_values_for_type(x509.IPAddress))
-
-    if subject_alt_names:
-        ssl_cert['subjectAltName'] = tuple(subject_alt_names)
-
-    return ssl_cert
-
-
-def _validate_pyopenssl_hostname(peer_cert, hostname):
-    cert = _pyopenssl_cert_to_ssl_cert(peer_cert)
-    try:
-        host_ip = ipaddress.ip_address(hostname)
-    except ValueError:
-        host_ip = None
-
-    names = []
-    for key, value in cert.get('subjectAltName', ()):
-        if key == 'DNS':
-            if host_ip is None and _dnsname_match(value, hostname):
-                return
-            names.append(value)
-        elif key == 'IP Address':
-            if host_ip is not None and _ipaddress_match(value, host_ip):
-                return
-            names.append(value)
-
-    if not names:
-        for subject in cert.get('subject', ()):
-            for key, value in subject:
-                if key == 'commonName':
-                    if _dnsname_match(value, hostname):
-                        return
-                    names.append(value)
-
-    if len(names) > 1:
-        raise ssl.CertificateError("hostname {!r} doesn't match either of {}".format(
-            hostname, ', '.join(map(repr, names))))
-    if len(names) == 1:
-        raise ssl.CertificateError("hostname {!r} doesn't match {!r}".format(hostname, names[0]))
-    raise ssl.CertificateError("no appropriate commonName or subjectAltName fields were found")
-
-
-def _dnsname_match(pattern, hostname):
-    if not pattern:
-        return False
-
-    wildcards = pattern.count('*')
-    if not wildcards:
-        return pattern.lower() == hostname.lower()
-    if wildcards > 1:
-        raise ssl.CertificateError(
-            "too many wildcards in certificate DNS name: {!r}.".format(pattern))
-
-    leftmost, sep, remainder = pattern.partition('.')
-    if '*' in remainder:
-        raise ssl.CertificateError(
-            "wildcard can only be present in the leftmost label: {!r}.".format(pattern))
-    if not sep:
-        raise ssl.CertificateError(
-            "sole wildcard without additional labels is not supported: {!r}.".format(pattern))
-    if leftmost != '*':
-        raise ssl.CertificateError(
-            "partial wildcards in leftmost label are not supported: {!r}.".format(pattern))
-
-    hostname_leftmost, sep, hostname_remainder = hostname.partition('.')
-    if not hostname_leftmost or not sep:
-        return False
-    return remainder.lower() == hostname_remainder.lower()
-
-
-def _ipaddress_match(pattern, host_ip):
-    try:
-        return ipaddress.ip_address(pattern) == host_ip
-    except ValueError:
-        return False
 
 
 segment_codec_no_compression = SegmentCodec()
