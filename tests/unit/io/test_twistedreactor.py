@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import ssl
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -27,7 +28,7 @@ try:
 except ImportError:
     crypto = None
 
-from cassandra.connection import Connection, DefaultEndPoint
+from cassandra.connection import Connection, DefaultEndPoint, _default_pyopenssl_ssl_method
 
 try:
     from twisted.test import proto_helpers
@@ -72,7 +73,7 @@ class TwistedSSLContextTest(unittest.TestCase):
 
     def test_empty_ssl_options_default_to_negotiating_tls(self):
         with patch.object(twistedreactor.SSL, 'Context') as context_mock:
-            context = twistedreactor._build_pyopenssl_context_from_options({})
+            context = twistedreactor._build_pyopenssl_context_from_options({}, twistedreactor.SSL)
 
         context_mock.assert_called_once_with(twistedreactor.SSL.TLS_CLIENT_METHOD)
         assert context is context_mock.return_value
@@ -81,23 +82,30 @@ class TwistedSSLContextTest(unittest.TestCase):
         tls_method = object()
 
         with patch.object(twistedreactor, 'SSL', SimpleNamespace(TLS_METHOD=tls_method)):
-            assert twistedreactor._default_ssl_method() is tls_method
+            assert _default_pyopenssl_ssl_method(twistedreactor.SSL) is tls_method
 
     def test_default_ssl_method_falls_back_to_tlsv1_2_method(self):
         tlsv1_2_method = object()
 
         with patch.object(twistedreactor, 'SSL', SimpleNamespace(TLSv1_2_METHOD=tlsv1_2_method)):
-            assert twistedreactor._default_ssl_method() is tlsv1_2_method
+            assert _default_pyopenssl_ssl_method(twistedreactor.SSL) is tlsv1_2_method
 
     def test_ssl_version_option_is_preserved(self):
         with patch.object(twistedreactor.SSL, 'Context') as context_mock:
             twistedreactor._build_pyopenssl_context_from_options(
-                {'ssl_version': twistedreactor.SSL.TLSv1_2_METHOD})
+                {'ssl_version': twistedreactor.SSL.TLSv1_2_METHOD}, twistedreactor.SSL)
 
         context_mock.assert_called_once_with(twistedreactor.SSL.TLSv1_2_METHOD)
 
+    def test_stdlib_ssl_version_option_is_translated(self):
+        with patch.object(twistedreactor.SSL, 'Context') as context_mock:
+            twistedreactor._build_pyopenssl_context_from_options(
+                {'ssl_version': ssl.PROTOCOL_TLS}, twistedreactor.SSL)
+
+        context_mock.assert_called_once_with(twistedreactor.SSL.TLS_CLIENT_METHOD)
+
     def test_ca_certs_default_to_required_validation(self):
-        context = twistedreactor._build_pyopenssl_context_from_options({'ca_certs': CA_CERTS})
+        context = twistedreactor._build_pyopenssl_context_from_options({'ca_certs': CA_CERTS}, twistedreactor.SSL)
 
         assert context.get_verify_mode() == twistedreactor.SSL.VERIFY_PEER
 
@@ -140,6 +148,23 @@ class TwistedSSLContextTest(unittest.TestCase):
         creator.info_callback(connection, twistedreactor.SSL.SSL_CB_HANDSHAKE_DONE, None)
 
         connection.get_app_data.assert_not_called()
+
+    def test_hostname_callback_is_set_on_each_connection(self):
+        context = Mock()
+        first_connection = Mock()
+        second_connection = Mock()
+        first_creator = twistedreactor._SSLCreator(DefaultEndPoint('first.host'), context, {}, True, None)
+        second_creator = twistedreactor._SSLCreator(DefaultEndPoint('second.host'), context, {}, True, None)
+
+        with patch.object(twistedreactor.SSL, 'Connection', side_effect=[first_connection, second_connection]):
+            assert first_creator.clientConnectionForTLS(Mock()) is first_connection
+            assert second_creator.clientConnectionForTLS(Mock()) is second_connection
+
+        context.set_info_callback.assert_not_called()
+        first_callback = first_connection.set_info_callback.call_args[0][0]
+        second_callback = second_connection.set_info_callback.call_args[0][0]
+        assert first_callback.__self__ is first_creator
+        assert second_callback.__self__ is second_creator
 
 
 class TestTwistedTimer(TimerTestMixin, unittest.TestCase):

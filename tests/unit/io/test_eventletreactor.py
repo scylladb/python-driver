@@ -41,7 +41,7 @@ except (ImportError, AttributeError):
     eventletreactor = None
     EventletConnection = None  # noqa
 
-from cassandra.connection import Connection, DefaultEndPoint
+from cassandra.connection import Connection, DefaultEndPoint, _default_pyopenssl_ssl_method
 
 CA_CERTS = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', '..', 'integration', 'long', 'ssl', 'rootCa.crt'))
@@ -82,7 +82,7 @@ class EventletSSLContextTest(unittest.TestCase):
 
     def test_empty_ssl_options_default_to_negotiating_tls(self):
         with patch.object(eventletreactor.SSL, 'Context') as context_mock:
-            context = eventletreactor._build_pyopenssl_context_from_options({})
+            context = eventletreactor._build_pyopenssl_context_from_options({}, eventletreactor.SSL)
 
         context_mock.assert_called_once_with(eventletreactor.SSL.TLS_CLIENT_METHOD)
         assert context is context_mock.return_value
@@ -91,20 +91,27 @@ class EventletSSLContextTest(unittest.TestCase):
         tls_method = object()
 
         with patch.object(eventletreactor, 'SSL', SimpleNamespace(TLS_METHOD=tls_method)):
-            assert eventletreactor._default_ssl_method() is tls_method
+            assert _default_pyopenssl_ssl_method(eventletreactor.SSL) is tls_method
 
     def test_default_ssl_method_falls_back_to_tlsv1_2_method(self):
         tlsv1_2_method = object()
 
         with patch.object(eventletreactor, 'SSL', SimpleNamespace(TLSv1_2_METHOD=tlsv1_2_method)):
-            assert eventletreactor._default_ssl_method() is tlsv1_2_method
+            assert _default_pyopenssl_ssl_method(eventletreactor.SSL) is tlsv1_2_method
 
     def test_ssl_version_option_is_preserved(self):
         with patch.object(eventletreactor.SSL, 'Context') as context_mock:
             eventletreactor._build_pyopenssl_context_from_options(
-                {'ssl_version': eventletreactor.SSL.TLSv1_2_METHOD})
+                {'ssl_version': eventletreactor.SSL.TLSv1_2_METHOD}, eventletreactor.SSL)
 
         context_mock.assert_called_once_with(eventletreactor.SSL.TLSv1_2_METHOD)
+
+    def test_stdlib_ssl_version_option_is_translated(self):
+        with patch.object(eventletreactor.SSL, 'Context') as context_mock:
+            eventletreactor._build_pyopenssl_context_from_options(
+                {'ssl_version': ssl.PROTOCOL_TLS}, eventletreactor.SSL)
+
+        context_mock.assert_called_once_with(eventletreactor.SSL.TLS_CLIENT_METHOD)
 
     def test_ca_certs_default_to_required_validation(self):
         conn = EventletConnection.__new__(EventletConnection)

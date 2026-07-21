@@ -154,6 +154,86 @@ def _ipaddress_match(pattern, host_ip):
         return False
 
 
+def _default_pyopenssl_ssl_method(ssl_module):
+    for method_name in ('TLS_CLIENT_METHOD', 'TLS_METHOD', 'TLSv1_2_METHOD'):
+        method = getattr(ssl_module, method_name, None)
+        if method is not None:
+            return method
+    raise ImportError('pyOpenSSL does not expose a secure TLS client method')
+
+
+def _pyopenssl_ssl_method_from_ssl_version(ssl_version, ssl_module):
+    if not isinstance(ssl_version, type(ssl.PROTOCOL_TLS)):
+        return ssl_version
+
+    protocol_method_names = (
+        ('PROTOCOL_TLS', None),
+        ('PROTOCOL_SSLv23', None),
+        ('PROTOCOL_TLS_CLIENT', None),
+        ('PROTOCOL_TLS_SERVER', ('TLS_SERVER_METHOD', 'TLS_METHOD')),
+        ('PROTOCOL_TLSv1', ('TLSv1_METHOD',)),
+        ('PROTOCOL_TLSv1_1', ('TLSv1_1_METHOD',)),
+        ('PROTOCOL_TLSv1_2', ('TLSv1_2_METHOD',)),
+    )
+    for protocol_name, method_names in protocol_method_names:
+        if getattr(ssl, protocol_name, None) is ssl_version:
+            if method_names is None:
+                return _default_pyopenssl_ssl_method(ssl_module)
+            for method_name in method_names:
+                method = getattr(ssl_module, method_name, None)
+                if method is not None:
+                    return method
+            raise ValueError('pyOpenSSL does not expose a method for {}'.format(protocol_name))
+
+    return ssl_version
+
+
+def _pyopenssl_verify_mode_from_cert_reqs(cert_reqs, ssl_module):
+    if not isinstance(cert_reqs, type(ssl.CERT_NONE)):
+        return cert_reqs
+    if cert_reqs == ssl.CERT_NONE:
+        return ssl_module.VERIFY_NONE
+    if cert_reqs in (ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED):
+        return ssl_module.VERIFY_PEER
+    return cert_reqs
+
+
+def _build_pyopenssl_context_from_options(ssl_options, ssl_module):
+    ssl_version = (ssl_options['ssl_version']
+                   if 'ssl_version' in ssl_options else _default_pyopenssl_ssl_method(ssl_module))
+    ssl_version = _pyopenssl_ssl_method_from_ssl_version(ssl_version, ssl_module)
+    context = ssl_module.Context(ssl_version)
+    certfile = ssl_options.get('certfile', None)
+    keyfile = ssl_options.get('keyfile', None)
+    if certfile:
+        use_certificate_chain_file = getattr(context, 'use_certificate_chain_file', None)
+        if use_certificate_chain_file:
+            use_certificate_chain_file(certfile)
+        else:
+            context.use_certificate_file(certfile)
+        context.use_privatekey_file(keyfile or certfile)
+        context.check_privatekey()
+    elif keyfile:
+        context.use_privatekey_file(keyfile)
+    ca_certs = ssl_options.get('ca_certs', None)
+    if ca_certs:
+        context.load_verify_locations(ca_certs)
+    ciphers = ssl_options.get('ciphers', None)
+    if ciphers:
+        context.set_cipher_list(ciphers)
+    cert_reqs = ssl_options.get('cert_reqs', None)
+    if cert_reqs is None:
+        cert_reqs = (ssl_module.VERIFY_PEER
+                     if (ssl_options.get('ca_certs', None) or ssl_options.get('check_hostname', False))
+                     else ssl_module.VERIFY_NONE)
+    cert_reqs = _pyopenssl_verify_mode_from_cert_reqs(cert_reqs, ssl_module)
+    context.set_verify(
+        cert_reqs,
+        callback=lambda _connection, _x509, _errnum, _errdepth, ok: ok
+    )
+    return context
+
+
 segment_codec_no_compression = SegmentCodec()
 segment_codec_lz4 = None
 
