@@ -15,6 +15,7 @@ import itertools
 import ssl
 import unittest
 from io import BytesIO
+from types import SimpleNamespace
 import time
 from threading import Lock
 from unittest.mock import Mock, ANY, call, patch
@@ -23,7 +24,8 @@ from cassandra import OperationTimedOut
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, HeartbeatFuture, _Frame, Timer, TimerManager,
-                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
+                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator,
+                                  _build_pyopenssl_context_from_options)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 SupportedMessage, ProtocolHandler, ResultMessage,
@@ -109,6 +111,84 @@ class ConnectionTest(unittest.TestCase):
         assert c.ssl_context.verify_mode == ssl.CERT_REQUIRED
         assert c.ssl_context.check_hostname
         assert c._check_hostname
+
+    def make_pyopenssl_module(self, **methods):
+        context = Mock()
+        module_attrs = {
+            'Context': Mock(return_value=context),
+            'VERIFY_NONE': object(),
+            'VERIFY_PEER': object(),
+        }
+        module_attrs.update(methods)
+        return SimpleNamespace(**module_attrs)
+
+    def test_pyopenssl_context_translates_stdlib_protocol_tls(self):
+        tls_client_method = object()
+        ssl_module = self.make_pyopenssl_module(TLS_CLIENT_METHOD=tls_client_method)
+
+        _build_pyopenssl_context_from_options({'ssl_version': ssl.PROTOCOL_TLS}, ssl_module)
+
+        ssl_module.Context.assert_called_once_with(tls_client_method)
+
+    def test_pyopenssl_context_translates_stdlib_tlsv1_2_protocol(self):
+        tlsv1_2_method = object()
+        ssl_module = self.make_pyopenssl_module(TLSv1_2_METHOD=tlsv1_2_method)
+
+        _build_pyopenssl_context_from_options({'ssl_version': ssl.PROTOCOL_TLSv1_2}, ssl_module)
+
+        ssl_module.Context.assert_called_once_with(tlsv1_2_method)
+
+    def test_pyopenssl_context_preserves_pyopenssl_method(self):
+        pyopenssl_method = object()
+        ssl_module = self.make_pyopenssl_module(TLS_CLIENT_METHOD=object())
+
+        _build_pyopenssl_context_from_options({'ssl_version': pyopenssl_method}, ssl_module)
+
+        ssl_module.Context.assert_called_once_with(pyopenssl_method)
+
+    def test_pyopenssl_context_applies_ciphers(self):
+        ssl_module = self.make_pyopenssl_module(TLS_CLIENT_METHOD=object())
+
+        _build_pyopenssl_context_from_options({'ciphers': 'HIGH:!aNULL'}, ssl_module)
+
+        ssl_module.Context.return_value.set_cipher_list.assert_called_once_with('HIGH:!aNULL')
+
+    def test_pyopenssl_context_loads_cert_chain_and_keyfile(self):
+        ssl_module = self.make_pyopenssl_module(TLS_CLIENT_METHOD=object())
+
+        _build_pyopenssl_context_from_options(
+            {'certfile': 'client.pem', 'keyfile': 'client.key'}, ssl_module)
+
+        context = ssl_module.Context.return_value
+        context.use_certificate_chain_file.assert_called_once_with('client.pem')
+        context.use_privatekey_file.assert_called_once_with('client.key')
+        context.check_privatekey.assert_called_once_with()
+
+    def test_pyopenssl_context_loads_private_key_from_certfile_by_default(self):
+        ssl_module = self.make_pyopenssl_module(TLS_CLIENT_METHOD=object())
+
+        _build_pyopenssl_context_from_options({'certfile': 'client-combined.pem'}, ssl_module)
+
+        context = ssl_module.Context.return_value
+        context.use_certificate_chain_file.assert_called_once_with('client-combined.pem')
+        context.use_privatekey_file.assert_called_once_with('client-combined.pem')
+        context.check_privatekey.assert_called_once_with()
+
+    def test_pyopenssl_context_translates_stdlib_cert_reqs(self):
+        verify_peer = object()
+        ssl_module = self.make_pyopenssl_module(TLS_CLIENT_METHOD=object(), VERIFY_PEER=verify_peer)
+
+        _build_pyopenssl_context_from_options({'cert_reqs': ssl.CERT_REQUIRED}, ssl_module)
+
+        ssl_module.Context.return_value.set_verify.assert_called_once_with(verify_peer, callback=ANY)
+
+    def test_pyopenssl_context_preserves_pyopenssl_verify_mode(self):
+        verify_mode = object()
+        ssl_module = self.make_pyopenssl_module(TLS_CLIENT_METHOD=object())
+
+        _build_pyopenssl_context_from_options({'cert_reqs': verify_mode}, ssl_module)
+
+        ssl_module.Context.return_value.set_verify.assert_called_once_with(verify_mode, callback=ANY)
 
     def test_bad_protocol_version(self, *args):
         c = self.make_connection()

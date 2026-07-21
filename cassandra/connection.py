@@ -18,6 +18,7 @@ import errno
 from functools import wraps, partial, total_ordering
 from heapq import heappush, heappop
 import io
+import ipaddress
 import logging
 import socket
 import struct
@@ -54,6 +55,183 @@ from cassandra.util import OrderedDict
 from cassandra.shard_info import ShardingInfo  # noqa: F401  # re-exported for cassandra.connection.ShardingInfo
 
 log = logging.getLogger(__name__)
+
+
+def _pyopenssl_cert_to_ssl_cert(peer_cert):
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+
+    cert = peer_cert.to_cryptography()
+    ssl_cert = {}
+
+    subject = tuple((('commonName', attr.value),)
+                    for attr in cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME))
+    if subject:
+        ssl_cert['subject'] = subject
+
+    subject_alt_names = []
+    try:
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound:
+        pass
+    else:
+        subject_alt_names.extend(('DNS', name) for name in san.get_values_for_type(x509.DNSName))
+        subject_alt_names.extend(('IP Address', str(address))
+                                 for address in san.get_values_for_type(x509.IPAddress))
+
+    if subject_alt_names:
+        ssl_cert['subjectAltName'] = tuple(subject_alt_names)
+
+    return ssl_cert
+
+
+def _validate_pyopenssl_hostname(peer_cert, hostname):
+    cert = _pyopenssl_cert_to_ssl_cert(peer_cert)
+    try:
+        host_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        host_ip = None
+
+    names = []
+    for key, value in cert.get('subjectAltName', ()):
+        if key == 'DNS':
+            if host_ip is None and _dnsname_match(value, hostname):
+                return
+            names.append(value)
+        elif key == 'IP Address':
+            if host_ip is not None and _ipaddress_match(value, host_ip):
+                return
+            names.append(value)
+
+    if not names:
+        for subject in cert.get('subject', ()):
+            for key, value in subject:
+                if key == 'commonName':
+                    if _dnsname_match(value, hostname):
+                        return
+                    names.append(value)
+
+    if len(names) > 1:
+        raise ssl.CertificateError("hostname {!r} doesn't match either of {}".format(
+            hostname, ', '.join(map(repr, names))))
+    if len(names) == 1:
+        raise ssl.CertificateError("hostname {!r} doesn't match {!r}".format(hostname, names[0]))
+    raise ssl.CertificateError("no appropriate commonName or subjectAltName fields were found")
+
+
+def _dnsname_match(pattern, hostname):
+    if not pattern:
+        return False
+
+    wildcards = pattern.count('*')
+    if not wildcards:
+        return pattern.lower() == hostname.lower()
+    if wildcards > 1:
+        raise ssl.CertificateError(
+            "too many wildcards in certificate DNS name: {!r}.".format(pattern))
+
+    leftmost, sep, remainder = pattern.partition('.')
+    if '*' in remainder:
+        raise ssl.CertificateError(
+            "wildcard can only be present in the leftmost label: {!r}.".format(pattern))
+    if not sep:
+        raise ssl.CertificateError(
+            "sole wildcard without additional labels is not supported: {!r}.".format(pattern))
+    if leftmost != '*':
+        raise ssl.CertificateError(
+            "partial wildcards in leftmost label are not supported: {!r}.".format(pattern))
+
+    hostname_leftmost, sep, hostname_remainder = hostname.partition('.')
+    if not hostname_leftmost or not sep:
+        return False
+    return remainder.lower() == hostname_remainder.lower()
+
+
+def _ipaddress_match(pattern, host_ip):
+    try:
+        return ipaddress.ip_address(pattern) == host_ip
+    except ValueError:
+        return False
+
+
+def _default_pyopenssl_ssl_method(ssl_module):
+    for method_name in ('TLS_CLIENT_METHOD', 'TLS_METHOD', 'TLSv1_2_METHOD'):
+        method = getattr(ssl_module, method_name, None)
+        if method is not None:
+            return method
+    raise ImportError('pyOpenSSL does not expose a secure TLS client method')
+
+
+def _pyopenssl_ssl_method_from_ssl_version(ssl_version, ssl_module):
+    if not isinstance(ssl_version, type(ssl.PROTOCOL_TLS)):
+        return ssl_version
+
+    protocol_method_names = (
+        ('PROTOCOL_TLS', None),
+        ('PROTOCOL_SSLv23', None),
+        ('PROTOCOL_TLS_CLIENT', None),
+        ('PROTOCOL_TLS_SERVER', ('TLS_SERVER_METHOD', 'TLS_METHOD')),
+        ('PROTOCOL_TLSv1', ('TLSv1_METHOD',)),
+        ('PROTOCOL_TLSv1_1', ('TLSv1_1_METHOD',)),
+        ('PROTOCOL_TLSv1_2', ('TLSv1_2_METHOD',)),
+    )
+    for protocol_name, method_names in protocol_method_names:
+        if getattr(ssl, protocol_name, None) is ssl_version:
+            if method_names is None:
+                return _default_pyopenssl_ssl_method(ssl_module)
+            for method_name in method_names:
+                method = getattr(ssl_module, method_name, None)
+                if method is not None:
+                    return method
+            raise ValueError('pyOpenSSL does not expose a method for {}'.format(protocol_name))
+
+    return ssl_version
+
+
+def _pyopenssl_verify_mode_from_cert_reqs(cert_reqs, ssl_module):
+    if not isinstance(cert_reqs, type(ssl.CERT_NONE)):
+        return cert_reqs
+    if cert_reqs == ssl.CERT_NONE:
+        return ssl_module.VERIFY_NONE
+    if cert_reqs in (ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED):
+        return ssl_module.VERIFY_PEER
+    return cert_reqs
+
+
+def _build_pyopenssl_context_from_options(ssl_options, ssl_module):
+    ssl_version = (ssl_options['ssl_version']
+                   if 'ssl_version' in ssl_options else _default_pyopenssl_ssl_method(ssl_module))
+    ssl_version = _pyopenssl_ssl_method_from_ssl_version(ssl_version, ssl_module)
+    context = ssl_module.Context(ssl_version)
+    certfile = ssl_options.get('certfile', None)
+    keyfile = ssl_options.get('keyfile', None)
+    if certfile:
+        use_certificate_chain_file = getattr(context, 'use_certificate_chain_file', None)
+        if use_certificate_chain_file:
+            use_certificate_chain_file(certfile)
+        else:
+            context.use_certificate_file(certfile)
+        context.use_privatekey_file(keyfile or certfile)
+        context.check_privatekey()
+    elif keyfile:
+        context.use_privatekey_file(keyfile)
+    ca_certs = ssl_options.get('ca_certs', None)
+    if ca_certs:
+        context.load_verify_locations(ca_certs)
+    ciphers = ssl_options.get('ciphers', None)
+    if ciphers:
+        context.set_cipher_list(ciphers)
+    cert_reqs = ssl_options.get('cert_reqs', None)
+    if cert_reqs is None:
+        cert_reqs = (ssl_module.VERIFY_PEER
+                     if (ssl_options.get('ca_certs', None) or ssl_options.get('check_hostname', False))
+                     else ssl_module.VERIFY_NONE)
+    cert_reqs = _pyopenssl_verify_mode_from_cert_reqs(cert_reqs, ssl_module)
+    context.set_verify(
+        cert_reqs,
+        callback=lambda _connection, _x509, _errnum, _errdepth, ok: ok
+    )
+    return context
 
 
 segment_codec_no_compression = SegmentCodec()

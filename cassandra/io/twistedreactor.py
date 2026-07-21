@@ -28,7 +28,9 @@ from twisted.internet.interfaces import IOpenSSLClientConnectionCreator
 from twisted.python.failure import Failure
 from zope.interface import implementer
 
-from cassandra.connection import Connection, ConnectionShutdown, Timer, TimerManager, ConnectionException
+from cassandra.connection import (Connection, ConnectionShutdown, Timer, TimerManager, ConnectionException,
+                                  _build_pyopenssl_context_from_options,
+                                  _validate_pyopenssl_hostname)
 
 try:
     from OpenSSL import SSL
@@ -39,42 +41,12 @@ except ImportError as e:
 log = logging.getLogger(__name__)
 
 
-def _default_ssl_method():
-    for method_name in ("TLS_CLIENT_METHOD", "TLS_METHOD", "TLSv1_2_METHOD"):
-        method = getattr(SSL, method_name, None)
-        if method is not None:
-            return method
-    raise ImportError("pyOpenSSL does not expose a secure TLS client method")
-
-
 def _check_pyopenssl():
     if not _HAS_SSL:
         raise ImportError(
             str(import_exception) +
             ', pyOpenSSL must be installed to enable SSL support with the Twisted event loop'
         )
-
-
-def _build_pyopenssl_context_from_options(ssl_options):
-    ssl_version = (ssl_options["ssl_version"]
-                   if "ssl_version" in ssl_options else _default_ssl_method())
-    context = SSL.Context(ssl_version)
-    if "certfile" in ssl_options:
-        context.use_certificate_file(ssl_options["certfile"])
-    if "keyfile" in ssl_options:
-        context.use_privatekey_file(ssl_options["keyfile"])
-    if "ca_certs" in ssl_options:
-        context.load_verify_locations(ssl_options["ca_certs"])
-    cert_reqs = ssl_options.get("cert_reqs", None)
-    if cert_reqs is None:
-        cert_reqs = (SSL.VERIFY_PEER
-                     if (ssl_options.get("ca_certs", None) or ssl_options.get("check_hostname", False))
-                     else SSL.VERIFY_NONE)
-    context.set_verify(
-        cert_reqs,
-        callback=lambda _connection, _x509, _errnum, _errdepth, ok: ok
-    )
-    return context
 
 
 def _cleanup(cleanup_weakref):
@@ -186,21 +158,28 @@ class _SSLCreator(object):
         if ssl_context is not None:
             self.context = ssl_context
         else:
-            self.context = _build_pyopenssl_context_from_options(self.ssl_options)
-        self.context.set_info_callback(self.info_callback)
+            self.context = _build_pyopenssl_context_from_options(self.ssl_options, SSL)
 
     def verify_callback(self, connection, x509, errnum, errdepth, ok):
         return ok
 
+    def _hostname_to_verify(self):
+        return self.ssl_options.get("server_hostname") or self.endpoint.address
+
     def info_callback(self, connection, where, ret):
         if where & SSL.SSL_CB_HANDSHAKE_DONE:
-            if self.check_hostname and self.endpoint.address != connection.get_peer_certificate().get_subject().commonName:
-                transport = connection.get_app_data()
-                transport.failVerification(Failure(ConnectionException("Hostname verification failed", self.endpoint)))
+            if self.check_hostname:
+                try:
+                    _validate_pyopenssl_hostname(connection.get_peer_certificate(), self._hostname_to_verify())
+                except Exception as exc:
+                    transport = connection.get_app_data()
+                    transport.failVerification(Failure(ConnectionException(str(exc), self.endpoint)))
 
     def clientConnectionForTLS(self, tlsProtocol):
         connection = SSL.Connection(self.context, None)
         connection.set_app_data(tlsProtocol)
+        if self.check_hostname:
+            connection.set_info_callback(self.info_callback)
         if self.ssl_options and "server_hostname" in self.ssl_options:
             connection.set_tlsext_host_name(self.ssl_options['server_hostname'].encode('ascii'))
         return connection
@@ -249,7 +228,7 @@ class TwistedConnection(Connection):
 
     def _build_ssl_context_from_options(self):
         _check_pyopenssl()
-        return _build_pyopenssl_context_from_options(self.ssl_options)
+        return _build_pyopenssl_context_from_options(self.ssl_options, SSL)
 
     def add_connection(self):
         """

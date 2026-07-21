@@ -13,11 +13,22 @@
 # limitations under the License.
 
 import os
+import ssl
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from cassandra.connection import Connection, DefaultEndPoint
+try:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    from OpenSSL import crypto
+except ImportError:
+    crypto = None
+
+from cassandra.connection import Connection, DefaultEndPoint, _default_pyopenssl_ssl_method
 
 try:
     from twisted.test import proto_helpers
@@ -35,13 +46,34 @@ CA_CERTS = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', '..', 'integration', 'long', 'ssl', 'rootCa.crt'))
 
 
+def _make_certificate(common_name, san_dns_names=None):
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+    ])
+    now = datetime.now(timezone.utc)
+    builder = (x509.CertificateBuilder()
+               .subject_name(subject)
+               .issuer_name(issuer)
+               .public_key(key.public_key())
+               .serial_number(x509.random_serial_number())
+               .not_valid_before(now - timedelta(days=1))
+               .not_valid_after(now + timedelta(days=1)))
+    if san_dns_names:
+        builder = builder.add_extension(
+            x509.SubjectAlternativeName([x509.DNSName(name) for name in san_dns_names]),
+            critical=False)
+
+    return crypto.X509.from_cryptography(builder.sign(key, hashes.SHA256()))
+
+
 @unittest.skipIf(TwistedConnection is None, "Twisted libraries are not available")
 @unittest.skipIf(not getattr(twistedreactor, '_HAS_SSL', False), "pyOpenSSL is not available")
 class TwistedSSLContextTest(unittest.TestCase):
 
     def test_empty_ssl_options_default_to_negotiating_tls(self):
         with patch.object(twistedreactor.SSL, 'Context') as context_mock:
-            context = twistedreactor._build_pyopenssl_context_from_options({})
+            context = twistedreactor._build_pyopenssl_context_from_options({}, twistedreactor.SSL)
 
         context_mock.assert_called_once_with(twistedreactor.SSL.TLS_CLIENT_METHOD)
         assert context is context_mock.return_value
@@ -50,23 +82,30 @@ class TwistedSSLContextTest(unittest.TestCase):
         tls_method = object()
 
         with patch.object(twistedreactor, 'SSL', SimpleNamespace(TLS_METHOD=tls_method)):
-            assert twistedreactor._default_ssl_method() is tls_method
+            assert _default_pyopenssl_ssl_method(twistedreactor.SSL) is tls_method
 
     def test_default_ssl_method_falls_back_to_tlsv1_2_method(self):
         tlsv1_2_method = object()
 
         with patch.object(twistedreactor, 'SSL', SimpleNamespace(TLSv1_2_METHOD=tlsv1_2_method)):
-            assert twistedreactor._default_ssl_method() is tlsv1_2_method
+            assert _default_pyopenssl_ssl_method(twistedreactor.SSL) is tlsv1_2_method
 
     def test_ssl_version_option_is_preserved(self):
         with patch.object(twistedreactor.SSL, 'Context') as context_mock:
             twistedreactor._build_pyopenssl_context_from_options(
-                {'ssl_version': twistedreactor.SSL.TLSv1_2_METHOD})
+                {'ssl_version': twistedreactor.SSL.TLSv1_2_METHOD}, twistedreactor.SSL)
 
         context_mock.assert_called_once_with(twistedreactor.SSL.TLSv1_2_METHOD)
 
+    def test_stdlib_ssl_version_option_is_translated(self):
+        with patch.object(twistedreactor.SSL, 'Context') as context_mock:
+            twistedreactor._build_pyopenssl_context_from_options(
+                {'ssl_version': ssl.PROTOCOL_TLS}, twistedreactor.SSL)
+
+        context_mock.assert_called_once_with(twistedreactor.SSL.TLS_CLIENT_METHOD)
+
     def test_ca_certs_default_to_required_validation(self):
-        context = twistedreactor._build_pyopenssl_context_from_options({'ca_certs': CA_CERTS})
+        context = twistedreactor._build_pyopenssl_context_from_options({'ca_certs': CA_CERTS}, twistedreactor.SSL)
 
         assert context.get_verify_mode() == twistedreactor.SSL.VERIFY_PEER
 
@@ -76,6 +115,56 @@ class TwistedSSLContextTest(unittest.TestCase):
         Connection.__init__(conn, DefaultEndPoint('1.2.3.4'), ssl_options={'check_hostname': True})
 
         assert conn._check_hostname
+
+    def test_hostname_verification_uses_server_hostname(self):
+        context = Mock()
+        creator = twistedreactor._SSLCreator(DefaultEndPoint('proxy.host'), context,
+                                             {'server_hostname': 'sni.host'}, True, None)
+        connection = Mock()
+        connection.get_peer_certificate.return_value = _make_certificate('proxy.host', ['sni.host'])
+
+        creator.info_callback(connection, twistedreactor.SSL.SSL_CB_HANDSHAKE_DONE, None)
+
+        connection.get_app_data.assert_not_called()
+
+    def test_hostname_verification_prefers_san_over_common_name(self):
+        context = Mock()
+        creator = twistedreactor._SSLCreator(DefaultEndPoint('sni.host'), context, {}, True, None)
+        connection = Mock()
+        transport = Mock()
+        connection.get_app_data.return_value = transport
+        connection.get_peer_certificate.return_value = _make_certificate('sni.host', ['other.host'])
+
+        creator.info_callback(connection, twistedreactor.SSL.SSL_CB_HANDSHAKE_DONE, None)
+
+        transport.failVerification.assert_called_once()
+
+    def test_hostname_verification_matches_wildcard_san(self):
+        context = Mock()
+        creator = twistedreactor._SSLCreator(DefaultEndPoint('node.example.com'), context, {}, True, None)
+        connection = Mock()
+        connection.get_peer_certificate.return_value = _make_certificate('other.host', ['*.example.com'])
+
+        creator.info_callback(connection, twistedreactor.SSL.SSL_CB_HANDSHAKE_DONE, None)
+
+        connection.get_app_data.assert_not_called()
+
+    def test_hostname_callback_is_set_on_each_connection(self):
+        context = Mock()
+        first_connection = Mock()
+        second_connection = Mock()
+        first_creator = twistedreactor._SSLCreator(DefaultEndPoint('first.host'), context, {}, True, None)
+        second_creator = twistedreactor._SSLCreator(DefaultEndPoint('second.host'), context, {}, True, None)
+
+        with patch.object(twistedreactor.SSL, 'Connection', side_effect=[first_connection, second_connection]):
+            assert first_creator.clientConnectionForTLS(Mock()) is first_connection
+            assert second_creator.clientConnectionForTLS(Mock()) is second_connection
+
+        context.set_info_callback.assert_not_called()
+        first_callback = first_connection.set_info_callback.call_args[0][0]
+        second_callback = second_connection.set_info_callback.call_args[0][0]
+        assert first_callback.__self__ is first_creator
+        assert second_callback.__self__ is second_creator
 
 
 class TestTwistedTimer(TimerTestMixin, unittest.TestCase):

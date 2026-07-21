@@ -480,6 +480,21 @@ class TestClientRoutesSSLValidation(unittest.TestCase):
         )
         cluster.shutdown()
 
+    def test_pyopenssl_ssl_context_with_client_routes_ok(self):
+        """Cluster should allow pyOpenSSL-style contexts without check_hostname."""
+        ssl_ctx = Mock()
+        del ssl_ctx.check_hostname
+
+        config = ClientRoutesConfig(
+            proxies=[ClientRouteProxy(str(uuid.uuid4()), "10.0.0.1")]
+        )
+        cluster = Cluster(
+            contact_points=["10.0.0.1"],
+            ssl_context=ssl_ctx,
+            client_routes_config=config,
+        )
+        cluster.shutdown()
+
     def test_no_ssl_with_client_routes_ok(self):
         """Cluster should allow client_routes_config without SSL."""
         config = ClientRoutesConfig(

@@ -1350,7 +1350,7 @@ class Cluster(object):
             # connections go through NLB proxies whose addresses won't match
             # server certificates.
             _check_hostname_enabled = False
-            if ssl_context is not None and ssl_context.check_hostname:
+            if ssl_context is not None and getattr(ssl_context, 'check_hostname', False):
                 _check_hostname_enabled = True
             if ssl_options is not None and ssl_options.get('check_hostname', False):
                 _check_hostname_enabled = True
