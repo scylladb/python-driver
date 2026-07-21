@@ -4737,7 +4737,7 @@ class ResponseFuture(object):
     _host = None
     _control_connection_query_attempted = False
     _TABLET_ROUTING_CTYPE = None
-    _bound_result_metadata = []
+    _bound_result_metadata = None
 
     _warned_timeout = False
 

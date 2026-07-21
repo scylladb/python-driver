@@ -12,15 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import io
+import struct
 import unittest
 
+from typing import ClassVar
 from unittest.mock import Mock
 
 from cassandra import ConsistencyLevel, ProtocolVersion, UnsupportedOperation
 from cassandra.protocol import (
-    PrepareMessage, QueryMessage, ExecuteMessage, UnsupportedOperation,
+    PrepareMessage, QueryMessage, ExecuteMessage,
     BatchMessage, StartupMessage, OptionsMessage, RegisterMessage,
-    AuthResponseMessage, ProtocolHandler, _MessageType
+    AuthResponseMessage, ProtocolHandler, _MessageType,
+    ResultMessage, RESULT_KIND_ROWS
 )
 from cassandra.protocol_features import ProtocolFeatures
 from cassandra.query import BatchType
@@ -65,6 +69,253 @@ class MessageTest(unittest.TestCase):
                                (b'\x00\x03',), (b'foo',),
                                (b'\x00\x04',),
                                (b'\x00\x00\x00\x01',), (b'\x00\x00',)])
+
+    def test_execute_message_skip_meta_flag_with_extension(self):
+        """
+        skip_meta=True must set _SKIP_METADATA_FLAG (0x02) in the flags byte when
+        the connection negotiated SCYLLA_USE_METADATA_ID, and the metadata id
+        field must be written on the wire.
+        """
+        message = ExecuteMessage('1', [], 4, skip_meta=True, result_metadata_id=b'foo')
+        mock_io = Mock()
+
+        message.send_body(mock_io, 4, ProtocolFeatures(use_metadata_id=True))
+        # flags byte should be VALUES_FLAG | SKIP_METADATA_FLAG = 0x01 | 0x02 = 0x03
+        self._check_calls(mock_io, [(b'\x00\x01',), (b'1',),
+                                    (b'\x00\x03',), (b'foo',),
+                                    (b'\x00\x04',), (b'\x03',), (b'\x00\x00',)])
+
+    def test_execute_message_skip_meta_suppressed_without_extension(self):
+        """
+        skip_meta=True must NOT reach the wire on a pre-v5 connection that did not
+        negotiate SCYLLA_USE_METADATA_ID: without the metadata-id mechanism, a
+        schema change after PREPARE would leave the driver decoding rows with
+        stale cached metadata. The metadata id field must not be written either.
+        """
+        message = ExecuteMessage('1', [], 4, skip_meta=True, result_metadata_id=b'foo')
+        mock_io = Mock()
+
+        message.send_body(mock_io, 4)
+        # flags byte contains only VALUES_FLAG; no metadata id field
+        self._check_calls(mock_io, [(b'\x00\x01',), (b'1',), (b'\x00\x04',), (b'\x01',), (b'\x00\x00',)])
+
+    def test_execute_message_v5_native_skip_meta_not_set(self):
+        """
+        On a native protocol v5 connection (no Scylla extension), skip_meta=True must
+        NOT set _SKIP_METADATA_FLAG. Upstream never emitted the flag on any version, and
+        this PR keeps native v5 byte-identical to upstream — enabling skip on native v5 is
+        a separate, out-of-scope behavior change. The metadata id field is still written
+        (it is part of the v5 EXECUTE frame layout), so only VALUES_FLAG is set.
+        """
+        message = ExecuteMessage('1', [], 4, skip_meta=True)
+        mock_io = Mock()
+
+        message.send_body(mock_io, 5)
+        # v5 wire layout:
+        #   query_id:           short(1) + b'1'
+        #   result_metadata_id: short(0) + b''  (sentinel — None on init)
+        #   consistency:        short(4) = ONE
+        #   flags (4-byte int): VALUES_FLAG(0x01) only — skip is NOT set on native v5
+        #   param count:        short(0)
+        self._check_calls(mock_io, [
+            (b'\x00\x01',), (b'1',),
+            (b'\x00\x00',), (b'',),
+            (b'\x00\x04',),
+            (b'\x00\x00\x00\x01',), (b'\x00\x00',),
+        ])
+
+    def test_execute_message_v5_with_extension_sets_skip_flag(self):
+        """
+        skip is extension-driven, not version-driven: on a v5 connection that ALSO
+        negotiated SCYLLA_USE_METADATA_ID, skip_meta=True does set _SKIP_METADATA_FLAG.
+        This also confirms _SKIP_METADATA_FLAG actually reaches the wire (it was dead code
+        upstream) whenever the extension gates it on.
+        """
+        message = ExecuteMessage('1', [], 4, skip_meta=True)
+        mock_io = Mock()
+
+        message.send_body(mock_io, 5, ProtocolFeatures(use_metadata_id=True))
+        # flags (4-byte int): VALUES_FLAG(0x01) | SKIP_METADATA_FLAG(0x02) = 0x03
+        self._check_calls(mock_io, [
+            (b'\x00\x01',), (b'1',),
+            (b'\x00\x00',), (b'',),
+            (b'\x00\x04',),
+            (b'\x00\x00\x00\x03',), (b'\x00\x00',),
+        ])
+
+    def test_execute_message_scylla_metadata_id_v4(self):
+        """result_metadata_id should be written on protocol v4 when the connection negotiated the Scylla extension."""
+        message = ExecuteMessage('1', [], 4, result_metadata_id=b'foo')
+        mock_io = Mock()
+
+        message.send_body(mock_io, 4, ProtocolFeatures(use_metadata_id=True))
+        # metadata_id written before query params (same position as v5)
+        self._check_calls(mock_io, [(b'\x00\x01',), (b'1',),
+                                    (b'\x00\x03',), (b'foo',),
+                                    (b'\x00\x04',), (b'\x01',), (b'\x00\x00',)])
+
+    def test_execute_message_scylla_metadata_id_none_writes_sentinel(self):
+        """
+        When the connection negotiated the extension but result_metadata_id is None
+        (e.g. LWT statement or mixed cluster), send_body must still write the field
+        as an empty string sentinel (\\x00\\x00) so the frame layout matches what
+        the server expects.
+        """
+        message = ExecuteMessage('1', [], 4)
+        # result_metadata_id intentionally left as None
+        mock_io = Mock()
+
+        message.send_body(mock_io, 4, ProtocolFeatures(use_metadata_id=True))
+        # empty sentinel: \x00\x00 (zero-length short) + b'' (zero bytes), then normal query params
+        self._check_calls(mock_io, [(b'\x00\x01',), (b'1',),
+                                    (b'\x00\x00',), (b'',),
+                                    (b'\x00\x04',), (b'\x01',), (b'\x00\x00',)])
+
+    def test_execute_message_v5_metadata_id_none_writes_sentinel(self):
+        """
+        On protocol v5, result_metadata_id is always written (uses_prepared_metadata).
+        When result_metadata_id is None (e.g. LWT statement or mixed cluster where the
+        statement was prepared before the extension was active), send_body must write an
+        empty sentinel instead of crashing with TypeError.
+        """
+        message = ExecuteMessage('1', [], 4)
+        # result_metadata_id intentionally left as None; use_metadata_id stays False (v5 native path)
+        mock_io = Mock()
+
+        message.send_body(mock_io, 5)
+        # v5 always writes metadata_id: None → empty sentinel \x00\x00 + b'', then query params
+        # v5 uses 4-byte flags: VALUES_FLAG = \x00\x00\x00\x01
+        self._check_calls(mock_io, [(b'\x00\x01',), (b'1',),
+                                    (b'\x00\x00',), (b'',),
+                                    (b'\x00\x04',),
+                                    (b'\x00\x00\x00\x01',), (b'\x00\x00',)])
+
+    def test_recv_results_prepared_scylla_extension_reads_metadata_id(self):
+        """
+        When use_metadata_id is True (Scylla extension), result_metadata_id must be
+        read from the PREPARE response even for protocol v4.
+        """
+        # Build a minimal valid PREPARE response binary (no bind/result columns):
+        #   query_id:          short(2) + b'ab'
+        #   result_metadata_id: short(3) + b'xyz'  <-- only present when extension active
+        #   prepared flags:    int(1) = global_tables_spec
+        #   colcount:          int(0)
+        #   num_pk_indexes:    int(0)
+        #   ksname:            short(2) + b'ks'
+        #   cfname:            short(2) + b'tb'
+        #   result flags:      int(4) = no_metadata
+        #   result colcount:   int(0)
+        buf = io.BytesIO(
+            struct.pack('>H', 2) + b'ab'   # query_id
+            + struct.pack('>H', 3) + b'xyz'  # result_metadata_id
+            + struct.pack('>i', 1)           # prepared flags: global_tables_spec
+            + struct.pack('>i', 0)           # colcount = 0
+            + struct.pack('>i', 0)           # num_pk_indexes = 0
+            + struct.pack('>H', 2) + b'ks'  # ksname
+            + struct.pack('>H', 2) + b'tb'  # cfname
+            + struct.pack('>i', 4)           # result flags: no_metadata
+            + struct.pack('>i', 0)           # result colcount = 0
+        )
+
+        features_with_extension = ProtocolFeatures(use_metadata_id=True)
+        msg = ResultMessage(kind=4)  # RESULT_KIND_PREPARED = 4
+        msg.recv_results_prepared(buf, protocol_version=4,
+                                  protocol_features=features_with_extension,
+                                  user_type_map={})
+        assert msg.query_id == b'ab'
+        assert msg.result_metadata_id == b'xyz'
+
+    def test_recv_results_prepared_no_extension_skips_metadata_id(self):
+        """
+        Without use_metadata_id, result_metadata_id must NOT be read on protocol v4.
+        The buffer must NOT contain a metadata_id field.
+        """
+        buf = io.BytesIO(
+            struct.pack('>H', 2) + b'ab'   # query_id
+            # no result_metadata_id
+            + struct.pack('>i', 1)           # prepared flags: global_tables_spec
+            + struct.pack('>i', 0)           # colcount = 0
+            + struct.pack('>i', 0)           # num_pk_indexes = 0
+            + struct.pack('>H', 2) + b'ks'  # ksname
+            + struct.pack('>H', 2) + b'tb'  # cfname
+            + struct.pack('>i', 4)           # result flags: no_metadata
+            + struct.pack('>i', 0)           # result colcount = 0
+        )
+
+        features_without_extension = ProtocolFeatures(use_metadata_id=False)
+        msg = ResultMessage(kind=4)
+        msg.recv_results_prepared(buf, protocol_version=4,
+                                  protocol_features=features_without_extension,
+                                  user_type_map={})
+        assert msg.query_id == b'ab'
+        assert msg.result_metadata_id is None
+
+    def test_recv_results_prepared_v5_reads_metadata_id(self):
+        """
+        On protocol v5, ProtocolVersion.uses_prepared_metadata() is True, so
+        result_metadata_id must be read from the PREPARE response even when
+        use_metadata_id is False (native v5 path, not the Scylla extension).
+        """
+        buf = io.BytesIO(
+            struct.pack('>H', 2) + b'ab'   # query_id
+            + struct.pack('>H', 3) + b'xyz'  # result_metadata_id (always present on v5)
+            + struct.pack('>i', 1)           # prepared flags: global_tables_spec
+            + struct.pack('>i', 0)           # colcount = 0
+            + struct.pack('>i', 0)           # num_pk_indexes = 0
+            + struct.pack('>H', 2) + b'ks'  # ksname
+            + struct.pack('>H', 2) + b'tb'  # cfname
+            + struct.pack('>i', 4)           # result flags: no_metadata
+            + struct.pack('>i', 0)           # result colcount = 0
+        )
+
+        features_no_extension = ProtocolFeatures(use_metadata_id=False)
+        msg = ResultMessage(kind=4)  # RESULT_KIND_PREPARED = 4
+        msg.recv_results_prepared(buf, protocol_version=5,
+                                  protocol_features=features_no_extension,
+                                  user_type_map={})
+        assert msg.query_id == b'ab'
+        assert msg.result_metadata_id == b'xyz'
+
+    def test_recv_results_metadata_reads_metadata_id_on_change(self):
+        """
+        When _METADATA_ID_FLAG (0x0008) is set in a ROWS result,
+        recv_results_metadata must read and store the new result_metadata_id
+        sent by the server (METADATA_CHANGED signal), and still populate
+        column_metadata normally.
+        """
+        # Wire layout for a ROWS result with METADATA_CHANGED:
+        #   flags:             int(0x0008)  = _METADATA_ID_FLAG
+        #   colcount:          int(0)
+        #   result_metadata_id: short(4) + b'new1'
+        # (no columns — colcount=0 — to keep the buffer minimal)
+        buf = io.BytesIO(
+            struct.pack('>i', 0x0008)          # flags: METADATA_ID_FLAG
+            + struct.pack('>i', 0)             # colcount = 0
+            + struct.pack('>H', 4) + b'new1'   # result_metadata_id = b'new1'
+        )
+        msg = ResultMessage(kind=RESULT_KIND_ROWS)
+        msg.recv_results_metadata(buf, user_type_map={})
+        assert msg.result_metadata_id == b'new1'
+        assert msg.column_metadata == []
+
+    def test_recv_results_metadata_no_metadata_flag_skips_metadata_id(self):
+        """
+        When _NO_METADATA_FLAG (0x0004) is set, recv_results_metadata returns
+        early and must NOT read or set result_metadata_id, even if the caller
+        mistakenly sets _METADATA_ID_FLAG alongside it.
+        """
+        # flags = _NO_METADATA_FLAG (0x0004), colcount = 0
+        buf = io.BytesIO(
+            struct.pack('>i', 0x0004)  # flags: NO_METADATA
+            + struct.pack('>i', 0)     # colcount = 0
+        )
+        msg = ResultMessage(kind=RESULT_KIND_ROWS)
+        msg.recv_results_metadata(buf, user_type_map={})
+        # recv_results_metadata returns early on NO_METADATA; result_metadata_id
+        # must never be set as an instance attribute (it is not a class default).
+        # column_metadata is a class attribute defaulting to None and must remain so.
+        assert not hasattr(msg, 'result_metadata_id')
+        assert msg.column_metadata is None
 
     def test_query_message(self):
         """
@@ -237,7 +488,7 @@ class FrameByteIdentityTest(unittest.TestCase):
     The expected frames below were captured from the pre-change encoder.
     """
 
-    EXPECTED_FRAMES = {
+    EXPECTED_FRAMES: ClassVar[dict] = {
         'startup_v4': '0400000701000000160001000b43514c5f56455253494f4e0005332e342e35',
         'options_v4': '040000070500000000',
         'register_v4': '040000070b000000220002000f544f504f4c4f47595f4348414e4745000d5354415455535f4348414e4745',
