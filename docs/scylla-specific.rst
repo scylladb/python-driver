@@ -148,7 +148,7 @@ For more details on paging, see :ref:`query-paging`.
 Tablet Awareness
 ----------------
 
-**scylla-driver** is tablet-aware, which means that it is able to parse `TABLETS_ROUTING_V1` extension to ProtocolFeatures, recieve tablet information sent by Scylla in the `custom_payload` part of the `RESULT` message, and utilize it.
+**scylla-driver** is tablet-aware, which means that it is able to parse the `TABLETS_ROUTING_V1` and `TABLETS_ROUTING_V2` extensions to ProtocolFeatures, receive tablet information sent by Scylla in the `custom_payload` part of the `RESULT` message, and utilize it.
 Thanks to this, queries to tablet-based tables are still shard-aware.
 
 Details on the scylla cql protocol extensions
@@ -156,3 +156,49 @@ https://github.com/scylladb/scylladb/blob/master/docs/dev/protocol-extensions.md
 
 Details on the sending tablet information to the drivers
 https://github.com/scylladb/scylladb/blob/master/docs/dev/protocol-extensions.md#sending-tablet-info-to-the-drivers
+
+
+Tablet version tracking and leader-aware routing
+------------------------------------------------
+
+When the cluster offers it, the driver negotiates ``TABLETS_ROUTING_V2`` in
+preference to V1. The negotiation happens per connection, so V2 and V1
+connections can coexist in the same cluster; each connection uses whichever
+extension its node offers. V2 adds two capabilities on top of V1, both
+invisible to application code.
+
+**Tablet version tracking.** Every tablet now carries a ``tablet_version`` that
+changes whenever its replica set or leader changes. The driver caches the version
+it last saw for each tablet and, on every prepared-statement execution over a V2
+connection, appends a single ``tablet_version_block`` byte derived from it. The
+server returns updated routing information in the ``custom_payload`` only when
+that byte shows the driver's cached view is stale, instead of attaching it to
+every response. This keeps the cached routing information fresh while avoiding
+the per-response overhead that V1 incurs.
+
+**Leader-aware routing for strongly-consistent tables.** Tables in a
+strongly-consistent keyspace -- one created with a ``consistency`` option and
+backed by Raft -- have a tablet leader that coordinates operations. For those
+tables, the driver sends each request directly to the leader, saving the extra
+hop the coordinator would otherwise take to forward it. Reads with consistency
+level ``ONE`` or ``LOCAL_ONE`` are an exception to this and retain normal
+token-aware replica ordering. Eventually-consistent tables are completely
+unaffected and keep their usual token-aware (optionally shuffled) replica
+ordering.
+
+Leader-aware routing is best-effort and bounded by the load-balancing policy:
+the leader is only targeted directly if the wrapped policy would consider it in
+the first place. For example, a ``DCAwareRoundRobinPolicy`` configured with no
+remote hosts will not send cross-datacenter traffic to a leader in another
+datacenter; the request goes to a local replica and the server forwards it to
+the leader, exactly as it would without V2.
+
+No configuration is required: as with V1, a ``TokenAwarePolicy`` is all that is
+needed.
+
+.. note::
+
+   ``TABLETS_ROUTING_V2`` is still experimental: a Scylla node advertises it
+   (on the wire as ``TABLETS_ROUTING_V2_EXPERIMENTAL``) only when started with
+   the ``strongly-consistent-tables`` experimental feature enabled. A node
+   without it offers only ``TABLETS_ROUTING_V1``.
