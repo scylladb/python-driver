@@ -558,6 +558,14 @@ class _QueryMessage(_MessageType):
         self.skip_meta = skip_meta
         self.keyspace = keyspace
 
+    def _should_skip_metadata(self, protocol_version, protocol_features):
+        """Whether to set ``_SKIP_METADATA_FLAG`` on this message.
+
+        The base is unconditional (the message's own ``skip_meta``); subclasses
+        narrow it based on the connection's negotiated features.
+        """
+        return self.skip_meta
+
     def _write_query_params(self, f, protocol_version, protocol_features=None):
         write_consistency_level(f, self.consistency_level)
         flags = 0x00
@@ -575,6 +583,9 @@ class _QueryMessage(_MessageType):
 
         if self.timestamp is not None:
             flags |= _PROTOCOL_TIMESTAMP_FLAG
+
+        if self._should_skip_metadata(protocol_version, protocol_features):
+            flags |= _SKIP_METADATA_FLAG
 
         if self.keyspace is not None:
             if ProtocolVersion.uses_keyspace_flag(protocol_version):
@@ -638,13 +649,45 @@ class ExecuteMessage(_QueryMessage):
         super(ExecuteMessage, self).__init__(query_params, consistency_level, serial_consistency_level, fetch_size,
                                              paging_state, timestamp, skip_meta, continuous_paging_options)
 
+    @staticmethod
+    def _metadata_id_negotiated(protocol_version, protocol_features):
+        """Whether the result-metadata-id field is part of this EXECUTE frame.
+
+        It is part of the frame layout whenever the connection speaks CQL v5+
+        natively or negotiated SCYLLA_USE_METADATA_ID, so on such connections it
+        must always be written.
+        """
+        return (ProtocolVersion.uses_prepared_metadata(protocol_version)
+                or (protocol_features is not None and protocol_features.use_metadata_id))
+
+    def _should_skip_metadata(self, protocol_version, protocol_features):
+        """Whether to ask the server to skip sending result metadata.
+
+        Only when the SCYLLA_USE_METADATA_ID extension is negotiated on this
+        connection. Without the metadata-id mechanism a schema change after
+        PREPARE would leave the driver decoding rows with stale cached metadata.
+
+        This is deliberately narrower than :meth:`_metadata_id_negotiated`: on
+        native CQL v5 the metadata-id field is part of the frame layout, but we
+        do NOT emit ``_SKIP_METADATA_FLAG`` there. Upstream never emitted it on
+        any version, and turning the skip optimization on for native v5 is a
+        separate behavior change out of scope for this Scylla extension.
+        """
+        return (self.skip_meta
+                and protocol_features is not None
+                and protocol_features.use_metadata_id)
+
     def _write_query_params(self, f, protocol_version, protocol_features=None):
         super(ExecuteMessage, self)._write_query_params(f, protocol_version, protocol_features)
 
     def send_body(self, f, protocol_version, protocol_features=None):
         write_string(f, self.query_id)
-        if ProtocolVersion.uses_prepared_metadata(protocol_version):
-            write_string(f, self.result_metadata_id)
+        if self._metadata_id_negotiated(protocol_version, protocol_features):
+            # An empty id is written when the statement has no cached metadata id
+            # (prepared before the extension was negotiated, e.g. in a mixed
+            # cluster): the server treats the mismatch as METADATA_CHANGED and
+            # responds with full metadata plus the current id.
+            write_string(f, self.result_metadata_id if self.result_metadata_id is not None else b'')
         self._write_query_params(f, protocol_version, protocol_features)
 
 
@@ -748,7 +791,7 @@ class ResultMessage(_MessageType):
 
     def recv_results_prepared(self, f, protocol_version, protocol_features, user_type_map):
         self.query_id = read_binary_string(f)
-        if ProtocolVersion.uses_prepared_metadata(protocol_version):
+        if ProtocolVersion.uses_prepared_metadata(protocol_version) or protocol_features.use_metadata_id:
             self.result_metadata_id = read_binary_string(f)
         else:
             self.result_metadata_id = None

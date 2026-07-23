@@ -1,6 +1,12 @@
 Unreleased
 ==========
 
+Features
+--------
+* Negotiate and implement the ``SCYLLA_USE_METADATA_ID`` protocol extension: prepared
+  statements skip re-sending result metadata on EXECUTE, and the driver automatically
+  refreshes cached metadata when the server detects a schema change (DRIVER-153)
+
 Others
 ------
 * Message serialization now receives the connection's negotiated ``ProtocolFeatures``:
