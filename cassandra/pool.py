@@ -682,19 +682,23 @@ class HostConnection(object):
         shard_aware_port_ssl; if it is absent, return None so the pool opens a
         regular SSL connection instead of falling back to the plaintext port.
         Explicit ssl_options={}, like ssl_context, marks the cluster SSL-enabled.
+        Endpoint ssl_options also imply SSL for custom endpoint factories.
         """
         if (self.advanced_shardaware_block_until and self.advanced_shardaware_block_until > time.time()) or \
            self._session.cluster.shard_aware_options.disable_shardaware_port:
             return None
 
         cluster = self._session.cluster
-        ssl_enabled = cluster.ssl_context is not None or cluster.ssl_options is not None
+        ssl_enabled = (cluster.ssl_context is not None or
+                       cluster.ssl_options is not None or
+                       self.host.endpoint.ssl_options is not None)
 
         endpoint = None
-        if ssl_enabled and self.host.sharding_info.shard_aware_port_ssl:
-            endpoint = copy.copy(self.host.endpoint)
-            endpoint._port = self.host.sharding_info.shard_aware_port_ssl
-        elif not ssl_enabled and self.host.sharding_info.shard_aware_port:
+        if ssl_enabled:
+            if self.host.sharding_info.shard_aware_port_ssl:
+                endpoint = copy.copy(self.host.endpoint)
+                endpoint._port = self.host.sharding_info.shard_aware_port_ssl
+        elif self.host.sharding_info.shard_aware_port:
             endpoint = copy.copy(self.host.endpoint)
             endpoint._port = self.host.sharding_info.shard_aware_port
 
