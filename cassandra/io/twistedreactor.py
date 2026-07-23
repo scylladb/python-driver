@@ -139,11 +139,16 @@ class TwistedLoop(object):
 
 @implementer(IOpenSSLClientConnectionCreator)
 class _SSLCreator(object):
-    def __init__(self, endpoint, ssl_context, ssl_options, check_hostname, timeout):
+    def __init__(self, endpoint, ssl_context, ssl_options, check_hostname, timeout, ssl_session_cache=None):
         self.endpoint = endpoint
         self.ssl_options = ssl_options
         self.check_hostname = check_hostname
         self.timeout = timeout
+        self.ssl_session_cache = ssl_session_cache
+        # Set in clientConnectionForTLS() to the single SSL.Connection this creator
+        # drives; read by TwistedConnection._cache_tls_session_if_needed() after the
+        # first CQL exchange.
+        self._ssl_connection = None
 
         if ssl_context:
             self.context = ssl_context
@@ -167,15 +172,80 @@ class _SSLCreator(object):
 
     def info_callback(self, connection, where, ret):
         if where & SSL.SSL_CB_HANDSHAKE_DONE:
-            if self.check_hostname and self.endpoint.address != connection.get_peer_certificate().get_subject().commonName:
-                transport = connection.get_app_data()
-                transport.failVerification(Failure(ConnectionException("Hostname verification failed", self.endpoint)))
+            transport = connection.get_app_data()
+            endpoint = connection._cassandra_endpoint
+            cert = connection.get_peer_certificate()
+            # Read check_hostname from the connection (not this creator) because a
+            # shared ssl_context means set_info_callback() only keeps the last
+            # creator's bound callback, so self.check_hostname could belong to a
+            # different creator and bypass or misapply hostname verification.
+            if connection._cassandra_check_hostname and (
+                    cert is None or
+                    endpoint.address != cert.get_subject().commonName):
+                transport.failVerification(Failure(ConnectionException("Hostname verification failed", endpoint)))
+                return
+            # For TLS 1.2 (and earlier) the session is fully established at
+            # handshake completion, so cache it immediately.  For TLS 1.3 the
+            # server sends the NewSessionTicket *after* the handshake, so
+            # get_session() here may return None or a ticketless, non-resumable
+            # session; caching that and setting the guard flag would suppress
+            # the deferred path and leave a ticketless session cached
+            # indefinitely.  TLS 1.3 is therefore left entirely to the deferred
+            # path in TwistedConnection._cache_tls_session_if_needed(), which
+            # runs after the first CQL exchange once the ticket has arrived.
+            # Note: pyOpenSSL's SSL.Connection exposes no session_reused(), so we cannot
+            # detect resumed handshakes here; the per-connection guard flag stored on the
+            # SSL.Connection prevents the deferred path from storing the same session again.
+            # Both the guard flag and the cache reference live on the connection
+            # (not this creator) because a shared ssl_context means
+            # set_info_callback() only keeps the last creator's bound callback,
+            # so creator-scoped state would belong to the wrong instance -- e.g.
+            # storing one cluster's session into another cluster's cache.
+            ssl_session_cache = connection._cassandra_ssl_session_cache
+            if ssl_session_cache is not None and \
+                    connection.get_protocol_version_name() != 'TLSv1.3':
+                session = connection.get_session()
+                if session is not None:
+                    ssl_session_cache.set(endpoint.tls_session_cache_key, session)
+                    connection._cassandra_session_cached = True
 
     def clientConnectionForTLS(self, tlsProtocol):
         connection = SSL.Connection(self.context, None)
         connection.set_app_data(tlsProtocol)
+        # Twisted may overwrite app_data with its own state, so stash the
+        # per-connection endpoint as a dedicated attribute on this specific
+        # SSL.Connection.  info_callback recovers it from here because it runs off
+        # the shared SSL.Context and cannot rely on this creator's attributes.
+        connection._cassandra_endpoint = self.endpoint
+        # Likewise stash this creator's cache on the connection so info_callback
+        # writes to the correct cache even when a shared ssl_context binds it to
+        # a different creator instance.
+        connection._cassandra_ssl_session_cache = self.ssl_session_cache
+        # Same reasoning for the hostname check policy: keep it on the connection
+        # so info_callback applies this creator's check_hostname rather than that
+        # of whichever creator last bound the shared context's info_callback.
+        connection._cassandra_check_hostname = self.check_hostname
+        # Per-connection "session already stored" guard.  Kept on the connection
+        # (not this creator) so it stays correct even when a shared ssl_context
+        # means info_callback fires bound to a different creator instance.
+        connection._cassandra_session_cached = False
+        # This creator drives exactly one connection, so this reference unambiguously
+        # identifies it for TwistedConnection._cache_tls_session_if_needed().
+        self._ssl_connection = connection
         if self.ssl_options and "server_hostname" in self.ssl_options:
             connection.set_tlsext_host_name(self.ssl_options['server_hostname'].encode('ascii'))
+
+        # Apply cached TLS session for resumption (PyOpenSSL)
+        if self.ssl_session_cache is not None:
+            cached_session = self.ssl_session_cache.get(
+                self.endpoint.tls_session_cache_key)
+            if cached_session:
+                try:
+                    connection.set_session(cached_session)
+                    log.debug("Using cached TLS session for %s", self.endpoint)
+                except Exception as e:
+                    log.debug("Could not restore TLS session for %s: %s", self.endpoint, e)
+
         return connection
 
 
@@ -212,6 +282,7 @@ class TwistedConnection(Connection):
         self.is_closed = True
         self.connector = None
         self.transport = None
+        self._ssl_creator = None  # set in add_connection() when SSL is used
 
         reactor.callFromThread(self.add_connection)
         self._loop.maybe_start()
@@ -241,7 +312,9 @@ class TwistedConnection(Connection):
                 self.ssl_options,
                 self._check_hostname,
                 self.connect_timeout,
+                ssl_session_cache=self._ssl_session_cache,
             )
+            self._ssl_creator = ssl_connection_creator
 
             endpoint = SSL4ClientEndpoint(
                 reactor,
@@ -258,6 +331,46 @@ class TwistedConnection(Connection):
                 timeout=self.connect_timeout
             )
         connectProtocol(endpoint, TwistedConnectionProtocol(self))
+
+    def _cache_tls_session_if_needed(self, initial=False):
+        """
+        PyOpenSSL override of :meth:`.Connection._cache_tls_session_if_needed`.
+
+        Twisted drives connection setup through its own machinery rather than
+        the base ``_connect_socket()``, so this is only ever called from the
+        ReadyMessage / AuthSuccessMessage handlers (``initial`` is always
+        ``False``) — after the first application-data exchange.  For TLS 1.3
+        this is the earliest point at which the resumable session ticket is
+        available; for TLS 1.2 the session is also valid here.  The premature
+        initial attempt is skipped defensively should it ever be invoked.
+        """
+        if initial:
+            return
+        if self._ssl_session_cache is None or self._ssl_creator is None:
+            return
+        if self._tls_session_cached:
+            return
+        ssl_conn = self._ssl_creator._ssl_connection
+        if ssl_conn is None:
+            return
+        if getattr(ssl_conn, '_cassandra_session_cached', False):
+            # info_callback already stored this connection's session eagerly
+            # (TLS 1.2 path).  Mirror the flag so the driver-level invariant
+            # ("True once the session has been stored") holds for this path too.
+            self._tls_session_cached = True
+            return
+        # Note: pyOpenSSL's SSL.Connection exposes no session_reused(), so we cannot
+        # skip resumed handshakes; the per-connection guards above still prevent
+        # storing the same session more than once for this connection.
+        try:
+            session = ssl_conn.get_session()
+            if session is not None:
+                self._ssl_session_cache.set(
+                    self.endpoint.tls_session_cache_key, session)
+                self._tls_session_cached = True
+                ssl_conn._cassandra_session_cached = True
+        except Exception as e:
+            log.debug("Could not cache TLS session for %s: %s", self.endpoint, e)
 
     def client_connection_made(self, transport):
         """

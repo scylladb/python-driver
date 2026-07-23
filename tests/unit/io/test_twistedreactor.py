@@ -15,7 +15,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from cassandra.connection import DefaultEndPoint
+from cassandra.connection import DefaultEndPoint, SSLSessionCache
 
 try:
     from twisted.test import proto_helpers
@@ -196,3 +196,205 @@ class TestTwistedConnection(unittest.TestCase):
         self.obj_ut.push('123 pickup')
         self.mock_reactor_cft.assert_called_with(
             transport_mock.write, '123 pickup')
+
+
+class TestSSLCreatorInfoCallback(unittest.TestCase):
+    """Verify that _SSLCreator.info_callback does not cache TLS sessions
+    when hostname verification fails."""
+
+    def setUp(self):
+        if twistedreactor is None:
+            raise unittest.SkipTest("Twisted libraries not available")
+        from OpenSSL import SSL
+        self.SSL = SSL
+
+    def _make_creator(self, check_hostname, endpoint_address, cert_cn,
+                      ssl_session_cache=None):
+        from cassandra.io.twistedreactor import _SSLCreator
+        endpoint = Mock()
+        endpoint.address = endpoint_address
+        endpoint.tls_session_cache_key = (endpoint_address, 9042)
+        ssl_ctx = Mock()
+        creator = _SSLCreator(
+            endpoint=endpoint,
+            ssl_context=ssl_ctx,
+            ssl_options=None,
+            check_hostname=check_hostname,
+            timeout=5,
+            ssl_session_cache=ssl_session_cache,
+        )
+
+        # Build a mock OpenSSL connection
+        connection = Mock()
+        subject = Mock()
+        subject.commonName = cert_cn
+        cert = Mock()
+        cert.get_subject.return_value = subject
+        connection.get_peer_certificate.return_value = cert
+        session = Mock()
+        connection.get_session.return_value = session
+        # Default to a pre-TLS-1.3 handshake so the eager path caches; TLS 1.3
+        # tests override this explicitly.
+        connection.get_protocol_version_name.return_value = 'TLSv1.2'
+        # info_callback reads the cache from the connection (not the creator);
+        # mirror clientConnectionForTLS() here.
+        connection._cassandra_ssl_session_cache = ssl_session_cache
+        # Likewise, info_callback reads the hostname check policy from the
+        # connection; mirror clientConnectionForTLS() here.
+        connection._cassandra_check_hostname = check_hostname
+        transport = Mock()
+        connection.get_app_data.return_value = transport
+        connection._cassandra_endpoint = endpoint
+
+        return creator, connection, transport, session
+
+    def test_hostname_mismatch_does_not_cache(self):
+        """When hostname verification fails, the session must NOT be cached."""
+        cache = SSLSessionCache()
+        creator, connection, transport, session = self._make_creator(
+            check_hostname=True,
+            endpoint_address='good.example.com',
+            cert_cn='evil.example.com',
+            ssl_session_cache=cache,
+        )
+
+        creator.info_callback(connection, self.SSL.SSL_CB_HANDSHAKE_DONE, 0)
+
+        transport.failVerification.assert_called_once()
+        assert cache.size() == 0, "Session was cached despite hostname mismatch"
+
+    def test_hostname_match_caches_session(self):
+        """When hostname matches, the session should be cached."""
+        cache = SSLSessionCache()
+        creator, connection, transport, session = self._make_creator(
+            check_hostname=True,
+            endpoint_address='good.example.com',
+            cert_cn='good.example.com',
+            ssl_session_cache=cache,
+        )
+
+        creator.info_callback(connection, self.SSL.SSL_CB_HANDSHAKE_DONE, 0)
+
+        transport.failVerification.assert_not_called()
+        assert cache.size() == 1
+        assert cache.get(('good.example.com', 9042)) is session
+
+    def test_no_check_hostname_caches_session(self):
+        """When check_hostname is False, always cache regardless of CN."""
+        cache = SSLSessionCache()
+        creator, connection, transport, session = self._make_creator(
+            check_hostname=False,
+            endpoint_address='good.example.com',
+            cert_cn='evil.example.com',
+            ssl_session_cache=cache,
+        )
+
+        creator.info_callback(connection, self.SSL.SSL_CB_HANDSHAKE_DONE, 0)
+
+        transport.failVerification.assert_not_called()
+        assert cache.size() == 1
+
+    def test_tls13_not_cached_eagerly(self):
+        """On TLS 1.3 the eager path must not cache (or set the guard flag);
+        the ticket arrives later, so the deferred path handles it."""
+        cache = SSLSessionCache()
+        creator, connection, transport, session = self._make_creator(
+            check_hostname=False,
+            endpoint_address='good.example.com',
+            cert_cn='good.example.com',
+            ssl_session_cache=cache,
+        )
+        connection.get_protocol_version_name.return_value = 'TLSv1.3'
+        connection._cassandra_session_cached = False
+
+        creator.info_callback(connection, self.SSL.SSL_CB_HANDSHAKE_DONE, 0)
+
+        transport.failVerification.assert_not_called()
+        assert cache.size() == 0, "TLS 1.3 session was cached eagerly"
+        assert connection._cassandra_session_cached is False
+
+    def test_uses_connection_cache_not_creator_cache(self):
+        """With a shared ssl_context, info_callback may be bound to a different
+        creator; it must write to the cache stashed on the connection, not the
+        creator's own cache."""
+        creator_cache = SSLSessionCache()
+        connection_cache = SSLSessionCache()
+        # Creator carries creator_cache, but the connection belongs to another
+        # cluster whose cache is connection_cache.
+        creator, connection, transport, session = self._make_creator(
+            check_hostname=False,
+            endpoint_address='good.example.com',
+            cert_cn='good.example.com',
+            ssl_session_cache=creator_cache,
+        )
+        connection._cassandra_ssl_session_cache = connection_cache
+
+        creator.info_callback(connection, self.SSL.SSL_CB_HANDSHAKE_DONE, 0)
+
+        assert connection_cache.get(('good.example.com', 9042)) is session
+        assert creator_cache.size() == 0, \
+            "Session leaked into the creator's cache instead of the connection's"
+
+
+class TestTwistedConnectionCacheGuard(unittest.TestCase):
+    """Verify the per-connection guard prevents storing a session twice, even
+    when info_callback (bound to a shared ssl_context) already stored it."""
+
+    def setUp(self):
+        if twistedreactor is None:
+            raise unittest.SkipTest("Twisted libraries not available")
+
+    def _make_conn(self, cache, ssl_conn):
+        conn = TwistedConnection.__new__(TwistedConnection)
+        conn.endpoint = DefaultEndPoint('10.0.0.1', 9042)
+        conn._ssl_session_cache = cache
+        conn._tls_session_cached = False
+        creator = Mock()
+        creator._ssl_connection = ssl_conn
+        conn._ssl_creator = creator
+        return conn
+
+    def test_no_double_store_when_info_callback_already_cached(self):
+        cache = SSLSessionCache()
+        first_session = Mock(name='session_1')
+        ssl_conn = Mock()
+        ssl_conn._cassandra_session_cached = True  # info_callback stored it
+        ssl_conn.get_session.return_value = Mock(name='session_2')
+        cache.set(('10.0.0.1', 9042), first_session)
+
+        conn = self._make_conn(cache, ssl_conn)
+        conn._cache_tls_session_if_needed()
+
+        # Guard must prevent appending a second (different) session object.
+        assert cache._snapshot_sessions() == [first_session]
+
+    def test_stores_then_is_idempotent(self):
+        cache = SSLSessionCache()
+        session = Mock(name='session')
+        ssl_conn = Mock()
+        ssl_conn._cassandra_session_cached = False
+        ssl_conn.get_session.return_value = session
+
+        conn = self._make_conn(cache, ssl_conn)
+        conn._cache_tls_session_if_needed()
+        assert cache._snapshot_sessions() == [session]
+        assert conn._tls_session_cached is True
+        assert ssl_conn._cassandra_session_cached is True
+
+        # A second call with a different reported session is a no-op.
+        ssl_conn.get_session.return_value = Mock(name='other')
+        conn._cache_tls_session_if_needed()
+        assert cache._snapshot_sessions() == [session]
+
+    def test_initial_call_is_skipped(self):
+        # The immediate post-handshake call (initial=True) must not store the
+        # session, since a TLS 1.3 ticket may not have arrived yet.
+        cache = SSLSessionCache()
+        ssl_conn = Mock()
+        ssl_conn._cassandra_session_cached = False
+        ssl_conn.get_session.return_value = Mock(name='premature_session')
+
+        conn = self._make_conn(cache, ssl_conn)
+        conn._cache_tls_session_if_needed(initial=True)
+        assert cache.get(('10.0.0.1', 9042)) is None
+        assert conn._tls_session_cached is False
