@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import itertools
+import ssl
 import unittest
 from io import BytesIO
 import time
@@ -22,7 +23,10 @@ from cassandra import OperationTimedOut
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, HeartbeatFuture, _Frame, Timer, TimerManager,
-                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
+                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator,
+                                  _build_pyopenssl_context_from_options,
+                                  _ensure_pyopenssl_context_requires_verification,
+                                  _validate_pyopenssl_hostname)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 SupportedMessage, ProtocolHandler, ResultMessage,
@@ -30,6 +34,113 @@ from cassandra.protocol import (write_stringmultimap, write_int, write_string,
 
 from tests.util import wait_until, assertRegex
 import pytest
+
+
+class FakeX509Name(object):
+    def __init__(self, common_name):
+        self._common_name = common_name
+
+    def get_components(self):
+        return [(b'CN', self._common_name.encode('utf-8'))]
+
+
+class FakeX509Extension(object):
+    def __init__(self, value):
+        self._value = value
+
+    def get_short_name(self):
+        return b'subjectAltName'
+
+    def __str__(self):
+        return self._value
+
+
+class FakeX509Certificate(object):
+    def __init__(self, common_name, subject_alt_name=None):
+        self._subject = FakeX509Name(common_name)
+        self._extensions = []
+        if subject_alt_name is not None:
+            self._extensions.append(FakeX509Extension(subject_alt_name))
+
+    def get_subject(self):
+        return self._subject
+
+    def get_extension_count(self):
+        return len(self._extensions)
+
+    def get_extension(self, i):
+        return self._extensions[i]
+
+
+class FakePyOpenSSLContext(object):
+    def __init__(self, method):
+        self.method = method
+        self.verify_mode = None
+
+    def set_verify(self, verify_mode, callback):
+        self.verify_mode = verify_mode
+        self.verify_callback = callback
+
+    def get_verify_mode(self):
+        return self.verify_mode
+
+
+class FakePyOpenSSLModule(object):
+    TLS_CLIENT_METHOD = object()
+    VERIFY_NONE = 0
+    VERIFY_PEER = 1
+    Context = FakePyOpenSSLContext
+
+
+class PyOpenSSLHostnameValidationTest(unittest.TestCase):
+
+    def test_rejects_sole_wildcard_subject_alt_name(self):
+        cert = FakeX509Certificate('unused', subject_alt_name='DNS:*')
+
+        with self.assertRaises(ssl.CertificateError):
+            _validate_pyopenssl_hostname(cert, 'node1')
+
+    def test_ip_hostname_requires_ip_subject_alt_name(self):
+        cert = FakeX509Certificate('unused', subject_alt_name='DNS:*.2.3.4')
+
+        with self.assertRaises(ssl.CertificateError):
+            _validate_pyopenssl_hostname(cert, '1.2.3.4')
+
+    def test_ip_hostname_accepts_exact_ip_subject_alt_name(self):
+        cert = FakeX509Certificate('unused', subject_alt_name='IP Address:1.2.3.4')
+
+        _validate_pyopenssl_hostname(cert, '1.2.3.4')
+
+    def test_ip_hostname_accepts_exact_common_name_without_san(self):
+        cert = FakeX509Certificate('1.2.3.4')
+
+        _validate_pyopenssl_hostname(cert, '1.2.3.4')
+
+
+class PyOpenSSLContextTest(unittest.TestCase):
+
+    def test_check_hostname_promotes_verify_none_to_verify_peer(self):
+        context = _build_pyopenssl_context_from_options(
+            FakePyOpenSSLModule,
+            {'cert_reqs': ssl.CERT_NONE, 'check_hostname': True})
+
+        assert context.verify_mode == FakePyOpenSSLModule.VERIFY_PEER
+
+    def test_supplied_context_check_hostname_promotes_verify_none_to_verify_peer(self):
+        context = FakePyOpenSSLContext(FakePyOpenSSLModule.TLS_CLIENT_METHOD)
+        context.verify_mode = FakePyOpenSSLModule.VERIFY_NONE
+
+        _ensure_pyopenssl_context_requires_verification(FakePyOpenSSLModule, context, True)
+
+        assert context.verify_mode == FakePyOpenSSLModule.VERIFY_PEER
+
+    def test_supplied_context_without_check_hostname_preserves_verify_none(self):
+        context = FakePyOpenSSLContext(FakePyOpenSSLModule.TLS_CLIENT_METHOD)
+        context.verify_mode = FakePyOpenSSLModule.VERIFY_NONE
+
+        _ensure_pyopenssl_context_requires_verification(FakePyOpenSSLModule, context, False)
+
+        assert context.verify_mode == FakePyOpenSSLModule.VERIFY_NONE
 
 
 class ConnectionTest(unittest.TestCase):
@@ -80,6 +191,34 @@ class ConnectionTest(unittest.TestCase):
         endpoint = DefaultEndPoint('10.0.0.1')
         assert c.endpoint == endpoint
         assert c.endpoint.address == endpoint.address
+
+    def test_omitted_ssl_options_do_not_enable_ssl(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'))
+
+        assert c.ssl_context is None
+        assert not c._ssl_enabled
+
+    def test_empty_ssl_options_enable_ssl(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'), ssl_options={})
+
+        assert isinstance(c.ssl_context, ssl.SSLContext)
+        assert c.ssl_context.verify_mode == ssl.CERT_NONE
+        assert c.ssl_options == {}
+        assert c._ssl_enabled
+
+    def test_ssl_options_cert_reqs_applied_to_context(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'), ssl_options={'cert_reqs': ssl.CERT_REQUIRED})
+
+        assert isinstance(c.ssl_context, ssl.SSLContext)
+        assert c.ssl_context.verify_mode == ssl.CERT_REQUIRED
+
+    def test_ssl_options_check_hostname_requires_validation(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'), ssl_options={'check_hostname': True})
+
+        assert isinstance(c.ssl_context, ssl.SSLContext)
+        assert c.ssl_context.verify_mode == ssl.CERT_REQUIRED
+        assert c.ssl_context.check_hostname
+        assert c._check_hostname
 
     def test_bad_protocol_version(self, *args):
         c = self.make_connection()

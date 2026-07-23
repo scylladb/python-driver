@@ -133,7 +133,7 @@ class AsyncioConnection(Connection):
         Connection.__init__(self, *args, **kwargs)
         self._background_tasks = set()
         self._transport = None
-        self._using_ssl = bool(self.ssl_context)
+        self._using_ssl = self._ssl_enabled
 
         self._connect_socket()
         self._socket.setblocking(0)

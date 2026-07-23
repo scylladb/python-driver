@@ -17,6 +17,7 @@ from collections import defaultdict, deque
 import errno
 from functools import wraps, partial, total_ordering
 from heapq import heappush, heappop
+import ipaddress
 import io
 import logging
 import socket
@@ -54,6 +55,7 @@ from cassandra.util import OrderedDict
 from cassandra.shard_info import ShardingInfo  # noqa: F401  # re-exported for cassandra.connection.ShardingInfo
 
 log = logging.getLogger(__name__)
+
 
 segment_codec_no_compression = SegmentCodec()
 segment_codec_lz4 = None
@@ -128,6 +130,197 @@ DEFAULT_LOCAL_PORT_LOW = 49152
 DEFAULT_LOCAL_PORT_HIGH = 65535
 
 frame_header_v3 = struct.Struct('>BhBi')
+
+
+def _default_pyopenssl_ssl_method(ssl_module):
+    for method_name in ('TLS_CLIENT_METHOD', 'TLS_METHOD', 'TLSv1_2_METHOD'):
+        method = getattr(ssl_module, method_name, None)
+        if method is not None:
+            return method
+    raise ImportError('pyOpenSSL does not expose a secure TLS client method')
+
+
+def _pyopenssl_ssl_method_from_stdlib(ssl_module, ssl_version):
+    if ssl_version is None:
+        return _default_pyopenssl_ssl_method(ssl_module)
+
+    protocol_method_names = (
+        ('PROTOCOL_TLS_CLIENT', ('TLS_CLIENT_METHOD', 'TLS_METHOD', 'TLSv1_2_METHOD')),
+        ('PROTOCOL_TLS', ('TLS_METHOD', 'TLS_CLIENT_METHOD', 'TLSv1_2_METHOD')),
+        ('PROTOCOL_SSLv23', ('TLS_METHOD', 'TLS_CLIENT_METHOD', 'TLSv1_2_METHOD')),
+        ('PROTOCOL_TLSv1_2', ('TLSv1_2_METHOD',)),
+        ('PROTOCOL_TLSv1_1', ('TLSv1_1_METHOD',)),
+        ('PROTOCOL_TLSv1', ('TLSv1_METHOD',)),
+    )
+    for protocol_name, method_names in protocol_method_names:
+        protocol = getattr(ssl, protocol_name, None)
+        if (protocol is not None and
+                ssl_version.__class__ is protocol.__class__ and
+                ssl_version == protocol):
+            for method_name in method_names:
+                method = getattr(ssl_module, method_name, None)
+                if method is not None:
+                    return method
+            raise ImportError('pyOpenSSL does not expose a method for %s' % (protocol_name,))
+
+    return ssl_version
+
+
+def _pyopenssl_verify_mode_from_cert_reqs(ssl_module, cert_reqs):
+    if cert_reqs is None:
+        return None
+    if cert_reqs.__class__ is not type(ssl.CERT_REQUIRED):
+        return cert_reqs
+    if cert_reqs == ssl.CERT_NONE:
+        return ssl_module.VERIFY_NONE
+    if cert_reqs in (ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED):
+        return ssl_module.VERIFY_PEER
+    return cert_reqs
+
+
+def _ensure_pyopenssl_context_requires_verification(ssl_module, context, check_hostname):
+    if check_hostname and context.get_verify_mode() == ssl_module.VERIFY_NONE:
+        context.set_verify(
+            ssl_module.VERIFY_PEER,
+            callback=lambda _connection, _x509, _errnum, _errdepth, ok: ok
+        )
+
+
+def _build_pyopenssl_context_from_options(ssl_module, ssl_options):
+    ssl_options = ssl_options or {}
+    context = ssl_module.Context(
+        _pyopenssl_ssl_method_from_stdlib(ssl_module, ssl_options.get('ssl_version', None))
+    )
+    if 'certfile' in ssl_options:
+        context.use_certificate_file(ssl_options['certfile'])
+    if 'keyfile' in ssl_options:
+        context.use_privatekey_file(ssl_options['keyfile'])
+    if 'ca_certs' in ssl_options:
+        context.load_verify_locations(ssl_options['ca_certs'])
+    cert_reqs = _pyopenssl_verify_mode_from_cert_reqs(
+        ssl_module, ssl_options.get('cert_reqs', None))
+    if cert_reqs is None:
+        cert_reqs = (ssl_module.VERIFY_PEER
+                     if (ssl_options.get('ca_certs', None) or ssl_options.get('check_hostname', False))
+                     else ssl_module.VERIFY_NONE)
+    elif ssl_options.get('check_hostname', False) and cert_reqs == ssl_module.VERIFY_NONE:
+        cert_reqs = ssl_module.VERIFY_PEER
+    context.set_verify(
+        cert_reqs,
+        callback=lambda _connection, _x509, _errnum, _errdepth, ok: ok
+    )
+    ciphers = ssl_options.get('ciphers', None)
+    if ciphers:
+        if isinstance(ciphers, str):
+            ciphers = ciphers.encode('ascii')
+        context.set_cipher_list(ciphers)
+    return context
+
+
+def _normalized_hostname(hostname):
+    return hostname.rstrip('.').lower()
+
+
+def _dnsname_match(dn, hostname):
+    dn = _normalized_hostname(dn)
+    hostname = _normalized_hostname(hostname)
+
+    if not dn or not hostname:
+        return False
+
+    if '*' not in dn:
+        return dn == hostname
+
+    dn_labels = dn.split('.')
+    hostname_labels = hostname.split('.')
+    if (len(dn_labels) != len(hostname_labels) or
+            len(dn_labels) < 2 or dn_labels[0] != '*' or
+            not hostname_labels[0] or
+            any('*' in label for label in dn_labels[1:])):
+        return False
+
+    return dn_labels[1:] == hostname_labels[1:]
+
+
+def _ipaddress_match(cert_ip, hostname):
+    try:
+        host_ip = ipaddress.ip_address(hostname)
+        cert_ip = ipaddress.ip_address(cert_ip)
+    except ValueError:
+        return False
+    return cert_ip == host_ip
+
+
+def _is_ip_address(hostname):
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return True
+
+
+def _decode_x509_name(value):
+    if isinstance(value, bytes):
+        return value.decode('utf-8')
+    return value
+
+
+def _pyopenssl_cert_subject_alt_names(cert):
+    dns_names = []
+    ip_addresses = []
+
+    for i in range(cert.get_extension_count()):
+        extension = cert.get_extension(i)
+        if extension.get_short_name() != b'subjectAltName':
+            continue
+        for item in str(extension).split(','):
+            item = item.strip()
+            if item.startswith('DNS:'):
+                dns_names.append(item[4:])
+            elif item.startswith('IP Address:'):
+                ip_addresses.append(item[11:])
+
+    return dns_names, ip_addresses
+
+
+def _pyopenssl_cert_common_names(cert):
+    return [
+        _decode_x509_name(value)
+        for key, value in cert.get_subject().get_components()
+        if key == b'CN'
+    ]
+
+
+def _validate_pyopenssl_hostname(cert, hostname):
+    san_dns_names, san_ip_addresses = _pyopenssl_cert_subject_alt_names(cert)
+    san_names = san_dns_names + san_ip_addresses
+    hostname_is_ip = _is_ip_address(hostname)
+
+    for cert_ip in san_ip_addresses:
+        if _ipaddress_match(cert_ip, hostname):
+            return
+    if hostname_is_ip and san_names:
+        raise ssl.CertificateError(
+            "hostname %r doesn't match certificate subjectAltName %r" %
+            (hostname, san_names))
+
+    for cert_hostname in san_dns_names:
+        if _dnsname_match(cert_hostname, hostname):
+            return
+    if san_names:
+        raise ssl.CertificateError(
+            "hostname %r doesn't match certificate subjectAltName %r" %
+            (hostname, san_names))
+
+    common_names = _pyopenssl_cert_common_names(cert)
+    for common_name in common_names:
+        if (_ipaddress_match(common_name, hostname) if hostname_is_ip
+                else _dnsname_match(common_name, hostname)):
+            return
+
+    raise ssl.CertificateError(
+        "hostname %r doesn't match certificate commonName %r" %
+        (hostname, common_names))
 
 
 class EndPoint(object):
@@ -803,6 +996,7 @@ class Connection(object):
     endpoint = None
     ssl_options = None
     ssl_context = None
+    _ssl_options_explicit = False
     last_error = None
 
     # The current number of operations that are in flight. More precisely,
@@ -885,7 +1079,11 @@ class Connection(object):
         self.endpoint = host if isinstance(host, EndPoint) else DefaultEndPoint(host, port)
 
         self.authenticator = authenticator
-        self.ssl_options = ssl_options.copy() if ssl_options else {}
+        endpoint_ssl_options = self.endpoint.ssl_options
+        # Explicit ssl_options={} enables SSL with default options; omitted
+        # ssl_options=None leaves SSL disabled unless an endpoint supplies options.
+        self._ssl_options_explicit = ssl_options is not None
+        self.ssl_options = ssl_options.copy() if ssl_options is not None else {}
         self.ssl_context = ssl_context
         self.sockopts = sockopts
         self.compression = compression
@@ -905,10 +1103,13 @@ class Connection(object):
         self._on_orphaned_stream_released = on_orphaned_stream_released
         self._application_info = application_info
 
-        if ssl_options:
-            self.ssl_options.update(self.endpoint.ssl_options or {})
-        elif self.endpoint.ssl_options:
-            self.ssl_options = self.endpoint.ssl_options
+        if ssl_options is not None:
+            self.ssl_options.update(endpoint_ssl_options or {})
+        elif endpoint_ssl_options is not None:
+            self._ssl_options_explicit = True
+            self.ssl_options = endpoint_ssl_options
+        self._check_hostname = bool(self.ssl_options.get('check_hostname', False) or
+                                    getattr(self.ssl_context, 'check_hostname', False))
 
         # PYTHON-1331
         #
@@ -918,7 +1119,7 @@ class Connection(object):
         #
         # Note the use of pop() here; we are very deliberately removing these params from ssl_options if they're present.  After this
         # operation ssl_options should contain only args needed for the ssl_context.wrap_socket() call.
-        if not self.ssl_context and self.ssl_options:
+        if self.ssl_context is None and self._ssl_options_explicit:
             self.ssl_context = self._build_ssl_context_from_options()
 
         self.max_request_id = min(self.max_in_flight - 1, (2 ** 15) - 1)
@@ -941,6 +1142,10 @@ class Connection(object):
     @property
     def port(self):
         return self.endpoint.port
+
+    @property
+    def _ssl_enabled(self):
+        return self.ssl_context is not None or self._ssl_options_explicit
 
     @classmethod
     def initialize_reactor(cls):
@@ -1000,10 +1205,15 @@ class Connection(object):
         # Python >= 3.10 requires either PROTOCOL_TLS_CLIENT or PROTOCOL_TLS_SERVER so we'll get ahead of things by always
         # being explicit
         ssl_version = opts.get('ssl_version', None) or ssl.PROTOCOL_TLS_CLIENT
-        cert_reqs = opts.get('cert_reqs', None) or ssl.CERT_REQUIRED
+        cert_reqs = opts.get('cert_reqs', None)
+        if cert_reqs is None:
+            cert_reqs = (ssl.CERT_REQUIRED
+                         if (opts.get('ca_certs', None) or opts.get('check_hostname', False))
+                         else ssl.CERT_NONE)
         rv = ssl.SSLContext(protocol=int(ssl_version))
+        rv.check_hostname = False
+        rv.verify_mode = cert_reqs
         rv.check_hostname = bool(opts.get('check_hostname', False))
-        rv.options = int(cert_reqs)
 
         certfile = opts.get('certfile', None)
         keyfile = opts.get('keyfile', None)
