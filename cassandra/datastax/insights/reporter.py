@@ -33,6 +33,28 @@ from cassandra.datastax.insights.serializers  import initialize_registry
 log = logging.getLogger(__name__)
 
 
+def _ssl_options_cert_validation_enabled(ssl_options):
+    cert_reqs = ssl_options.get('cert_reqs')
+    if cert_reqs is not None:
+        return cert_reqs != ssl.CERT_NONE
+    return bool(ssl_options.get('ca_certs') or ssl_options.get('check_hostname', False))
+
+
+def _safe_getattr(obj, name, default=None):
+    try:
+        return object.__getattribute__(obj, name)
+    except AttributeError:
+        return default
+
+
+def _ssl_context_cert_validation_enabled(ssl_context):
+    if isinstance(ssl_context, ssl.SSLContext):
+        return ssl_context.verify_mode != ssl.CERT_NONE
+
+    from OpenSSL import SSL
+    return ssl_context.get_verify_mode() != SSL.VERIFY_NONE
+
+
 class MonitorReporter(Thread):
 
     def __init__(self, interval_sec, session):
@@ -139,16 +161,36 @@ class MonitorReporter(Thread):
         except AttributeError:
             compression_type = 'NONE'
 
+        connection = cc._connection
+        connection_ssl_context = _safe_getattr(connection, 'ssl_context', None)
+        connection_ssl_options = _safe_getattr(connection, 'ssl_options', None)
+        endpoint = _safe_getattr(connection, 'endpoint', None)
+        endpoint_ssl_options = _safe_getattr(endpoint, 'ssl_options', None)
+
+        ssl_options_explicit = bool(_safe_getattr(connection, '_ssl_options_explicit', False))
+        connection_ssl_enabled = _safe_getattr(connection, '_ssl_enabled', None)
+        if connection_ssl_enabled is None:
+            connection_ssl_enabled = connection_ssl_context is not None or ssl_options_explicit
+
+        ssl_context = (connection_ssl_context
+                       if connection_ssl_context is not None
+                       else self._session.cluster.ssl_context)
+        ssl_options = (connection_ssl_options
+                       if ssl_options_explicit or endpoint_ssl_options is not None
+                       else self._session.cluster.ssl_options)
+        ssl_enabled = (bool(connection_ssl_enabled) or
+                       ssl_context is not None or
+                       ssl_options is not None or
+                       endpoint_ssl_options is not None)
+
         cert_validation = None
         try:
-            if self._session.cluster.ssl_context:
-                if isinstance(self._session.cluster.ssl_context, ssl.SSLContext):
-                    cert_validation = self._session.cluster.ssl_context.verify_mode == ssl.CERT_REQUIRED
-                else:  # pyopenssl
-                    from OpenSSL import SSL
-                    cert_validation = self._session.cluster.ssl_context.get_verify_mode() != SSL.VERIFY_NONE
-            elif self._session.cluster.ssl_options:
-                cert_validation = self._session.cluster.ssl_options.get('cert_reqs') == ssl.CERT_REQUIRED
+            if ssl_context is not None:
+                cert_validation = _ssl_context_cert_validation_enabled(ssl_context)
+            elif ssl_options is not None:
+                cert_validation = _ssl_options_cert_validation_enabled(ssl_options)
+            elif endpoint_ssl_options is not None:
+                cert_validation = _ssl_options_cert_validation_enabled(endpoint_ssl_options)
         except Exception as e:
             log.debug('Unable to get the cert validation: {}'.format(e))
 
@@ -186,7 +228,7 @@ class MonitorReporter(Thread):
                 'compression': compression_type.upper() if compression_type else 'NONE',
                 'reconnectionPolicy': insights_registry.serialize(self._session.cluster.reconnection_policy),
                 'sslConfigured': {
-                    'enabled': bool(self._session.cluster.ssl_options or self._session.cluster.ssl_context),
+                    'enabled': ssl_enabled,
                     'certValidation': cert_validation
                 },
                 'authProvider': {
