@@ -201,7 +201,7 @@ def _build_pyopenssl_context_from_options(ssl_module, ssl_options):
         ssl_module, ssl_options.get('cert_reqs', None))
     if cert_reqs is None:
         cert_reqs = (ssl_module.VERIFY_PEER
-                     if (ssl_options.get('ca_certs', None) or ssl_options.get('check_hostname', False))
+                     if ssl_options
                      else ssl_module.VERIFY_NONE)
     elif ssl_options.get('check_hostname', False) and cert_reqs == ssl_module.VERIFY_NONE:
         cert_reqs = ssl_module.VERIFY_PEER
@@ -1208,7 +1208,7 @@ class Connection(object):
         cert_reqs = opts.get('cert_reqs', None)
         if cert_reqs is None:
             cert_reqs = (ssl.CERT_REQUIRED
-                         if (opts.get('ca_certs', None) or opts.get('check_hostname', False))
+                         if self.ssl_options
                          else ssl.CERT_NONE)
         rv = ssl.SSLContext(protocol=int(ssl_version))
         rv.check_hostname = False

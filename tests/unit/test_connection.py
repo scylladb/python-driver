@@ -119,6 +119,18 @@ class PyOpenSSLHostnameValidationTest(unittest.TestCase):
 
 class PyOpenSSLContextTest(unittest.TestCase):
 
+    def test_empty_ssl_options_default_to_verify_none(self):
+        context = _build_pyopenssl_context_from_options(FakePyOpenSSLModule, {})
+
+        assert context.verify_mode == FakePyOpenSSLModule.VERIFY_NONE
+
+    def test_non_empty_ssl_options_default_to_verify_peer(self):
+        context = _build_pyopenssl_context_from_options(
+            FakePyOpenSSLModule,
+            {'server_hostname': 'node.example.com'})
+
+        assert context.verify_mode == FakePyOpenSSLModule.VERIFY_PEER
+
     def test_check_hostname_promotes_verify_none_to_verify_peer(self):
         context = _build_pyopenssl_context_from_options(
             FakePyOpenSSLModule,
@@ -205,6 +217,14 @@ class ConnectionTest(unittest.TestCase):
         assert c.ssl_context.verify_mode == ssl.CERT_NONE
         assert c.ssl_options == {}
         assert c._ssl_enabled
+
+    def test_non_empty_ssl_options_default_to_cert_required(self):
+        for ssl_options in ({'server_hostname': 'node.example.com'}, {'ciphers': 'DEFAULT'}):
+            with self.subTest(ssl_options=ssl_options):
+                c = Connection(DefaultEndPoint('1.2.3.4'), ssl_options=ssl_options)
+
+                assert isinstance(c.ssl_context, ssl.SSLContext)
+                assert c.ssl_context.verify_mode == ssl.CERT_REQUIRED
 
     def test_ssl_options_cert_reqs_applied_to_context(self):
         c = Connection(DefaultEndPoint('1.2.3.4'), ssl_options={'cert_reqs': ssl.CERT_REQUIRED})
