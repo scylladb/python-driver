@@ -34,6 +34,7 @@ except:
     from zipfile import BadZipfile as BadZipFile
 
 from cassandra import DriverException
+from cassandra.connection import _default_pyopenssl_ssl_method
 
 log = logging.getLogger(__name__)
 
@@ -181,9 +182,9 @@ def _pyopenssl_context_from_cert(ca_cert_location, cert_location, key_location):
         from OpenSSL import SSL
     except ImportError as e:
         raise ImportError(
-            "PyOpenSSL must be installed to connect to Astra with the Eventlet or Twisted event loops")\
-            .with_traceback(e.__traceback__)
-    ssl_context = SSL.Context(SSL.TLSv1_METHOD)
+            "PyOpenSSL must be installed to connect to Astra with the Eventlet or Twisted event loops"
+        ) from e
+    ssl_context = SSL.Context(_default_pyopenssl_ssl_method(SSL))
     ssl_context.set_verify(SSL.VERIFY_PEER, callback=lambda _1, _2, _3, _4, ok: ok)
     ssl_context.use_certificate_file(cert_location)
     ssl_context.use_privatekey_file(key_location)

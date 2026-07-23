@@ -72,7 +72,22 @@ class MockSession(MagicMock):
         return connection
 
 
+class EndpointSSLOptionsEndPoint(DefaultEndPoint):
+    @property
+    def ssl_options(self):
+        return {}
+
+
 class TestShardAware(unittest.TestCase):
+    def make_host(self, shard_aware_port=19042, shard_aware_port_ssl=19045):
+        host = MagicMock()
+        host.endpoint = DefaultEndPoint("1.2.3.4")
+        host.sharding_info = ShardingInfo(shard_id=1, shards_count=4, partitioner="",
+                                          sharding_algorithm="", sharding_ignore_msb=0,
+                                          shard_aware_port=shard_aware_port,
+                                          shard_aware_port_ssl=shard_aware_port_ssl)
+        return host
+
     def test_parsing_and_calculating_shard_id(self):
         """
         Testing the parsing of the options command
@@ -100,8 +115,7 @@ class TestShardAware(unittest.TestCase):
         Test that on given a `shard_aware_port` on the OPTIONS message (ShardInfo class)
         the next connections would be open using this port
         """
-        host = MagicMock()
-        host.endpoint = DefaultEndPoint("1.2.3.4")
+        host = self.make_host()
 
         for port, ssl_options, ssl_context in [
                 (19042, None, None),
@@ -128,8 +142,7 @@ class TestShardAware(unittest.TestCase):
         Test that SSL connections do not fall back to the plaintext
         shard-aware port when the SSL shard-aware port is unavailable.
         """
-        host = MagicMock()
-        host.endpoint = DefaultEndPoint("1.2.3.4")
+        host = self.make_host(shard_aware_port=19042, shard_aware_port_ssl=None)
         sharding_info = ShardingInfo(
             shard_id=1, shards_count=4, partitioner="", sharding_algorithm="",
             sharding_ignore_msb=0, shard_aware_port=19042,
@@ -153,6 +166,40 @@ class TestShardAware(unittest.TestCase):
                 finally:
                     session.cluster.executor.shutdown(wait=True)
 
+    def test_endpoint_ssl_options_use_ssl_advanced_shard_aware_port(self):
+        host = self.make_host()
+        host.endpoint = EndpointSSLOptionsEndPoint("1.2.3.4")
+        session = MockSession()
+        pool = HostConnection(host=host, host_distance=HostDistance.REMOTE, session=session)
+
+        try:
+            for f in session.futures:
+                f.result()
+
+            endpoint = pool._get_shard_aware_endpoint()
+            assert endpoint is not None
+            assert endpoint.port == 19045
+        finally:
+            session.cluster.executor.shutdown(wait=True)
+
+    def test_endpoint_ssl_options_do_not_use_plaintext_advanced_shard_aware_port(self):
+        host = self.make_host(shard_aware_port=19042, shard_aware_port_ssl=None)
+        host.endpoint = EndpointSSLOptionsEndPoint("1.2.3.4")
+        sharding_info = ShardingInfo(
+            shard_id=1, shards_count=4, partitioner="", sharding_algorithm="",
+            sharding_ignore_msb=0, shard_aware_port=19042,
+            shard_aware_port_ssl=None)
+        session = MockSession(sharding_info=sharding_info)
+        pool = HostConnection(host=host, host_distance=HostDistance.REMOTE, session=session)
+
+        try:
+            for f in session.futures:
+                f.result()
+
+            assert pool._get_shard_aware_endpoint() is None
+        finally:
+            session.cluster.executor.shutdown(wait=True)
+
     def test_advanced_shard_aware_cooldown(self):
         """
         `disable_advanced_shard_aware` must suppress the shard-aware endpoint for
@@ -160,8 +207,7 @@ class TestShardAware(unittest.TestCase):
         the deadline has passed. The hard-disable flag must suppress the endpoint
         unconditionally.
         """
-        host = MagicMock()
-        host.endpoint = DefaultEndPoint("1.2.3.4")
+        host = self.make_host()
         session = MockSession()
 
         pool = HostConnection(host=host, host_distance=HostDistance.REMOTE, session=session)

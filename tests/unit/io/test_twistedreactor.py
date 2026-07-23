@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import ssl
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from cassandra.connection import DefaultEndPoint
+from cassandra.connection import Connection, DefaultEndPoint
 
 try:
     from twisted.test import proto_helpers
@@ -28,6 +31,135 @@ except ImportError:
 from cassandra.connection import _Frame
 
 from tests.unit.io.utils import TimerTestMixin
+
+CA_CERTS = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', '..', 'integration', 'long', 'ssl', 'rootCa.crt'))
+
+
+@unittest.skipIf(TwistedConnection is None, "Twisted libraries are not available")
+@unittest.skipIf(not getattr(twistedreactor, '_HAS_SSL', False), "pyOpenSSL is not available")
+class TwistedSSLContextTest(unittest.TestCase):
+
+    def test_empty_ssl_options_default_to_negotiating_tls(self):
+        with patch.object(twistedreactor.SSL, 'Context') as context_mock:
+            context = twistedreactor._build_pyopenssl_context_from_options({})
+
+        context_mock.assert_called_once_with(twistedreactor._default_ssl_method())
+        assert context is context_mock.return_value
+
+    def test_default_ssl_method_falls_back_to_tls_method(self):
+        tls_method = object()
+
+        with patch.object(twistedreactor, 'SSL', SimpleNamespace(TLS_METHOD=tls_method)):
+            assert twistedreactor._default_ssl_method() is tls_method
+
+    def test_default_ssl_method_falls_back_to_tlsv1_2_method(self):
+        tlsv1_2_method = object()
+
+        with patch.object(twistedreactor, 'SSL', SimpleNamespace(TLSv1_2_METHOD=tlsv1_2_method)):
+            assert twistedreactor._default_ssl_method() is tlsv1_2_method
+
+    def test_ssl_version_option_is_preserved(self):
+        with patch.object(twistedreactor.SSL, 'Context') as context_mock:
+            twistedreactor._build_pyopenssl_context_from_options(
+                {'ssl_version': twistedreactor.SSL.TLSv1_2_METHOD})
+
+        context_mock.assert_called_once_with(twistedreactor.SSL.TLSv1_2_METHOD)
+
+    def test_stdlib_ssl_version_option_is_translated(self):
+        with patch.object(twistedreactor.SSL, 'Context') as context_mock:
+            twistedreactor._build_pyopenssl_context_from_options(
+                {'ssl_version': ssl.PROTOCOL_TLS})
+
+        context_mock.assert_called_once_with(twistedreactor.SSL.TLS_METHOD)
+
+    def test_ca_certs_default_to_required_validation(self):
+        context = twistedreactor._build_pyopenssl_context_from_options({'ca_certs': CA_CERTS})
+
+        assert context.get_verify_mode() == twistedreactor.SSL.VERIFY_PEER
+
+    def test_stdlib_cert_reqs_option_is_translated(self):
+        context = twistedreactor._build_pyopenssl_context_from_options({'cert_reqs': ssl.CERT_REQUIRED})
+
+        assert context.get_verify_mode() == twistedreactor.SSL.VERIFY_PEER
+
+    def test_ciphers_option_is_applied(self):
+        with patch.object(twistedreactor.SSL, 'Context') as context_mock:
+            twistedreactor._build_pyopenssl_context_from_options({'ciphers': 'ECDHE+AESGCM'})
+
+        context_mock.return_value.set_cipher_list.assert_called_once_with(b'ECDHE+AESGCM')
+
+    def test_check_hostname_option_enables_hostname_validation(self):
+        conn = TwistedConnection.__new__(TwistedConnection)
+
+        Connection.__init__(conn, DefaultEndPoint('1.2.3.4'), ssl_options={'check_hostname': True})
+
+        assert conn._check_hostname
+
+    def test_supplied_context_check_hostname_requires_peer_verification(self):
+        context = twistedreactor.SSL.Context(twistedreactor.SSL.TLS_METHOD)
+
+        assert context.get_verify_mode() == twistedreactor.SSL.VERIFY_NONE
+
+        twistedreactor._SSLCreator(
+            DefaultEndPoint('node.example.com'),
+            context,
+            {'check_hostname': True},
+            True,
+            1)
+
+        assert context.get_verify_mode() == twistedreactor.SSL.VERIFY_PEER
+
+    def test_ssl_creator_sets_hostname_callback_on_connection(self):
+        context = Mock()
+        context.get_verify_mode.return_value = twistedreactor.SSL.VERIFY_PEER
+
+        with patch.object(twistedreactor.SSL, 'Connection') as connection_mock:
+            creator = twistedreactor._SSLCreator(
+                DefaultEndPoint('node.example.com'),
+                context,
+                {'server_hostname': 'node.example.com'},
+                True,
+                1)
+            connection = connection_mock.return_value
+            result = creator.clientConnectionForTLS(Mock())
+
+        context.set_info_callback.assert_not_called()
+        assert result is connection
+        connection.set_info_callback.assert_called_once_with(creator.info_callback)
+
+    def test_ssl_creator_uses_context_callback_when_connection_callback_is_unavailable(self):
+        class ConnectionWithoutInfoCallback(object):
+            def __init__(self, context, socket):
+                self.context = context
+                self.socket = socket
+                self.app_data = None
+
+            def set_app_data(self, app_data):
+                self.app_data = app_data
+
+            def set_tlsext_host_name(self, server_hostname):
+                self.server_hostname = server_hostname
+
+        context = Mock()
+        context.get_verify_mode.return_value = twistedreactor.SSL.VERIFY_PEER
+
+        with patch.object(twistedreactor.SSL, 'Connection', ConnectionWithoutInfoCallback):
+            creator = twistedreactor._SSLCreator(
+                DefaultEndPoint('node.example.com'),
+                context,
+                {'server_hostname': 'node.example.com'},
+                True,
+                1)
+            tls_protocol = Mock()
+            result = creator.clientConnectionForTLS(tls_protocol)
+
+        context.set_info_callback.assert_called_once_with(creator.info_callback)
+        assert result.context is context
+        assert result.socket is None
+        assert result.app_data is tls_protocol
+        assert result.server_hostname == b'node.example.com'
+
 
 class TestTwistedTimer(TimerTestMixin, unittest.TestCase):
     """
@@ -196,3 +328,19 @@ class TestTwistedConnection(unittest.TestCase):
         self.obj_ut.push('123 pickup')
         self.mock_reactor_cft.assert_called_with(
             transport_mock.write, '123 pickup')
+
+    @unittest.skipIf(not getattr(twistedreactor, '_HAS_SSL', False), "pyOpenSSL is not available")
+    @patch('cassandra.io.twistedreactor.connectProtocol')
+    @patch('cassandra.io.twistedreactor.TCP4ClientEndpoint')
+    @patch('cassandra.io.twistedreactor.SSL4ClientEndpoint')
+    def test_empty_ssl_options_use_ssl_endpoint(self, mock_ssl_endpoint, mock_tcp_endpoint, mock_connect_protocol):
+        conn = twistedreactor.TwistedConnection(
+            DefaultEndPoint('1.2.3.4'),
+            cql_version='3.0.1',
+            ssl_options={})
+
+        conn.add_connection()
+
+        mock_ssl_endpoint.assert_called_once()
+        mock_tcp_endpoint.assert_not_called()
+        mock_connect_protocol.assert_called_once()

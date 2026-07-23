@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import unittest
+import warnings
 
 from concurrent.futures import Future
 import logging
@@ -277,6 +278,25 @@ class ClusterTest(unittest.TestCase):
                 assert factory.call_count == 1
                 assert factory.call_args.kwargs['compression'] == expected
                 assert cluster.compression == expected
+
+    def test_empty_ssl_options_are_rejected_with_cloud_config(self):
+        with pytest.raises(ValueError) as exc:
+            Cluster(cloud={'secure_connect_bundle': 'unused'}, ssl_options={})
+
+        assert "cannot be specified with a cloud configuration" in str(exc.value)
+
+    def test_empty_ssl_options_emit_deprecation_warning(self):
+        with pytest.warns(DeprecationWarning, match="Using ssl_options without ssl_context"):
+            cluster = Cluster(ssl_options={})
+
+        assert cluster.ssl_options == {}
+
+    def test_omitted_ssl_options_do_not_emit_deprecation_warning(self):
+        with warnings.catch_warnings(record=True) as recorded_warnings:
+            warnings.simplefilter("always")
+            Cluster()
+
+        assert not [warning for warning in recorded_warnings if warning.category is DeprecationWarning]
 
 
 class SchedulerTest(unittest.TestCase):
