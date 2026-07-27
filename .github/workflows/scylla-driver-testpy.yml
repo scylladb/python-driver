@@ -26,6 +26,9 @@ on:
       - setup.py
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   testpy-driver-compat:
     name: latest Scylla release test.py driver subset
@@ -33,12 +36,21 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
+      GET_VERSION_SHA256: 2dfbf1afd596fc9efd68c7795bfa52df0fd69d0342237574a17521b14f173df3
       GET_VERSION_VERSION: 0.4.3
+      MC_SHA256: 01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891
+      MC_VERSION: RELEASE.2025-08-13T08-35-41Z
+      MINIO_SHA256: 7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f
+      MINIO_VERSION: RELEASE.2025-09-07T16-13-09Z
+      SCYLLA_CCM_COMMIT: d15a2fab9d22fffad8a30c806a7c8e1632e58aae
+      TOXIPROXY_SHA256: 65e042d3fc2290c099527bc506446a6fd863a09f113b8944b636ece70221c2b3
       TOXIPROXY_VERSION: 2.12.0
 
     steps:
       - name: Checkout driver
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: |
@@ -64,11 +76,17 @@ jobs:
       - name: Install Scylla test.py service tools
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
-          curl -fsSLo "$RUNNER_TEMP/bin/minio" https://dl.min.io/server/minio/release/linux-amd64/minio
-          curl -fsSLo "$RUNNER_TEMP/bin/mc" https://dl.min.io/client/mc/release/linux-amd64/mc
-          chmod +x "$RUNNER_TEMP/bin/minio" "$RUNNER_TEMP/bin/mc"
-          curl -fsSL "https://github.com/Shopify/toxiproxy/releases/download/v${TOXIPROXY_VERSION}/toxiproxy_${TOXIPROXY_VERSION}_linux_amd64.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP/bin" toxiproxy-server toxiproxy-cli
+          curl -fsSLo "$RUNNER_TEMP/bin/minio" \
+            "https://dl.min.io/server/minio/release/linux-amd64/archive/minio.${MINIO_VERSION}"
+          echo "${MINIO_SHA256}  $RUNNER_TEMP/bin/minio" | sha256sum -c -
+          curl -fsSLo "$RUNNER_TEMP/bin/mc" \
+            "https://dl.min.io/client/mc/release/linux-amd64/archive/mc.${MC_VERSION}"
+          echo "${MC_SHA256}  $RUNNER_TEMP/bin/mc" | sha256sum -c -
+          curl -fsSLo "$RUNNER_TEMP/toxiproxy.tar.gz" \
+            "https://github.com/Shopify/toxiproxy/releases/download/v${TOXIPROXY_VERSION}/toxiproxy_${TOXIPROXY_VERSION}_linux_amd64.tar.gz"
+          echo "${TOXIPROXY_SHA256}  $RUNNER_TEMP/toxiproxy.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/toxiproxy.tar.gz" -C "$RUNNER_TEMP/bin" toxiproxy-server toxiproxy-cli
+          chmod +x "$RUNNER_TEMP/bin/minio" "$RUNNER_TEMP/bin/mc" "$RUNNER_TEMP/bin/toxiproxy-server" "$RUNNER_TEMP/bin/toxiproxy-cli"
           printf '%s\n' \
             '#!/usr/bin/env bash' \
             'exec /usr/sbin/slapd -u "$(id -un)" -g "$(id -gn)" "$@"' \
@@ -81,6 +99,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           curl -fsSLo "$RUNNER_TEMP/get-version.zip" \
             "https://github.com/scylladb-actions/get-version/releases/download/v${GET_VERSION_VERSION}/get-version_${GET_VERSION_VERSION}_linux_amd64v3.zip"
+          echo "${GET_VERSION_SHA256}  $RUNNER_TEMP/get-version.zip" | sha256sum -c -
           unzip -q -o "$RUNNER_TEMP/get-version.zip" -d "$RUNNER_TEMP/bin"
           chmod +x "$RUNNER_TEMP/bin/get-version"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -88,19 +107,13 @@ jobs:
       - name: Resolve latest stable Scylla release
         id: scylla-release
         run: |
-          stable_filter='^[0-9]{4}$.^[0-9]+$.^[0-9]+$ and LAST.LAST.LAST'
-          docker_version="$(get-version --source dockerhub-imagetag --repo scylladb/scylla -filters "$stable_filter" | tr -d '"')"
-          github_version="$(get-version --source github-tag --repo scylladb/scylladb --prefix scylla- --out-no-prefix --filters "$stable_filter" | tr -d '"')"
-          if [[ -z "$docker_version" || -z "$github_version" ]]; then
+          version="$(scripts/run_scylla_driver_testpy.sh --resolve-scylla-version)"
+          if [[ -z "$version" ]]; then
             echo "Failed to resolve latest stable Scylla release" >&2
             exit 1
           fi
-          if [[ "$docker_version" != "$github_version" ]]; then
-            echo "Latest stable Scylla release mismatch: DockerHub=$docker_version GitHub=$github_version" >&2
-            exit 1
-          fi
-          git ls-remote --exit-code --refs --tags https://github.com/scylladb/scylladb.git "refs/tags/scylla-$docker_version"
-          echo "version=$docker_version" >> "$GITHUB_OUTPUT"
+          git ls-remote --exit-code --refs --tags https://github.com/scylladb/scylladb.git "refs/tags/scylla-$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Checkout matching Scylla test.py
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -109,6 +122,7 @@ jobs:
           ref: scylla-${{ steps.scylla-release.outputs.version }}
           path: scylladb
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Prepare Scylla test.py host compatibility
         run: |
@@ -127,7 +141,7 @@ jobs:
       - name: Install ccm and Scylla test.py Python dependencies
         run: |
           uv pip install \
-            "ccm @ git+https://github.com/scylladb/scylla-ccm.git@master" \
+            "ccm @ git+https://github.com/scylladb/scylla-ccm.git@${SCYLLA_CCM_COMMIT}" \
             aiohttp \
             allure-pytest \
             colorama \

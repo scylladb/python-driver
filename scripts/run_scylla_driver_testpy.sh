@@ -12,6 +12,7 @@ jobs="${SCYLLA_TESTPY_JOBS:-1}"
 max_failures="${SCYLLA_TESTPY_MAX_FAILURES:-1}"
 timeout="${SCYLLA_TESTPY_TIMEOUT:-1800}"
 session_timeout="${SCYLLA_TESTPY_SESSION_TIMEOUT:-7200}"
+custom_exe_marker_created=0
 
 trim() {
     local value="$1"
@@ -31,7 +32,7 @@ resolve_latest_stable_release() {
     docker_version="$(get-version \
         --source dockerhub-imagetag \
         --repo scylladb/scylla \
-        -filters "$stable_release_filter" | tr -d '"')"
+        --filters "$stable_release_filter" | tr -d '"')"
     github_version="$(get-version \
         --source github-tag \
         --repo scylladb/scylladb \
@@ -105,6 +106,21 @@ pull_scylla_with_ccm() {
     "$ccm" remove "$download_cluster_name" >/dev/null 2>&1 || true
 }
 
+prepare_custom_exe_mode() {
+    local marker="$source_dir/build.ninja"
+
+    if [[ ! -e "$marker" ]]; then
+        : > "$marker"
+        custom_exe_marker_created=1
+    fi
+}
+
+cleanup_custom_exe_mode() {
+    if [[ "$custom_exe_marker_created" == "1" ]]; then
+        rm -f "$source_dir/build.ninja"
+    fi
+}
+
 validate_selected_tests() {
     local test_id test_file missing=0
     for test_id in "$@"; do
@@ -121,6 +137,17 @@ main() {
     local version scylla_exe python_bin
     local list_tests=0
     local -a tests passthrough_args pytest_args
+
+    trap cleanup_custom_exe_mode EXIT
+
+    if [[ "${1:-}" == "--resolve-scylla-version" ]]; then
+        version="${SCYLLA_VERSION:-}"
+        if [[ -z "$version" || "$version" == "latest" ]]; then
+            version="$(resolve_latest_stable_release)"
+        fi
+        printf '%s\n' "${version#release:}"
+        return 0
+    fi
 
     if [[ ! -f "$tests_file" ]]; then
         echo "test selection file does not exist: $tests_file" >&2
@@ -157,7 +184,7 @@ main() {
     if [[ -z "$scylla_exe" ]]; then
         if ! scylla_exe="$(find_scylla_executable "$version")"; then
             pull_scylla_with_ccm "$version"
-            scylla_exe="$(find_scylla_executable "$version")"
+            scylla_exe="$(find_scylla_executable "$version")" || true
         fi
     fi
     if [[ ! -x "$scylla_exe" ]]; then
@@ -171,6 +198,7 @@ main() {
     fi
 
     echo "Scylla executable: $scylla_exe"
+    prepare_custom_exe_mode
 
     passthrough_args=()
     for arg in "$@"; do
@@ -210,9 +238,8 @@ main() {
     )
 
     cd "$source_dir"
-    # Use Scylla's pytest runner plugin directly. The test.py wrapper probes
-    # configured build modes before its --exe-path hook can switch to custom_exe,
-    # which does not work for a source-only checkout plus a ccm-downloaded binary.
+    # Use Scylla's pytest runner plugin directly. The build.ninja marker makes
+    # custom_exe path resolution work before --exe-path replaces the binary.
     "$python_bin" -m pytest "${pytest_args[@]}"
 }
 
