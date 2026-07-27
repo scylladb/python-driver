@@ -1,0 +1,162 @@
+name: Scylla test.py driver compatibility
+
+on:
+  push:
+    branches:
+      - master
+      - 'branch-**'
+    paths:
+      - cassandra/**
+      - tests/**
+      - scripts/run_scylla_driver_testpy.sh
+      - scripts/scylla-driver-testpy-tests.txt
+      - .github/workflows/scylla-driver-testpy.yml
+      - pyproject.toml
+      - uv.lock
+      - setup.py
+  pull_request:
+    paths:
+      - cassandra/**
+      - tests/**
+      - scripts/run_scylla_driver_testpy.sh
+      - scripts/scylla-driver-testpy-tests.txt
+      - .github/workflows/scylla-driver-testpy.yml
+      - pyproject.toml
+      - uv.lock
+      - setup.py
+  workflow_dispatch:
+
+jobs:
+  testpy-driver-compat:
+    name: latest Scylla release test.py driver subset
+    if: "!contains(github.event.pull_request.labels.*.name, 'disable-integration-tests')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GET_VERSION_VERSION: 0.4.3
+      TOXIPROXY_VERSION: 2.12.0
+
+    steps:
+      - name: Checkout driver
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            curl \
+            libaio1t64 \
+            libev4 \
+            libev-dev \
+            ldap-utils \
+            sasl2-bin \
+            slapd \
+            tar \
+            unzip
+          sudo mkdir -p /etc/openldap
+          sudo ln -sfn /etc/ldap/schema /etc/openldap/schema
+          if command -v apparmor_parser >/dev/null 2>&1 && [[ -f /etc/apparmor.d/usr.sbin.slapd ]]; then
+            sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.slapd || true
+          fi
+          echo /usr/sbin >> "$GITHUB_PATH"
+
+      - name: Install Scylla test.py service tools
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/minio" https://dl.min.io/server/minio/release/linux-amd64/minio
+          curl -fsSLo "$RUNNER_TEMP/bin/mc" https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x "$RUNNER_TEMP/bin/minio" "$RUNNER_TEMP/bin/mc"
+          curl -fsSL "https://github.com/Shopify/toxiproxy/releases/download/v${TOXIPROXY_VERSION}/toxiproxy_${TOXIPROXY_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/bin" toxiproxy-server toxiproxy-cli
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'exec /usr/sbin/slapd -u "$(id -un)" -g "$(id -gn)" "$@"' \
+            > "$RUNNER_TEMP/bin/slapd"
+          chmod +x "$RUNNER_TEMP/bin/slapd"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Install get-version
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/get-version.zip" \
+            "https://github.com/scylladb-actions/get-version/releases/download/v${GET_VERSION_VERSION}/get-version_${GET_VERSION_VERSION}_linux_amd64v3.zip"
+          unzip -q -o "$RUNNER_TEMP/get-version.zip" -d "$RUNNER_TEMP/bin"
+          chmod +x "$RUNNER_TEMP/bin/get-version"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve latest stable Scylla release
+        id: scylla-release
+        run: |
+          stable_filter='^[0-9]{4}$.^[0-9]+$.^[0-9]+$ and LAST.LAST.LAST'
+          docker_version="$(get-version --source dockerhub-imagetag --repo scylladb/scylla -filters "$stable_filter" | tr -d '"')"
+          github_version="$(get-version --source github-tag --repo scylladb/scylladb --prefix scylla- --out-no-prefix --filters "$stable_filter" | tr -d '"')"
+          if [[ -z "$docker_version" || -z "$github_version" ]]; then
+            echo "Failed to resolve latest stable Scylla release" >&2
+            exit 1
+          fi
+          if [[ "$docker_version" != "$github_version" ]]; then
+            echo "Latest stable Scylla release mismatch: DockerHub=$docker_version GitHub=$github_version" >&2
+            exit 1
+          fi
+          git ls-remote --exit-code --refs --tags https://github.com/scylladb/scylladb.git "refs/tags/scylla-$docker_version"
+          echo "version=$docker_version" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout matching Scylla test.py
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: scylladb/scylladb
+          ref: scylla-${{ steps.scylla-release.outputs.version }}
+          path: scylladb
+          fetch-depth: 1
+
+      - name: Prepare Scylla test.py host compatibility
+        run: |
+          if [[ -f /usr/lib/ldap/back_mdb.so ]] && ! grep -q '^moduleload back_mdb' scylladb/test/resource/slapd.conf; then
+            sed -i '1imoduleload back_mdb\nmodulepath /usr/lib/ldap' scylladb/test/resource/slapd.conf
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Build driver
+        run: uv sync --no-dev
+
+      - name: Install ccm and Scylla test.py Python dependencies
+        run: |
+          uv pip install \
+            "ccm @ git+https://github.com/scylladb/scylla-ccm.git@master" \
+            aiohttp \
+            allure-pytest \
+            colorama \
+            cryptography \
+            humanfriendly \
+            psutil \
+            PyKMIP \
+            "pytest~=8.0" \
+            pytest-asyncio \
+            pytest-repeat \
+            pytest-timeout \
+            pytest-xdist \
+            requests \
+            sqlalchemy \
+            treelib \
+            unidiff \
+            universalasync
+
+      - name: Cache Scylla ccm download
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.ccm/repository
+            ~/.ccm/scylla-repository
+          key: scylla-ccm-release-${{ steps.scylla-release.outputs.version }}-${{ runner.os }}
+
+      - name: Run Scylla test.py driver subset
+        env:
+          SCYLLA_SOURCE_DIR: ${{ github.workspace }}/scylladb
+          SCYLLA_TESTPY_TMPDIR: ${{ runner.temp }}/scylla-testpy
+          SCYLLA_VERSION: ${{ steps.scylla-release.outputs.version }}
+        run: scripts/run_scylla_driver_testpy.sh
