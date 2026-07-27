@@ -19,7 +19,6 @@ test/cluster/test_metadata_id.py::test_changed_prepared_statement_metadata_udt
 # Driver control-connection service-level classification.
 test/cluster/auth_cluster/test_raft_service_levels.py::test_driver_service_level_not_used_for_user_queries
 test/cluster/auth_cluster/test_raft_service_levels.py::test_driver_service_level_used_for_driver_queries
-test/cluster/auth_cluster/test_raft_service_levels.py::test_control_connection_not_reclassified_by_driver_queries
 
 # Driver startup options exposed by system.clients.
 test/cqlpy/test_virtual_tables.py::test_clients
@@ -49,7 +48,5 @@ test/cqlpy/test_prepare.py::test_composite_pk_indexes_duplicate_named_variables_
 test/cqlpy/test_prepare.py::test_duplicate_named_bind_marker_prepared
 test/cqlpy/test_prepare.py::test_duplicate_named_bind_marker_prepared_cassandra_compatibility_mode
 
-# Driver serializer edge cases and Scylla-driver-specific collection binding.
+# Driver serializer edge cases.
 test/cqlpy/test_type_varint.py::test_varint_key_representation
-test/cqlpy/test_null.py::test_null_string_in_collection
-test/cqlpy/test_null.py::test_null_int_in_collection

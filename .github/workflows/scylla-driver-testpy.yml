@@ -142,6 +142,7 @@ jobs:
             pytest-xdist \
             requests \
             sqlalchemy \
+            tabulate \
             treelib \
             unidiff \
             universalasync
