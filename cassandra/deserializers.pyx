@@ -722,7 +722,18 @@ cpdef Deserializer find_deserializer(cqltype):
     elif issubclass(cqltype, cqltypes.FrozenType):
         cls = DesFrozenType
     elif issubclass(cqltype, cqltypes.VectorType):
-        cls = DesVectorType
+        # Only subtypes that are actually fixed-width as vector elements
+        # (per VectorType._struct_format_map) benefit from -- and are
+        # supported by -- the optimized Cython path. Variable-length
+        # subtypes (e.g. UTF8Type, ShortType/smallint) must go through
+        # GenericDeserializer, which delegates to the already-correct
+        # pure-Python VectorType.deserialize(). Without this check,
+        # DesVectorType would be selected regardless of subtype and would
+        # only discover it can't handle the data after construction, via
+        # the ValueError in _deserialize_generic -- which nothing upstream
+        # catches, so real queries against e.g. Vector<text, N> columns
+        # would crash during row parsing.
+        cls = DesVectorType if cqltype.subtype in cqltypes.VectorType._struct_format_map else GenericDeserializer
     else:
         cls = GenericDeserializer
 

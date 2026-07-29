@@ -583,13 +583,15 @@ class VectorTests(unittest.TestCase):
         # fixed-width vector fast path. Cassandra's AbstractType.valueLengthIfFixed()
         # (and ShortType.java specifically) does not override the variable-length
         # default, so smallint vector elements are vint-length-prefixed on the
-        # wire rather than fixed 2-byte values. So we round-trip through
+        # wire rather than fixed 2-byte values. find_deserializer() routes it to
+        # GenericDeserializer (not DesVectorType) accordingly -- see
+        # test_find_deserializer_vector_dispatch. We round-trip through
         # serialize()/deserialize() instead of assuming a fixed-width wire
         # format, the same way test_vector_cython_deserializer_variable_size_subtype
         # does for UTF8Type below.
         vt_int16 = VectorType.apply_parameters(['ShortType', 3], {})
         des_int16 = find_deserializer(vt_int16)
-        self.assertEqual(des_int16.__class__.__name__, 'DesVectorType')
+        self.assertEqual(des_int16.__class__.__name__, 'GenericDeserializer')
 
         data_int16 = vt_int16.serialize([10, 20, 30], 5)
         result_int16 = vt_int16.deserialize(data_int16, 5)
@@ -604,14 +606,116 @@ class VectorTests(unittest.TestCase):
 
     def test_vector_cython_deserializer_variable_size_subtype(self):
         """
-        Test that DesVectorType falls back gracefully for variable-size subtypes.
-        Variable-size types (e.g. UTF8Type) are not supported by the Cython fast path
-        and should raise ValueError from DesVectorType._deserialize_generic.
-        The pure Python VectorType.deserialize handles these correctly.
+        Test that find_deserializer() routes variable-size vector subtypes
+        (e.g. UTF8Type) to GenericDeserializer rather than DesVectorType, and
+        that this deserializer correctly round-trips real data.
+
+        DesVectorType only supports the fixed-width subtypes listed in
+        VectorType._struct_format_map (float/double/int32/bigint); anything
+        else -- text, smallint, varint, etc. -- must go through
+        GenericDeserializer, which delegates to the pure-Python
+        VectorType.deserialize(). Before this dispatch was made subtype-aware,
+        DesVectorType was selected unconditionally for any VectorType and
+        would only discover it couldn't handle the data after construction
+        (via a ValueError raised deep in _deserialize_generic, with nothing
+        upstream positioned to catch it) -- meaning real queries against
+        e.g. Vector<text, N> columns would crash during row parsing. See
+        test_desvectortype_rejects_variable_size_subtype for that internal
+        safety net, which is no longer reachable through normal dispatch.
 
         @since 3.x
-        @expected_result Cython deserializer raises ValueError for variable-size subtypes;
-                         pure Python path correctly deserializes them
+        @expected_result find_deserializer() returns GenericDeserializer for
+                         variable-size vector subtypes, and it correctly
+                         deserializes real data.
+
+        @test_category data_types:vector
+        """
+        try:
+            from cassandra.deserializers import find_deserializer, make_deserializers
+        except ImportError:
+            self.skipTest('Cython deserializers not available')
+
+        vt_text = VectorType.apply_parameters(['UTF8Type', 3], {})
+        des_text = find_deserializer(vt_text)
+        self.assertEqual(des_text.__class__.__name__, 'GenericDeserializer')
+
+        # Pure Python path should work correctly
+        data = vt_text.serialize(['abc', 'def', 'ghi'], 5)
+        result = vt_text.deserialize(data, 5)
+        self.assertEqual(result, ['abc', 'def', 'ghi'])
+
+        # GenericDeserializer has no Python-callable deserialize_bytes()
+        # convenience wrapper (that's specific to DesVectorType), so drive it
+        # through the actual production row-parsing pipeline instead -- this
+        # is the exact path (make_deserializers -> find_deserializer ->
+        # from_binary -> Deserializer.deserialize) that would previously
+        # raise ValueError for a Vector<text, N> column.
+        import struct
+        from cassandra.obj_parser import ListParser
+        from cassandra.parsing import ParseDesc
+        from cassandra.bytesio import BytesIOReader
+        from cassandra.policies import ColDesc
+
+        buf = bytearray()
+        buf += struct.pack('>i', 1)  # row count
+        buf += struct.pack('>i', len(data))
+        buf += data
+
+        desc = ParseDesc(
+            colnames=['vec'],
+            coltypes=[vt_text],
+            column_encryption_policy=None,
+            coldescs=[ColDesc('ks', 'table', 'vec')],
+            deserializers=make_deserializers([vt_text]),
+            protocol_version=5
+        )
+        rows = ListParser().parse_rows(BytesIOReader(bytes(buf)), desc)
+        self.assertEqual(rows, [(['abc', 'def', 'ghi'],)])
+
+    def test_desvectortype_rejects_variable_size_subtype(self):
+        """
+        Test that DesVectorType._deserialize_generic still raises ValueError
+        for variable-size subtypes when the class is used directly.
+
+        After making find_deserializer() dispatch subtype-aware,
+        DesVectorType is never handed a variable-size subtype through normal
+        dispatch (see test_vector_cython_deserializer_variable_size_subtype
+        and test_find_deserializer_vector_dispatch). This test bypasses
+        find_deserializer() to construct DesVectorType directly, confirming
+        the ValueError safety net inside _deserialize_generic is still
+        intact as an internal invariant check (defense-in-depth), even
+        though it's no longer a user-facing error path.
+
+        @since 3.x
+        @expected_result DesVectorType raises ValueError for variable-size
+                         subtypes when constructed directly
+
+        @test_category data_types:vector
+        """
+        try:
+            from cassandra.deserializers import DesVectorType
+        except ImportError:
+            self.skipTest('Cython deserializers not available')
+
+        vt_text = VectorType.apply_parameters(['UTF8Type', 3], {})
+        des_text = DesVectorType(vt_text)
+
+        data = vt_text.serialize(['abc', 'def', 'ghi'], 5)
+        with self.assertRaises(ValueError) as cm:
+            des_text.deserialize_bytes(data, 5)
+        self.assertIn('variable-size subtype', str(cm.exception))
+
+    def test_find_deserializer_vector_dispatch(self):
+        """
+        Test that find_deserializer() picks the right deserializer class
+        per VectorType subtype: DesVectorType (the Cython fast path) for
+        subtypes in VectorType._struct_format_map, GenericDeserializer
+        (delegating to the pure-Python VectorType.deserialize()) for
+        everything else.
+
+        @since 3.x
+        @expected_result Fixed-width subtypes get DesVectorType;
+                         variable-size subtypes get GenericDeserializer
 
         @test_category data_types:vector
         """
@@ -620,19 +724,19 @@ class VectorTests(unittest.TestCase):
         except ImportError:
             self.skipTest('Cython deserializers not available')
 
-        vt_text = VectorType.apply_parameters(['UTF8Type', 3], {})
-        des_text = find_deserializer(vt_text)
-        self.assertEqual(des_text.__class__.__name__, 'DesVectorType')
+        # Fixed-width subtypes: fast Cython path
+        for subtype_name in ('FloatType', 'DoubleType', 'Int32Type', 'LongType'):
+            vt = VectorType.apply_parameters([subtype_name, 3], {})
+            des = find_deserializer(vt)
+            self.assertEqual(des.__class__.__name__, 'DesVectorType',
+                              "expected DesVectorType for Vector<%s>" % subtype_name)
 
-        # Cython path should raise for variable-size subtypes
-        data = vt_text.serialize(['abc', 'def', 'ghi'], 5)
-        with self.assertRaises(ValueError) as cm:
-            des_text.deserialize_bytes(data, 5)
-        self.assertIn('variable-size subtype', str(cm.exception))
-
-        # Pure Python path should work correctly
-        result = vt_text.deserialize(data, 5)
-        self.assertEqual(result, ['abc', 'def', 'ghi'])
+        # Variable-size (or otherwise unoptimized) subtypes: generic fallback
+        for subtype_name in ('UTF8Type', 'ShortType', 'IntegerType'):
+            vt = VectorType.apply_parameters([subtype_name, 3], {})
+            des = find_deserializer(vt)
+            self.assertEqual(des.__class__.__name__, 'GenericDeserializer',
+                              "expected GenericDeserializer for Vector<%s>" % subtype_name)
 
     def test_vector_numpy_large_deserialization(self):
         """
