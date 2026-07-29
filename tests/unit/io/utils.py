@@ -41,6 +41,51 @@ import pytest
 
 log = logging.getLogger(__name__)
 
+UNIT_CA_CERT = os.path.join(
+    os.path.dirname(__file__), 'fixtures', 'root_ca.pem')
+
+
+def make_pyopenssl_x509_certificate(common_name, san_dns_names=None,
+                                    san_ip_addresses=None):
+    """Build a real pyOpenSSL X509 certificate entirely in process."""
+    from datetime import datetime, timedelta, timezone
+    import ipaddress
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    from OpenSSL import crypto
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, common_name)
+    ])
+    now = datetime.now(timezone.utc)
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+    )
+
+    subject_alt_names = [
+        x509.DNSName(name) for name in (san_dns_names or [])
+    ]
+    subject_alt_names.extend(
+        x509.IPAddress(ipaddress.ip_address(address))
+        for address in (san_ip_addresses or [])
+    )
+    if subject_alt_names:
+        builder = builder.add_extension(
+            x509.SubjectAlternativeName(subject_alt_names), critical=False)
+
+    certificate = builder.sign(key, hashes.SHA256())
+    return crypto.X509.from_cryptography(certificate)
+
 
 class TimerCallback(object):
 

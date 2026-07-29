@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import unittest
+import warnings
 
 from concurrent.futures import Future
 import logging
 import socket
+import ssl
 from types import SimpleNamespace
 
 from unittest.mock import patch, Mock
@@ -277,6 +279,51 @@ class ClusterTest(unittest.TestCase):
                 assert factory.call_count == 1
                 assert factory.call_args.kwargs['compression'] == expected
                 assert cluster.compression == expected
+
+    def test_empty_ssl_options_are_rejected_with_cloud_config(self):
+        with pytest.raises(ValueError) as exc:
+            Cluster(cloud={'secure_connect_bundle': 'unused'}, ssl_options={})
+
+        assert "cannot be specified with a cloud configuration" in str(exc.value)
+
+    def test_empty_ssl_options_emit_deprecation_warning(self):
+        with self.assertLogs('cassandra.cluster', level='WARNING') as logs:
+            with pytest.warns(DeprecationWarning, match="Using ssl_options without ssl_context"):
+                cluster = Cluster(ssl_options={}, compression=False)
+        try:
+            assert cluster.ssl_options == {}
+            assert "Cluster-level ssl_options" in logs.output[0]
+            assert "endpoint-level SSL options may enable verification" in logs.output[0]
+        finally:
+            cluster.shutdown()
+
+    def test_omitted_ssl_options_do_not_emit_deprecation_warning(self):
+        with warnings.catch_warnings(record=True) as recorded_warnings:
+            warnings.simplefilter("always")
+            cluster = Cluster(compression=False)
+        try:
+            assert not [
+                warning for warning in recorded_warnings
+                if (warning.category is DeprecationWarning and
+                    "Using ssl_options without ssl_context" in
+                    str(warning.message))
+            ]
+        finally:
+            cluster.shutdown()
+
+    def test_check_hostname_warns_when_overriding_cert_none(self):
+        ssl_options = {
+            'check_hostname': True,
+            'cert_reqs': ssl.CERT_NONE,
+        }
+        with self.assertLogs('cassandra.cluster', level='WARNING') as logs:
+            with pytest.warns(DeprecationWarning):
+                cluster = Cluster(
+                    ssl_options=ssl_options, compression=False)
+        try:
+            assert "overrides cert_reqs=CERT_NONE" in logs.output[0]
+        finally:
+            cluster.shutdown()
 
 
 class SchedulerTest(unittest.TestCase):

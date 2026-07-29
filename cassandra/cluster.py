@@ -37,6 +37,7 @@ from random import random
 import re
 import queue
 import socket
+import ssl
 import sys
 import time
 from threading import Lock, RLock, Thread, Event
@@ -883,12 +884,29 @@ class Cluster(object):
     when new sockets are created. This should be used when client encryption is enabled
     in Cassandra.
 
-    The following documentation only applies when ssl_options is used without ssl_context.
+    The following documentation only applies when cluster-level ``ssl_options``
+    is used without ``ssl_context``. An :class:`~cassandra.connection.EndPoint`
+    may independently supply SSL options for its connections.
 
-    By default, a ``ca_certs`` value should be supplied (the value should be
-    a string pointing to the location of the CA certs file), and you probably
-    want to specify ``ssl_version`` as ``ssl.PROTOCOL_TLS`` to match
-    Cassandra's default protocol.
+    .. versionchanged:: 3.29.12
+
+        An explicit empty dict (``ssl_options={}``) enables TLS with default
+        options. Cluster-level ``ssl_options=None`` does not enable TLS by
+        itself; an ``ssl_context`` or SSL options supplied by the selected
+        :class:`~cassandra.connection.EndPoint` still enable it. Empty options
+        do not verify the server certificate unless the endpoint supplies
+        additional security settings. A nonempty options dict enables
+        peer-certificate verification by default unless ``cert_reqs`` explicitly
+        disables it. Setting
+        ``'check_hostname': True`` always enables peer-certificate verification
+        because hostname checking requires an authenticated certificate chain.
+        When verification is enabled and ``ca_certs`` is omitted, the system
+        trust roots are loaded.
+
+    Supply ``ca_certs`` as a path to a CA certificate file when the server uses
+    a private CA that is not in the system trust store. You probably also want
+    to specify ``ssl_version`` as ``ssl.PROTOCOL_TLS`` to match Cassandra's
+    default protocol.
 
     .. versionchanged:: 3.3.0
 
@@ -1298,7 +1316,8 @@ class Cluster(object):
 
         if cloud is not None:
             self.cloud = cloud
-            if contact_points is not _NOT_SET or endpoint_factory or ssl_context or ssl_options:
+            if (contact_points is not _NOT_SET or endpoint_factory or
+                    ssl_context is not None or ssl_options is not None):
                 raise ValueError("contact_points, endpoint_factory, ssl_context, and ssl_options "
                                  "cannot be specified with a cloud configuration")
 
@@ -1345,6 +1364,13 @@ class Cluster(object):
             if not isinstance(client_routes_config, ClientRoutesConfig):
                 raise TypeError("client_routes_config must be a ClientRoutesConfig instance")
 
+            endpoint_ssl_options = next((
+                cp.ssl_options
+                for cp in self.contact_points
+                if (isinstance(cp, EndPoint) and
+                    cp.ssl_options is not None)
+            ), None)
+
             # SSL hostname verification is incompatible with client routes:
             # connections go through NLB proxies whose addresses won't match
             # server certificates.
@@ -1352,6 +1378,9 @@ class Cluster(object):
             if ssl_context is not None and ssl_context.check_hostname:
                 _check_hostname_enabled = True
             if ssl_options is not None and ssl_options.get('check_hostname', False):
+                _check_hostname_enabled = True
+            if (endpoint_ssl_options is not None and
+                    endpoint_ssl_options.get('check_hostname', False)):
                 _check_hostname_enabled = True
             if _check_hostname_enabled:
                 raise ValueError(
@@ -1362,8 +1391,16 @@ class Cluster(object):
                     "ssl_context.check_hostname = False."
                 )
 
-            ssl_enabled = ssl_context is not None or ssl_options is not None
-            self._client_routes_handler = _ClientRoutesHandler(client_routes_config, ssl_enabled=ssl_enabled)
+            ssl_enabled = (
+                ssl_context is not None or
+                ssl_options is not None or
+                endpoint_ssl_options is not None
+            )
+            self._client_routes_handler = _ClientRoutesHandler(
+                client_routes_config,
+                ssl_enabled=ssl_enabled,
+                endpoint_ssl_options=endpoint_ssl_options,
+            )
 
             if contact_points is _NOT_SET or not self._contact_points_explicit:
                 seed_addrs = [dep.connection_addr_override for dep in client_routes_config.proxies
@@ -1508,12 +1545,25 @@ class Cluster(object):
 
         self.metrics_enabled = metrics_enabled
 
-        if ssl_options and not ssl_context:
+        if ssl_options is not None and ssl_context is None:
             warn('Using ssl_options without ssl_context is '
                  'deprecated and will result in an error in '
                  'the next major release. Please use ssl_context '
                  'to prepare for that release.',
                  DeprecationWarning)
+            if not ssl_options:
+                log.warning(
+                    'Cluster-level ssl_options enable TLS without requesting '
+                    'server certificate verification; endpoint-level SSL '
+                    'options may enable verification for individual '
+                    'connections')
+            elif (ssl_options.get('check_hostname', False) and
+                  ssl_options.get('cert_reqs') == ssl.CERT_NONE):
+                log.warning(
+                    'Cluster-level check_hostname=True requires server '
+                    'certificate verification and overrides '
+                    'cert_reqs=CERT_NONE at cluster level; endpoint-level SSL '
+                    'options may override these settings')
 
         self.ssl_options = ssl_options
         self.ssl_context = ssl_context

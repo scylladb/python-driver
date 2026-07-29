@@ -7,6 +7,34 @@ Features
   statements skip re-sending result metadata on EXECUTE, and the driver automatically
   refreshes cached metadata when the server detects a schema change (DRIVER-153)
 
+Bug Fixes
+---------
+* Explicit ``ssl_options={}`` and endpoint SSL options now enable TLS instead
+  of being treated as omitted SSL options. Empty options without additional
+  endpoint security settings encrypt the connection without verifying the
+  server certificate. Cluster-level ``ssl_options=None`` does not enable TLS by
+  itself; an ``ssl_context`` or endpoint SSL options still enable it. An
+  endpoint ``server_hostname`` used only for SNI routing is not treated as an
+  additional security setting for explicit empty cluster options.
+* Legacy ``ssl_options`` now work with the Twisted and Eventlet reactors by
+  using pyOpenSSL contexts with mapped protocol, verification, cipher, SNI, and
+  hostname-validation settings. Nonempty options without ``cert_reqs`` now
+  default to peer-certificate verification on these reactors instead of
+  pyOpenSSL's ``VERIFY_NONE``. When ``ca_certs`` is omitted, the system trust
+  roots are loaded. Serialized symbolic stdlib protocol names are supported;
+  plain integer protocol values are mapped only when unambiguous and otherwise
+  rejected rather than being silently interpreted as a different pyOpenSSL
+  method. Existing configurations that connect to an untrusted certificate
+  must supply the appropriate CA or explicitly opt out with
+  ``cert_reqs=ssl.CERT_NONE`` and leave ``check_hostname`` disabled.
+* Hostname verification is now performed consistently when ``check_hostname``
+  is enabled. The flag was previously not propagated to some connection paths,
+  so hostname mismatches could be silently accepted; such mismatches now fail
+  the connection. For a supplied standard-library context, enabling hostname
+  checks also enables peer-certificate verification when necessary.
+* ``SSLContext`` setup now applies ``cert_reqs`` through ``verify_mode`` instead
+  of overwriting the SSL options bitmask, preserving default hardening flags.
+
 Others
 ------
 * ``PreparedStatement.result_metadata`` and ``PreparedStatement.result_metadata_id`` are

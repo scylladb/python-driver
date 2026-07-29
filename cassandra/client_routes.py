@@ -213,20 +213,29 @@ class _ClientRoutesHandler:
 
     config: 'ClientRoutesConfig'
     ssl_enabled: bool
+    endpoint_ssl_options: Optional[Dict]
     _routes: _RouteStore
     _connection_ids: Set[str]
     _proxy_addresses_override: Dict[str, str]
 
-    def __init__(self, config: 'ClientRoutesConfig', ssl_enabled: bool = False):
+    def __init__(self, config: 'ClientRoutesConfig', ssl_enabled: bool = False,
+                 endpoint_ssl_options: Optional[Dict] = None):
         """
         :param config: ClientRoutesConfig instance
         :param ssl_enabled: Whether TLS is enabled (determines port selection)
+        :param endpoint_ssl_options: SSL options inherited from endpoint
+            contact points for generated client-routes endpoints
         """
         if not isinstance(config, ClientRoutesConfig):
             raise TypeError("config must be a ClientRoutesConfig instance")
 
         self.config = config
         self.ssl_enabled = ssl_enabled
+        self.endpoint_ssl_options = (
+            dict(endpoint_ssl_options)
+            if endpoint_ssl_options is not None
+            else None
+        )
         self._routes = _RouteStore()
         self._connection_ids = {dep.connection_id for dep in config.proxies}
         # Precalculate proxy address mappings for efficient lookup

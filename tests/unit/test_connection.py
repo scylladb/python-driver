@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import itertools
+import socket
+import ssl
 import unittest
 from io import BytesIO
 import time
@@ -22,12 +24,11 @@ from cassandra import OperationTimedOut
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, HeartbeatFuture, _Frame, Timer, TimerManager,
-                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
+                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, SniEndPoint, ShardAwarePortGenerator)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 SupportedMessage, ProtocolHandler, ResultMessage,
                                 RESULT_KIND_SET_KEYSPACE)
-
 from tests.util import wait_until, assertRegex
 import pytest
 
@@ -80,6 +81,209 @@ class ConnectionTest(unittest.TestCase):
         endpoint = DefaultEndPoint('10.0.0.1')
         assert c.endpoint == endpoint
         assert c.endpoint.address == endpoint.address
+
+    def test_omitted_ssl_options_do_not_enable_ssl(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'))
+
+        assert c.ssl_context is None
+        assert not c._ssl_enabled
+
+    def test_tls_error_is_not_masked_by_later_socket_error(self):
+        first_socket = Mock()
+        second_socket = Mock()
+        tls_error = ssl.SSLError(1, 'certificate verify failed')
+        first_socket.connect.side_effect = tls_error
+        second_socket.connect.side_effect = socket.error(
+            111, 'Connection refused')
+        c = Connection.__new__(Connection)
+        c.endpoint = DefaultEndPoint('node.example.com')
+        c._get_socket_addresses = Mock(return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 6, '',
+             ('192.0.2.1', 9042)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, '',
+             ('192.0.2.2', 9042)),
+        ])
+        c._socket_impl = Mock()
+        c._socket_impl.socket.side_effect = [first_socket, second_socket]
+        c.ssl_context = None
+        c.features = Mock(shard_id=None)
+        c.connect_timeout = 5
+        c._check_hostname = False
+        c.sockopts = None
+
+        with self.assertRaises(ssl.SSLError) as raised:
+            c._connect_socket()
+
+        assert raised.exception is tls_error
+        first_socket.close.assert_called_once_with()
+        second_socket.close.assert_called_once_with()
+
+    def test_empty_ssl_options_enable_ssl(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'), ssl_options={})
+
+        assert isinstance(c.ssl_context, ssl.SSLContext)
+        assert c.ssl_context.verify_mode == ssl.CERT_NONE
+        assert c.ssl_options == {}
+        assert c._ssl_enabled
+
+    def test_symbolic_stdlib_ssl_protocol_builds_stdlib_context(self):
+        c = Connection(
+            DefaultEndPoint('1.2.3.4'),
+            ssl_options={'ssl_version': 'PROTOCOL_TLS'})
+
+        assert c.ssl_context.protocol == ssl.PROTOCOL_TLS
+
+    def test_check_hostname_secures_supplied_stdlib_context(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        c = Connection(
+            DefaultEndPoint('node.example.com'),
+            ssl_context=context,
+            ssl_options={'check_hostname': True})
+
+        assert c._check_hostname
+        assert context.check_hostname
+        assert context.verify_mode == ssl.CERT_REQUIRED
+
+    def test_empty_ssl_options_with_endpoint_sni_preserve_cert_none(self):
+        c = Connection(
+            SniEndPoint('1.2.3.4', 'node.example.com'),
+            ssl_options={})
+
+        assert c.ssl_options == {'server_hostname': 'node.example.com'}
+        assert c.ssl_context.verify_mode == ssl.CERT_NONE
+        assert not c._ssl_options_verify_by_default
+
+    def test_empty_ssl_options_with_endpoint_ca_default_to_cert_required(self):
+        endpoint = SniEndPoint('1.2.3.4', 'node.example.com')
+        endpoint._ssl_options = {'ca_certs': 'endpoint-ca.pem'}
+        context = Mock()
+
+        with patch('cassandra.tls.ssl.SSLContext', return_value=context):
+            c = Connection(endpoint, ssl_options={})
+
+        assert c.ssl_options == {'ca_certs': 'endpoint-ca.pem'}
+        assert c._ssl_options_verify_by_default
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        context.load_verify_locations.assert_called_once_with(
+            'endpoint-ca.pem')
+
+    def test_omitted_ssl_options_with_endpoint_sni_default_to_cert_required(self):
+        c = Connection(SniEndPoint('1.2.3.4', 'node.example.com'))
+
+        assert c.ssl_options == {'server_hostname': 'node.example.com'}
+        assert c.ssl_context.verify_mode == ssl.CERT_REQUIRED
+        assert c._ssl_options_verify_by_default
+
+    def test_explicit_verification_options_override_origin_default(self):
+        endpoint = SniEndPoint('1.2.3.4', 'endpoint.example.com')
+
+        c = Connection(
+            endpoint,
+            ssl_options={
+                'server_hostname': 'caller.example.com',
+                'cert_reqs': ssl.CERT_NONE,
+                'check_hostname': False,
+            })
+
+        assert c.ssl_options['server_hostname'] == 'endpoint.example.com'
+        assert c.ssl_context.verify_mode == ssl.CERT_NONE
+        assert not c.ssl_context.check_hostname
+
+    def test_endpoint_check_hostname_overrides_disabled_origin_default(self):
+        endpoint = SniEndPoint('1.2.3.4', 'endpoint.example.com')
+        endpoint._ssl_options['check_hostname'] = True
+
+        c = Connection(endpoint, ssl_options={})
+
+        assert c.ssl_context.verify_mode == ssl.CERT_REQUIRED
+        assert c.ssl_context.check_hostname
+
+    def test_endpoint_context_options_rejected_for_supplied_context(self):
+        endpoint = SniEndPoint('1.2.3.4', 'endpoint.example.com')
+        endpoint._ssl_options.update({
+            'ca_certs': 'endpoint-ca.pem',
+            'cert_reqs': ssl.CERT_REQUIRED,
+            'check_hostname': True,
+        })
+        context = Mock(spec=ssl.SSLContext)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        with pytest.raises(ValueError, match="independent SSL context"):
+            Connection(endpoint, ssl_context=context)
+
+        assert context.verify_mode == ssl.CERT_NONE
+        assert not context.check_hostname
+        context.load_verify_locations.assert_not_called()
+
+    def test_endpoint_sni_does_not_mutate_supplied_context(self):
+        endpoint = SniEndPoint('1.2.3.4', 'endpoint.example.com')
+        context = Mock(spec=ssl.SSLContext)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        c = Connection(endpoint, ssl_context=context)
+
+        assert c.ssl_context is context
+        assert c.ssl_options == {
+            'server_hostname': 'endpoint.example.com'}
+        assert context.verify_mode == ssl.CERT_NONE
+        assert not context.check_hostname
+        context.load_verify_locations.assert_not_called()
+        context.load_cert_chain.assert_not_called()
+        context.set_ciphers.assert_not_called()
+
+    def test_endpoint_option_does_not_promote_explicit_cert_none(self):
+        endpoint = SniEndPoint('1.2.3.4', 'endpoint.example.com')
+        endpoint._ssl_options = {'ciphers': 'DEFAULT'}
+        context = Mock(spec=ssl.SSLContext)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        with pytest.raises(ValueError, match="independent SSL context"):
+            Connection(
+                endpoint,
+                ssl_context=context,
+                ssl_options={'cert_reqs': ssl.CERT_NONE})
+
+        assert context.verify_mode == ssl.CERT_NONE
+        assert not context.check_hostname
+        context.set_ciphers.assert_not_called()
+
+    def test_non_empty_ssl_options_default_to_cert_required(self):
+        for ssl_options in ({'server_hostname': 'node.example.com'}, {'ciphers': 'DEFAULT'}):
+            with self.subTest(ssl_options=ssl_options):
+                c = Connection(DefaultEndPoint('1.2.3.4'), ssl_options=ssl_options)
+
+                assert isinstance(c.ssl_context, ssl.SSLContext)
+                assert c.ssl_context.verify_mode == ssl.CERT_REQUIRED
+
+    def test_ssl_options_cert_reqs_applied_to_context(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'), ssl_options={'cert_reqs': ssl.CERT_REQUIRED})
+
+        assert isinstance(c.ssl_context, ssl.SSLContext)
+        assert c.ssl_context.verify_mode == ssl.CERT_REQUIRED
+
+    def test_ssl_options_check_hostname_requires_validation(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'), ssl_options={'check_hostname': True})
+
+        assert isinstance(c.ssl_context, ssl.SSLContext)
+        assert c.ssl_context.verify_mode == ssl.CERT_REQUIRED
+        assert c.ssl_context.check_hostname
+        assert c._check_hostname
+
+    def test_ssl_options_check_hostname_promotes_cert_none_to_cert_required(self):
+        c = Connection(
+            DefaultEndPoint('1.2.3.4'),
+            ssl_options={'cert_reqs': ssl.CERT_NONE, 'check_hostname': True})
+
+        assert isinstance(c.ssl_context, ssl.SSLContext)
+        assert c.ssl_context.verify_mode == ssl.CERT_REQUIRED
+        assert c.ssl_context.check_hostname
+        assert c._check_hostname
 
     def test_bad_protocol_version(self, *args):
         c = self.make_connection()

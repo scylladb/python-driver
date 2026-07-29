@@ -16,18 +16,23 @@
 import unittest
 
 import logging
+import ssl
 import sys
-from unittest.mock import sentinel
+from unittest.mock import Mock, sentinel
 
 from cassandra import ConsistencyLevel
 from cassandra.cluster import (
     ExecutionProfile, GraphExecutionProfile, GraphAnalyticsExecutionProfile
 )
+from cassandra.connection import Connection, DefaultEndPoint
 from cassandra.datastax.graph.query import GraphOptions
+from cassandra.datastax.insights.reporter import MonitorReporter
 from cassandra.datastax.insights.registry import insights_registry
 from cassandra.datastax.insights.serializers import initialize_registry
+from cassandra.tls import _ssl_options_cert_validation_enabled
 from cassandra.policies import (
     LoadBalancingPolicy,
+    HostDistance,
     DCAwareRoundRobinPolicy,
     TokenAwarePolicy,
     WhiteListRoundRobinPolicy,
@@ -40,10 +45,22 @@ from cassandra.policies import (
     WrapperPolicy
 )
 
+try:
+    from OpenSSL import SSL as pyopenssl_ssl
+except (ImportError, AttributeError):
+    pyopenssl_ssl = None
+
 
 log = logging.getLogger(__name__)
 
 initialize_registry(insights_registry)
+
+
+class EndpointSSLOptionsEndPoint(DefaultEndPoint):
+
+    @property
+    def ssl_options(self):
+        return {}
 
 
 class TestGetConfig(unittest.TestCase):
@@ -87,6 +104,194 @@ class TestGetConfig(unittest.TestCase):
 
         # with default -- same behavior
         assert insights_registry.serialize(SubclassSentinel(), default=object()) is sentinel.serialized_superclass
+
+
+class TestMonitorReporterStartupData(unittest.TestCase):
+
+    def _get_startup_data(self, connection=sentinel.default_connection,
+                          ssl_options=None, ssl_context=None,
+                          endpoints_resolved=()):
+        reporter = MonitorReporter.__new__(MonitorReporter)
+        reporter._interval = 30
+
+        if connection is sentinel.default_connection:
+            connection = Connection()
+
+        cluster = Mock()
+        cluster.auth_provider = None
+        cluster.client_id = 'client-id'
+        cluster.connection_class = Connection
+        cluster.control_connection._connection = connection
+        cluster.ssl_options = ssl_options
+        cluster.ssl_context = ssl_context
+        cluster.endpoints_resolved = endpoints_resolved
+        cluster.application_name = None
+        cluster.application_version = None
+        cluster._endpoint_map_for_insights = {}
+        cluster.idle_heartbeat_interval = 30
+        cluster.metadata.all_hosts.return_value = []
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.protocol_version = 4
+        cluster.reconnection_policy = object()
+
+        session = Mock()
+        session.cluster = cluster
+        session.hosts = []
+        session.session_id = 'session-id'
+
+        reporter._session = session
+        return reporter._get_startup_data()
+
+    def test_empty_ssl_options_reported_as_enabled_without_validation(self):
+        connection = Connection(ssl_options={})
+
+        startup_data = self._get_startup_data(connection)
+
+        assert connection._ssl_options_explicit is True
+        assert startup_data['data']['sslConfigured']['enabled'] is True
+        assert startup_data['data']['sslConfigured']['certValidation'] is False
+
+    def test_missing_control_connection_uses_cluster_ssl_configuration(self):
+        startup_data = self._get_startup_data(None, ssl_options={})
+
+        assert startup_data['data']['initialControlConnection'] is None
+        assert startup_data['data']['localAddress'] is None
+        assert startup_data['data']['compression'] == 'NONE'
+        assert startup_data['data']['sslConfigured']['enabled'] is True
+        assert startup_data['data']['sslConfigured']['certValidation'] is False
+
+    def test_missing_control_connection_uses_endpoint_ssl_configuration(self):
+        startup_data = self._get_startup_data(
+            None,
+            endpoints_resolved=[
+                EndpointSSLOptionsEndPoint('127.0.0.1')
+            ])
+
+        assert startup_data['data']['sslConfigured']['enabled'] is True
+        assert startup_data['data']['sslConfigured']['certValidation'] is False
+
+    def test_ssl_options_cert_required_validation_reported(self):
+        connection = Connection(ssl_options={'cert_reqs': ssl.CERT_REQUIRED})
+
+        startup_data = self._get_startup_data(connection)
+
+        assert startup_data['data']['sslConfigured']['certValidation'] is True
+
+    def test_check_hostname_validation_reported(self):
+        connection = Connection(ssl_options={'check_hostname': True})
+
+        startup_data = self._get_startup_data(connection)
+
+        assert startup_data['data']['sslConfigured']['certValidation'] is True
+
+    def test_omitted_ssl_options_reported_as_disabled(self):
+        connection = Connection()
+
+        startup_data = self._get_startup_data(connection)
+
+        assert connection.ssl_options == {}
+        assert connection._ssl_options_explicit is False
+        assert startup_data['data']['sslConfigured']['enabled'] is False
+        assert startup_data['data']['sslConfigured']['certValidation'] is None
+
+    def test_ssl_context_reported_as_enabled(self):
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        connection = Connection(ssl_context=ssl_context)
+
+        startup_data = self._get_startup_data(connection)
+
+        assert startup_data['data']['sslConfigured']['enabled'] is True
+
+    def test_ssl_context_cert_optional_validation_reported_enabled(self):
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_OPTIONAL
+        connection = Connection(ssl_context=ssl_context)
+
+        startup_data = self._get_startup_data(connection)
+
+        assert startup_data['data']['sslConfigured']['certValidation'] is True
+
+    @unittest.skipIf(pyopenssl_ssl is None, "pyOpenSSL is not available")
+    def test_pyopenssl_context_without_verify_peer_validation_reported_disabled(self):
+        ssl_method = getattr(
+            pyopenssl_ssl, 'TLS_METHOD', pyopenssl_ssl.SSLv23_METHOD)
+        ssl_context = pyopenssl_ssl.Context(ssl_method)
+        ssl_context.set_verify(
+            pyopenssl_ssl.VERIFY_CLIENT_ONCE, callback=lambda *args: True)
+        connection = Connection(ssl_context=ssl_context)
+
+        startup_data = self._get_startup_data(connection)
+
+        assert startup_data['data']['sslConfigured']['certValidation'] is False
+
+    @unittest.skipIf(pyopenssl_ssl is None, "pyOpenSSL is not available")
+    def test_pyopenssl_context_with_verify_peer_validation_reported_enabled(self):
+        ssl_method = getattr(
+            pyopenssl_ssl, 'TLS_METHOD', pyopenssl_ssl.SSLv23_METHOD)
+        ssl_context = pyopenssl_ssl.Context(ssl_method)
+        ssl_context.set_verify(
+            pyopenssl_ssl.VERIFY_PEER | pyopenssl_ssl.VERIFY_CLIENT_ONCE,
+            callback=lambda *args: True)
+        connection = Connection(ssl_context=ssl_context)
+
+        startup_data = self._get_startup_data(connection)
+
+        assert startup_data['data']['sslConfigured']['certValidation'] is True
+
+    @unittest.skipIf(pyopenssl_ssl is None, "pyOpenSSL is not available")
+    def test_pyopenssl_options_without_verify_peer_report_validation_disabled(self):
+        assert not _ssl_options_cert_validation_enabled({
+            'cert_reqs': pyopenssl_ssl.VERIFY_CLIENT_ONCE,
+        })
+
+    @unittest.skipIf(pyopenssl_ssl is None, "pyOpenSSL is not available")
+    def test_pyopenssl_options_with_verify_peer_report_validation_enabled(self):
+        assert _ssl_options_cert_validation_enabled({
+            'cert_reqs': (
+                pyopenssl_ssl.VERIFY_PEER |
+                pyopenssl_ssl.VERIFY_CLIENT_ONCE
+            ),
+        })
+
+    def test_endpoint_ssl_options_reported_as_enabled(self):
+        connection = Connection(EndpointSSLOptionsEndPoint('127.0.0.1'))
+
+        startup_data = self._get_startup_data(connection)
+
+        assert connection._ssl_options_explicit is True
+        assert startup_data['data']['sslConfigured']['enabled'] is True
+        assert startup_data['data']['sslConfigured']['certValidation'] is False
+
+
+class TestMonitorReporterStatusData(unittest.TestCase):
+
+    def test_control_connection_is_snapshotted_during_shutdown(self):
+        connection = Mock(host='127.0.0.1')
+
+        class ChangingControlConnection(object):
+            calls = 0
+
+            @property
+            def _connection(self):
+                self.calls += 1
+                return connection if self.calls == 1 else None
+
+        reporter = MonitorReporter.__new__(MonitorReporter)
+        cluster = Mock()
+        cluster.client_id = 'client-id'
+        cluster.control_connection = ChangingControlConnection()
+        session = Mock()
+        session.cluster = cluster
+        session.session_id = 'session-id'
+        session.get_pool_state.return_value = {}
+        reporter._session = session
+
+        status_data = reporter._get_status_data()
+
+        assert status_data['data']['controlConnection'] == '127.0.0.1'
+        assert cluster.control_connection.calls == 1
+
 
 class TestConfigAsDict(unittest.TestCase):
 

@@ -20,11 +20,11 @@ from heapq import heappush, heappop
 import io
 import logging
 import socket
+import ssl
 import struct
 import sys
 from threading import Thread, Event, RLock, Condition
 import time
-import ssl
 import uuid
 import weakref
 import random
@@ -50,6 +50,10 @@ from cassandra.protocol import (ReadyMessage, AuthenticateMessage, OptionsMessag
                                 AuthSuccessMessage, ProtocolException,
                                 RegisterMessage, ReviseRequestMessage)
 from cassandra.segment import SegmentCodec, CrcException
+from cassandra.tls import (_build_ssl_context_from_options,
+                           _prepare_ssl_options,
+                           _ssl_options_requiring_new_context,
+                           _wrap_socket_from_context)
 from cassandra.util import OrderedDict
 from cassandra.shard_info import ShardingInfo  # noqa: F401  # re-exported for cassandra.connection.ShardingInfo
 
@@ -455,6 +459,10 @@ class ClientRoutesEndPoint(EndPoint):
     def host_id(self) -> uuid.UUID:
         return self._host_id
 
+    @property
+    def ssl_options(self) -> Optional[Dict]:
+        return self._handler.endpoint_ssl_options
+
     def resolve(self) -> Tuple[str, int]:
         """
         Resolve endpoint by delegating to the handler.
@@ -803,6 +811,8 @@ class Connection(object):
     endpoint = None
     ssl_options = None
     ssl_context = None
+    _ssl_options_explicit = False
+    _ssl_options_verify_by_default = None
     last_error = None
 
     # The current number of operations that are in flight. More precisely,
@@ -858,6 +868,7 @@ class Connection(object):
     _socket = None
 
     _socket_impl = socket
+    _connect_socket_error_types = (socket.error,)
 
     _check_hostname = False
     _product_type = None
@@ -883,9 +894,21 @@ class Connection(object):
                  on_orphaned_stream_released=None, application_info: Optional[ApplicationInfoBase] = None):
         # TODO next major rename host to endpoint and remove port kwarg.
         self.endpoint = host if isinstance(host, EndPoint) else DefaultEndPoint(host, port)
+        endpoint_ssl_options = self.endpoint.ssl_options
+        self._endpoint_ssl_options = (
+            dict(endpoint_ssl_options)
+            if endpoint_ssl_options is not None
+            else None
+        )
 
         self.authenticator = authenticator
-        self.ssl_options = ssl_options.copy() if ssl_options else {}
+        (
+            self.ssl_options,
+            self._ssl_options_explicit,
+            self._ssl_options_verify_by_default,
+        ) = _prepare_ssl_options(
+            ssl_options, self._endpoint_ssl_options
+        )
         self.ssl_context = ssl_context
         self.sockopts = sockopts
         self.compression = compression
@@ -905,21 +928,39 @@ class Connection(object):
         self._on_orphaned_stream_released = on_orphaned_stream_released
         self._application_info = application_info
 
-        if ssl_options:
-            self.ssl_options.update(self.endpoint.ssl_options or {})
-        elif self.endpoint.ssl_options:
-            self.ssl_options = self.endpoint.ssl_options
-
-        # PYTHON-1331
-        #
-        # We always use SSLContext.wrap_socket() now but legacy configs may have other params that were passed to ssl.wrap_socket()...
-        # and either could have 'check_hostname'.  Remove these params into a separate map and use them to build an SSLContext if
-        # we need to do so.
-        #
-        # Note the use of pop() here; we are very deliberately removing these params from ssl_options if they're present.  After this
-        # operation ssl_options should contain only args needed for the ssl_context.wrap_socket() call.
-        if not self.ssl_context and self.ssl_options:
+        # An explicitly empty options mapping enables TLS with default options.
+        if self.ssl_context is None and self._ssl_options_explicit:
             self.ssl_context = self._build_ssl_context_from_options()
+        elif self.ssl_context is not None:
+            endpoint_context_options = _ssl_options_requiring_new_context(
+                self._endpoint_ssl_options)
+            if endpoint_context_options:
+                # SSLContext has no supported copy operation, and settings such
+                # as trust roots, client keys, and pyOpenSSL callbacks cannot be
+                # restored reliably. The cluster context is shared by concurrent
+                # connections, so mutating and restoring it would leak endpoint
+                # policy or race with another handshake. Require the existing
+                # context to remain immutable; callers needing endpoint-specific
+                # context settings can omit ssl_context and use ssl_options,
+                # which builds an independent context for every connection.
+                raise ValueError(
+                    "Endpoint SSL options %s require an independent SSL "
+                    "context and cannot be combined with a supplied "
+                    "ssl_context" % sorted(endpoint_context_options))
+
+        if (self.ssl_options.get('check_hostname', False) and
+                isinstance(self.ssl_context, ssl.SSLContext) and
+                not self.ssl_context.check_hostname):
+            # ``check_hostname`` is a context setting, not a wrap_socket
+            # option. Apply the caller's request to a supplied stdlib context
+            # so the default and Asyncio reactors do not rely on their no-op
+            # ``_validate_hostname`` hook.
+            if self.ssl_context.verify_mode == ssl.CERT_NONE:
+                self.ssl_context.verify_mode = ssl.CERT_REQUIRED
+            self.ssl_context.check_hostname = True
+
+        self._check_hostname = bool(self.ssl_options.get('check_hostname', False) or
+                                    getattr(self.ssl_context, 'check_hostname', False))
 
         self.max_request_id = min(self.max_in_flight - 1, (2 ** 15) - 1)
         # Don't fill the deque with 2**15 items right away. Start with some and add
@@ -941,6 +982,10 @@ class Connection(object):
     @property
     def port(self):
         return self.endpoint.port
+
+    @property
+    def _ssl_enabled(self):
+        return self.ssl_context is not None or self._ssl_options_explicit
 
     @classmethod
     def initialize_reactor(cls):
@@ -992,47 +1037,16 @@ class Connection(object):
             return conn
 
     def _build_ssl_context_from_options(self):
-
-        # Extract a subset of names from self.ssl_options which apply to SSLContext creation
-        ssl_context_opt_names = ['ssl_version', 'cert_reqs', 'check_hostname', 'keyfile', 'certfile', 'ca_certs', 'ciphers']
-        opts = {k:self.ssl_options.get(k, None) for k in ssl_context_opt_names if k in self.ssl_options}
-
-        # Python >= 3.10 requires either PROTOCOL_TLS_CLIENT or PROTOCOL_TLS_SERVER so we'll get ahead of things by always
-        # being explicit
-        ssl_version = opts.get('ssl_version', None) or ssl.PROTOCOL_TLS_CLIENT
-        cert_reqs = opts.get('cert_reqs', None) or ssl.CERT_REQUIRED
-        rv = ssl.SSLContext(protocol=int(ssl_version))
-        rv.check_hostname = bool(opts.get('check_hostname', False))
-        rv.options = int(cert_reqs)
-
-        certfile = opts.get('certfile', None)
-        keyfile = opts.get('keyfile', None)
-        if certfile:
-            rv.load_cert_chain(certfile, keyfile)
-        ca_certs = opts.get('ca_certs', None)
-        if ca_certs:
-            rv.load_verify_locations(ca_certs)
-        ciphers = opts.get('ciphers', None)
-        if ciphers:
-            rv.set_ciphers(ciphers)
-
-        return rv
+        return _build_ssl_context_from_options(
+            self.ssl_options,
+            verify_by_default=self._ssl_options_verify_by_default)
 
     def _wrap_socket_from_context(self):
-
-        # Extract a subset of names from self.ssl_options which apply to SSLContext.wrap_socket (or at least the parts
-        # of it that don't involve building an SSLContext under the covers)
-        wrap_socket_opt_names = ['server_side', 'do_handshake_on_connect', 'suppress_ragged_eofs', 'server_hostname']
-        opts = {k:self.ssl_options.get(k, None) for k in wrap_socket_opt_names if k in self.ssl_options}
-
-        # PYTHON-1186: set the server_hostname only if the SSLContext has
-        # check_hostname enabled and it is not already provided by the EndPoint ssl options
-        #opts['server_hostname'] = self.endpoint.address
-        if (self.ssl_context.check_hostname and 'server_hostname' not in opts):
-            server_hostname = self.endpoint.address
-            opts['server_hostname'] = server_hostname
-
-        return self.ssl_context.wrap_socket(self._socket, **opts)
+        return _wrap_socket_from_context(
+            self.ssl_context,
+            self._socket,
+            self.ssl_options,
+            self.endpoint.address)
 
     def _initiate_connection(self, sockaddr):
         if self.features.shard_id is not None:
@@ -1089,13 +1103,27 @@ class Connection(object):
                     self._validate_hostname()
                 sockerr = None
                 break
-            except socket.error as err:
+            except self._connect_socket_error_types as err:
                 if self._socket:
                     self._socket.close()
                     self._socket = None
-                sockerr = err
+                # Preserve a TLS or driver error over later socket failures so
+                # a final ECONNREFUSED cannot hide certificate diagnostics.
+                if (sockerr is None or
+                        (isinstance(sockerr, socket.error) and
+                         not isinstance(sockerr, ssl.SSLError))):
+                    sockerr = err
+            except Exception:
+                if self._socket:
+                    self._socket.close()
+                    self._socket = None
+                raise
 
         if sockerr:
+            if isinstance(sockerr, ssl.SSLError):
+                raise sockerr
+            if not isinstance(sockerr, socket.error):
+                raise sockerr
             raise socket.error(sockerr.errno, "Tried connecting to %s. Last error: %s" %
                                ([a[4] for a in addresses], sockerr.strerror or sockerr))
 

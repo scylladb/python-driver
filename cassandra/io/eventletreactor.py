@@ -20,13 +20,27 @@ from eventlet.green import socket
 from eventlet.queue import Queue
 from greenlet import GreenletExit
 import logging
+import ssl
 from threading import Event
 import time
 
-from cassandra.connection import Connection, ConnectionShutdown, Timer, TimerManager
+from cassandra.connection import (Connection, ConnectionException,
+                                  ConnectionShutdown, SniEndPoint, Timer,
+                                  TimerManager)
+from cassandra.tls import (
+    _build_pyopenssl_context_from_options as _build_pyopenssl_context,
+    _encode_server_hostname,
+    _ensure_pyopenssl_context_requires_verification,
+    _resolve_pyopenssl_server_names,
+    _validate_pyopenssl_hostname,
+)
+_PYOPENSSL_ERROR = ()
+_PYOPENSSL_ZERO_RETURN_ERROR = ()
 try:
     from eventlet.green.OpenSSL import SSL
     _PYOPENSSL = True
+    _PYOPENSSL_ERROR = (SSL.Error,)
+    _PYOPENSSL_ZERO_RETURN_ERROR = (SSL.ZeroReturnError,)
 except ImportError as e:
     _PYOPENSSL = False
     no_pyopenssl_error = e
@@ -55,6 +69,9 @@ class EventletConnection(Connection):
 
     _socket_impl = eventlet.green.socket
     _ssl_impl = eventlet.green.ssl
+    _connect_socket_error_types = (
+        (socket.error, ConnectionException) + _PYOPENSSL_ERROR
+    )
 
     _timers = None
     _timeout_watcher = None
@@ -92,7 +109,6 @@ class EventletConnection(Connection):
 
     def __init__(self, *args, **kwargs):
         Connection.__init__(self, *args, **kwargs)
-        self.uses_legacy_ssl_options = self.ssl_options and not self.ssl_context
         self._write_queue = Queue()
 
         self._connect_socket()
@@ -103,28 +119,41 @@ class EventletConnection(Connection):
 
     def _wrap_socket_from_context(self):
         _check_pyopenssl()
+        _ensure_pyopenssl_context_requires_verification(SSL, self.ssl_context, self._check_hostname)
         self._socket = SSL.Connection(self.ssl_context, self._socket)
         self._socket.set_connect_state()
-        if self.ssl_options and 'server_hostname' in self.ssl_options:
+        server_hostname, _expected_name = self._tls_server_names()
+        if server_hostname is not None:
             # This is necessary for SNI
-            self._socket.set_tlsext_host_name(self.ssl_options['server_hostname'].encode('ascii'))
+            self._socket.set_tlsext_host_name(_encode_server_hostname(server_hostname))
+        return self._socket
+
+    def _tls_server_names(self):
+        return _resolve_pyopenssl_server_names(
+            self.endpoint.address,
+            (self.ssl_options or {}).get('server_hostname'),
+            self._check_hostname,
+            verify_endpoint_address=isinstance(self.endpoint, SniEndPoint))
 
     def _initiate_connection(self, sockaddr):
-        if self.uses_legacy_ssl_options:
-            super(EventletConnection, self)._initiate_connection(sockaddr)
-        else:
-            self._socket.connect(sockaddr)
-            if self.ssl_context or self.ssl_options:
-                self._socket.do_handshake()
+        super(EventletConnection, self)._initiate_connection(sockaddr)
+        if self._ssl_enabled:
+            self._socket.do_handshake()
 
-    def _match_hostname(self):
-        if self.uses_legacy_ssl_options:
-            super(EventletConnection, self)._match_hostname()
-        else:
-            cert_name = self._socket.get_peer_certificate().get_subject().commonName
-            if cert_name != self.endpoint.address:
-                raise Exception("Hostname verification failed! Certificate name '{}' "
-                                "doesn't endpoint '{}'".format(cert_name, self.endpoint.address))
+    def _validate_hostname(self):
+        _server_hostname, expected_name = self._tls_server_names()
+        try:
+            _validate_pyopenssl_hostname(self._socket.get_peer_certificate(), expected_name)
+        except ssl.CertificateError as exc:
+            raise ConnectionException(
+                "Hostname verification failed: %s" % (exc,), self.endpoint) from exc
+
+    def _build_ssl_context_from_options(self):
+        _check_pyopenssl()
+        return _build_pyopenssl_context(
+            SSL,
+            self.ssl_options,
+            verify_by_default=self._ssl_options_verify_by_default)
 
     def close(self):
         with self.lock:
@@ -161,6 +190,14 @@ class EventletConnection(Connection):
             try:
                 next_msg = self._write_queue.get()
                 self._socket.sendall(next_msg)
+            except _PYOPENSSL_ZERO_RETURN_ERROR:
+                log.debug("Connection %s closed by server during socket send", self)
+                self.close()
+                return
+            except _PYOPENSSL_ERROR as err:
+                log.debug("Exception during TLS socket send for %s: %s", self, err)
+                self.defunct(err)
+                return
             except socket.error as err:
                 log.debug("Exception during socket send for %s: %s", self, err)
                 self.defunct(err)
@@ -172,7 +209,19 @@ class EventletConnection(Connection):
         while True:
             try:
                 buf = self._socket.recv(self.in_buffer_size)
+                if not buf:
+                    log.debug("Connection %s closed by server", self)
+                    self.close()
+                    return
                 self._iobuf.write(buf)
+            except _PYOPENSSL_ZERO_RETURN_ERROR:
+                log.debug("Connection %s closed by server during socket recv", self)
+                self.close()
+                return
+            except _PYOPENSSL_ERROR as err:
+                log.debug("Exception during TLS socket recv for %s: %s", self, err)
+                self.defunct(err)
+                return
             except socket.error as err:
                 log.debug("Exception during socket recv for %s: %s",
                           self, err)
@@ -181,12 +230,8 @@ class EventletConnection(Connection):
             except GreenletExit:  # graceful greenthread exit
                 return
 
-            if buf and self._iobuf.tell():
+            if self._iobuf.tell():
                 self.process_io_buffer()
-            else:
-                log.debug("Connection %s closed by server", self)
-                self.close()
-                return
 
     def push(self, data):
         chunk_size = self.out_buffer_size

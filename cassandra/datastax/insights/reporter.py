@@ -20,7 +20,6 @@ import multiprocessing
 import random
 import platform
 import socket
-import ssl
 import sys
 from threading import Event, Thread
 import time
@@ -29,6 +28,8 @@ from cassandra.policies import HostDistance
 from cassandra.util import ms_timestamp_from_datetime
 from cassandra.datastax.insights.registry import insights_registry
 from cassandra.datastax.insights.serializers  import initialize_registry
+from cassandra.tls import (_ssl_context_cert_validation_enabled,
+                           _ssl_options_cert_validation_enabled)
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ class MonitorReporter(Thread):
 
     def _get_status_data(self):
         cc = self._session.cluster.control_connection
+        connection = cc._connection
 
         connected_nodes = {
             host.address: {
@@ -110,22 +112,24 @@ class MonitorReporter(Thread):
                 'clientId': str(self._session.cluster.client_id),
                 # // 'sessionId' must be the same as the one provided in the startup message
                 'sessionId': str(self._session.session_id),
-                'controlConnection': cc._connection.host if cc._connection else None,
+                'controlConnection': connection.host if connection else None,
                 'connectedNodes': connected_nodes
             }
         }
 
     def _get_startup_data(self):
-        cc = self._session.cluster.control_connection
+        cluster = self._session.cluster
+        cc = cluster.control_connection
+        connection = cc._connection
         try:
-            local_ipaddr = cc._connection._socket.getsockname()[0]
+            local_ipaddr = connection._socket.getsockname()[0]
         except Exception as e:
             local_ipaddr = None
-            log.debug('Unable to get local socket addr from {}: {}'.format(cc._connection, e))
+            log.debug('Unable to get local socket addr from {}: {}'.format(connection, e))
         hostname = socket.getfqdn()
 
         host_distances_counter = Counter(
-            self._session.cluster.profile_manager.distance(host)
+            cluster.profile_manager.distance(host)
             for host in self._session.hosts
         )
         host_distances_dict = {
@@ -135,20 +139,33 @@ class MonitorReporter(Thread):
         }
 
         try:
-            compression_type = cc._connection._compression_type
+            compression_type = connection._compression_type
         except AttributeError:
             compression_type = 'NONE'
 
+        if connection is not None:
+            ssl_enabled = connection._ssl_enabled
+            ssl_context = connection.ssl_context
+            ssl_options = None
+        else:
+            ssl_context = cluster.ssl_context
+            ssl_options = cluster.ssl_options
+            if ssl_options is None:
+                ssl_options = next((
+                    endpoint_options
+                    for endpoint in getattr(
+                        cluster, 'endpoints_resolved', ())
+                    for endpoint_options in (endpoint.ssl_options,)
+                    if endpoint_options is not None
+                ), None)
+            ssl_enabled = ssl_context is not None or ssl_options is not None
+
         cert_validation = None
         try:
-            if self._session.cluster.ssl_context:
-                if isinstance(self._session.cluster.ssl_context, ssl.SSLContext):
-                    cert_validation = self._session.cluster.ssl_context.verify_mode == ssl.CERT_REQUIRED
-                else:  # pyopenssl
-                    from OpenSSL import SSL
-                    cert_validation = self._session.cluster.ssl_context.get_verify_mode() != SSL.VERIFY_NONE
-            elif self._session.cluster.ssl_options:
-                cert_validation = self._session.cluster.ssl_options.get('cert_reqs') == ssl.CERT_REQUIRED
+            if ssl_context is not None:
+                cert_validation = _ssl_context_cert_validation_enabled(ssl_context)
+            elif ssl_options is not None:
+                cert_validation = _ssl_options_cert_validation_enabled(ssl_options)
         except Exception as e:
             log.debug('Unable to get the cert validation: {}'.format(e))
 
@@ -167,31 +184,31 @@ class MonitorReporter(Thread):
             'data': {
                 'driverName': 'DataStax Python Driver',
                 'driverVersion': sys.modules['cassandra'].__version__,
-                'clientId': str(self._session.cluster.client_id),
+                'clientId': str(cluster.client_id),
                 'sessionId': str(self._session.session_id),
-                'applicationName': self._session.cluster.application_name or 'python',
-                'applicationNameWasGenerated': not self._session.cluster.application_name,
-                'applicationVersion': self._session.cluster.application_version,
-                'contactPoints': self._session.cluster._endpoint_map_for_insights,
-                'dataCenters': list(set(h.datacenter for h in self._session.cluster.metadata.all_hosts()
+                'applicationName': cluster.application_name or 'python',
+                'applicationNameWasGenerated': not cluster.application_name,
+                'applicationVersion': cluster.application_version,
+                'contactPoints': cluster._endpoint_map_for_insights,
+                'dataCenters': list(set(h.datacenter for h in cluster.metadata.all_hosts()
                                         if (h.datacenter and
-                                            self._session.cluster.profile_manager.distance(h) == HostDistance.LOCAL))),
-                'initialControlConnection': cc._connection.host if cc._connection else None,
-                'protocolVersion': self._session.cluster.protocol_version,
+                                            cluster.profile_manager.distance(h) == HostDistance.LOCAL))),
+                'initialControlConnection': connection.host if connection else None,
+                'protocolVersion': cluster.protocol_version,
                 'localAddress': local_ipaddr,
                 'hostName': hostname,
-                'executionProfiles': insights_registry.serialize(self._session.cluster.profile_manager),
+                'executionProfiles': insights_registry.serialize(cluster.profile_manager),
                 'configuredConnectionLength': host_distances_dict,
-                'heartbeatInterval': self._session.cluster.idle_heartbeat_interval,
+                'heartbeatInterval': cluster.idle_heartbeat_interval,
                 'compression': compression_type.upper() if compression_type else 'NONE',
-                'reconnectionPolicy': insights_registry.serialize(self._session.cluster.reconnection_policy),
+                'reconnectionPolicy': insights_registry.serialize(cluster.reconnection_policy),
                 'sslConfigured': {
-                    'enabled': bool(self._session.cluster.ssl_options or self._session.cluster.ssl_context),
+                    'enabled': ssl_enabled,
                     'certValidation': cert_validation
                 },
                 'authProvider': {
-                    'type': (self._session.cluster.auth_provider.__class__.__name__
-                             if self._session.cluster.auth_provider else
+                    'type': (cluster.auth_provider.__class__.__name__
+                             if cluster.auth_provider else
                              None)
                 },
                 'otherOptions': {
@@ -208,7 +225,7 @@ class MonitorReporter(Thread):
                     },
                     'runtime': {
                         'python': sys.version,
-                        'event_loop': self._session.cluster.connection_class.__name__
+                        'event_loop': cluster.connection_class.__name__
                     }
                 },
                 'periodicStatusInterval': self._interval

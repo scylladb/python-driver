@@ -47,10 +47,36 @@ These docs will include some examples for how to achieve common configurations,
 but the `ssl.SSLContext <https://docs.python.org/3/library/ssl.html#ssl.SSLContext>`_ documentation
 gives a more complete description of what is possible.
 
-To enable SSL with version 3.17.0 and higher, you will need to set :attr:`.Cluster.ssl_context` to a
-``ssl.SSLContext`` instance to enable SSL. Optionally, you can also set :attr:`.Cluster.ssl_options`
-to a dict of options. These will be passed as kwargs to ``ssl.SSLContext.wrap_socket()``
-when new sockets are created.
+With version 3.17.0 and higher, the preferred way to enable SSL is to set
+:attr:`.Cluster.ssl_context` to an ``ssl.SSLContext`` instance. Optionally, you
+can also set :attr:`.Cluster.ssl_options` to a dict of options passed as keyword
+arguments to ``ssl.SSLContext.wrap_socket()`` when new sockets are created.
+
+For compatibility, :attr:`.Cluster.ssl_options` can also enable SSL without an
+``ssl_context``. This use is deprecated and will be removed in the next major
+release. An explicit empty dict (``ssl_options={}``) enables encryption without
+verifying the server certificate when the endpoint supplies no additional
+security settings. Cluster-level ``ssl_options=None`` does not enable SSL by
+itself; an ``ssl_context`` or SSL options supplied by the selected
+:class:`~.connection.EndPoint` still enable it. A nonempty options dict enables
+peer-certificate verification by default unless ``cert_reqs`` explicitly
+disables it. Setting
+``check_hostname=True`` always enables peer-certificate verification because
+hostname checking requires an authenticated certificate chain. When
+verification is enabled and ``ca_certs`` is omitted, the driver loads the
+system trust roots.
+
+When ``ssl_options={'check_hostname': True}`` is combined with a supplied
+standard-library ``SSLContext`` whose hostname checking is disabled, the driver
+enables ``SSLContext.check_hostname`` and promotes ``CERT_NONE`` to
+``CERT_REQUIRED``. This mutates the supplied context because hostname checking
+cannot be enabled per connection.
+
+An endpoint ``server_hostname`` used only for SNI routing is not an additional
+security setting. Consequently, explicit ``ssl_options={}`` remains
+unverified when an endpoint contributes only ``server_hostname``. Omitting
+``ssl_options`` instead delegates TLS configuration to the endpoint, whose
+nonempty options enable verification by default.
 
 If you create your SSLContext using `ssl.create_default_context <https://docs.python.org/3/library/ssl.html#ssl.create_default_context>`_,
 be aware that SSLContext.check_hostname is set to True by default, so the hostname validation will be done
@@ -67,12 +93,31 @@ keystore files with these instructions:
 
 SSL with Twisted or Eventlet
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Twisted and Eventlet both use an alternative SSL implementation called pyOpenSSL, so if your `Cluster`'s connection class is
-:class:`~cassandra.io.twistedreactor.TwistedConnection` or :class:`~cassandra.io.eventletreactor.EventletConnection`, you must pass a
-`pyOpenSSL context <https://www.pyopenssl.org/en/stable/api/ssl.html#context-objects>`_ instead.
-An example is provided in these docs, and more details can be found in the
-`documentation <https://www.pyopenssl.org/en/stable/api/ssl.html#context-objects>`_.
+Twisted and Eventlet use pyOpenSSL instead of the standard-library SSL
+implementation. When :attr:`.Cluster.ssl_options` is supplied without an
+``ssl_context``, the driver automatically builds a compatible
+`pyOpenSSL context <https://www.pyopenssl.org/en/stable/api/ssl.html#context-objects>`_
+and maps the supported protocol, verification, certificate, cipher, SNI, and
+hostname-validation settings.
+
+Standard-library ``ssl.PROTOCOL_*`` values are translated to the corresponding
+pyOpenSSL method. Serialized configurations may use the symbolic stdlib name,
+such as ``'PROTOCOL_TLS'``. Avoid serializing protocol values as plain
+integers: stdlib and pyOpenSSL assign different meanings to some of the same
+integers, and ambiguous values are rejected. The ``cert_reqs`` option accepts
+the corresponding stdlib certificate requirement constants.
+
+If you supply :attr:`.Cluster.ssl_context` directly with
+:class:`~cassandra.io.twistedreactor.TwistedConnection` or
+:class:`~cassandra.io.eventletreactor.EventletConnection`, it must be a
+pyOpenSSL context rather than a standard-library ``ssl.SSLContext``. An example
+is provided below, and more details can be found in the
+`pyOpenSSL documentation <https://www.pyopenssl.org/en/stable/api/ssl.html#context-objects>`_.
 pyOpenSSL is not installed by the driver and must be installed separately.
+Enabling hostname checks on an unverified supplied context promotes it to peer
+verification and replaces its verification callback. On older pyOpenSSL
+versions without per-connection info callbacks, Twisted also replaces the
+context-level info callback.
 
 SSL Configuration Examples
 ^^^^^^^^^^^^^^^^^^^^^^^^^^

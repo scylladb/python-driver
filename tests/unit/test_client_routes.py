@@ -26,8 +26,18 @@ from cassandra.client_routes import (
     _Route,
     _ClientRoutesHandler
 )
-from cassandra.connection import ClientRoutesEndPoint, ClientRoutesEndPointFactory
+from cassandra.connection import (
+    ClientRoutesEndPoint, ClientRoutesEndPointFactory, Connection,
+    DefaultEndPoint,
+)
 from cassandra.cluster import Cluster
+
+
+class EndpointSSLOptionsEndPoint(DefaultEndPoint):
+
+    @property
+    def ssl_options(self):
+        return {}
 
 
 class TestClientRouteProxy(unittest.TestCase):
@@ -448,6 +458,63 @@ class TestClientRoutesSSLValidation(unittest.TestCase):
                 client_routes_config=config,
             )
         self.assertIn("check_hostname", str(cm.exception))
+
+    def test_empty_ssl_options_enable_tls_routes(self):
+        config = ClientRoutesConfig(
+            proxies=[ClientRouteProxy(str(uuid.uuid4()), "10.0.0.1")]
+        )
+        with self.assertWarns(DeprecationWarning):
+            cluster = Cluster(
+                contact_points=["10.0.0.1"],
+                ssl_options={},
+                client_routes_config=config,
+            )
+        try:
+            self.assertTrue(cluster._client_routes_handler.ssl_enabled)
+        finally:
+            cluster.shutdown()
+
+    def test_endpoint_ssl_options_enable_tls_routes(self):
+        config = ClientRoutesConfig(
+            proxies=[ClientRouteProxy(str(uuid.uuid4()), "10.0.0.1")]
+        )
+        cluster = Cluster(
+            contact_points=[
+                EndpointSSLOptionsEndPoint("10.0.0.1")
+            ],
+            client_routes_config=config,
+        )
+        try:
+            handler = cluster._client_routes_handler
+            self.assertTrue(handler.ssl_enabled)
+            self.assertEqual(handler.endpoint_ssl_options, {})
+
+            host_id = uuid.uuid4()
+            response = Mock()
+            response.column_names = [
+                "connection_id", "host_id", "address", "port", "tls_port"
+            ]
+            response.parsed_rows = [[
+                str(config.proxies[0].connection_id),
+                host_id,
+                "route.example.com",
+                9042,
+                9142,
+            ]]
+            connection = Mock()
+            connection.wait_for_response.return_value = response
+            handler.initialize(connection, timeout=5.0)
+            self.assertEqual(handler._routes.get_by_host_id(host_id).port, 9142)
+
+            endpoint = cluster.endpoint_factory.create({
+                "host_id": host_id,
+                "rpc_address": "10.0.0.5",
+                "native_transport_port": 9042,
+            })
+            self.assertEqual(endpoint.ssl_options, {})
+            self.assertTrue(Connection(endpoint)._ssl_enabled)
+        finally:
+            cluster.shutdown()
 
     def test_disabled_check_hostname_with_client_routes_ok(self):
         """Cluster should allow check_hostname=False with client_routes_config."""
