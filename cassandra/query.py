@@ -29,6 +29,7 @@ from cassandra import ConsistencyLevel, OperationTimedOut
 from cassandra.util import unix_time_from_uuid1, maybe_add_timeout_to_query
 from cassandra.encoder import Encoder
 import cassandra.encoder
+from cassandra.cqltypes import VectorType
 from cassandra.policies import ColDesc
 from cassandra.protocol import _UNSET_VALUE
 from cassandra.util import OrderedDict, _sanitize_identifiers
@@ -532,8 +533,20 @@ class PreparedStatement(object):
     def _serializers(self):
         """Lazily create and cache Cython serializers for column types.
 
-        Returns a list of Serializer objects if Cython serializers are available
-        and there is no column encryption policy, otherwise returns None.
+        Returns a list of Serializer objects if Cython serializers are available,
+        there is no column encryption policy, and at least one column would
+        actually benefit from the Cython fast path (currently: VectorType
+        columns); otherwise returns None.
+
+        The Cython serializer dispatch has measurable per-value overhead. For
+        ordinary scalar columns (int, float, text, ...) the generic serializer
+        just turns around and calls cqltype.serialize() anyway, so the extra
+        dispatch makes scalar-only statements *slower* than the plain Python
+        path. The big win (multiple times faster) is specifically for
+        VectorType columns, where the Cython path avoids a per-element
+        io.BytesIO loop. So we only take the Cython path when the statement
+        contains at least one VectorType column; scalar-only statements fall
+        through to the plain Python bind path automatically.
 
         The column_encryption_policy check is performed on every access (not
         cached) so that serializers are correctly bypassed if a policy is set
@@ -547,7 +560,8 @@ class PreparedStatement(object):
             return self._cached_serializers
         except AttributeError:
             pass
-        if _HAVE_CYTHON_SERIALIZERS and self.column_metadata:
+        if (_HAVE_CYTHON_SERIALIZERS and self.column_metadata and
+                any(issubclass(col.type, VectorType) for col in self.column_metadata)):
             self._cached_serializers = _cython_make_serializers(
                 [col.type for col in self.column_metadata])
         else:

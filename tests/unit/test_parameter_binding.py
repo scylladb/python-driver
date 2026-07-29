@@ -15,15 +15,18 @@
 import unittest
 import struct
 import pytest
+from unittest import mock
 
 from cassandra.encoder import Encoder
 from cassandra.protocol import ColumnMetadata
+from cassandra import query
 from cassandra.query import (bind_params, ValueSequence, PreparedStatement,
                              BoundStatement, UNSET_VALUE)
-from cassandra.cqltypes import Int32Type
+from cassandra.cqltypes import FloatType, Int32Type, UTF8Type, VectorType
 from cassandra.util import OrderedDict
 
 from tests.util import assertListEqual
+from tests.unit.cython.utils import cythontest
 
 
 class ParamBindingTest(unittest.TestCase):
@@ -339,6 +342,87 @@ class CythonBindPathTest(unittest.TestCase):
         msg = str(exc.value)
         assert 'v0' in msg
         assert 'Int32Type' in msg
+
+
+@cythontest
+class SerializersGatingTest(unittest.TestCase):
+    """Tests for the _serializers property's gating logic.
+
+    The Cython fast path has measurable per-value dispatch overhead: for
+    scalar-only statements the generic serializer just calls
+    cqltype.serialize() anyway, so it is a net regression to use it there.
+    The big win is specifically for VectorType columns. So _serializers
+    should only build (and cache) Cython serializers when the statement
+    contains at least one VectorType column; scalar-only statements should
+    fall through to the plain Python bind path (i.e. _serializers is None).
+
+    These tests patch cassandra.query._HAVE_CYTHON_SERIALIZERS and
+    _cython_make_serializers directly so the gating logic itself is
+    exercised deterministically without depending on the real Cython
+    serializer implementation.
+
+    Requires the Cython extensions (cassandra.serializers, ...) to be
+    built, which is not the case e.g. on PyPy wheels (see setup.py:
+    try_cython is disabled for PyPy). ``_cython_make_serializers`` only
+    exists as a module-level attribute of cassandra.query when the import
+    of cassandra.serializers succeeds; without this guard, patching it
+    with mock.patch.object fails with AttributeError instead of skipping.
+    """
+
+    protocol_version = 4
+
+    def _make_prepared(self, column_metadata):
+        return PreparedStatement(column_metadata=column_metadata,
+                                 query_id=None,
+                                 routing_key_indexes=[],
+                                 query=None,
+                                 keyspace='keyspace',
+                                 protocol_version=self.protocol_version,
+                                 result_metadata=None,
+                                 result_metadata_id=None)
+
+    def test_scalar_only_statement_has_no_serializers(self):
+        """A statement with only scalar columns must not use the Cython fast
+        path, even when Cython serializers are available."""
+        column_metadata = [ColumnMetadata('keyspace', 'cf', 'c0', Int32Type),
+                           ColumnMetadata('keyspace', 'cf', 'c1', UTF8Type),
+                           ColumnMetadata('keyspace', 'cf', 'c2', FloatType)]
+        prepared = self._make_prepared(column_metadata)
+        with mock.patch.object(query, '_HAVE_CYTHON_SERIALIZERS', True), \
+             mock.patch.object(query, '_cython_make_serializers',
+                               lambda types: ['stub'] * len(types)):
+            assert prepared._serializers is None
+
+    def test_vector_column_statement_uses_serializers(self):
+        """A statement containing at least one VectorType column should use
+        the Cython fast path when Cython serializers are available, even if
+        it also has scalar columns."""
+        vec_type = VectorType.apply_parameters([FloatType, 4], None)
+        column_metadata = [ColumnMetadata('keyspace', 'cf', 'c0', Int32Type),
+                           ColumnMetadata('keyspace', 'cf', 'v0', vec_type)]
+        prepared = self._make_prepared(column_metadata)
+        with mock.patch.object(query, '_HAVE_CYTHON_SERIALIZERS', True), \
+             mock.patch.object(query, '_cython_make_serializers',
+                               lambda types: ['stub'] * len(types)):
+            assert prepared._serializers is not None
+            assert len(prepared._serializers) == len(column_metadata)
+
+    def test_vector_column_statement_without_cython_has_no_serializers(self):
+        """Even a vector-containing statement falls back to the plain Python
+        path when Cython serializers are not available."""
+        vec_type = VectorType.apply_parameters([FloatType, 4], None)
+        column_metadata = [ColumnMetadata('keyspace', 'cf', 'v0', vec_type)]
+        prepared = self._make_prepared(column_metadata)
+        with mock.patch.object(query, '_HAVE_CYTHON_SERIALIZERS', False):
+            assert prepared._serializers is None
+
+    def test_empty_statement_has_no_serializers(self):
+        """A statement with no columns should not attempt to build serializers."""
+        prepared = self._make_prepared([])
+        with mock.patch.object(query, '_HAVE_CYTHON_SERIALIZERS', True), \
+             mock.patch.object(query, '_cython_make_serializers',
+                               lambda types: ['stub'] * len(types)):
+            assert prepared._serializers is None
 
 
 class UnsetValueBindingTest(unittest.TestCase):

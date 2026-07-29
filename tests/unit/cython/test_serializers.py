@@ -23,9 +23,7 @@ import math
 import struct
 import unittest
 
-import numpy as np
-
-from tests.unit.cython.utils import cythontest
+from tests.unit.cython.utils import cythontest, numpytest
 
 from cassandra.cython_deps import HAVE_CYTHON
 
@@ -559,8 +557,10 @@ class TestSerVectorTypeIterableInput(unittest.TestCase):
         python_bytes = vec_type.serialize([1.0, 2.0, 3.0], PROTO)
         self.assertEqual(cython_bytes, python_bytes)
 
+    @numpytest
     def test_numpy_float32_array_input(self):
         """NumPy float32 arrays should hit the float buffer fast path."""
+        import numpy as np
         vec_type = _make_vector_type(FloatType, 4)
         ser = SerVectorType(vec_type)
         values = np.asarray([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
@@ -568,8 +568,10 @@ class TestSerVectorTypeIterableInput(unittest.TestCase):
         python_bytes = vec_type.serialize(values, PROTO)
         self.assertEqual(cython_bytes, python_bytes)
 
+    @numpytest
     def test_numpy_float64_array_input(self):
         """NumPy float64 arrays should hit the double buffer fast path."""
+        import numpy as np
         vec_type = _make_vector_type(DoubleType, 3)
         ser = SerVectorType(vec_type)
         values = np.asarray([1.0, -2.5, 3.14], dtype=np.float64)
@@ -577,8 +579,10 @@ class TestSerVectorTypeIterableInput(unittest.TestCase):
         python_bytes = vec_type.serialize(values, PROTO)
         self.assertEqual(cython_bytes, python_bytes)
 
+    @numpytest
     def test_numpy_int32_array_input(self):
         """NumPy int32 arrays should hit the int32 buffer fast path."""
+        import numpy as np
         vec_type = _make_vector_type(Int32Type, 3)
         ser = SerVectorType(vec_type)
         values = np.asarray([2147483647, -2147483648, 0], dtype=np.int32)
@@ -586,6 +590,7 @@ class TestSerVectorTypeIterableInput(unittest.TestCase):
         python_bytes = vec_type.serialize(values, PROTO)
         self.assertEqual(cython_bytes, python_bytes)
 
+    @numpytest
     def test_numpy_dtype_mismatch_fallthrough(self):
         """dtype mismatch should fall through to element-wise path correctly.
 
@@ -593,6 +598,7 @@ class TestSerVectorTypeIterableInput(unittest.TestCase):
         float[::1], so the serializer must fall through to the
         element-wise path and still produce correct bytes.
         """
+        import numpy as np
         vec_type = _make_vector_type(FloatType, 3)
         ser = SerVectorType(vec_type)
         values = np.asarray([1.0, 2.0, 3.0], dtype=np.float64)
@@ -642,6 +648,125 @@ class TestFindSerializer(unittest.TestCase):
         """Un-parameterized VectorType (base class) should not crash."""
         ser = find_serializer(VectorType)
         self.assertIsInstance(ser, GenericSerializer)
+
+
+@cythontest
+class TestFindSerializerRespectsSerializeOverride(unittest.TestCase):
+    """Regression tests: a subclass that overrides serialize() must never be
+    routed through a hard-coded built-in Cython fast path.
+
+    cassandra.cqltypes.CassandraTypeType auto-registers any class subclassing
+    a CassandraType (see tests/unit/test_types.py::test_parse_casstype_args
+    for the same pattern applied to the generic CassandraType base), so a
+    user-defined FloatType/DoubleType/Int32Type/VectorType subclass with a
+    custom serialize() is a real, reachable object here -- not just a
+    hypothetical. Dispatching on __name__ or plain issubclass() (as opposed
+    to checking which class in the MRO actually defines serialize()) would
+    silently discard such an override and emit the built-in's raw bytes.
+    """
+
+    def _assert_generic_and_respects_override(self, cqltype, value, expected):
+        ser = find_serializer(cqltype)
+        self.assertIsInstance(ser, GenericSerializer)
+        self.assertEqual(ser.serialize(value, PROTO), expected)
+
+    def test_float_subclass_override_not_fast_pathed(self):
+        class CustomFloatType(FloatType):
+            @staticmethod
+            def serialize(val, protocol_version):
+                return b'CUSTOM-FLOAT'
+
+        self._assert_generic_and_respects_override(
+            CustomFloatType, 1.0, b'CUSTOM-FLOAT')
+
+    def test_double_subclass_override_not_fast_pathed(self):
+        class CustomDoubleType(DoubleType):
+            @staticmethod
+            def serialize(val, protocol_version):
+                return b'CUSTOM-DOUBLE'
+
+        self._assert_generic_and_respects_override(
+            CustomDoubleType, 1.0, b'CUSTOM-DOUBLE')
+
+    def test_int32_subclass_override_not_fast_pathed(self):
+        class CustomInt32Type(Int32Type):
+            @staticmethod
+            def serialize(val, protocol_version):
+                return b'CUSTOM-INT32'
+
+        self._assert_generic_and_respects_override(
+            CustomInt32Type, 1, b'CUSTOM-INT32')
+
+    def test_vector_type_subclass_override_not_fast_pathed(self):
+        class CustomVectorType(VectorType):
+            @staticmethod
+            def serialize(v, protocol_version):
+                return b'CUSTOM-VECTOR'
+
+        vec_type = CustomVectorType.apply_parameters([FloatType, 4], None)
+        self._assert_generic_and_respects_override(
+            vec_type, [1.0, 2.0, 3.0, 4.0], b'CUSTOM-VECTOR')
+
+    def test_vector_with_overridden_float_subtype_respects_override(self):
+        """A vector whose *subtype* (element type) overrides serialize()
+        must not be packed via the hard-coded IEEE-754 float32 fast path,
+        even though the vector container itself is a plain VectorType.
+        """
+        class CustomFloatType(FloatType):
+            @staticmethod
+            def serialize(val, protocol_version):
+                return b'F'
+
+        vec_type = VectorType.apply_parameters([CustomFloatType, 3], None)
+        ser = find_serializer(vec_type)
+        result = ser.serialize([1.0, 2.0, 3.0], PROTO)
+        expected = vec_type.serialize([1.0, 2.0, 3.0], PROTO)
+        self.assertEqual(result, b'FFF')
+        self.assertEqual(result, expected)
+
+    def test_vector_with_overridden_double_subtype_respects_override(self):
+        class CustomDoubleType(DoubleType):
+            @staticmethod
+            def serialize(val, protocol_version):
+                return b'D'
+
+        vec_type = VectorType.apply_parameters([CustomDoubleType, 2], None)
+        ser = find_serializer(vec_type)
+        result = ser.serialize([1.0, 2.0], PROTO)
+        expected = vec_type.serialize([1.0, 2.0], PROTO)
+        self.assertEqual(result, b'DD')
+        self.assertEqual(result, expected)
+
+    def test_vector_with_overridden_int32_subtype_respects_override(self):
+        class CustomInt32Type(Int32Type):
+            @staticmethod
+            def serialize(val, protocol_version):
+                return b'I'
+
+        vec_type = VectorType.apply_parameters([CustomInt32Type, 2], None)
+        ser = find_serializer(vec_type)
+        result = ser.serialize([1, 2], PROTO)
+        expected = vec_type.serialize([1, 2], PROTO)
+        self.assertEqual(result, b'II')
+        self.assertEqual(result, expected)
+
+    def test_non_overriding_subclass_still_gets_fast_path(self):
+        """A subclass that does NOT override serialize() (e.g. the kind
+        apply_parameters() itself generates) should still take the fast
+        path -- the fix must not regress the legitimate optimization.
+        """
+        class PlainFloatSubtype(FloatType):
+            pass
+
+        ser = find_serializer(PlainFloatSubtype)
+        self.assertIsInstance(ser, SerFloatType)
+
+        vec_type = VectorType.apply_parameters([PlainFloatSubtype, 4], None)
+        vec_ser = find_serializer(vec_type)
+        self.assertIsInstance(vec_ser, SerVectorType)
+        result = vec_ser.serialize([1.0, 2.0, 3.0, 4.0], PROTO)
+        expected = vec_type.serialize([1.0, 2.0, 3.0, 4.0], PROTO)
+        self.assertEqual(result, expected)
 
 
 @cythontest

@@ -176,14 +176,40 @@ cdef class SerInt32Type(Serializer):
 # Type detection helpers
 # ---------------------------------------------------------------------------
 
+cdef inline object _nearest_serialize_owner(object cls):
+    """Return the class in ``cls``'s MRO that actually defines ``serialize``.
+
+    ``CassandraType.apply_parameters()`` (used to build e.g. parameterized
+    ``VectorType`` subtypes, or -- via user code -- any other subclass of a
+    built-in scalar type) only ever sets data attributes such as
+    ``subtypes``/``vector_size``/``fieldnames`` on the generated class; it
+    never sets ``serialize`` there. Walking the MRO to find the nearest class
+    whose own ``__dict__`` defines ``serialize`` therefore reliably answers
+    "does this class actually behave like the built-in type for
+    serialization purposes, or has some ancestor/itself overridden it?" --
+    which a plain ``is``/``issubclass`` check cannot: those are true for any
+    subclass, including a user-defined one that overrides ``serialize()`` to
+    do something other than what the corresponding Cython ``Ser*`` class
+    hard-codes. ``cassandra.cqltypes.CassandraTypeType`` auto-registers any
+    non-underscore-prefixed class by its own ``__name__`` (see
+    ``tests/unit/test_types.py::test_parse_casstype_args`` for the supported
+    pattern of subclassing a ``CassandraType`` with custom behavior), so such
+    a subclass -- intentionally or via an accidental name clash -- can end up
+    as a real column's type or a vector's subtype.
+    """
+    for klass in cls.__mro__:
+        if 'serialize' in klass.__dict__:
+            return klass
+    return None
+
 cdef inline bint _is_float_type(object subtype):
-    return subtype is cqltypes.FloatType or issubclass(subtype, cqltypes.FloatType)
+    return _nearest_serialize_owner(subtype) is cqltypes.FloatType
 
 cdef inline bint _is_double_type(object subtype):
-    return subtype is cqltypes.DoubleType or issubclass(subtype, cqltypes.DoubleType)
+    return _nearest_serialize_owner(subtype) is cqltypes.DoubleType
 
 cdef inline bint _is_int32_type(object subtype):
-    return subtype is cqltypes.Int32Type or issubclass(subtype, cqltypes.Int32Type)
+    return _nearest_serialize_owner(subtype) is cqltypes.Int32Type
 
 
 # ---------------------------------------------------------------------------
@@ -534,16 +560,27 @@ cdef dict _ser_classes = {}
 cpdef Serializer find_serializer(cqltype):
     """Find a serializer for a cqltype."""
 
-    # For VectorType, use SerVectorType only if parameterized (has a valid subtype).
-    # Un-parameterized VectorType (base class) would crash _is_float_type() etc.
+    # For VectorType, use SerVectorType only if parameterized (has a valid
+    # subtype) AND cqltype behaves like the built-in VectorType for
+    # serialization -- i.e. the nearest class in its MRO that defines
+    # serialize() is cqltypes.VectorType itself, not some subclass (built-in
+    # generated subtypes never define their own serialize(), but a
+    # user-defined subclass might override it; see
+    # _nearest_serialize_owner()). Un-parameterized VectorType (base class)
+    # would crash _is_float_type() etc, so that's still checked first.
     if issubclass(cqltype, cqltypes.VectorType):
-        if getattr(cqltype, 'subtype', None) is not None:
+        if (getattr(cqltype, 'subtype', None) is not None and
+                _nearest_serialize_owner(cqltype) is cqltypes.VectorType):
             return SerVectorType(cqltype)
         return GenericSerializer(cqltype)
 
-    # For scalar types with dedicated serializers, look up by name
-    name = 'Ser' + cqltype.__name__
-    cls = _ser_classes.get(name)
+    # For scalar types with dedicated serializers, use the specialized path
+    # only when cqltype actually behaves like the built-in type for
+    # serialization -- keyed and verified by identity/MRO ownership, not by
+    # class-name string, so a different class merely *named* e.g. 'FloatType'
+    # (or a subclass overriding serialize()) can't be mistaken for it.
+    owner = _nearest_serialize_owner(cqltype)
+    cls = _ser_classes.get(owner)
     if cls is not None:
         return cls(cqltype)
 
@@ -564,10 +601,13 @@ def obj_array(list objs):
     """Create a (Cython) array of objects given a list of objects.
 
     Mirrors ``deserializers.obj_array()`` so both sides share the same
-    typed-memoryview convention.  Returns the plain list for empty input
-    since ``cython_array`` does not support zero-length shapes.  Callers
-    that use ``cdef Serializer[::1]`` typed memoryviews must guard
-    against empty input before assignment.
+    typed-memoryview convention. Empty input is not currently expected here:
+    the only caller, ``PreparedStatement._serializers``, already guards on
+    ``self.column_metadata`` being non-empty before calling
+    ``make_serializers()``. The early return below is defensive only (it
+    does not, by itself, make an empty-input call safe end-to-end for
+    callers that assign the result to a typed ``Serializer[::1]``
+    memoryview, since a plain list isn't a valid memoryview value).
     """
     if not objs:
         return objs
@@ -579,7 +619,10 @@ def obj_array(list objs):
     return arr
 
 
-# Build the lookup dict for scalar serializers at module load time
-_ser_classes['SerFloatType'] = SerFloatType
-_ser_classes['SerDoubleType'] = SerDoubleType
-_ser_classes['SerInt32Type'] = SerInt32Type
+# Build the lookup dict for scalar serializers at module load time. Keyed by
+# the actual built-in cqltypes class objects (not name strings), so a
+# same-named or subclassed impostor can't be mistaken for the real type --
+# see find_serializer() and _nearest_serialize_owner().
+_ser_classes[cqltypes.FloatType] = SerFloatType
+_ser_classes[cqltypes.DoubleType] = SerDoubleType
+_ser_classes[cqltypes.Int32Type] = SerInt32Type
