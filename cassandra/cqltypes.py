@@ -41,6 +41,7 @@ import socket
 import time
 import struct
 import sys
+from threading import Lock
 from uuid import UUID
 
 from cassandra.marshal import (int8_pack, int8_unpack, int16_pack, int16_unpack,
@@ -977,36 +978,66 @@ class UserType(TupleType):
     typename = "org.apache.cassandra.db.marshal.UserType"
 
     _cache = {}
+    _cache_lock = Lock()
     _module = sys.modules[__name__]
 
     @classmethod
-    def make_udt_class(cls, keyspace, udt_name, field_names, field_types):
+    def make_udt_class(cls, keyspace, udt_name, field_names, field_types,
+                       mapped_class=None):
         assert len(field_names) == len(field_types)
 
-        instance = cls._cache.get((keyspace, udt_name))
-        if not instance or instance.fieldnames != field_names or instance.subtypes != field_types:
-            instance = type(udt_name, (cls,), {'subtypes': field_types,
-                                               'cassname': cls.cassname,
-                                               'typename': udt_name,
-                                               'fieldnames': field_names,
-                                               'keyspace': keyspace,
-                                               'mapped_class': None,
-                                               'tuple_type': cls._make_registered_udt_namedtuple(keyspace, udt_name, field_names)})
-            cls._cache[(keyspace, udt_name)] = instance
+        # A UDT type descriptor can outlive the response that created it (for
+        # example, in a PreparedStatement's cached result metadata).  Keep a
+        # distinct descriptor for each registered Python mapping so parsing
+        # metadata for another Cluster cannot mutate an existing descriptor.
+        #
+        # Use identity rather than the class itself in the key. Registered
+        # classes normally are hashable, but a custom metaclass may opt out of
+        # hashing. The generated descriptor holds a strong reference to
+        # mapped_class, so its id cannot be reused while this cache entry exists.
+        cache_key = (keyspace, udt_name, id(mapped_class))
+        with cls._cache_lock:
+            instance = cls._cache.get(cache_key)
+            if not instance or instance.fieldnames != field_names or instance.subtypes != field_types:
+                instance = type(udt_name, (cls,), {'subtypes': field_types,
+                                                   'cassname': cls.cassname,
+                                                   'typename': udt_name,
+                                                   'fieldnames': field_names,
+                                                   'keyspace': keyspace,
+                                                   'mapped_class': mapped_class,
+                                                   # Mapped values deserialize
+                                                   # directly into mapped_class.
+                                                   # Only unmapped variants need
+                                                   # a module-registered tuple
+                                                   # type for pickle support.
+                                                   'tuple_type': (
+                                                       None if mapped_class is not None
+                                                       else cls._make_registered_udt_namedtuple(
+                                                           keyspace, udt_name, field_names))})
+                cls._cache[cache_key] = instance
         return instance
 
     @classmethod
     def evict_udt_class(cls, keyspace, udt_name):
-        try:
-            del cls._cache[(keyspace, udt_name)]
-        except KeyError:
-            pass
+        # Registration changes must evict mapped and unmapped variants alike.
+        # Slicing also recognizes two-element keys left by older driver code in
+        # a long-running process that reloads this module.
+        with cls._cache_lock:
+            cache_keys = [
+                cache_key for cache_key in cls._cache
+                if cache_key[:2] == (keyspace, udt_name)
+            ]
+            for cache_key in cache_keys:
+                del cls._cache[cache_key]
 
     @classmethod
     def apply_parameters(cls, subtypes, names):
         keyspace = subtypes[0].cass_parameterized_type()  # when parsed from cassandra type, the keyspace is created as an unrecognized cass type; This gets the name back
         udt_name = _name_from_hex_string(subtypes[1].cassname)
         field_names = tuple(_name_from_hex_string(encoded_name) for encoded_name in names[2:])  # using tuple here to match what comes into make_udt_class from other sources (for caching equality test)
+        # Cassandra type strings carry no per-Cluster user-type map. Keep this
+        # legacy lookup explicitly unmapped instead of borrowing a descriptor
+        # registered for some other Cluster.
         return cls.make_udt_class(keyspace, udt_name, field_names, tuple(subtypes[2:]))
 
     @classmethod

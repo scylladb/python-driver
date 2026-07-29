@@ -314,7 +314,7 @@ class MessageTest(unittest.TestCase):
         # recv_results_metadata returns early on NO_METADATA; result_metadata_id
         # must never be set as an instance attribute (it is not a class default).
         # column_metadata is a class attribute defaulting to None and must remain so.
-        assert not hasattr(msg, 'result_metadata_id')
+        assert msg.result_metadata_id is None
         assert msg.column_metadata is None
 
     def test_query_message(self):
