@@ -152,14 +152,17 @@ class TestProtocolFeatures(unittest.TestCase):
         assert pf.sharding_info is None
 
     def test_is_scylla_detected_via_sharding(self):
-        """ScyllaDB with full sharding is recognised and sharding_info is populated."""
+        """ScyllaDB with full sharding is recognised and sharding_info is populated.
+
+        Deliberately omits SCYLLA_LWT_ADD_METADATA_MARK so this test isolates
+        is_scylla detection via sharding_info, not the LWT extension key.
+        """
         pf = ProtocolFeatures.parse_from_supported({
             'SCYLLA_SHARD': ['3'],
             'SCYLLA_NR_SHARDS': ['12'],
             'SCYLLA_PARTITIONER': ['org.apache.cassandra.dht.Murmur3Partitioner'],
             'SCYLLA_SHARDING_ALGORITHM': ['biased-token-round-robin'],
             'SCYLLA_SHARDING_IGNORE_MSB': ['12'],
-            'SCYLLA_LWT_ADD_METADATA_MARK': ['LWT_OPTIMIZATION_META_BIT_MASK=8'],
         })
         assert pf.is_scylla is True
         assert pf.shard_id == 3
