@@ -82,27 +82,27 @@ class TestProtocolFeatures(unittest.TestCase):
 
     def test_scylla_without_sharding_no_crash(self):
         """
-        Regression test for F1: SCYLLA_PARTITIONER present but SCYLLA_NR_SHARDS
-        and SCYLLA_SHARDING_IGNORE_MSB absent must not raise TypeError.
-        Mirrors the scenario where only some shard fields are advertised.
+        Regression test for F1: SCYLLA_PARTITIONER present but SCYLLA_SHARD /
+        SCYLLA_NR_SHARDS absent must not raise TypeError. ScyllaDB gates all
+        sharding fields together server-side, so this is not expected in
+        practice, but if it happens the driver must not fabricate a partial
+        ShardingInfo -- it should just disable shard-aware routing while
+        still recognising the server as ScyllaDB via the LWT extension key.
         """
-        # Should not raise even though shards_count / sharding_ignore_msb are None.
         pf = ProtocolFeatures.parse_from_supported({
             'SCYLLA_PARTITIONER': ['org.apache.cassandra.dht.Murmur3Partitioner'],
             'SCYLLA_LWT_ADD_METADATA_MARK': ['LWT_OPTIMIZATION_META_BIT_MASK=8'],
         })
         assert pf.is_scylla is True
-        # SCYLLA_PARTITIONER passes the sharding guard, so sharding_info is populated
-        # with zero defaults rather than crashing.
+        # Incomplete sharding fields -- no ShardingInfo is fabricated.
         assert pf.shard_id == 0
-        assert pf.sharding_info is not None
-        assert pf.sharding_info.shards_count == 0
-        assert pf.sharding_info.sharding_ignore_msb == 0
+        assert pf.sharding_info is None
 
     def test_scylla_sharding_algorithm_only_no_crash(self):
         """
-        Regression: SCYLLA_SHARDING_ALGORITHM present without SCYLLA_NR_SHARDS
-        must not raise TypeError.
+        Regression: SCYLLA_SHARDING_ALGORITHM present without SCYLLA_SHARD /
+        SCYLLA_NR_SHARDS must not raise TypeError, and must not fabricate a
+        partial ShardingInfo.
         """
         pf = ProtocolFeatures.parse_from_supported({
             'SCYLLA_SHARDING_ALGORITHM': ['biased-token-round-robin'],
@@ -110,5 +110,4 @@ class TestProtocolFeatures(unittest.TestCase):
         })
         assert pf.is_scylla is True
         assert pf.shard_id == 0
-        assert pf.sharding_info is not None
-        assert pf.sharding_info.shards_count == 0
+        assert pf.sharding_info is None
