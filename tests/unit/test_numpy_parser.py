@@ -15,21 +15,44 @@
 import struct
 import unittest
 
+from cassandra.cython_deps import HAVE_CYTHON, HAVE_NUMPY
+
 try:
+    from tests import VERIFY_CYTHON
+except ImportError:
+    VERIFY_CYTHON = False
+
+# cassandra.numpy_parser is a Cython extension (gated on HAVE_CYTHON), not a
+# pure-Python module -- HAVE_NUMPY (from cassandra.cython_deps) only tells us
+# whether the *numpy package itself* is importable, not whether numpy_parser
+# built/imports correctly. A single broad `except ImportError` around all of
+# these imports would conflate two very different situations:
+#   - numpy genuinely not installed (expected in a numpy-less environment;
+#     should skip cleanly), vs.
+#   - the Cython extension being broken or missing despite numpy being
+#     present (an unexpected regression that should FAIL the test run
+#     rather than hide behind a silently skipped test -- this is exactly
+#     how a real numpy_parser regression could slip through a green CI run).
+#
+# So gate on HAVE_CYTHON and HAVE_NUMPY together (the same compound
+# condition as the `numpytest` decorator in tests/unit/cython/utils.py,
+# including its VERIFY_CYTHON override for CI configurations that require
+# Cython support to be present); only skip when Cython and/or numpy support
+# is genuinely absent, and otherwise import unconditionally so a broken
+# extension surfaces as a real ImportError/test failure.
+HAVE_NUMPY_PARSER = (HAVE_CYTHON and HAVE_NUMPY) or VERIFY_CYTHON
+
+if HAVE_NUMPY_PARSER:
     import numpy as np
     from cassandra.numpy_parser import NumpyParser
     from cassandra.bytesio import BytesIOReader
     from cassandra.parsing import ParseDesc
     from cassandra.deserializers import obj_array, make_deserializers
 
-    HAVE_NUMPY = True
-except ImportError:
-    HAVE_NUMPY = False
-
 from cassandra import cqltypes
 
 
-@unittest.skipUnless(HAVE_NUMPY, "NumPy not available")
+@unittest.skipUnless(HAVE_NUMPY_PARSER, "NumPy/Cython extension not available")
 class TestNumpyParserVectorType(unittest.TestCase):
     """Tests for VectorType support in NumpyParser"""
 
@@ -476,6 +499,72 @@ class TestNumpyParserVectorType(unittest.TestCase):
         null_row_bytes = arr.data[1].tobytes()
         self.assertEqual(null_row_bytes, b"\x00" * len(null_row_bytes))
 
+    def test_oversized_vector_payload_raises(self):
+        """Test that a vector payload larger than the array stride is rejected.
+
+        Guards against a memcpy buffer overflow: unpack_row() must not trust
+        an oversized buf.size and copy past the end of the preallocated row.
+        """
+        vector_size = 3
+        vector_type = self._create_vector_type(cqltypes.FloatType, vector_size)
+
+        buffer = bytearray()
+        buffer.extend(struct.pack(">i", 1))  # row count
+
+        # Claim 4 floats (16 bytes) worth of payload for a 3-float (12 byte)
+        # column stride.
+        buffer.extend(struct.pack(">i", 16))
+        buffer.extend(struct.pack(">4f", 1.0, 2.0, 3.0, 4.0))
+
+        parser = NumpyParser()
+        reader = BytesIOReader(bytes(buffer))
+
+        desc = ParseDesc(
+            colnames=["vec"],
+            coltypes=[vector_type],
+            column_encryption_policy=None,
+            coldescs=None,
+            deserializers=obj_array([None]),
+            protocol_version=5,
+        )
+
+        with self.assertRaisesRegex(ValueError, r"'vec'"):
+            parser.parse_rows(reader, desc)
+
+    def test_undersized_vector_payload_raises(self):
+        """Test that a vector payload smaller than the array stride is rejected.
+
+        An undersized payload must not be silently accepted: without a
+        strict equality check, memcpy would only fill part of the row,
+        leaving the remaining bytes uninitialized/stale (a correctness and
+        potential info-leak issue), rather than raising.
+        """
+        vector_size = 4
+        vector_type = self._create_vector_type(cqltypes.FloatType, vector_size)
+
+        buffer = bytearray()
+        buffer.extend(struct.pack(">i", 1))  # row count
+
+        # Claim only 3 floats (12 bytes) worth of payload for a 4-float
+        # (16 byte) column stride.
+        buffer.extend(struct.pack(">i", 12))
+        buffer.extend(struct.pack(">3f", 1.0, 2.0, 3.0))
+
+        parser = NumpyParser()
+        reader = BytesIOReader(bytes(buffer))
+
+        desc = ParseDesc(
+            colnames=["vec"],
+            coltypes=[vector_type],
+            column_encryption_policy=None,
+            coldescs=None,
+            deserializers=obj_array([None]),
+            protocol_version=5,
+        )
+
+        with self.assertRaisesRegex(ValueError, r"'vec'"):
+            parser.parse_rows(reader, desc)
+
     def test_unsupported_subtype_falls_back_to_object_array(self):
         """Test that an unsupported vector subtype falls back to an object array"""
         vector_size = 2
@@ -531,6 +620,70 @@ class TestNumpyParserVectorType(unittest.TestCase):
 
         for i, expected_vector in enumerate(vectors):
             self.assertEqual(list(arr[i]), expected_vector)
+
+
+@unittest.skipUnless(HAVE_NUMPY_PARSER, "NumPy/Cython extension not available")
+class TestNumpyParserScalarType(unittest.TestCase):
+    """Regression tests for the plain (non-vector) scalar column fast path.
+
+    `_cqltype_to_numpy` in cassandra/numpy_parser.pyx is shared by two call
+    sites in make_array(): VectorType.subtype dispatch and plain scalar
+    top-level column dispatch. A fix aimed only at excluding a subtype from
+    the vector fast path (e.g. ShortType, which is vint-prefixed *inside* a
+    vector) must not remove that subtype's entry from the shared dict
+    outright, since that would also silently regress the scalar column fast
+    path for the exact same type (ShortType/smallint *is* fixed-width as a
+    scalar column). These tests guard against that regression.
+    """
+
+    def test_scalar_smallint_uses_fast_masked_int16_array(self):
+        """smallint (ShortType) is fixed-width (2 bytes, big-endian, no
+        length prefix) as a scalar column -- unlike inside a VectorType,
+        where it is vint-length-prefixed per element. It must still get the
+        fast masked int16 array here, not fall back to a slow 1D object
+        array.
+        """
+        from cassandra.numpy_parser import make_array
+
+        arr = make_array(cqltypes.ShortType, 5)
+
+        self.assertNotEqual(arr.dtype, np.dtype("O"))
+        self.assertEqual(arr.dtype, np.dtype(">i2"))
+        self.assertTrue(hasattr(arr, "mask"))
+        self.assertEqual(arr.shape, (5,))
+
+    def test_scalar_smallint_round_trips_end_to_end(self):
+        """End-to-end companion: parse actual wire bytes for a smallint
+        column through NumpyParser.parse_rows() and confirm the result is a
+        native int16 (masked) array with the correct values, not an object
+        array.
+        """
+        values = [1, -5, 32767, -32768, 0]
+
+        buffer = bytearray()
+        buffer.extend(struct.pack(">i", len(values)))  # row count
+        for v in values:
+            buffer.extend(struct.pack(">i", 2))  # smallint byte size
+            buffer.extend(struct.pack(">h", v))
+
+        parser = NumpyParser()
+        reader = BytesIOReader(bytes(buffer))
+
+        desc = ParseDesc(
+            colnames=["small"],
+            coltypes=[cqltypes.ShortType],
+            column_encryption_policy=None,
+            coldescs=None,
+            deserializers=obj_array([None]),
+            protocol_version=5,
+        )
+
+        result = parser.parse_rows(reader, desc)
+        arr = result["small"]
+
+        self.assertNotEqual(arr.dtype, np.dtype("O"))
+        self.assertEqual(arr.shape, (len(values),))
+        np.testing.assert_array_equal(arr, np.array(values, dtype=np.int16))
 
 
 if __name__ == "__main__":

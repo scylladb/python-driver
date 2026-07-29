@@ -67,20 +67,41 @@ _cqltype_to_numpy = {
     cqltypes.LongType:          np.dtype('>i8'),
     cqltypes.CounterColumnType: np.dtype('>i8'),
     cqltypes.Int32Type:         np.dtype('>i4'),
+    cqltypes.ShortType:         np.dtype('>i2'),
     cqltypes.FloatType:         np.dtype('>f4'),
     cqltypes.DoubleType:        np.dtype('>f8'),
 }
-# Note: ShortType (smallint) is intentionally absent from this table. Unlike
-# LongType/Int32Type/FloatType/DoubleType/CounterColumnType, ShortType does
-# not override serial_size() in cassandra.cqltypes, so it has no fixed
-# per-element width when serialized *inside* a VectorType: the server
-# vint-prefixes each smallint element rather than encoding it as a plain
-# 2-byte big-endian field. Mapping it here would make the vector fast-path
-# assume a fixed 2-byte stride, which does not match the actual wire format
-# and causes a crash (see unpack_row's stride check) instead of falling back
-# to the safe, slower object-array path used for other subtypes without a
-# fixed width (e.g. UTF8Type). See also ByteType (tinyint), which has the
-# same issue and is likewise absent from this table.
+# This table is consulted from two different call sites in make_array()
+# below, and the two call sites do NOT mean the same thing by "fixed width":
+#
+#   - Scalar top-level columns (`_cqltype_to_numpy[coltype]`): here ShortType
+#     (smallint) genuinely is fixed-width on the wire (a plain 2-byte
+#     big-endian field, no length prefix), so it belongs in this table and
+#     gets the fast masked-array path, exactly like Int32Type/LongType/etc.
+#
+#   - VectorType.subtype dispatch (`_cqltype_to_numpy[subtype]` in the
+#     VectorType branch below): Cassandra/Scylla vint-prefixes each element
+#     *inside* a vector unless the subtype overrides serial_size() with a
+#     fixed value (see cqltypes.VectorType.serialize/deserialize, which
+#     branch on exactly this). ShortType (and ByteType/tinyint) do not
+#     override serial_size() -- it returns None from the _CassandraType
+#     base -- so inside a vector they are NOT fixed-width, even though
+#     ShortType *is* fixed-width as a scalar column. Using this table
+#     directly for a vector subtype without checking serial_size() would
+#     make the vector fast-path assume a fixed 2-byte stride that does not
+#     match the actual wire format, causing a crash (see unpack_row's
+#     stride check) instead of falling back to the safe, slower
+#     object-array path used for other subtypes without a fixed width
+#     (e.g. UTF8Type).
+#
+# Rather than removing ShortType from this shared table (which would also
+# silently break the scalar smallint fast path, since both call sites read
+# from the same dict), the VectorType call site below guards with
+# `subtype.serial_size() is not None` before consulting this table at all.
+# That mirrors the check VectorType itself uses to decide its own wire
+# encoding, so it is the general, authoritative test -- and it also
+# protects any subtype added to this table in the future without requiring
+# every caller to separately remember the vector-vs-scalar distinction.
 
 obj_dtype = np.dtype('O')
 
@@ -123,7 +144,7 @@ def make_arrays(ParseDesc desc, array_size):
             (e.g. this can be fed into pandas.DataFrame)
     """
     array_descs = np.empty((desc.rowsize,), arrDescDtype)
-    arrays = [None] * desc.rowsize
+    arrays = []
 
     for i, coltype in enumerate(desc.coltypes):
         arr = make_array(coltype, array_size)
@@ -136,7 +157,7 @@ def make_arrays(ParseDesc desc, array_size):
         except AttributeError:
             array_descs[i]['mask_ptr'] = 0
             array_descs[i]['mask_stride'] = 1
-        arrays[i] = arr
+        arrays.append(arr)
 
     return array_descs, arrays
 
@@ -151,13 +172,26 @@ def make_array(coltype, array_size):
         # VectorType - create 2D array (rows x vector_dimension)
         vector_size = coltype.vector_size
         subtype = coltype.subtype
-        try:
-            dtype = _cqltype_to_numpy[subtype]
-            a = np.ma.empty((array_size, vector_size), dtype=dtype)
-            a.mask = np.zeros((array_size, vector_size), dtype=bool)
-        except KeyError:
-            # Unsupported vector subtype - fall back to object array
-            a = np.empty((array_size,), dtype=obj_dtype)
+        # Only use the fixed-width fast path if the subtype actually has a
+        # fixed per-element wire size *inside a vector*. subtype.serial_size()
+        # is exactly the check VectorType.serialize()/deserialize() use to
+        # decide whether elements are plain fixed-width fields or
+        # vint-length-prefixed (e.g. ShortType/ByteType return None here,
+        # even though ShortType has its own, unrelated entry in
+        # _cqltype_to_numpy for the scalar-column case below). Checking this
+        # first -- rather than only catching KeyError on _cqltype_to_numpy --
+        # also protects any subtype added to that table in the future.
+        if subtype.serial_size() is not None:
+            try:
+                dtype = _cqltype_to_numpy[subtype]
+                a = np.ma.empty((array_size, vector_size), dtype=dtype)
+                a.mask = np.zeros((array_size, vector_size), dtype=bool)
+                return a
+            except KeyError:
+                pass
+        # Unsupported vector subtype, or one without a fixed per-element
+        # wire width - fall back to object array.
+        a = np.empty((array_size,), dtype=obj_dtype)
         return a
 
     # Scalar types
@@ -189,10 +223,11 @@ cdef inline int unpack_row(
             Py_INCREF(val)
             (<PyObject **> arr.buf_ptr)[0] = <PyObject *> val
         elif buf.size >= 0:
-            if buf.size > arr.stride:
+            if buf.size != arr.stride:
                 raise ValueError(
-                    "Column %d: received %d bytes but array stride is %d" %
-                    (i, buf.size, arr.stride))
+                    "Column %d (%r): received %d bytes but array stride is %d "
+                    "(payload must exactly match the expected element size)" %
+                    (i, desc.colnames[i], buf.size, arr.stride))
             memcpy(<char *> arr.buf_ptr, buf.ptr, buf.size)
         else:
             memset(<char *>arr.mask_ptr, 1, arr.mask_stride)
