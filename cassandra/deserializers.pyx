@@ -30,10 +30,18 @@ from uuid import UUID
 from cassandra import cqltypes
 from cassandra import util
 
-# Import numpy availability flag and conditionally import numpy
-from cassandra.cython_deps import HAVE_NUMPY
-if HAVE_NUMPY:
+# Determine numpy availability independently rather than importing the flag
+# from cassandra.cython_deps: this module sits on cassandra.row_parser's import
+# chain (row_parser -> deserializers), and cassandra.cython_deps determines
+# HAVE_CYTHON by importing cassandra.row_parser. Importing cython_deps from
+# here would re-enter the still-initializing cython_deps module and raise
+# ImportError on the partially initialized module, which cython_deps then
+# misinterprets as "Cython is unavailable".
+try:
     import numpy as np
+    HAVE_NUMPY = True
+except ImportError:
+    HAVE_NUMPY = False
 
 cdef class Deserializer:
     """Cython-based deserializer class for a cqltype"""

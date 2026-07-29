@@ -50,10 +50,20 @@ from cassandra.marshal import (int8_pack, int8_unpack, int16_pack, int16_unpack,
                                varint_pack, varint_unpack, point_be, point_le,
                                vints_pack, vints_unpack, uvint_unpack, uvint_pack)
 from cassandra import util
-from cassandra.cython_deps import HAVE_NUMPY
 
-if HAVE_NUMPY:
+# Determine numpy availability independently rather than importing the flag
+# from cassandra.cython_deps: this module sits on cassandra.row_parser's
+# import chain (row_parser -> deserializers -> cqltypes), and
+# cassandra.cython_deps determines HAVE_CYTHON by importing
+# cassandra.row_parser. Importing cython_deps from here would re-enter the
+# still-initializing cython_deps module and raise ImportError on the
+# partially initialized module, which cython_deps then misinterprets as
+# "Cython is unavailable".
+try:
     import numpy as np
+    HAVE_NUMPY = True
+except ImportError:
+    HAVE_NUMPY = False
 
 _little_endian_flag = 1  # we always serialize LE
 import ipaddress

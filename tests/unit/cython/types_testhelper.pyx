@@ -103,6 +103,46 @@ def test_composite_long_element():
     assert result == (payload.decode('utf-8'),)
 
 
+def test_tuple_itemlen_int32_max_no_overflow():
+    """
+    Confirms a reported false-positive: DesTupleType.deserialize checks
+    `p + itemlen <= buf.size` where `p` is Py_ssize_t (64-bit) and `itemlen`
+    is int32_t. Because C's usual arithmetic conversions promote the
+    narrower int32_t operand to match the wider Py_ssize_t before the
+    addition, this cannot wrap around even when itemlen == INT32_MAX -- the
+    addition happens in 64-bit space, not 32-bit. This test constructs a
+    tuple value whose declared item length is INT32_MAX against a buffer far
+    too small to hold it, and confirms the bounds check correctly rejects it
+    (raises IndexError) rather than silently passing and creating an
+    out-of-bounds buffer view.
+    """
+    cdef Deserializer des
+    cdef BytesIOReader reader
+    cdef Buffer buf
+
+    INT32_MAX = 2147483647
+
+    tuple_type = cqltypes.TupleType.apply_parameters([cqltypes.Int32Type])
+    des = find_deserializer(tuple_type)
+
+    # Only the 4-byte big-endian item length is present -- no payload bytes
+    # follow. If `p + itemlen` ever overflowed (e.g. computed as plain 32-bit
+    # arithmetic), it would wrap negative and incorrectly satisfy `<= buf.size`,
+    # which would then attempt to build a Buffer view spanning ~2GiB past the
+    # end of a 4-byte allocation.
+    blob = struct.pack('>i', INT32_MAX)
+    reader = BytesIOReader(blob)
+    buf.ptr = reader.read()
+    buf.size = reader.size
+
+    try:
+        from_binary(des, &buf, 3)
+    except IndexError as e:
+        assert "exceeds buffer size" in str(e)
+    else:
+        assert False, "expected IndexError from oversized tuple item length"
+
+
 def test_date_side_by_side():
     # Test pure python and cython date deserialization side-by-side
     # This is meant to detect inconsistent rounding or conversion (PYTHON-480 for example)

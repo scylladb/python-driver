@@ -31,3 +31,7 @@ class TypesTest(unittest.TestCase):
     @cythontest
     def test_composite_long_element(self):
         types_testhelper.test_composite_long_element()
+
+    @cythontest
+    def test_tuple_itemlen_int32_max_no_overflow(self):
+        types_testhelper.test_tuple_itemlen_int32_max_no_overflow()
