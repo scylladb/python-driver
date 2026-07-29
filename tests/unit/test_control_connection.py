@@ -121,6 +121,9 @@ class MockCluster(object):
     def remove_host(self, host):
         pass
 
+    def _create_thread_pool_executor(self, **kwargs):
+        return ThreadPoolExecutor(**kwargs)
+
     def on_up(self, host):
         pass
 
@@ -177,7 +180,7 @@ class MockConnection(object):
                 result.column_names = self.local_results[0]
                 result.parsed_rows = self.local_results[1]
             result.paging_state = None
-            return result
+            return result if fail_on_error else (True, result)
         self.wait_for_response = Mock(side_effect=wait_for_response_side_effect)
 
     def fetch_all_pages(self, query_msg, timeout, fail_on_error=True):
@@ -331,10 +334,24 @@ class ControlConnectionTest(unittest.TestCase):
         self.control_connection.refresh_node_list_and_token_map()
         assert self.connection.wait_for_response.called
         calls = self.connection.wait_for_response.call_args_list
-        for call in calls:
-            query_msg = call[0][0]
+        for response_call in calls:
+            query_msg = response_call[0][0]
             assert isinstance(query_msg, QueryMessage)
             assert query_msg.fetch_size == self.control_connection._schema_meta_page_size
+
+    def test_mock_connection_fetch_all_pages_honors_fail_on_error_false(self):
+        """
+        Regression test for MockConnection.fetch_all_pages/wait_for_response:
+        when fail_on_error=False, it must return (True, result), matching
+        the real Connection.fetch_all_pages/wait_for_response contract used
+        by ControlConnection._try_connect (which passes fail_on_error=False
+        and unpacks the result as a (success, result) tuple).
+        """
+        query_msg = QueryMessage(query="SELECT * FROM system.local",
+                                  consistency_level=ConsistencyLevel.ONE)
+        success, result = self.connection.fetch_all_pages(query_msg, timeout=5, fail_on_error=False)
+        assert success is True
+        assert isinstance(result, ResultMessage)
 
     def test_topology_queries_fetch_all_pages(self):
         from cassandra.connection import Connection as RealConnection

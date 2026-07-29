@@ -3935,7 +3935,7 @@ class ControlConnection(object):
                                        consistency_level=ConsistencyLevel.ONE,
                                        fetch_size=self._schema_meta_page_size)
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with self._cluster._create_thread_pool_executor(max_workers=2) as executor:
                 local_future = executor.submit(
                     connection.fetch_all_pages, local_query, self._timeout, False)
                 peers_future = executor.submit(
@@ -4103,7 +4103,7 @@ class ControlConnection(object):
                                        consistency_level=cl,
                                        fetch_size=self._schema_meta_page_size)
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with self._cluster._create_thread_pool_executor(max_workers=2) as executor:
                 peers_future = executor.submit(
                     connection.fetch_all_pages, peers_query, self._timeout)
                 local_future = executor.submit(
