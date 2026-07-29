@@ -292,5 +292,67 @@ class TestNumpyParserVectorType(unittest.TestCase):
         np.testing.assert_array_almost_equal(arr, expected)
 
 
+@unittest.skipUnless(HAVE_NUMPY, "NumPy not available")
+class TestNumpyParserBoundsCheck(unittest.TestCase):
+    """
+    Regression tests for unpack_row's fixed-width bounds check.
+
+    unpack_row's memcpy destination slot is exactly arr.stride bytes wide
+    (preallocated by make_array/make_arrays). A server response (real or
+    malformed/malicious) that declares a value size other than the
+    column's fixed width must be rejected instead of being memcpy'd,
+    which would overflow into adjacent NumPy array memory.
+    """
+
+    def test_row_value_larger_than_stride_raises(self):
+        buffer = bytearray()
+        buffer.extend(struct.pack('>i', 1))  # row count
+
+        # Int32Type has a fixed 4-byte width, but the wire here declares an
+        # 8-byte value -- this must be rejected rather than overflowing the
+        # destination array slot via memcpy.
+        buffer.extend(struct.pack('>i', 8))
+        buffer.extend(struct.pack('>2i', 1, 2))
+
+        parser = NumpyParser()
+        reader = BytesIOReader(bytes(buffer))
+
+        desc = ParseDesc(
+            colnames=['id'],
+            coltypes=[cqltypes.Int32Type],
+            column_encryption_policy=None,
+            coldescs=None,
+            deserializers=obj_array([None]),
+            protocol_version=5
+        )
+
+        with self.assertRaises(ValueError):
+            parser.parse_rows(reader, desc)
+
+    def test_row_value_smaller_than_stride_raises(self):
+        buffer = bytearray()
+        buffer.extend(struct.pack('>i', 1))  # row count
+
+        # LongType has a fixed 8-byte width, but the wire here declares only
+        # 4 bytes.
+        buffer.extend(struct.pack('>i', 4))
+        buffer.extend(struct.pack('>i', 1))
+
+        parser = NumpyParser()
+        reader = BytesIOReader(bytes(buffer))
+
+        desc = ParseDesc(
+            colnames=['ctr'],
+            coltypes=[cqltypes.LongType],
+            column_encryption_policy=None,
+            coldescs=None,
+            deserializers=obj_array([None]),
+            protocol_version=5
+        )
+
+        with self.assertRaises(ValueError):
+            parser.parse_rows(reader, desc)
+
+
 if __name__ == '__main__':
     unittest.main()

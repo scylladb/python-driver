@@ -190,8 +190,21 @@ cdef inline int unpack_row(
             Py_INCREF(val)
             (<PyObject **> arr.buf_ptr)[0] = <PyObject *> val
         elif buf.size >= 0:
+            # buf.size comes straight off the wire. It must match the fixed
+            # column width the destination array slot was allocated with
+            # (arr.stride); otherwise the memcpy below would read/write past
+            # the end of that slot and corrupt adjacent array memory.
+            if buf.size != arr.stride:
+                raise ValueError(
+                    f"Expected column value to have serialized size {arr.stride}; "
+                    f"observed serialized size of {buf.size} instead")
             memcpy(<char *> arr.buf_ptr, buf.ptr, buf.size)
         else:
+            # Non-object (fixed-width) arrays are always allocated as masked
+            # arrays in make_array(), so mask_ptr is only ever 0 for object
+            # arrays (see make_arrays()/make_array()) -- and those are always
+            # handled by the arr.is_object branch above, so this memset never
+            # actually runs against a NULL mask_ptr.
             memset(<char *>arr.mask_ptr, 1, arr.mask_stride)
 
         # Update the pointer into the array for the next time

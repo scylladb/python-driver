@@ -27,3 +27,7 @@ class TypesTest(unittest.TestCase):
     @cythontest
     def test_date_side_by_side(self):
         types_testhelper.test_date_side_by_side()
+
+    @cythontest
+    def test_composite_long_element(self):
+        types_testhelper.test_composite_long_element()

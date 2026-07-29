@@ -604,7 +604,7 @@ cdef class DesCompositeType(_DesParameterizedType):
     cdef deserialize(self, Buffer *buf, int protocol_version):
         cdef Py_ssize_t i, idx, start
         cdef Buffer elem_buf
-        cdef int16_t element_length
+        cdef uint16_t element_length
         cdef Deserializer deserializer
         cdef tuple res = tuple_new(self.subtypes_len)
 
