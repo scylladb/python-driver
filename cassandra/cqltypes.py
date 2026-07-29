@@ -1546,13 +1546,20 @@ class VectorType(_CassandraType):
 
 
 # Populate VectorType._struct_format_map now that all types are defined
+# Note: ShortType (smallint) is intentionally excluded. Cassandra's
+# AbstractType.valueLengthIfFixed() (and ShortType.java specifically) does not
+# override the variable-length default, so smallint vector elements are
+# vint-length-prefixed on the wire, not fixed 2-byte values. Treating it as
+# fixed-width here would be both dead code (VectorType.deserialize/serialize
+# gate on subtype.serial_size() before ever consulting this map, and
+# ShortType.serial_size() correctly returns None) and, if ever consulted
+# directly (e.g. by numpy_parser), incorrect.
 VectorType._struct_format_map = {
     FloatType: 'f',
     DoubleType: 'd',
     Int32Type: 'i',
     LongType: 'q',
-    ShortType: 'h',
 }
 
 # Map struct format chars to numpy dtype strings for large vector deserialization
-VectorType._numpy_dtype_map = {'f': '>f4', 'd': '>f8', 'i': '>i4', 'q': '>i8', 'h': '>i2'}
+VectorType._numpy_dtype_map = {'f': '>f4', 'd': '>f8', 'i': '>i4', 'q': '>i8'}

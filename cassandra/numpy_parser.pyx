@@ -143,12 +143,21 @@ def make_array(coltype, array_size):
         # VectorType - create 2D array (rows x vector_dimension)
         vector_size = coltype.vector_size
         subtype = coltype.subtype
-        try:
+        # Only subtypes that are fixed-width *as vector elements* (per
+        # VectorType._struct_format_map) are eligible for the accelerated
+        # 2D-array path. This is deliberately not the same set as
+        # _cqltype_to_numpy: a subtype can be fixed-width when serialized as
+        # its own scalar column (e.g. ShortType/smallint, which is always 2
+        # bytes there) while still being variable-length (vint-prefixed) when
+        # serialized as a vector element, per Cassandra's actual wire format.
+        # Reusing _cqltype_to_numpy here would silently misparse those types.
+        if subtype in cqltypes.VectorType._struct_format_map:
             dtype = _cqltype_to_numpy[subtype]
             a = np.ma.empty((array_size, vector_size), dtype=dtype)
             a.mask = np.zeros((array_size, vector_size), dtype=bool)
-        except KeyError:
-            # Unsupported vector subtype - fall back to object array
+        else:
+            # Unsupported (or variable-length-as-vector-element) subtype -
+            # fall back to object array
             a = np.empty((array_size,), dtype=obj_dtype)
         return a
 

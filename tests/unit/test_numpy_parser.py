@@ -17,7 +17,7 @@ import unittest
 
 try:
     import numpy as np
-    from cassandra.numpy_parser import NumpyParser
+    from cassandra.numpy_parser import NumpyParser, make_array
     from cassandra.bytesio import BytesIOReader
     from cassandra.parsing import ParseDesc
     from cassandra.deserializers import obj_array
@@ -194,37 +194,29 @@ class TestNumpyParserVectorType(unittest.TestCase):
         expected = np.array(vectors, dtype='<i8')
         np.testing.assert_array_equal(arr, expected)
 
-    def test_vector_int16_2d_array(self):
-        """Test that VectorType<smallint> creates and populates a 2D NumPy array"""
+    def test_vector_int16_falls_back_to_object_array(self):
+        """
+        Test that VectorType<smallint> allocation falls back to a 1D object
+        array instead of the fixed-width 2D fast path.
+
+        ShortType (smallint) vector elements are vint-length-prefixed on the
+        wire (ShortType.serial_size() is None, matching Cassandra's real
+        encoding: neither AbstractType.valueLengthIfFixed() nor
+        ShortType.java override the variable-length default), not fixed
+        2-byte values. So ShortType is intentionally excluded from
+        VectorType._struct_format_map / the numpy fast path -- allocating a
+        fixed 2D '<i2' array for it (the previous behavior here) would
+        silently misparse the actual vint-length-prefixed wire data.
+        """
         vector_size = 8
         vector_type = self._create_vector_type(cqltypes.ShortType, vector_size)
-        
-        vectors = [
-            [1, 2, 3, 4, 5, 6, 7, 8],
-            [9, 10, 11, 12, 13, 14, 15, 16],
-        ]
-        
-        serialized = self._serialize_vectors(vectors, 'h')
-        
-        parser = NumpyParser()
-        reader = BytesIOReader(serialized)
-        
-        desc = ParseDesc(
-            colnames=['small_vec'],
-            coltypes=[vector_type],
-            column_encryption_policy=None,
-            coldescs=None,
-            deserializers=obj_array([None]),
-            protocol_version=5
-        )
-        
-        result = parser.parse_rows(reader, desc)
-        
-        arr = result['small_vec']
-        self.assertEqual(arr.shape, (2, 8))
-        
-        expected = np.array(vectors, dtype='<i2')
-        np.testing.assert_array_equal(arr, expected)
+
+        arr = make_array(vector_type, 2)
+
+        # Falls back to a 1D array of Python objects (one per row), not a
+        # fixed-width 2D numeric array.
+        self.assertEqual(arr.shape, (2,))
+        self.assertEqual(arr.dtype, np.dtype('O'))
 
     def test_mixed_columns_with_vectors(self):
         """Test parsing multiple columns including VectorType"""

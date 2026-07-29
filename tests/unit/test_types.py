@@ -579,12 +579,19 @@ class VectorTests(unittest.TestCase):
         self.assertEqual(result_int64, [100, 200])
 
         # Test int16/short vector
-        from cassandra.cqltypes import ShortType
+        # Note: ShortType (smallint) is intentionally not part of the
+        # fixed-width vector fast path. Cassandra's AbstractType.valueLengthIfFixed()
+        # (and ShortType.java specifically) does not override the variable-length
+        # default, so smallint vector elements are vint-length-prefixed on the
+        # wire rather than fixed 2-byte values. So we round-trip through
+        # serialize()/deserialize() instead of assuming a fixed-width wire
+        # format, the same way test_vector_cython_deserializer_variable_size_subtype
+        # does for UTF8Type below.
         vt_int16 = VectorType.apply_parameters(['ShortType', 3], {})
         des_int16 = find_deserializer(vt_int16)
         self.assertEqual(des_int16.__class__.__name__, 'DesVectorType')
 
-        data_int16 = struct.pack('>3h', 10, 20, 30)
+        data_int16 = vt_int16.serialize([10, 20, 30], 5)
         result_int16 = vt_int16.deserialize(data_int16, 5)
         self.assertEqual(result_int16, [10, 20, 30])
 
@@ -675,9 +682,11 @@ class VectorTests(unittest.TestCase):
         result = vt_int64.deserialize(packed, 5)
         self.assertEqual(result, int64_values)
 
-        # ShortType skipped: serial_size() returns None (pre-existing bug),
-        # so VectorType.deserialize takes the variable-size path which fails.
-        # ShortType struct.unpack works for small vectors via _vector_struct.
+        # ShortType is intentionally skipped here: smallint vector elements
+        # are vint-length-prefixed on the wire (ShortType.serial_size() is
+        # None, matching Cassandra's real encoding), not fixed 2-byte values,
+        # so it is not part of the fixed-width/numpy fast path and this
+        # large-vector struct-packing test doesn't apply to it.
 
 
 ZERO = datetime.timedelta(0)
