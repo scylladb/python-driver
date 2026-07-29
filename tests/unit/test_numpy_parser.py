@@ -14,7 +14,6 @@
 
 import struct
 import unittest
-from unittest.mock import Mock
 
 try:
     import numpy as np
