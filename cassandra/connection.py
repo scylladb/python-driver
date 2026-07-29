@@ -1353,7 +1353,9 @@ class Connection(object):
             self.defunct(exc)
             raise
 
-    def fetch_all_pages(self, query_msg, timeout, fail_on_error=True):
+    def fetch_all_pages(
+            self, query_msg: QueryMessage, timeout: Optional[float], fail_on_error: bool = True
+    ) -> Union[ResultMessage, Tuple[bool, Union[ResultMessage, Exception]]]:
         """Fetch all pages for a query, following paging_state until exhausted.
 
         Runs the given query and, if the response has a paging_state,
@@ -1404,6 +1406,8 @@ class Connection(object):
                 if result and result.parsed_rows:
                     all_rows.extend(result.parsed_rows)
         finally:
+            # Restore paging_state on any exit, including exceptions; the
+            # error/tuple itself still propagates unmodified after this runs.
             query_msg.paging_state = original_paging_state
 
         result.parsed_rows = all_rows
