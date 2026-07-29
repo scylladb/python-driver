@@ -2647,12 +2647,12 @@ class SchemaParserV3(SchemaParserV22):
     def _is_not_scylla(self):
         """Check if NOT connected to ScyllaDB.
 
-        Uses the is_scylla flag from ProtocolFeatures, which is set from the
-        presence of Scylla-specific extension keys in the SUPPORTED response
-        (e.g. SCYLLA_LWT_ADD_METADATA_MARK, SCYLLA_RATE_LIMIT_ERROR) and
-        therefore remains True even when shard-awareness is disabled.
+        Uses ProtocolFeatures.is_scylla, which is set from Scylla-specific
+        extension keys in the SUPPORTED response and therefore stays True
+        even when shard-awareness is disabled server-side.
         """
-        return not getattr(getattr(self.connection, 'features', None), 'is_scylla', False)
+        features = getattr(self.connection, 'features', None)
+        return not (features is not None and features.is_scylla)
 
     _table_name_col = 'table_name'
 
