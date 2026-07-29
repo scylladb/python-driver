@@ -3964,26 +3964,26 @@ class ControlConnection(object):
                                        consistency_level=ConsistencyLevel.ONE,
                                        fetch_size=self._schema_meta_page_size)
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                local_future = executor.submit(
-                    connection.fetch_all_pages, local_query, self._timeout, False)
-                peers_future = executor.submit(
-                    connection.fetch_all_pages, peers_query, self._timeout, False)
+            # Reuse the cluster's long-lived executor instead of spinning up a pool per call.
+            local_future = self._cluster.executor.submit(
+                connection.fetch_all_pages, local_query, self._timeout, False)
+            peers_future = self._cluster.executor.submit(
+                connection.fetch_all_pages, peers_query, self._timeout, False)
 
-                local_success, local_result = local_future.result()
+            local_success, local_result = local_future.result()
 
-                if not local_success:
-                    raise local_result
+            if not local_success:
+                raise local_result
 
-                peers_success, peers_result = peers_future.result()
+            peers_success, peers_result = peers_future.result()
 
-                if not peers_success:
-                    self._uses_peers_v2 = False
-                    sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
-                    peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
-                                               consistency_level=ConsistencyLevel.ONE,
-                                               fetch_size=self._schema_meta_page_size)
-                    peers_result = connection.fetch_all_pages(peers_query, self._timeout)
+            if not peers_success:
+                self._uses_peers_v2 = False
+                sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
+                peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
+                                           consistency_level=ConsistencyLevel.ONE,
+                                           fetch_size=self._schema_meta_page_size)
+                peers_result = connection.fetch_all_pages(peers_query, self._timeout)
 
             shared_results = (peers_result, local_result)
             self._refresh_node_list_and_token_map(connection, preloaded_results=shared_results)
@@ -4132,14 +4132,14 @@ class ControlConnection(object):
                                        consistency_level=cl,
                                        fetch_size=self._schema_meta_page_size)
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                peers_future = executor.submit(
-                    connection.fetch_all_pages, peers_query, self._timeout)
-                local_future = executor.submit(
-                    connection.fetch_all_pages, local_query, self._timeout)
+            # Reuse the cluster's long-lived executor instead of spinning up a pool per call.
+            peers_future = self._cluster.executor.submit(
+                connection.fetch_all_pages, peers_query, self._timeout)
+            local_future = self._cluster.executor.submit(
+                connection.fetch_all_pages, local_query, self._timeout)
 
-                peers_result = peers_future.result()
-                local_result = local_future.result()
+            peers_result = peers_future.result()
+            local_result = local_future.result()
 
         peers_result = dict_factory(peers_result.column_names, peers_result.parsed_rows)
 
