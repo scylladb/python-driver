@@ -73,7 +73,7 @@ class TcpProxy:
         self._running = False
         self._thread = None
         self._lock = threading.Lock()
-        self._connections = set()
+        self._connections = {}  # (client_sock, target_sock) -> forwarder thread
         self.total_connections = 0
 
     def start(self):
@@ -92,16 +92,12 @@ class TcpProxy:
                  self.target_host, self.target_port)
 
     def stop(self):
-        self._running = False
         if self._server_sock:
             try:
                 self._server_sock.close()
             except Exception:
                 pass
-        with self._lock:
-            for csock, tsock in list(self._connections):
-                self._close_pair(csock, tsock)
-            self._connections.clear()
+        self._shutdown_and_join_connections(stopping=True)
         if self._thread:
             self._thread.join(timeout=5)
         log.info("TcpProxy stopped %s:%d", self.listen_host, self.listen_port)
@@ -120,11 +116,44 @@ class TcpProxy:
 
     def drop_connections(self):
         """Forcibly close all active connections."""
-        with self._lock:
-            for csock, tsock in list(self._connections):
-                self._close_pair(csock, tsock)
-            self._connections.clear()
+        self._shutdown_and_join_connections()
         log.info("TcpProxy %s:%d dropped all connections", self.listen_host, self.listen_port)
+
+    def _shutdown_and_join_connections(self, stopping=False):
+        """
+        Shut down (not close) each connection's sockets to unblock its
+        forwarder thread, then join it. Only the forwarder thread itself
+        closes its sockets, avoiding a close-vs-still-in-use fd-reuse race.
+
+        stopping=True (stop() only) flips _running to False under the same
+        lock as the connections snapshot, so no connection registered by
+        _handle_new_connection can be missed.
+        """
+        with self._lock:
+            if stopping:
+                self._running = False
+            connections = list(self._connections.items())
+        for (csock, tsock), _thread in connections:
+            self._shutdown_pair(csock, tsock)
+        finished_keys = []
+        for (csock, tsock), thread in connections:
+            thread.join(timeout=5)
+            if thread.is_alive():
+                # Do NOT drop this entry from self._connections: it is
+                # still a live thread owning open fds. Leaving it tracked
+                # lets active_connections reflect reality and lets a
+                # subsequent stop()/drop_connections() retry the shutdown
+                # and join. _forward_loop() removes its own entry (under
+                # _lock) once it actually exits, so there's no leak here.
+                log.warning(
+                    "TcpProxy %s:%d: forwarder thread %s did not exit "
+                    "within timeout; leaked fds are possible",
+                    self.listen_host, self.listen_port, thread.name)
+            else:
+                finished_keys.append((csock, tsock))
+        with self._lock:
+            for key in finished_keys:
+                self._connections.pop(key, None)
 
     def _run(self):
         while self._running:
@@ -153,14 +182,32 @@ class TcpProxy:
             client_sock.close()
             return
 
-        with self._lock:
-            self._connections.add((client_sock, target_sock))
-            self.total_connections += 1
-
         t = threading.Thread(target=self._forward_loop,
                              args=(client_sock, target_sock),
                              daemon=True)
-        t.start()
+        # Register then start() atomically under _lock, in that order:
+        # otherwise a short-lived thread could finish (and clean up)
+        # before being registered, leaking the entry, or run unseen by
+        # a concurrent stop()/drop_connections(). Also re-check
+        # _running, to reject connections after shutdown has begun.
+        with self._lock:
+            if not self._running:
+                target_sock.close()
+                client_sock.close()
+                return
+            self._connections[(client_sock, target_sock)] = t
+            self.total_connections += 1
+            try:
+                t.start()
+            except Exception as e:
+                # Undo registration: join()-ing an unstarted thread later
+                # would raise RuntimeError.
+                self._connections.pop((client_sock, target_sock), None)
+                self.total_connections -= 1
+                log.warning("TcpProxy %s:%d failed to start forwarder thread: %s",
+                            self.listen_host, self.listen_port, e)
+                client_sock.close()
+                target_sock.close()
 
     def _forward_loop(self, client_sock, target_sock):
         try:
@@ -178,7 +225,7 @@ class TcpProxy:
             pass
         finally:
             with self._lock:
-                self._connections.discard((client_sock, target_sock))
+                self._connections.pop((client_sock, target_sock), None)
             self._close_pair(client_sock, target_sock)
 
     @staticmethod
@@ -187,6 +234,15 @@ class TcpProxy:
             try:
                 s.close()
             except Exception:
+                pass
+
+    @staticmethod
+    def _shutdown_pair(csock, tsock):
+        """Best-effort shutdown (not close) to interrupt a thread blocked in select()/recv()."""
+        for s in (csock, tsock):
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
                 pass
 
 
@@ -227,7 +283,8 @@ class NLBEmulator:
         self._node_proxies = {}
         self._discovery_proxy = None
         self._rr_index = 0
-        self._lock = threading.Lock()
+        # RLock: add_node() holds it while _add_node_proxy() re-acquires it.
+        self._lock = threading.RLock()
         self._running = False
 
     def start(self, node_addresses):
@@ -288,13 +345,17 @@ class NLBEmulator:
         log.info("NLB stopped")
 
     def add_node(self, node_id, addr):
-        self._add_node_proxy(node_id, addr)
+        # Serialize against remove_node(): TcpProxy.stop() blocks until
+        # joined, so by the time we get the lock any freed fds are reaped.
+        with self._lock:
+            self._add_node_proxy(node_id, addr)
 
     def remove_node(self, node_id):
         with self._lock:
             proxy = self._node_proxies.pop(node_id, None)
+            if proxy:
+                proxy.stop()
         if proxy:
-            proxy.stop()
             log.info("NLB removed node %d", node_id)
 
     def node_port(self, node_id):
@@ -328,8 +389,18 @@ class NLBEmulator:
                  node_id, self.LISTEN_HOST, port, addr, self.native_port)
 
     def _live_addresses(self):
-        """IPs of nodes with active proxies."""
-        return [p.target_host for p in self._node_proxies.values()]
+        """
+        IPs of nodes with active proxies.
+
+        Snapshots under _lock: rr_handler() (the discovery port's accept
+        handler) calls this from the discovery TcpProxy's own accept-loop
+        thread, concurrently with add_node()/remove_node() mutating
+        _node_proxies from other threads. Without the lock, a node being
+        added/removed mid-iteration can raise "RuntimeError: dictionary
+        changed size during iteration".
+        """
+        with self._lock:
+            return [p.target_host for p in self._node_proxies.values()]
 
 def post_client_routes(contact_point, routes):
     """
