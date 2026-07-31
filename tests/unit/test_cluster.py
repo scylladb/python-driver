@@ -150,6 +150,33 @@ class OperationTimedOutTest(unittest.TestCase):
 
 class ClusterTest(unittest.TestCase):
 
+    def test_ssl_options_is_rejected(self):
+        for ssl_options in ({}, {'ca_certs': '/path/to/ca.pem'}):
+            with self.subTest(ssl_options=ssl_options):
+                with self.assertRaisesRegex(
+                        ValueError,
+                        "ssl_options is deprecated.*ssl_context.*"
+                        "ssl-options-migration"):
+                    Cluster(ssl_options=ssl_options)
+
+    def test_ssl_options_is_rejected_with_ssl_context(self):
+        with self.assertRaisesRegex(
+                ValueError,
+                "ssl_options is deprecated.*ssl_context.*"
+                "ssl-options-migration"):
+            Cluster(ssl_options={}, ssl_context=Mock())
+
+    def test_ssl_options_assignment_is_rejected(self):
+        cluster = Cluster()
+
+        with self.assertRaisesRegex(
+                ValueError,
+                "ssl_options is deprecated.*ssl_context.*"
+                "ssl-options-migration"):
+            cluster.ssl_options = {'ca_certs': '/path/to/ca.pem'}
+
+        assert cluster.ssl_options is None
+
     def test_tuple_for_contact_points(self):
         cluster = Cluster(contact_points=[('localhost', 9045), ('127.0.0.2', 9046), '127.0.0.3'], port=9999)
         # Refactored for clarity

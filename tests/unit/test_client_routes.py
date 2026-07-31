@@ -437,7 +437,7 @@ class TestClientRoutesSSLValidation(unittest.TestCase):
         self.assertIn("check_hostname", str(cm.exception))
 
     def test_check_hostname_with_ssl_options_raises(self):
-        """Cluster should reject check_hostname=True in ssl_options with client_routes_config."""
+        """Cluster should reject ssl_options before configuring client routes."""
         config = ClientRoutesConfig(
             proxies=[ClientRouteProxy(str(uuid.uuid4()), "10.0.0.1")]
         )
@@ -447,7 +447,8 @@ class TestClientRoutesSSLValidation(unittest.TestCase):
                 ssl_options={'check_hostname': True},
                 client_routes_config=config,
             )
-        self.assertIn("check_hostname", str(cm.exception))
+        self.assertIn("ssl_options is deprecated", str(cm.exception))
+        self.assertIn("ssl_context", str(cm.exception))
 
     def test_disabled_check_hostname_with_client_routes_ok(self):
         """Cluster should allow check_hostname=False with client_routes_config."""
