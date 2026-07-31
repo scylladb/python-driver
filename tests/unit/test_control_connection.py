@@ -15,13 +15,19 @@
 import unittest
 
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event, RLock, Thread
 from unittest.mock import Mock, ANY, call, patch
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
-from cassandra.cluster import ControlConnection, _Scheduler, ProfileManager, EXEC_PROFILE_DEFAULT, ExecutionProfile
+from cassandra.cluster import (Cluster, ControlConnection, _Scheduler,
+                               ProfileManager, EXEC_PROFILE_DEFAULT,
+                               ExecutionProfile,
+                               _ControlReconnectionHandler,
+                               _HOST_TRANSITION_DEFERRED)
 from cassandra.pool import Host
-from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
+from cassandra.connection import (ConnectionShutdown, EndPoint, DefaultEndPoint,
+                                  DefaultEndPointFactory)
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
                                 ConstantReconnectionPolicy, IdentityTranslator)
 
@@ -206,6 +212,269 @@ class ControlConnectionTest(unittest.TestCase):
         self.control_connection._connection = self.connection
         self.control_connection._time = self.time
 
+    def test_try_connect_rejects_connection_closed_during_startup(self):
+        endpoint = DefaultEndPoint("192.168.1.0")
+        closed_connection = Mock()
+        closed_connection.endpoint = endpoint
+        closed_connection.is_closed = True
+        self.cluster.connection_factory = Mock(return_value=closed_connection)
+
+        with self.assertRaises(ConnectionShutdown) as exc_info:
+            self.control_connection._try_connect(endpoint)
+
+        assert "closed during the startup handshake" in str(exc_info.exception)
+        assert self.control_connection._connection is self.connection
+        closed_connection.register_watchers.assert_not_called()
+
+    def test_set_new_connection_resumes_down_host_after_reconnect(self):
+        host = self.cluster.metadata.get_host(DefaultEndPoint("192.168.1.0"))
+        host.is_up = False
+        self.connection.close = Mock()
+        new_connection = Mock()
+        new_connection.endpoint = host.endpoint
+
+        self.control_connection._set_new_connection(new_connection)
+
+        assert self.control_connection._connection is new_connection
+        self.connection.close.assert_called_once_with()
+        self.cluster.scheduler.schedule_unique.assert_called_once_with(
+            0, self.cluster.on_up, host)
+
+    def test_set_new_connection_survives_resume_scheduling_failure(self):
+        host = self.cluster.metadata.get_host(
+            DefaultEndPoint("192.168.1.0"))
+        host.is_up = False
+        self.cluster.on_up = Mock()
+        self.cluster.scheduler.schedule_unique.side_effect = RuntimeError(
+            "scheduler rejected recovery")
+        self.connection.close = Mock()
+        new_connection = Mock()
+        new_connection.endpoint = host.endpoint
+
+        self.control_connection._set_new_connection(new_connection)
+
+        assert self.control_connection._connection is new_connection
+        new_connection.close.assert_not_called()
+        self.connection.close.assert_called_once_with()
+        self.cluster.on_up.assert_called_once_with(host)
+
+    def test_control_reconnection_handler_keeps_adopted_socket_open(self):
+        self.connection.close = Mock()
+        new_connection = Mock()
+        new_connection.endpoint = DefaultEndPoint("192.168.1.0")
+        self.control_connection._reconnect_internal = Mock(
+            return_value=new_connection)
+        completed = Mock()
+        handler = _ControlReconnectionHandler(
+            self.control_connection,
+            self.cluster.scheduler,
+            iter(()),
+            completed)
+
+        handler.run()
+
+        assert self.control_connection._connection is new_connection
+        self.connection.close.assert_called_once_with()
+        new_connection.close.assert_not_called()
+        completed.assert_called_once_with()
+
+    def test_control_reconnection_rejects_candidate_after_shutdown(self):
+        new_connection = Mock()
+        new_connection.endpoint = DefaultEndPoint("192.168.1.0")
+        self.control_connection._reconnect_internal = Mock(
+            return_value=new_connection)
+        completed = Mock()
+        handler = _ControlReconnectionHandler(
+            self.control_connection,
+            self.cluster.scheduler,
+            iter(()),
+            completed)
+        self.control_connection._is_shutdown = True
+
+        handler.run()
+
+        assert self.control_connection._connection is self.connection
+        new_connection.close.assert_called_once_with()
+        completed.assert_called_once_with()
+
+    def test_connect_returns_when_shutdown_rejects_initial_candidate(self):
+        candidate = Mock()
+        candidate.endpoint = DefaultEndPoint("192.168.1.0")
+        original_dbaas = object()
+        self.cluster.metadata.dbaas = original_dbaas
+        self.cluster.protocol_version = 4
+        self.control_connection._connection = None
+
+        def reconnect_during_shutdown():
+            self.control_connection._is_shutdown = True
+            return candidate
+
+        self.control_connection._reconnect_internal = Mock(
+            side_effect=reconnect_during_shutdown)
+
+        self.control_connection.connect()
+
+        assert self.control_connection._connection is None
+        candidate.close.assert_called_once_with()
+        assert self.cluster.metadata.dbaas is original_dbaas
+
+    def test_try_connect_closes_candidate_on_setup_base_exception(self):
+        class SetupCancelled(BaseException):
+            pass
+
+        endpoint = DefaultEndPoint("192.168.1.0")
+        candidate = Mock(is_closed=False)
+        candidate.features.sharding_info = None
+        candidate.features.tablets_routing_v1 = False
+        candidate.register_watchers.side_effect = SetupCancelled(
+            "cancelled watcher registration")
+        self.cluster.connection_factory = Mock(return_value=candidate)
+        self.cluster.metadata_request_timeout = 0
+        self.cluster._client_routes_handler = None
+
+        with self.assertRaises(SetupCancelled):
+            self.control_connection._try_connect(endpoint)
+
+        candidate.close.assert_called_once_with()
+
+    def test_set_new_connection_uses_verified_host_for_aliased_endpoint(self):
+        host = self.cluster.metadata.get_host(DefaultEndPoint("192.168.1.0"))
+        host.is_up = False
+        self.connection.close = Mock()
+        new_connection = Mock()
+        new_connection.endpoint = DefaultEndPoint("shared-proxy")
+        new_connection._control_connection_host = host
+
+        self.control_connection._set_new_connection(new_connection)
+
+        assert self.cluster.metadata.get_host(new_connection.endpoint) is None
+        self.cluster.scheduler.schedule_unique.assert_called_once_with(
+            0, self.cluster.on_up, host)
+
+    def test_set_new_connection_preserves_parked_addition_semantics(self):
+        host = self.cluster.metadata.get_host(DefaultEndPoint("192.168.1.0"))
+        host.is_up = False
+        parked_reconnector = Mock(is_host_addition=True)
+        host._reconnection_handler = parked_reconnector
+        self.cluster.on_add = Mock()
+        self.connection.close = Mock()
+        new_connection = Mock()
+        new_connection.endpoint = DefaultEndPoint("shared-proxy")
+        new_connection._control_connection_host = host
+
+        self.control_connection._set_new_connection(new_connection)
+
+        self.cluster.scheduler.schedule_unique.assert_called_once_with(
+            0, self.cluster.on_add, host)
+        parked_reconnector.cancel.assert_called_once_with()
+        assert host._reconnection_handler is None
+
+    def test_set_initial_connection_does_not_resume_down_host(self):
+        host = self.cluster.metadata.get_host(DefaultEndPoint("192.168.1.0"))
+        host.is_up = False
+        self.control_connection._connection = None
+        new_connection = Mock()
+        new_connection.endpoint = host.endpoint
+
+        self.control_connection._set_new_connection(new_connection)
+
+        assert self.control_connection._connection is new_connection
+        self.cluster.scheduler.schedule_unique.assert_not_called()
+
+    def test_default_hooks_stale_control_error_cannot_down_new_connection(self):
+        host = self.cluster.metadata.get_host(DefaultEndPoint("192.168.1.0"))
+        self.cluster._lock = RLock()
+        self.cluster._on_down_locked = Mock()
+        self.cluster._uses_default_failure_hooks = lambda: True
+        policy_entered = Event()
+        release_policy = Event()
+        thread_errors = []
+
+        def blocking_conviction(_):
+            policy_entered.set()
+            assert release_policy.wait(2)
+            return True
+
+        host.signal_connection_failure = blocking_conviction
+
+        old_connection = Mock(
+            endpoint=host.endpoint,
+            is_defunct=True,
+            last_error=ConnectionShutdown("old connection failed"))
+        old_connection._control_connection_host = host
+        self.control_connection._connection = old_connection
+
+        new_connection = Mock(
+            endpoint=host.endpoint,
+            is_defunct=False)
+        new_connection._control_connection_host = host
+
+        def signal_error():
+            try:
+                self.control_connection._signal_error()
+            except BaseException as exc:
+                thread_errors.append(exc)
+
+        signal_thread = Thread(target=signal_error)
+        signal_thread.start()
+        assert policy_entered.wait(2)
+
+        replace_thread = Thread(
+            target=self.control_connection._set_new_connection,
+            args=(new_connection,))
+        replace_thread.start()
+        replace_thread.join(2)
+        assert not replace_thread.is_alive()
+
+        release_policy.set()
+        signal_thread.join(2)
+
+        assert not signal_thread.is_alive()
+        assert thread_errors == []
+        assert self.control_connection._connection is new_connection
+        assert host.is_up
+        self.cluster._on_down_locked.assert_not_called()
+
+    def test_control_error_preserves_legacy_cluster_on_down_override(self):
+        class LegacyCluster(Cluster):
+
+            def on_down(
+                    self, host, is_host_addition,
+                    expect_host_to_be_down=False):
+                self.down_calls.append((
+                    host,
+                    is_host_addition,
+                    expect_host_to_be_down))
+
+        cluster = object.__new__(LegacyCluster)
+        cluster._lock = RLock()
+        cluster.metadata = MockMetadata()
+        cluster.down_calls = []
+        control_connection = ControlConnection(cluster, 1, 0, 0, 0)
+        host = cluster.metadata.get_host(DefaultEndPoint("192.168.1.0"))
+        connection = Mock(
+            endpoint=host.endpoint,
+            is_defunct=True,
+            last_error=ConnectionShutdown("control failed"))
+        connection._control_connection_host = host
+        control_connection._connection = connection
+
+        control_connection._signal_error()
+
+        assert cluster.down_calls == [
+            (host, False, False),
+        ]
+
+    def test_topology_refresh_retains_system_local_host_identity(self):
+        self.connection.endpoint = DefaultEndPoint("shared-proxy")
+
+        self.control_connection._refresh_node_list_and_token_map(
+            self.connection,
+            preloaded_results=self._matching_schema_preloaded_results)
+
+        assert self.connection._control_connection_host is \
+            self.cluster.metadata.get_host_by_host_id('uuid1')
+
     def test_wait_for_schema_agreement(self):
         """
         Basic test with all schema versions agreeing
@@ -388,6 +657,34 @@ class ControlConnectionTest(unittest.TestCase):
         assert self.cluster.metadata.get_host('192.168.1.6')
 
         assert 3 == len(self.cluster.metadata.all_hosts())
+
+    def test_deferred_ip_change_reschedules_before_using_old_endpoint(self):
+        host = self.cluster.metadata.get_host_by_host_id('uuid2')
+        old_endpoint = host.endpoint
+        new_endpoint = DefaultEndPoint("192.168.1.5")
+        self.cluster._force_down_for_endpoint_change = Mock(
+            return_value=_HOST_TRANSITION_DEFERRED)
+        del self.connection.peer_results[:]
+        self.connection.peer_results.extend([
+            [
+                "rpc_address", "peer", "schema_version", "data_center",
+                "rack", "tokens", "host_id"],
+            [[
+                new_endpoint.address, "10.0.0.5", "a", "dc1", "rack1",
+                ["2", "102", "202"], 'uuid2']]])
+        preloaded_results = _node_meta_results(
+            self.connection.local_results,
+            self.connection.peer_results)
+
+        self.control_connection._refresh_node_list_and_token_map(
+            self.connection,
+            preloaded_results=preloaded_results)
+
+        assert host.endpoint == old_endpoint
+        self.cluster.scheduler.schedule_unique.assert_called_once_with(
+            0,
+            self.control_connection.refresh_node_list_and_token_map,
+            force_token_rebuild=True)
 
 
     def test_refresh_nodes_and_tokens_uses_preloaded_results_if_given(self):

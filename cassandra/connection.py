@@ -18,6 +18,7 @@ import errno
 from functools import wraps, partial, total_ordering
 from heapq import heappush, heappop
 import io
+import inspect
 import logging
 import socket
 import struct
@@ -40,12 +41,16 @@ if 'gevent.monkey' in sys.modules:
 else:
     from queue import Queue, Empty  # noqa
 
-from cassandra import ConsistencyLevel, AuthenticationFailed, OperationTimedOut, ProtocolVersion
+from cassandra import (ConsistencyLevel, AuthenticationFailed,
+                       OperationTimedOut, ProtocolVersion,
+                       RequestValidationException)
 from cassandra.marshal import int32_pack
 from cassandra.protocol import (ReadyMessage, AuthenticateMessage, OptionsMessage,
                                 StartupMessage, ErrorMessage, CredentialsMessage,
                                 QueryMessage, ResultMessage, ProtocolHandler,
-                                InvalidRequestException, SupportedMessage,
+                                RequestValidationException as
+                                ProtocolRequestValidationException,
+                                SupportedMessage,
                                 AuthResponseMessage, AuthChallengeMessage,
                                 AuthSuccessMessage, ProtocolException,
                                 RegisterMessage, ReviseRequestMessage)
@@ -511,6 +516,39 @@ class _Frame(object):
 NONBLOCKING = (errno.EAGAIN, errno.EWOULDBLOCK)
 
 
+class _ConnectionStartupEvent(Event):
+    """
+    Track legacy reactors which publish READY by setting ``connected_event``.
+
+    Modern startup paths publish ``_startup_completed`` explicitly. Historical
+    third-party reactors only set this event, so remember whether it was set
+    while the connection was still open. This preserves that publication if a
+    close wins the race before ``Connection.factory`` snapshots the state.
+    """
+
+    def __init__(self, connection):
+        Event.__init__(self)
+        self._connection_ref = weakref.ref(connection)
+
+    def set(self):
+        connection = self._connection_ref()
+        if connection is None:
+            Event.set(self)
+            return
+
+        # Publish the legacy READY marker and wake factory atomically with
+        # close/defunct and factory's state snapshot. Connection.lock is an
+        # RLock because modern startup and Twisted close already set this
+        # event while holding it.
+        with connection.lock:
+            if (
+                    not connection.is_closed and
+                    not connection.is_defunct and
+                    connection.last_error is None):
+                connection._startup_event_set_while_open = True
+            Event.set(self)
+
+
 class ConnectionException(Exception):
     """
     An unrecoverable error was hit when attempting to use a connection,
@@ -531,6 +569,84 @@ class ConnectionShutdown(ConnectionException):
     Raised when a connection has been marked as defunct or has been closed.
     """
     pass
+
+
+class _ConnectionClosedDuringStartup(ConnectionShutdown):
+    """
+    Internal owner-side signal for a clean close returned by
+    ``Connection.factory``.
+    """
+    pass
+
+
+def _startup_close_error(connection, endpoint=None):
+    """Build an owner-side error without changing the factory return contract."""
+    connection_endpoint = getattr(connection, 'endpoint', None)
+    if connection_endpoint is not None:
+        endpoint = connection_endpoint
+    connection_lock = getattr(connection, 'lock', None)
+    if hasattr(connection_lock, '__enter__'):
+        with connection_lock:
+            startup_completed = (
+                getattr(connection, '_startup_completed', False) is True)
+            last_error = getattr(connection, 'last_error', None)
+    else:
+        startup_completed = (
+            getattr(connection, '_startup_completed', False) is True)
+        last_error = getattr(connection, 'last_error', None)
+
+    if startup_completed:
+        if isinstance(last_error, BaseException):
+            return last_error
+        return ConnectionShutdown(
+            "Connection to %s was closed after startup" % (endpoint,),
+            endpoint)
+    return _ConnectionClosedDuringStartup(
+        "Connection to %s was closed during the startup handshake" % (endpoint,),
+        endpoint)
+
+
+def _set_keyspace_blocking(connection, keyspace, timeout):
+    """
+    Call the timeout-aware API while preserving custom Connection subclasses
+    which implemented the historical one-argument override.
+    """
+    method = connection.set_keyspace_blocking
+    try:
+        parameters = tuple(inspect.signature(method).parameters.values())
+    except (TypeError, ValueError):
+        # Uninspectable C/Cython callables are often historical one-argument
+        # overrides. Preserve that API rather than guessing at a keyword.
+        return method(keyspace)
+
+    timeout_parameter = next(
+        (
+            parameter for parameter in parameters
+            if parameter.name == 'timeout'
+        ),
+        None)
+    if (
+            timeout_parameter is not None and
+            timeout_parameter.kind == inspect.Parameter.POSITIONAL_ONLY):
+        return method(keyspace, timeout)
+
+    if (
+            timeout_parameter is not None and
+            timeout_parameter.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY)):
+        return method(keyspace, timeout=timeout)
+
+    if any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters):
+        return method(keyspace, timeout=timeout)
+
+    if any(
+            parameter.kind == inspect.Parameter.VAR_POSITIONAL
+            for parameter in parameters):
+        return method(keyspace, timeout)
+    return method(keyspace)
 
 
 class ProtocolVersionUnsupported(ConnectionException):
@@ -841,6 +957,9 @@ class Connection(object):
 
     is_defunct = False
     is_closed = False
+    # Set by a pool before it deliberately retires this connection.  Returns
+    # racing that close must not treat it as a transport failure.
+    _pool_retired = False
     lock = None
     user_type_map = None
 
@@ -896,12 +1015,18 @@ class Connection(object):
         self.connect_timeout = connect_timeout
         self.allow_beta_protocol_version = allow_beta_protocol_version
         self.no_compact = no_compact
+        self._owning_pool = owning_pool
         self._push_watchers = defaultdict(set)
         self._requests = {}
+        # Per-request dispatch state used by set_keyspace_async to distinguish
+        # failures known to precede socket submission from ambiguous failures
+        # after push() has begun.
+        self._send_msg_states = {}
         self._io_buffer = _ConnectionIOBuffer(self)
         self._continuous_paging_sessions = {}
         self._socket_writable = True
         self.orphaned_request_ids = set()
+        self._pool_retired = False
         self._on_orphaned_stream_released = on_orphaned_stream_released
         self._application_info = application_info
 
@@ -929,7 +1054,12 @@ class Connection(object):
         self.highest_request_id = initial_size - 1
 
         self.lock = RLock()
-        self.connected_event = Event()
+        self._startup_event_set_while_open = False
+        self.connected_event = _ConnectionStartupEvent(self)
+        # ``connected_event`` is also set by close()/defunct() to wake factory
+        # waiters, so it cannot by itself prove that the startup handshake
+        # completed. Keep that state separately and publish it under ``lock``.
+        self._startup_completed = False
         self.features = ProtocolFeatures(shard_id=shard_id)
         self.total_shards = total_shards
         self.original_endpoint = self.endpoint
@@ -962,34 +1092,146 @@ class Connection(object):
     def create_timer(cls, timeout, callback):
         raise NotImplementedError()
 
+    def _is_clean_close_error(self, exc):
+        return not self.is_defunct and isinstance(exc, ConnectionShutdown)
+
     @classmethod
-    def factory(cls, endpoint, timeout, host_conn = None, *args, **kwargs):
+    def factory(cls, endpoint, timeout, *args, **kwargs):
         """
-        A factory function which returns connections which have
-        succeeded in connecting and are ready for service (or
-        raises an exception otherwise).
+        A factory function which returns a connection once startup has
+        completed, returns a closed connection if the server closes during
+        startup, or raises an exception otherwise.
+
+        Pool callers pass ``host_conn`` as a keyword-only factory option so
+        the connection remains tracked from construction through caller
+        adoption and can be closed by pool shutdown throughout that handoff.
+        Positional arguments retain their historical meaning as constructor
+        arguments.
         """
         start = time.time()
+        host_conn = kwargs.pop('host_conn', None)
         kwargs['connect_timeout'] = timeout
         conn = cls(endpoint, *args, **kwargs)
-        if host_conn is not None:
-            host_conn._pending_connections.append(conn)
-            if host_conn.is_shutdown:
+        if host_conn is not None and conn._owning_pool is None:
+            # ``host_conn`` is deliberately not forwarded to third-party
+            # Connection constructors, but the established owning_pool slot
+            # still needs to identify the pool for asynchronous release
+            # notifications after factory returns.
+            conn._owning_pool = host_conn
+        pending_registered = False
+        factory_completed = False
+        explicitly_closed = False
+        try:
+            if host_conn is not None:
+                register_pending = getattr(
+                    type(host_conn), '_register_pending_connection', None)
+                if register_pending is not None:
+                    pending_registered = register_pending(host_conn, conn)
+                    host_conn_shutdown = not pending_registered
+                else:
+                    pending_lock = getattr(host_conn, '_lock', None)
+                    if hasattr(pending_lock, '__enter__'):
+                        with pending_lock:
+                            host_conn._pending_connections.append(conn)
+                            pending_registered = True
+                            host_conn_shutdown = host_conn.is_shutdown
+                    else:
+                        host_conn._pending_connections.append(conn)
+                        pending_registered = True
+                        host_conn_shutdown = host_conn.is_shutdown
+
+                if host_conn_shutdown:
+                    conn.close()
+                    explicitly_closed = True
+            elapsed = time.time() - start
+            conn.connected_event.wait(timeout - elapsed)
+            # READY/auth success and close/defunct all wake connected_event.
+            # Snapshot their state under the connection lock so a defunct
+            # transition cannot expose is_defunct before last_error, and a
+            # post-startup close cannot be mistaken for a clean startup close.
+            with conn.lock:
+                last_error = conn.last_error
+                is_closed = conn.is_closed
+                startup_completed = conn._startup_completed
+                event_is_set = conn.connected_event.is_set()
+                is_unsupported_proto_version = conn.is_unsupported_proto_version
+                legacy_startup_completed = (
+                    event_is_set and
+                    conn._startup_event_set_while_open)
+                if (
+                        event_is_set and
+                        not startup_completed and
+                        (
+                            legacy_startup_completed or
+                            (
+                                not is_closed and
+                                not conn.is_defunct and
+                                last_error is None))):
+                    # Preserve the historical reactor-subclass contract:
+                    # before _mark_startup_completed existed, setting this
+                    # event on an open/error-free connection signaled READY.
+                    # The event records that ordering so a later close cannot
+                    # erase a READY publication before this snapshot.
+                    conn._startup_completed = True
+                    startup_completed = True
+                clean_startup_close = (
+                    last_error is not None
+                    and is_closed
+                    and not startup_completed
+                    and conn._is_clean_close_error(last_error))
+
+            if last_error:
+                if is_unsupported_proto_version:
+                    raise ProtocolVersionUnsupported(endpoint, conn.protocol_version)
+                if clean_startup_close:
+                    factory_completed = True
+                    return conn
+                raise last_error
+            elif not event_is_set:
                 conn.close()
-        elapsed = time.time() - start
-        conn.connected_event.wait(timeout - elapsed)
-        if conn.last_error:
-            if conn.is_unsupported_proto_version:
-                raise ProtocolVersionUnsupported(endpoint, conn.protocol_version)
-            raise conn.last_error
-        elif not conn.connected_event.is_set():
-            conn.close()
-            raise OperationTimedOut("Timed out creating connection (%s seconds)" % timeout,
-                                    timeout=timeout)
-        elif conn.is_closed:
-            raise ConnectionShutdown("Connection to %s was closed by server" % conn.endpoint)
-        else:
+                explicitly_closed = True
+                raise OperationTimedOut("Timed out creating connection (%s seconds)" % timeout,
+                                        timeout=timeout)
+            elif is_closed and startup_completed:
+                raise ConnectionShutdown(
+                    "Connection to %s was closed by server" % conn.endpoint,
+                    conn.endpoint)
+            factory_completed = True
             return conn
+        finally:
+            # Event.wait can be interrupted by cancellation exceptions which
+            # do not derive from Exception.  Until a result is returned the
+            # factory still owns the socket and must not leave it untracked.
+            if (
+                    not factory_completed and
+                    not explicitly_closed and
+                    not conn.is_closed):
+                conn.close()
+            # Failed or closed candidates remain factory-owned and are
+            # unregistered here. A successful open pool candidate stays
+            # registered until the caller atomically adopts it, closing the
+            # otherwise unowned return-to-caller window against shutdown.
+            if pending_registered and (
+                    not factory_completed or conn.is_closed):
+                unregister_pending = getattr(
+                    type(host_conn), '_unregister_pending_connection', None)
+                if unregister_pending is not None:
+                    unregister_pending(host_conn, conn)
+                else:
+                    pending_lock = getattr(host_conn, '_lock', None)
+                    if hasattr(pending_lock, '__enter__'):
+                        with pending_lock:
+                            pending_connections = host_conn._pending_connections
+                            for i, pending in enumerate(pending_connections):
+                                if pending is conn:
+                                    del pending_connections[i]
+                                    break
+                    else:
+                        pending_connections = host_conn._pending_connections
+                        for i, pending in enumerate(pending_connections):
+                            if pending is conn:
+                                del pending_connections[i]
+                                break
 
     def _build_ssl_context_from_options(self):
 
@@ -1121,6 +1363,11 @@ class Connection(object):
             if self.is_defunct or self.is_closed:
                 return
             self.is_defunct = True
+            # Publish the cause atomically with the defunct state. In
+            # particular, factory may already be awake after READY/auth
+            # success and must never observe a defunct connection without its
+            # error.
+            self.last_error = exc
 
         exc_info = sys.exc_info()
         # if we are not handling an exception, just use the passed exception, and don't try to format exc_info with the message
@@ -1131,12 +1378,25 @@ class Connection(object):
             log.debug("Defuncting connection (%s) to %s: %s",
                       id(self), self.endpoint, exc)
 
-        self.last_error = exc
         self.close()
         self.error_all_cp_sessions(exc)
         self.error_all_requests(exc)
         self.connected_event.set()
         return exc
+
+    def _mark_startup_completed(self):
+        """
+        Atomically publish successful startup and wake factory waiters.
+
+        A concurrent close which wins the lock remains a pre-startup close;
+        READY or AUTH_SUCCESS received after that close must not reclassify it.
+        """
+        with self.lock:
+            if self.is_closed or self.is_defunct:
+                return False
+            self._startup_completed = True
+            self.connected_event.set()
+            return True
 
     def error_all_cp_sessions(self, exc):
         stream_ids = list(self._continuous_paging_sessions.keys())
@@ -1205,6 +1465,10 @@ class Connection(object):
                 log.exception("Pushed event handler errored, ignoring:")
 
     def send_msg(self, msg, request_id, cb, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=None):
+        send_state = getattr(self, '_send_msg_states', {}).get(request_id)
+        if send_state is not None:
+            send_state['phase'] = 'before_registration'
+
         if self.is_defunct:
             msg = "Connection to %s is defunct" % self.endpoint
             if self.last_error:
@@ -1221,6 +1485,8 @@ class Connection(object):
         # queue the decoder function with the request
         # this allows us to inject custom functions per request to encode, decode messages
         self._requests[request_id] = (cb, decoder, result_metadata)
+        if send_state is not None:
+            send_state['phase'] = 'registered'
         msg = encoder(msg, request_id, self.protocol_version, compressor=self.compressor,
                       allow_beta_protocol_version=self.allow_beta_protocol_version,
                       protocol_features=self.features)
@@ -1230,7 +1496,14 @@ class Connection(object):
             self._segment_codec.encode(buffer, msg)
             msg = buffer.getvalue()
 
+        if send_state is not None:
+            # Once push starts, an exception no longer proves that no bytes
+            # reached the reactor/socket. The request id must not be reused on
+            # this connection after such an ambiguous failure.
+            send_state['phase'] = 'push_started'
         self.push(msg)
+        if send_state is not None:
+            send_state['phase'] = 'complete'
         return len(msg)
 
     def wait_for_response(self, msg, timeout=None, **kwargs):
@@ -1283,6 +1556,11 @@ class Connection(object):
         try:
             return waiter.deliver(timeout)
         except OperationTimedOut:
+            raise
+        except (RequestValidationException,
+                ProtocolRequestValidationException):
+            # Query validation reflects request/session state, not a broken
+            # transport. Keep the connection open for subsequent requests.
             raise
         except Exception as exc:
             self.defunct(exc)
@@ -1455,17 +1733,27 @@ class Connection(object):
 
     def new_continuous_paging_session(self, stream_id, decoder, row_factory, state):
         session = ContinuousPagingSession(stream_id, decoder, row_factory, self, state)
-        self._continuous_paging_sessions[stream_id] = session
+        with self.lock:
+            self._continuous_paging_sessions[stream_id] = session
         return session
 
     def remove_continuous_paging_session(self, stream_id):
-        try:
-            self._continuous_paging_sessions.pop(stream_id)
-            with self.lock:
+        notify_owner = None
+        with self.lock:
+            try:
+                self._continuous_paging_sessions.pop(stream_id)
                 log.debug("Returning cp session stream id %s", stream_id)
                 self.request_ids.append(stream_id)
-        except KeyError:
-            pass
+                if not self._continuous_paging_sessions:
+                    notify_owner = getattr(
+                        self._owning_pool, 'on_connection_released', None)
+            except KeyError:
+                return
+
+        # HostConnection retirement takes pool -> connection locks. Notify
+        # only after releasing the connection lock to preserve that order.
+        if notify_owner is not None:
+            notify_owner(self)
 
     @defunct_on_error
     def _send_options_message(self):
@@ -1584,7 +1872,7 @@ class Connection(object):
             if ProtocolVersion.has_checksumming_support(self.protocol_version):
                 self._enable_checksumming()
 
-            self.connected_event.set()
+            self._mark_startup_completed()
         elif isinstance(startup_response, AuthenticateMessage):
             log.debug("Got AuthenticateMessage on new connection (%s) from %s: %s",
                       id(self), self.endpoint, startup_response.authenticator)
@@ -1640,7 +1928,7 @@ class Connection(object):
             self.authenticator.on_authentication_success(auth_response.token)
             if self._compressor:
                 self.compressor = self._compressor
-            self.connected_event.set()
+            self._mark_startup_completed()
         elif isinstance(auth_response, AuthChallengeMessage):
             response = self.authenticator.evaluate_challenge(auth_response.challenge)
             msg = AuthResponseMessage("" if response is None else response)
@@ -1660,7 +1948,7 @@ class Connection(object):
             log.error(msg, self.endpoint, auth_response)
             raise ProtocolError(msg % (self.endpoint, auth_response))
 
-    def set_keyspace_blocking(self, keyspace):
+    def set_keyspace_blocking(self, keyspace, timeout=None):
         if not keyspace or keyspace == self.keyspace:
             return
 
@@ -1668,10 +1956,11 @@ class Connection(object):
         query = QueryMessage(query='USE %s' % (escape_name(keyspace),),
                              consistency_level=ConsistencyLevel.ONE)
         try:
-            result = self.wait_for_response(query)
-        except InvalidRequestException as ire:
-            # the keyspace probably doesn't exist
-            raise ire.to_exception()
+            result = self.wait_for_response(query, timeout=timeout)
+        except ProtocolRequestValidationException as validation_error:
+            raise validation_error.to_exception()
+        except RequestValidationException:
+            raise
         except Exception as exc:
             conn_exc = ConnectionException(
                 "Problem while setting keyspace: %r" % (exc,), self.endpoint)
@@ -1709,10 +1998,21 @@ class Connection(object):
         #   unlikely for a set_keyspace call
         # - it allows us to avoid signaling a condition every time a request completes
         while True:
+            closed_error = None
             with self.lock:
-                if self.in_flight < self.max_request_id:
+                if self.is_closed or self.is_defunct:
+                    # Preserve the in_flight contract for callers which always
+                    # balance this callback through pool.return_connection.
+                    self.in_flight += 1
+                    closed_error = ConnectionShutdown(
+                        "Connection to %s is closed" % self.endpoint,
+                        self.endpoint)
+                elif self.in_flight < self.max_request_id:
                     self.in_flight += 1
                     break
+            if closed_error is not None:
+                callback(self, closed_error)
+                return
             time.sleep(0.001)
 
         if not keyspace or keyspace == self.keyspace:
@@ -1727,17 +2027,53 @@ class Connection(object):
             if isinstance(result, ResultMessage):
                 self.keyspace = keyspace
                 callback(self, None)
-            elif isinstance(result, InvalidRequestException):
+            elif isinstance(result, ProtocolRequestValidationException):
                 callback(self, result.to_exception())
+            elif isinstance(result, RequestValidationException):
+                callback(self, result)
+            elif isinstance(result, Exception):
+                callback(self, result)
             else:
-                callback(self, self.defunct(ConnectionException(
-                    "Problem while setting keyspace: %r" % (result,), self.endpoint)))
+                conn_exc = ConnectionException(
+                    "Problem while setting keyspace: %r" % (result,),
+                    self.endpoint)
+                self.defunct(conn_exc)
+                callback(self, conn_exc)
 
         # We've incremented self.in_flight above, so we "have permission" to
-        # acquire a new request id
-        request_id = self.get_request_id()
-
-        self.send_msg(query, request_id, process_result)
+        # acquire a new request id. Keep close() excluded through callback
+        # registration/write; otherwise close can drain requests between the
+        # health check and send_msg registering this stream.
+        request_id = None
+        send_state = {'phase': 'unknown'}
+        try:
+            with self.lock:
+                request_id = self.get_request_id()
+                self._send_msg_states[request_id] = send_state
+                try:
+                    self.send_msg(query, request_id, process_result)
+                finally:
+                    if self._send_msg_states.get(request_id) is send_state:
+                        del self._send_msg_states[request_id]
+        except BaseException as exc:
+            if (
+                    request_id is not None and
+                    send_state['phase'] in (
+                        'before_registration',
+                        'registered')):
+                # No push was attempted, so no response can arrive for this
+                # stream and both pieces of ownership can be safely unwound.
+                with self.lock:
+                    self._requests.pop(request_id, None)
+                    if request_id not in self.request_ids:
+                        self.request_ids.append(request_id)
+            elif request_id is not None:
+                # A custom send_msg implementation, or any failure once push()
+                # begins, is ambiguous: the peer may still answer. Closing the
+                # connection prevents that response from being delivered to a
+                # new request reusing this stream id.
+                self.defunct(exc)
+            raise
 
     @property
     def is_idle(self):
@@ -1913,6 +2249,20 @@ class ConnectionHeartbeat(Thread):
                         # TODO: move this, along with connection locks in pool, down into Connection
                         with connection.lock:
                             connection.in_flight -= 1
+                        on_connection_released = getattr(
+                            f.owner, 'on_connection_released', None)
+                        if on_connection_released is not None:
+                            # The pool callback takes pool -> connection locks.
+                            try:
+                                on_connection_released(connection)
+                            except Exception:
+                                # Retirement bookkeeping must not reclassify a
+                                # successful heartbeat as a transport failure;
+                                # in_flight has already been balanced.
+                                log.exception(
+                                    "Error releasing connection (%s) after "
+                                    "successful heartbeat",
+                                    id(connection))
                         connection.reset_idle()
                     except Exception as e:
                         log.warning("Heartbeat failed for connection (%s) to %s",

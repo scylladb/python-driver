@@ -39,6 +39,7 @@ class MockSession(MagicMock):
         self.cluster.ssl_options = ssl_options
         self.cluster.ssl_context = ssl_context
         self.cluster.shard_aware_options = ShardAwareOptions()
+        self.cluster.connect_timeout = 5
         self.cluster.executor = ThreadPoolExecutor(max_workers=2)
         self.cluster.signal_connection_failure = lambda *args, **kwargs: False
         self.cluster.connection_factory = self.mock_connection_factory
@@ -73,6 +74,75 @@ class MockSession(MagicMock):
 
 
 class TestShardAware(unittest.TestCase):
+    def _assert_closed_missing_shard_connection_is_discarded(
+            self, use_shard_aware_endpoint):
+        host = MagicMock()
+        host.endpoint = DefaultEndPoint("1.2.3.4")
+        session = MockSession()
+        session.cluster.shard_aware_options.disable_shardaware_port = (
+            not use_shard_aware_endpoint)
+        pool = HostConnection(
+            host=host, host_distance=HostDistance.REMOTE, session=session)
+
+        try:
+            for future in session.futures:
+                future.result()
+
+            requested_shard = 2
+
+            class ClosedConnection(object):
+                def __init__(self):
+                    self.is_closed = True
+                    self.close = MagicMock()
+                    self.set_keyspace_blocking = MagicMock()
+                    self.features_access_count = 0
+                    self._features = ProtocolFeatures(
+                        shard_id=requested_shard)
+
+                @property
+                def features(self):
+                    self.features_access_count += 1
+                    return self._features
+
+            closed_connection = ClosedConnection()
+            session.cluster.connection_factory = MagicMock(
+                return_value=closed_connection)
+            pool._connections.clear()
+            pool._excess_connections.clear()
+            pool._connecting.add(requested_shard)
+
+            pool._open_connection_to_missing_shard(requested_shard)
+
+            assert pool._connections == {}
+            assert pool._excess_connections == set()
+            assert closed_connection.features_access_count == 0
+            closed_connection.set_keyspace_blocking.assert_not_called()
+            closed_connection.close.assert_called_once_with()
+            assert requested_shard not in pool._connecting
+
+            factory_args = session.cluster.connection_factory.call_args
+            expected_endpoint = (
+                DefaultEndPoint("1.2.3.4", port=19042)
+                if use_shard_aware_endpoint else host.endpoint)
+            assert factory_args.args[0] == expected_endpoint
+            if use_shard_aware_endpoint:
+                assert factory_args.kwargs['shard_id'] == requested_shard
+                assert factory_args.kwargs['total_shards'] == 4
+            else:
+                assert 'shard_id' not in factory_args.kwargs
+                assert 'total_shards' not in factory_args.kwargs
+        finally:
+            pool.shutdown()
+            session.cluster.executor.shutdown(wait=True)
+
+    def test_closed_connection_to_missing_shard_is_discarded(self):
+        self._assert_closed_missing_shard_connection_is_discarded(
+            use_shard_aware_endpoint=True)
+
+    def test_closed_connection_to_missing_shard_fallback_is_discarded(self):
+        self._assert_closed_missing_shard_connection_is_discarded(
+            use_shard_aware_endpoint=False)
+
     def test_parsing_and_calculating_shard_id(self):
         """
         Testing the parsing of the options command

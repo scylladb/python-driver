@@ -19,13 +19,15 @@ from cassandra.connection import DefaultEndPoint
 
 try:
     from twisted.test import proto_helpers
+    from twisted.internet.error import ConnectionDone, ConnectionLost
     from cassandra.io import twistedreactor
     from cassandra.io.twistedreactor import TwistedConnection
 except ImportError:
-    twistedreactor = TwistedConnection = None  # NOQA
+    twistedreactor = TwistedConnection = ConnectionDone = ConnectionLost = None  # NOQA
 
 
-from cassandra.connection import _Frame
+from cassandra.connection import ConnectionShutdown, _Frame
+from cassandra.protocol import ReadyMessage
 
 from tests.unit.io.utils import TimerTestMixin
 
@@ -131,6 +133,95 @@ class TestTwistedConnection(unittest.TestCase):
         self.obj_ut._send_options_message = Mock()
         self.obj_ut.client_connection_made(Mock())
         self.obj_ut._send_options_message.assert_called_with()
+
+    def test_clean_close_error(self):
+        assert self.obj_ut._is_clean_close_error(ConnectionDone())
+        assert not self.obj_ut._is_clean_close_error(ConnectionLost())
+
+        self.obj_ut.is_defunct = False
+        assert self.obj_ut._is_clean_close_error(ConnectionShutdown("closed"))
+
+        self.obj_ut.is_defunct = True
+        assert not self.obj_ut._is_clean_close_error(ConnectionShutdown("defunct"))
+
+    def test_factory_returns_connection_done_before_startup(self):
+        class StartupConnectionDone(TwistedConnection):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.defunct(ConnectionDone())
+
+        conn = StartupConnectionDone.factory(
+            DefaultEndPoint('1.2.3.4'), timeout=1)
+
+        assert conn.is_closed
+        assert not conn._startup_completed
+        assert isinstance(conn.last_error, ConnectionDone)
+
+    def test_factory_raises_connection_done_after_ready(self):
+        class ReadyThenConnectionDone(TwistedConnection):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._compressor = None
+                self._handle_startup_response(ReadyMessage())
+                self.defunct(ConnectionDone())
+
+        with self.assertRaises(ConnectionDone):
+            ReadyThenConnectionDone.factory(
+                DefaultEndPoint('1.2.3.4'), timeout=1)
+
+    @patch('cassandra.io.twistedreactor.connectProtocol')
+    def test_close_cancels_pending_connect(self, mock_connect_protocol):
+        connector = Mock()
+        mock_connect_protocol.return_value = connector
+        self.obj_ut.error_all_requests = Mock()
+        self.obj_ut.add_connection()
+
+        self.obj_ut.close()
+
+        assert self.obj_ut.is_closed
+        assert self.obj_ut.connected_event.is_set()
+        assert isinstance(self.obj_ut.last_error, ConnectionShutdown)
+        connector.addErrback.assert_called_once_with(
+            self.obj_ut._handle_connect_failure)
+        self.mock_reactor_cft.assert_called_with(connector.cancel)
+        self.obj_ut.error_all_requests.assert_called_once_with(
+            self.obj_ut.last_error)
+
+    def test_connect_failure_defuncts_connection_and_wakes_startup(self):
+        connect_error = RuntimeError("endpoint connect failed")
+        failure = Mock(value=connect_error)
+
+        result = self.obj_ut._handle_connect_failure(failure)
+
+        assert result is None
+        assert self.obj_ut.is_defunct
+        assert self.obj_ut.is_closed
+        assert self.obj_ut.last_error is connect_error
+        assert self.obj_ut.connected_event.is_set()
+
+    @patch('cassandra.io.twistedreactor.connectProtocol')
+    def test_close_before_scheduled_connect(self, mock_connect_protocol):
+        self.obj_ut.error_all_requests = Mock()
+
+        self.obj_ut.close()
+        self.obj_ut.add_connection()
+
+        assert self.obj_ut.is_closed
+        assert self.obj_ut.connected_event.is_set()
+        mock_connect_protocol.assert_not_called()
+
+    def test_connection_made_after_close_does_not_reopen(self):
+        transport = Mock()
+        self.obj_ut._send_options_message = Mock()
+        self.obj_ut.close()
+
+        self.obj_ut.client_connection_made(transport)
+
+        assert self.obj_ut.is_closed
+        assert self.obj_ut.transport is None
+        self.obj_ut._send_options_message.assert_not_called()
+        self.mock_reactor_cft.assert_called_with(
+            transport.connector.disconnect)
 
     @patch('twisted.internet.reactor.connectTCP')
     def test_close(self, mock_connectTCP):
