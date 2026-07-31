@@ -500,7 +500,7 @@ class ConnectionHeartbeatTest(unittest.TestCase):
         future = HeartbeatFuture(connection, owner)
 
         with pytest.raises(ConnectionException):
-            future.wait(0)
+            future.wait(timeout=0, original_timeout=0)
 
         owner.return_connection(connection)
 
