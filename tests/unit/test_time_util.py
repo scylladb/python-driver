@@ -51,15 +51,17 @@ class TimeUtilTest(unittest.TestCase):
 
     def test_times_from_uuid1(self):
         node = uuid.getnode()
-        now = time.time()
+        before = time.time()
         u = uuid.uuid1(node, 0)
+        after = time.time()
 
-        t = util.unix_time_from_uuid1(u)
-        assert now == pytest.approx(t, abs=1e-2)
+        uuid_time = util.unix_time_from_uuid1(u)
+        # Allow for coarse platform clocks and uuid1's monotonic adjustment.
+        assert before - 0.1 <= uuid_time <= after + 0.1
 
         dt = util.datetime_from_uuid1(u)
-        t = calendar.timegm(dt.timetuple()) + dt.microsecond / 1e6
-        assert now == pytest.approx(t, abs=1e-2)
+        datetime_time = calendar.timegm(dt.timetuple()) + dt.microsecond / 1e6
+        assert datetime_time == pytest.approx(uuid_time, abs=1e-6, rel=0)
 
     def test_uuid_from_time(self):
         t = time.time()
