@@ -98,6 +98,7 @@ class TestTwistedConnection(unittest.TestCase):
         self.reactor_cft_patcher = patch(
             'twisted.internet.reactor.callFromThread')
         self.reactor_run_patcher = patch('twisted.internet.reactor.run')
+        self.thread_patcher = patch('cassandra.io.twistedreactor.Thread')
         # Patch reactor.running to False so maybe_start() always enters
         # the branch that spawns the reactor thread. Without this, leaked
         # reactor state from prior tests can cause reactor.running to be
@@ -107,6 +108,9 @@ class TestTwistedConnection(unittest.TestCase):
             'twisted.internet.reactor.running', new=False)
         self.mock_reactor_cft = self.reactor_cft_patcher.start()
         self.mock_reactor_run = self.reactor_run_patcher.start()
+        self.mock_thread_class = self.thread_patcher.start()
+        self.mock_thread = self.mock_thread_class.return_value
+        self.mock_thread.is_alive.return_value = False
         self.reactor_running_patcher.start()
         self.obj_ut = twistedreactor.TwistedConnection(DefaultEndPoint('1.2.3.4'),
                                                        cql_version='3.0.1')
@@ -114,6 +118,7 @@ class TestTwistedConnection(unittest.TestCase):
     def tearDown(self):
         self.reactor_cft_patcher.stop()
         self.reactor_run_patcher.stop()
+        self.thread_patcher.stop()
         self.reactor_running_patcher.stop()
 
     def test_connection_initialization(self):
@@ -121,7 +126,12 @@ class TestTwistedConnection(unittest.TestCase):
         Verify that __init__() works correctly.
         """
         self.mock_reactor_cft.assert_called_with(self.obj_ut.add_connection)
-        self.mock_reactor_run.assert_called_with(installSignalHandlers=False)
+        self.mock_thread_class.assert_called_once_with(
+            target=self.mock_reactor_run,
+            name="cassandra_driver_twisted_event_loop",
+            kwargs={'installSignalHandlers': False})
+        self.assertIs(self.mock_thread.daemon, True)
+        self.mock_thread.start.assert_called_once_with()
 
     def test_client_connection_made(self):
         """
