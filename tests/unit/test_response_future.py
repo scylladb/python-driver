@@ -16,7 +16,7 @@ import unittest
 
 from collections import deque
 from threading import RLock
-from unittest.mock import Mock, MagicMock, ANY
+from unittest.mock import Mock, MagicMock, ANY, patch
 
 from cassandra import ConsistencyLevel, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
 from cassandra.cluster import Session, ResponseFuture, NoHostAvailable, ProtocolVersion, ControlConnectionQueryFallback
@@ -1316,8 +1316,9 @@ class ResponseFutureTests(unittest.TestCase):
         )
 
         # Ordinary METADATA_CHANGED handling, so no anomaly warning either.
-        with self.assertNoLogs('cassandra.cluster', level='WARNING'):
+        with patch('cassandra.cluster.log.warning') as warning:
             rf._set_result(None, None, None, response)
+        warning.assert_not_called()
 
         assert ps.result_metadata_and_id == (new_meta, b'new_id')
 
@@ -1351,8 +1352,9 @@ class ResponseFutureTests(unittest.TestCase):
         assert sum('result_metadata_id' in msg for msg in first.output) == 1
 
         # Second identical anomalous response: no new warning (deduped).
-        with self.assertNoLogs('cassandra.cluster', level='WARNING'):
+        with patch('cassandra.cluster.log.warning') as warning:
             rf._set_result(None, None, None, anomalous)
+        warning.assert_not_called()
         assert ps.result_metadata_and_id == (old_meta, b'old_id')
 
         # A genuine METADATA_CHANGED recovers the metadata and re-arms the warning.
