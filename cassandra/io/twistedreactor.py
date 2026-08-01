@@ -24,6 +24,7 @@ import weakref
 
 from twisted.internet import reactor, protocol
 from twisted.internet.endpoints import connectProtocol, TCP4ClientEndpoint, SSL4ClientEndpoint
+from twisted.internet.error import ConnectionDone
 from twisted.internet.interfaces import IOpenSSLClientConnectionCreator
 from twisted.python.failure import Failure
 from zope.interface import implementer
@@ -198,6 +199,9 @@ class TwistedConnection(Connection):
         cls._loop.add_timer(timer)
         return timer
 
+    def _is_clean_close_error(self, exc):
+        return isinstance(exc, ConnectionDone) or Connection._is_clean_close_error(self, exc)
+
     def __init__(self, *args, **kwargs):
         """
         Initialization method.
@@ -209,7 +213,10 @@ class TwistedConnection(Connection):
         """
         Connection.__init__(self, *args, **kwargs)
 
-        self.is_closed = True
+        # A scheduled or in-progress endpoint connection is still closeable.
+        # Keeping it logically open lets pool shutdown cancel it before
+        # connectionMade.
+        self.is_closed = False
         self.connector = None
         self.transport = None
 
@@ -226,9 +233,12 @@ class TwistedConnection(Connection):
 
     def add_connection(self):
         """
-        Convenience function to connect and store the resulting
-        connector.
+        Convenience function to connect and store the resulting Deferred.
         """
+        with self.lock:
+            if self.is_closed:
+                return
+
         host, port = self.endpoint.resolve()
         if self.ssl_context or self.ssl_options:
             # Can't use optionsForClientTLS here because it *forces* hostname verification.
@@ -257,7 +267,25 @@ class TwistedConnection(Connection):
                 port,
                 timeout=self.connect_timeout
             )
-        connectProtocol(endpoint, TwistedConnectionProtocol(self))
+
+        # connectProtocol returns a cancellable Deferred. Keep the final
+        # shutdown check and assignment under the lock so close() either stops
+        # this attempt before it starts or observes the Deferred and cancels it.
+        with self.lock:
+            if self.is_closed:
+                return
+            self.connector = connectProtocol(
+                endpoint, TwistedConnectionProtocol(self))
+            self.connector.addErrback(self._handle_connect_failure)
+
+    def _handle_connect_failure(self, failure):
+        # Pool shutdown intentionally cancels the endpoint Deferred. Consume
+        # that failure instead of leaving an unhandled cancellation in Twisted.
+        with self.lock:
+            if self.is_closed:
+                return None
+        self.defunct(failure.value)
+        return None
 
     def client_connection_made(self, transport):
         """
@@ -265,8 +293,16 @@ class TwistedConnection(Connection):
         succeeded.
         """
         with self.lock:
-            self.is_closed = False
-        self.transport = transport
+            if self.is_closed:
+                close_transport = True
+            else:
+                close_transport = False
+                self.transport = transport
+
+        if close_transport:
+            reactor.callFromThread(transport.connector.disconnect)
+            return
+
         self._send_options_message()
 
     def close(self):
@@ -277,18 +313,29 @@ class TwistedConnection(Connection):
             if self.is_closed:
                 return
             self.is_closed = True
+            connector = self.connector
+            transport = self.transport
+
+            shutdown_error = None
+            if not self.is_defunct:
+                msg = "Connection to %s was closed" % self.endpoint
+                if self.last_error:
+                    msg += ": %s" % (self.last_error,)
+                shutdown_error = ConnectionShutdown(msg)
+                if not self._startup_completed:
+                    self.last_error = shutdown_error
+                # Wake Connection.factory before waiting for reactor cleanup.
+                self.connected_event.set()
 
         log.debug("Closing connection (%s) to %s", id(self), self.endpoint)
-        reactor.callFromThread(self.transport.connector.disconnect)
+        if transport is not None:
+            reactor.callFromThread(transport.connector.disconnect)
+        elif connector is not None:
+            reactor.callFromThread(connector.cancel)
         log.debug("Closed socket to %s", self.endpoint)
 
-        if not self.is_defunct:
-            msg = "Connection to %s was closed" % self.endpoint
-            if self.last_error:
-                msg += ": %s" % (self.last_error,)
-            self.error_all_requests(ConnectionShutdown(msg))
-            # don't leave in-progress operations hanging
-            self.connected_event.set()
+        if shutdown_error is not None:
+            self.error_all_requests(shutdown_error)
 
     def handle_read(self):
         """

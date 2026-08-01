@@ -12,20 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import itertools
+import socket
 import unittest
 from io import BytesIO
 import time
-from threading import Lock
+from threading import Event, Lock, RLock, Thread, get_ident
 from unittest.mock import Mock, ANY, call, patch
 
-from cassandra import OperationTimedOut
+from cassandra import InvalidRequest, OperationTimedOut, Unauthorized
 from cassandra.cluster import Cluster
-from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
+from cassandra.connection import (Connection, ConnectionBusy, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, HeartbeatFuture, _Frame, Timer, TimerManager,
-                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
+                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator,
+                                  _ConnectionClosedDuringStartup,
+                                  _set_keyspace_blocking,
+                                  _startup_close_error)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 SupportedMessage, ProtocolHandler, ResultMessage,
+                                ReadyMessage, AuthSuccessMessage,
+                                InvalidRequestException,
+                                UnauthorizedErrorMessage,
                                 RESULT_KIND_SET_KEYSPACE)
 
 from tests.util import wait_until, assertRegex
@@ -272,6 +279,73 @@ class ConnectionTest(unittest.TestCase):
         assert query_msg.query == 'USE "my""ks"', (
             "Double quotes in keyspace name must be escaped as double-double quotes")
 
+    def test_set_keyspace_blocking_passes_timeout(self):
+        c = self.make_connection()
+        c.wait_for_response = Mock(
+            return_value=ResultMessage(kind=RESULT_KIND_SET_KEYSPACE))
+
+        c.set_keyspace_blocking('ks', timeout=1.25)
+
+        query_msg = c.wait_for_response.call_args[0][0]
+        assert query_msg.query == 'USE "ks"'
+        c.wait_for_response.assert_called_once_with(
+            query_msg, timeout=1.25)
+
+    def test_keyspace_timeout_adapter_preserves_custom_signatures(self):
+        calls = []
+
+        class HistoricalConnection(object):
+            def set_keyspace_blocking(self, keyspace):
+                calls.append(("historical", keyspace))
+
+        class PositionalTimeoutConnection(object):
+            def set_keyspace_blocking(self, keyspace, timeout, /):
+                calls.append(("positional", keyspace, timeout))
+
+        class VarargsTimeoutConnection(object):
+            def set_keyspace_blocking(self, keyspace, *args):
+                calls.append(("varargs", keyspace, args))
+
+        _set_keyspace_blocking(HistoricalConnection(), "ks1", 1.5)
+        _set_keyspace_blocking(PositionalTimeoutConnection(), "ks2", 2.5)
+        _set_keyspace_blocking(VarargsTimeoutConnection(), "ks3", 3.5)
+
+        assert calls == [
+            ("historical", "ks1"),
+            ("positional", "ks2", 2.5),
+            ("varargs", "ks3", (3.5,)),
+        ]
+
+    def test_validation_response_does_not_defunct_transport(self):
+        cases = (
+            (
+                InvalidRequestException(
+                    code=0x2200, message="invalid", info=None),
+                InvalidRequest),
+            (
+                UnauthorizedErrorMessage(
+                    code=0x2100, message="unauthorized", info=None),
+                Unauthorized),
+        )
+        for response, error_type in cases:
+            with self.subTest(error_type=error_type):
+                c = self.make_connection()
+                success = ResultMessage(kind=RESULT_KIND_SET_KEYSPACE)
+                responses = [response, success]
+
+                def send_response(message, request_id, callback):
+                    callback(responses.pop(0))
+
+                c.send_msg = send_response
+
+                with pytest.raises(error_type):
+                    c.wait_for_response(Mock())
+
+                assert not c.is_defunct
+                assert not c.is_closed
+                assert c.last_error is None
+                assert c.wait_for_response(Mock()) is success
+
     def test_set_keyspace_async_escapes_quotes(self):
         """
         Test that set_keyspace_async properly escapes double quotes in
@@ -290,6 +364,85 @@ class ConnectionTest(unittest.TestCase):
         query_msg = c.send_msg.call_args[0][0]
         assert query_msg.query == 'USE "my""ks"', (
             "Double quotes in keyspace name must be escaped as double-double quotes")
+
+    def test_set_keyspace_async_pre_push_failure_restores_request_id(self):
+        c = self.make_connection()
+        original_request_ids = tuple(c.request_ids)
+        request_id = original_request_ids[0]
+        c._socket_writable = False
+
+        with pytest.raises(ConnectionBusy):
+            c.set_keyspace_async("ks", Mock())
+
+        assert c._requests == {}
+        assert tuple(c.request_ids).count(request_id) == 1
+        assert set(c.request_ids) == set(original_request_ids)
+        # The pool caller owns balancing the documented unconditional
+        # increment even when dispatch raises synchronously.
+        assert c.in_flight == 1
+
+    def test_set_keyspace_async_ambiguous_send_failure_defuncts(self):
+        c = self.make_connection()
+        original_request_ids = tuple(c.request_ids)
+        request_id = original_request_ids[0]
+        queued_frames = []
+        send_error = RuntimeError("wakeup failed after enqueue")
+
+        def close():
+            with c.lock:
+                if c.is_closed:
+                    return
+                c.is_closed = True
+
+        def fail_after_enqueue(frame):
+            queued_frames.append(frame)
+            raise send_error
+
+        c.close = close
+        c.push = fail_after_enqueue
+        callback = Mock()
+
+        with pytest.raises(RuntimeError, match="wakeup failed after enqueue"):
+            c.set_keyspace_async("ks", callback)
+
+        assert len(queued_frames) == 1
+        assert c.is_defunct
+        assert c.is_closed
+        assert c.last_error is send_error
+        assert c._requests == {}
+        assert request_id not in c.request_ids
+        assert set(c.request_ids) == set(original_request_ids[1:])
+        callback.assert_called_once()
+
+    def test_final_continuous_paging_release_notifies_owner_outside_lock(self):
+        owner = Mock()
+        c = self.make_connection()
+        c._owning_pool = owner
+        c.lock = Lock()
+        c._continuous_paging_sessions = {
+            301: Mock(),
+            302: Mock(),
+        }
+
+        callback_had_lock = []
+
+        def on_connection_released(connection):
+            acquired = connection.lock.acquire(False)
+            callback_had_lock.append(not acquired)
+            if acquired:
+                connection.lock.release()
+
+        owner.on_connection_released.side_effect = on_connection_released
+
+        c.remove_continuous_paging_session(301)
+        owner.on_connection_released.assert_not_called()
+
+        c.remove_continuous_paging_session(302)
+
+        owner.on_connection_released.assert_called_once_with(c)
+        assert callback_had_lock == [False]
+        assert 301 in c.request_ids
+        assert 302 in c.request_ids
 
     def test_send_msg_passes_negotiated_features_to_encoder(self):
         """
@@ -383,6 +536,506 @@ class ConnectionTest(unittest.TestCase):
         assert "already closed" in error_message
         assert "Bad file descriptor" in error_message
 
+    def test_factory_returns_maintenance_mode_startup_close(self):
+        """
+        Maintenance mode accepts regular CQL sockets and closes them during
+        startup. The low-level factory keeps that close observable while
+        still tracking pool-owned startup connections for shutdown cleanup.
+        """
+
+        class MaintenanceModeCqlServer(object):
+            def __init__(self):
+                self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                self._sock.bind(('127.0.0.1', 0))
+                self._sock.listen(1)
+                self._sock.settimeout(2)
+                self.port = self._sock.getsockname()[1]
+                self.first_frame = b''
+                self.ready = Event()
+                self.received_frame = Event()
+                self.error = None
+                self.thread = Thread(target=self._run)
+                self.thread.daemon = True
+                self.thread.start()
+
+            def _run(self):
+                self.ready.set()
+                try:
+                    client, _ = self._sock.accept()
+                    with client:
+                        client.settimeout(2)
+                        while len(self.first_frame) < 9:
+                            chunk = client.recv(9 - len(self.first_frame))
+                            if not chunk:
+                                break
+                            self.first_frame += chunk
+                except Exception as exc:
+                    self.error = exc
+                finally:
+                    self.received_frame.set()
+
+            def close(self):
+                self._sock.close()
+                self.thread.join(2)
+
+        class MaintenanceModeConnection(Connection):
+            def __init__(self, *args, **kwargs):
+                super(MaintenanceModeConnection, self).__init__(*args, **kwargs)
+                self._reader = None
+                self._connect_socket()
+                self._send_options_message()
+                self._reader = Thread(target=self._read_until_server_closes)
+                self._reader.daemon = True
+                self._reader.start()
+
+            def push(self, data):
+                self._socket.sendall(data)
+
+            def close(self):
+                with self.lock:
+                    if self.is_closed:
+                        return
+                    self.is_closed = True
+
+                if self._socket:
+                    self._socket.close()
+
+                if not self.is_defunct:
+                    shutdown_error = ConnectionShutdown("Connection to %s was closed" % self.endpoint)
+                    self.error_all_requests(shutdown_error)
+                    if not self.connected_event.is_set():
+                        self.last_error = shutdown_error
+                    self.connected_event.set()
+
+            def _read_until_server_closes(self):
+                try:
+                    while True:
+                        data = self._socket.recv(self.in_buffer_size)
+                        if not data:
+                            self.close()
+                            return
+                        self._iobuf.write(data)
+                        self.process_io_buffer()
+                except socket.error as exc:
+                    if not self.is_closed:
+                        self.defunct(exc)
+
+        class PendingConnections(list):
+            def __init__(self):
+                super(PendingConnections, self).__init__()
+                self.appended = []
+
+            def append(self, conn):
+                self.appended.append(conn)
+                super(PendingConnections, self).append(conn)
+
+        server = MaintenanceModeCqlServer()
+        try:
+            assert server.ready.wait(2)
+            conn = MaintenanceModeConnection.factory(
+                DefaultEndPoint('127.0.0.1', server.port), timeout=2)
+
+            assert conn.is_closed
+            assert server.received_frame.wait(2)
+            assert server.error is None
+            assert len(server.first_frame) >= 5
+            assert server.first_frame[4] == 0x05  # OPTIONS
+        finally:
+            server.close()
+
+        server = MaintenanceModeCqlServer()
+        try:
+            assert server.ready.wait(2)
+            host_conn = Mock()
+            host_conn.is_shutdown = False
+            host_conn._pending_connections = PendingConnections()
+
+            conn = MaintenanceModeConnection.factory(
+                DefaultEndPoint('127.0.0.1', server.port),
+                timeout=2,
+                host_conn=host_conn)
+
+            assert conn.is_closed
+            assert server.received_frame.wait(2)
+            assert server.error is None
+            assert len(server.first_frame) >= 5
+            assert server.first_frame[4] == 0x05  # OPTIONS
+            assert host_conn._pending_connections == []
+            assert len(host_conn._pending_connections.appended) == 1
+            assert host_conn._pending_connections.appended[0] is conn
+        finally:
+            server.close()
+
+    def test_factory_raises_clean_close_after_ready(self):
+        class ReadyThenCleanCloseConnection(Connection):
+            def __init__(self, *args, **kwargs):
+                super(ReadyThenCleanCloseConnection, self).__init__(
+                    *args, **kwargs)
+                self._compressor = None
+                self._handle_startup_response(ReadyMessage())
+                self.close()
+
+            def close(self):
+                with self.lock:
+                    if self.is_closed:
+                        return
+                    self.is_closed = True
+                self.connected_event.set()
+
+        with pytest.raises(ConnectionShutdown) as exc_info:
+            ReadyThenCleanCloseConnection.factory(
+                DefaultEndPoint('127.0.0.1', 9042), timeout=2)
+
+        assert "closed by server" in str(exc_info.value)
+
+    def test_factory_marks_legacy_event_only_startup_complete(self):
+        class LegacyReadyConnection(Connection):
+            def __init__(self, *args, **kwargs):
+                super(LegacyReadyConnection, self).__init__(*args, **kwargs)
+                # Historical third-party reactors used only this event to
+                # publish successful startup.
+                self.connected_event.set()
+
+            def close(self):
+                with self.lock:
+                    self.is_closed = True
+                self.connected_event.set()
+
+        connection = LegacyReadyConnection.factory(
+            DefaultEndPoint('127.0.0.1', 9042), timeout=2)
+
+        assert connection._startup_completed is True
+        connection.close()
+        assert isinstance(
+            _startup_close_error(connection, connection.endpoint),
+            ConnectionShutdown)
+        assert not isinstance(
+            _startup_close_error(connection, connection.endpoint),
+            _ConnectionClosedDuringStartup)
+
+    def test_factory_preserves_positional_constructor_arguments(self):
+        expected_option = object()
+
+        class PositionalOptionConnection(Connection):
+            def __init__(self, endpoint, positional_option, *args, **kwargs):
+                self.positional_option = positional_option
+                super(PositionalOptionConnection, self).__init__(
+                    endpoint, *args, **kwargs)
+                self.connected_event.set()
+
+            def close(self):
+                with self.lock:
+                    self.is_closed = True
+                self.connected_event.set()
+
+        connection = PositionalOptionConnection.factory(
+            DefaultEndPoint('127.0.0.1', 9042),
+            2,
+            expected_option)
+
+        assert connection.positional_option is expected_option
+        connection.close()
+
+    def test_factory_records_host_connection_as_owner(self):
+        class ImmediateConnection(Connection):
+            def __init__(self, *args, **kwargs):
+                super(ImmediateConnection, self).__init__(*args, **kwargs)
+                self.connected_event.set()
+
+            def close(self):
+                with self.lock:
+                    self.is_closed = True
+                self.connected_event.set()
+
+        class Owner(object):
+            is_shutdown = False
+
+            def __init__(self):
+                self._pending_connections = []
+
+        owner = Owner()
+        connection = ImmediateConnection.factory(
+            DefaultEndPoint('127.0.0.1', 9042),
+            timeout=2,
+            host_conn=owner)
+
+        assert connection._owning_pool is owner
+        assert owner._pending_connections == [connection]
+        owner._pending_connections.remove(connection)
+        connection.close()
+
+    def test_factory_preserves_legacy_ready_when_close_wins_snapshot(self):
+        class LegacyReadyThenClosedConnection(Connection):
+            instance = None
+
+            def __init__(self, *args, **kwargs):
+                super(LegacyReadyThenClosedConnection, self).__init__(
+                    *args, **kwargs)
+                LegacyReadyThenClosedConnection.instance = self
+                # Historical reactors published READY only through this event.
+                self.connected_event.set()
+                # Deterministically place the close between READY publication
+                # and the factory state snapshot.
+                self.close()
+
+            def close(self):
+                with self.lock:
+                    if self.is_closed:
+                        return
+                    self.is_closed = True
+                    if not self._startup_completed:
+                        self.last_error = ConnectionShutdown(
+                            "legacy connection closed after READY",
+                            self.endpoint)
+                self.connected_event.set()
+
+        with pytest.raises(ConnectionShutdown) as exc_info:
+            LegacyReadyThenClosedConnection.factory(
+                DefaultEndPoint('127.0.0.1', 9042), timeout=2)
+
+        connection = LegacyReadyThenClosedConnection.instance
+        assert connection._startup_completed is True
+        assert exc_info.value is connection.last_error
+        assert "closed after READY" in str(exc_info.value)
+        assert not isinstance(
+            _startup_close_error(connection, connection.endpoint),
+            _ConnectionClosedDuringStartup)
+
+    def test_legacy_startup_event_publication_is_atomic_with_close(self):
+        c = self.make_connection()
+        acquire_attempted = Event()
+
+        class ObservedLock(object):
+            def __init__(self):
+                self.inner = RLock()
+
+            def __enter__(self):
+                acquire_attempted.set()
+                self.inner.acquire()
+                return self
+
+            def __exit__(self, *args):
+                self.inner.release()
+
+        observed_lock = ObservedLock()
+        c.lock = observed_lock
+        observed_lock.inner.acquire()
+        setter = Thread(target=c.connected_event.set)
+        setter.start()
+        try:
+            assert acquire_attempted.wait(1)
+            # Close wins while the event publisher is waiting for the same
+            # state lock; it must prevent publication of a legacy READY.
+            c.is_closed = True
+        finally:
+            observed_lock.inner.release()
+        setter.join(1)
+
+        assert not setter.is_alive()
+        assert c.connected_event.is_set()
+        assert not c._startup_event_set_while_open
+
+    def test_factory_raises_clean_close_after_auth_success(self):
+        class AuthSuccessThenCleanCloseConnection(Connection):
+            def __init__(self, *args, **kwargs):
+                super(AuthSuccessThenCleanCloseConnection, self).__init__(
+                    *args, **kwargs)
+                self.authenticator = Mock()
+                self._compressor = None
+                self._handle_auth_response(AuthSuccessMessage(b'token'))
+                self.close()
+
+            def close(self):
+                with self.lock:
+                    if self.is_closed:
+                        return
+                    self.is_closed = True
+                self.connected_event.set()
+
+        with pytest.raises(ConnectionShutdown) as exc_info:
+            AuthSuccessThenCleanCloseConnection.factory(
+                DefaultEndPoint('127.0.0.1', 9042), timeout=2)
+
+        assert "closed by server" in str(exc_info.value)
+
+    def test_factory_observes_defunct_error_atomically_after_ready(self):
+        expected_error = RuntimeError("post-READY transport failure")
+        setter_entered = Event()
+        factory_waiting_for_lock = Event()
+        release_setter = Event()
+        factory_thread_id = get_ident()
+
+        class ObservedRLock(object):
+            def __init__(self):
+                self._lock = RLock()
+
+            def __enter__(self):
+                if (get_ident() == factory_thread_id
+                        and setter_entered.is_set()):
+                    factory_waiting_for_lock.set()
+                self._lock.acquire()
+                return self
+
+            def __exit__(self, *args):
+                self._lock.release()
+
+        class AtomicDefunctConnection(Connection):
+            instance = None
+
+            @property
+            def last_error(self):
+                return self._last_error
+
+            @last_error.setter
+            def last_error(self, exc):
+                if self._block_error_publication:
+                    setter_entered.set()
+                    release_setter.wait(2)
+                self._last_error = exc
+
+            def __init__(self, *args, **kwargs):
+                self._last_error = None
+                self._block_error_publication = False
+                super(AtomicDefunctConnection, self).__init__(*args, **kwargs)
+                self.lock = ObservedRLock()
+                self._compressor = None
+                self._handle_startup_response(ReadyMessage())
+                self._block_error_publication = True
+                self.defunct_thread = Thread(
+                    target=self.defunct, args=(expected_error,))
+                self.defunct_thread.daemon = True
+                self.defunct_thread.start()
+                assert setter_entered.wait(2)
+
+                def release_when_factory_takes_snapshot():
+                    factory_waiting_for_lock.wait(2)
+                    release_setter.set()
+
+                self.release_thread = Thread(
+                    target=release_when_factory_takes_snapshot)
+                self.release_thread.daemon = True
+                self.release_thread.start()
+                AtomicDefunctConnection.instance = self
+
+            def close(self):
+                with self.lock:
+                    if self.is_closed:
+                        return
+                    self.is_closed = True
+
+        try:
+            with pytest.raises(RuntimeError) as exc_info:
+                AtomicDefunctConnection.factory(
+                    DefaultEndPoint('127.0.0.1', 9042), timeout=2)
+            assert exc_info.value is expected_error
+            assert factory_waiting_for_lock.is_set()
+        finally:
+            release_setter.set()
+            conn = AtomicDefunctConnection.instance
+            if conn is not None:
+                conn.defunct_thread.join(2)
+                conn.release_thread.join(2)
+
+    def test_factory_returns_reactor_clean_startup_close(self):
+        class ReactorCleanClose(Exception):
+            pass
+
+        class ReactorCleanCloseConnection(Connection):
+            def __init__(self, *args, **kwargs):
+                super(ReactorCleanCloseConnection, self).__init__(*args, **kwargs)
+                self.last_error = ReactorCleanClose("closed cleanly")
+                self.is_closed = True
+                self.is_defunct = True
+                self.connected_event.set()
+
+            def close(self):
+                self.is_closed = True
+
+            def _is_clean_close_error(self, exc):
+                return isinstance(exc, ReactorCleanClose)
+
+        conn = ReactorCleanCloseConnection.factory(
+            DefaultEndPoint('127.0.0.1', 9042), timeout=2)
+
+        assert conn.is_closed
+        assert conn.is_defunct
+        assert isinstance(conn.last_error, ReactorCleanClose)
+
+    def test_factory_raises_reactor_unclean_startup_close(self):
+        class ReactorUncleanClose(Exception):
+            pass
+
+        class ReactorUncleanCloseConnection(Connection):
+            def __init__(self, *args, **kwargs):
+                super(ReactorUncleanCloseConnection, self).__init__(*args, **kwargs)
+                self.last_error = ReactorUncleanClose("closed uncleanly")
+                self.is_closed = True
+                self.is_defunct = True
+                self.connected_event.set()
+
+            def close(self):
+                self.is_closed = True
+
+        with pytest.raises(ReactorUncleanClose):
+            ReactorUncleanCloseConnection.factory(
+                DefaultEndPoint('127.0.0.1', 9042), timeout=2)
+
+    def test_factory_raises_defunct_connection_shutdown_startup_error(self):
+        class DefunctConnectionShutdownConnection(Connection):
+            def __init__(self, *args, **kwargs):
+                super(DefunctConnectionShutdownConnection, self).__init__(*args, **kwargs)
+                self.last_error = ConnectionShutdown("defunct startup failure")
+                self.is_closed = True
+                self.is_defunct = True
+                self.connected_event.set()
+
+            def close(self):
+                self.is_closed = True
+
+        with pytest.raises(ConnectionShutdown):
+            DefunctConnectionShutdownConnection.factory(
+                DefaultEndPoint('127.0.0.1', 9042), timeout=2)
+
+    def test_factory_closes_socket_when_wait_is_cancelled(self):
+        class FactoryCancelled(BaseException):
+            pass
+
+        class InterruptingEvent(object):
+            def wait(self, timeout):
+                raise FactoryCancelled()
+
+        class InterruptedConnection(Connection):
+            instance = None
+
+            def __init__(self, *args, **kwargs):
+                super(InterruptedConnection, self).__init__(*args, **kwargs)
+                self.connected_event = InterruptingEvent()
+                self.close_count = 0
+                InterruptedConnection.instance = self
+
+            def close(self):
+                self.close_count += 1
+                self.is_closed = True
+
+        with pytest.raises(FactoryCancelled):
+            InterruptedConnection.factory(
+                DefaultEndPoint('127.0.0.1', 9042), timeout=2)
+
+        assert InterruptedConnection.instance.is_closed
+        assert InterruptedConnection.instance.close_count == 1
+
+    def test_owner_does_not_reclassify_post_startup_close(self):
+        connection = self.make_connection()
+        connection._startup_completed = True
+        connection.is_closed = True
+
+        error = _startup_close_error(connection)
+
+        assert isinstance(error, ConnectionShutdown)
+        assert not isinstance(error, _ConnectionClosedDuringStartup)
+        assert "after startup" in str(error)
+
 
 @patch('cassandra.connection.ConnectionHeartbeat._raise_if_stopped')
 class ConnectionHeartbeatTest(unittest.TestCase):
@@ -436,8 +1089,19 @@ class ConnectionHeartbeatTest(unittest.TestCase):
         holder = get_holders.return_value[0]
         holder.get_connections.return_value.append(idle_connection)
         holder.get_connections.return_value.append(non_idle_connection)
+        callback_had_lock = []
 
-        self.run_heartbeat(get_holders)
+        def on_connection_released(connection):
+            acquired = connection.lock.acquire(False)
+            callback_had_lock.append(not acquired)
+            if acquired:
+                connection.lock.release()
+            raise RuntimeError("retirement bookkeeping failed")
+
+        holder.on_connection_released.side_effect = on_connection_released
+
+        with patch('cassandra.connection.log.exception') as log_exception:
+            self.run_heartbeat(get_holders)
 
         holder.get_connections.assert_has_calls([call()] * get_holders.call_count)
         assert idle_connection.in_flight == 0
@@ -445,6 +1109,12 @@ class ConnectionHeartbeatTest(unittest.TestCase):
 
         idle_connection.send_msg.assert_has_calls([call(ANY, request_id, ANY)] * get_holders.call_count)
         assert non_idle_connection.send_msg.call_count == 0
+        holder.on_connection_released.assert_has_calls(
+            [call(idle_connection)] * get_holders.call_count)
+        assert callback_had_lock == [False] * get_holders.call_count
+        idle_connection.defunct.assert_not_called()
+        holder.return_connection.assert_not_called()
+        assert log_exception.call_count == get_holders.call_count
 
     def test_closed_defunct(self, *args):
         get_holders = self.make_get_holders(1)
