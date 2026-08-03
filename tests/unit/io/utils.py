@@ -120,7 +120,7 @@ def submit_and_wait_for_completion(unit_test, create_timer, start, end, incremen
         pending_callbacks.append(callback)
 
     # wait for all the callbacks associated with the timers to be invoked
-    while len(pending_callbacks) is not 0:
+    while len(pending_callbacks) != 0:
         for callback in pending_callbacks:
             if callback.was_invoked():
                 pending_callbacks.remove(callback)
