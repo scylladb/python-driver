@@ -16,6 +16,7 @@ from binascii import unhexlify
 from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Mapping
+from enum import Enum
 from functools import total_ordering
 from hashlib import md5
 import json
@@ -194,7 +195,8 @@ class Metadata(object):
             keyspace_meta.functions = old_keyspace_meta.functions
             keyspace_meta.aggregates = old_keyspace_meta.aggregates
             keyspace_meta.views = old_keyspace_meta.views
-            if (keyspace_meta.replication_strategy != old_keyspace_meta.replication_strategy):
+            if (keyspace_meta.replication_strategy != old_keyspace_meta.replication_strategy or
+                    keyspace_meta._consistency_mode != old_keyspace_meta._consistency_mode):
                 self._keyspace_updated(ks_name)
         else:
             self._keyspace_added(ks_name)
@@ -733,6 +735,31 @@ class LocalStrategy(ReplicationStrategy):
         return isinstance(other, LocalStrategy)
 
 
+class _ConsistencyMode(Enum):
+    """
+    Per-keyspace consistency option reported by ScyllaDB in
+    ``system_schema.scylla_keyspaces``. The server represents an
+    eventually-consistent keyspace as ``'eventual'`` or null.
+
+    ScyllaDB only implements ``GLOBAL`` so far, so it is currently the only mode
+    under which a keyspace's tablets have a Raft leader. ``LOCAL`` is reserved
+    for a mode that does not exist yet, and until it does it behaves exactly like
+    ``EVENTUAL`` everywhere in the driver.
+    """
+    EVENTUAL = 'eventual'
+    LOCAL = 'local'
+    GLOBAL = 'global'
+
+    @classmethod
+    def from_string(cls, value: Optional[str]):
+        # Map the server's string (or a null/unknown value) to a member,
+        # treating anything unrecognized as eventually consistent.
+        try:
+            return cls(value)
+        except ValueError:
+            return cls.EVENTUAL
+
+
 class KeyspaceMetadata(object):
     """
     A representation of the schema for a single keyspace.
@@ -801,6 +828,15 @@ class KeyspaceMetadata(object):
     A string indicating whether a graph engine is enabled for this keyspace (Core/Classic).
     """
 
+    _consistency_mode = _ConsistencyMode.EVENTUAL
+    """
+    The consistency mode of the keyspace, derived from the the ``consistency``
+    column ScyllaDB stores in ``system_schema.scylla_keyspaces``.
+
+    Private and unstable: it backs leader-aware routing and is not part of the
+    public API, so the name and semantics may change.
+    """
+
     _exc_info = None
     """ set if metadata parsing failed """
 
@@ -815,6 +851,7 @@ class KeyspaceMetadata(object):
         self.aggregates = {}
         self.views = {}
         self.graph_engine = graph_engine
+        self._consistency_mode = _ConsistencyMode.EVENTUAL
 
     @property
     def is_graph_enabled(self):
@@ -861,6 +898,19 @@ class KeyspaceMetadata(object):
         ret = "CREATE KEYSPACE %s WITH replication = %s " % (
             protect_name(self.name),
             self.replication_strategy.export_for_schema())
+
+        # TODO: Replace with `match` once the Python version is bumped to 3.10+.
+        if self._consistency_mode == _ConsistencyMode.EVENTUAL:
+            # Eventual consistency is the default.
+            pass
+        elif self._consistency_mode == _ConsistencyMode.LOCAL:
+            # Note: Local consistency mode is not implemented yet.
+            ret = ret + " AND consistency = 'local'"
+        elif self._consistency_mode == _ConsistencyMode.GLOBAL:
+            ret = ret + " AND consistency = 'global'"
+        else:
+            raise ValueError("Unknown consistency mode: %s" % self._consistency_mode)
+
         ret = ret + (' AND durable_writes = %s' % ("true" if self.durable_writes else "false"))
         if self.graph_engine is not None:
             ret = ret + (" AND graph_engine = '%s'" % self.graph_engine)
@@ -2577,6 +2627,11 @@ class SchemaParserV3(SchemaParserV22):
     _SELECT_AGGREGATES = "SELECT * FROM system_schema.aggregates"
     _SELECT_VIEWS = "SELECT * FROM system_schema.views"
 
+    # ScyllaDB-only: per-keyspace consistency option. The column is null for
+    # eventually-consistent keyspaces (and the whole table is absent on Cassandra
+    # and on Scylla versions without strongly-consistent tablets).
+    _SELECT_SCYLLA_KEYSPACES = "SELECT keyspace_name, consistency FROM system_schema.scylla_keyspaces"
+
     def _is_not_scylla(self):
         """Check if NOT connected to ScyllaDB by checking for shard awareness."""
         return getattr(getattr(self.connection, 'features', None), 'shard_id', None) is None
@@ -2610,12 +2665,66 @@ class SchemaParserV3(SchemaParserV22):
         self.indexes_result = []
         self.keyspace_table_index_rows = defaultdict(lambda: defaultdict(list))
         self.keyspace_view_rows = defaultdict(list)
+        self._scylla_consistency_cache = None
+
+    def _get_scylla_keyspaces_consistency(self):
+        """
+        Return a ``{keyspace_name: _ConsistencyMode}`` map read from
+        ``system_schema.scylla_keyspaces``.
+
+        A keyspace absent from the map, or one whose consistency value is not
+        recognized, is treated as eventually consistent. Returns ``{}`` on
+        non-Scylla clusters, on a control connection that did not negotiate
+        ``TABLETS_ROUTING_V2``, or when the table/column is unavailable (older
+        Scylla). The result is cached per parser instance so it is fetched at
+        most once per schema refresh.
+
+        A transient failure to read the table (timeout, connection or server
+        error) propagates like any other schema-refresh query. That aborts the
+        refresh, so the previously known metadata -- including each keyspace's
+        consistency mode -- is left in place and retried, rather than every
+        keyspace being silently reset to eventual (which would disable leader
+        routing and evict the tablet cache). A missing table/column is not an
+        error: _query_build_rows absorbs it via expected_failures and yields an
+        empty map.
+        """
+        if self._scylla_consistency_cache is not None:
+            return self._scylla_consistency_cache
+
+        if self._is_not_scylla():
+            self._scylla_consistency_cache = {}
+            return self._scylla_consistency_cache
+
+        # The consistency map only feeds V2 leader-aware routing. If the control
+        # connection did not negotiate TABLETS_ROUTING_V2, there are no
+        # strongly-consistent tables to route for, so skip the query entirely.
+        features = getattr(self.connection, 'features', None)
+        if features is None or not getattr(features, 'tablets_routing_v2', False):
+            self._scylla_consistency_cache = {}
+            return self._scylla_consistency_cache
+
+        rows = self._query_build_rows(self._SELECT_SCYLLA_KEYSPACES, lambda row: row)
+        self._scylla_consistency_cache = {row["keyspace_name"]: _ConsistencyMode.from_string(row.get("consistency"))
+                                          for row in rows}
+        return self._scylla_consistency_cache
+
+    def _set_consistency_mode(self, keyspace_meta: KeyspaceMetadata) -> KeyspaceMetadata:
+        keyspace_meta._consistency_mode = self._get_scylla_keyspaces_consistency().get(
+            keyspace_meta.name, _ConsistencyMode.EVENTUAL)
+        return keyspace_meta
+
+    def get_keyspace(self, keyspaces, keyspace):
+        keyspace_meta = super(SchemaParserV3, self).get_keyspace(keyspaces, keyspace)
+        if keyspace_meta is not None:
+            self._set_consistency_mode(keyspace_meta)
+        return keyspace_meta
 
     def get_all_keyspaces(self):
         for keyspace_meta in super(SchemaParserV3, self).get_all_keyspaces():
             for row in self.keyspace_view_rows[keyspace_meta.name]:
                 view_meta = self._build_view_metadata(row)
                 keyspace_meta._add_view_metadata(view_meta)
+            self._set_consistency_mode(keyspace_meta)
             yield keyspace_meta
 
     def get_table(self, keyspaces, keyspace, table):

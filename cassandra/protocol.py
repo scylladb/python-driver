@@ -654,9 +654,11 @@ class ExecuteMessage(_QueryMessage):
     def __init__(self, query_id, query_params, consistency_level,
                  serial_consistency_level=None, fetch_size=None,
                  paging_state=None, timestamp=None, skip_meta=False,
-                 continuous_paging_options=None, result_metadata_id=None):
+                 continuous_paging_options=None, result_metadata_id=None,
+                 tablet_version_block=None):
         self.query_id = query_id
         self.result_metadata_id = result_metadata_id
+        self.tablet_version_block = tablet_version_block
         super(ExecuteMessage, self).__init__(query_params, consistency_level, serial_consistency_level, fetch_size,
                                              paging_state, timestamp, skip_meta, continuous_paging_options)
 
@@ -689,6 +691,11 @@ class ExecuteMessage(_QueryMessage):
             # responds with full metadata plus the current id.
             write_string(f, self.result_metadata_id if self.result_metadata_id is not None else b'')
         self._write_query_params(f, protocol_version, protocol_features)
+        if protocol_features is not None and protocol_features.tablets_routing_v2:
+            # A V2 connection makes the server read exactly one trailing byte per
+            # EXECUTE, so always write one. Coalesce a missing value to 0 to keep
+            # the frame in sync.
+            write_byte(f, self.tablet_version_block if self.tablet_version_block is not None else 0)
 
 
 CUSTOM_TYPE = object()
