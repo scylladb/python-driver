@@ -18,8 +18,12 @@ from collections import deque
 from threading import RLock
 from unittest.mock import Mock, MagicMock, ANY, patch
 
-from cassandra import ConsistencyLevel, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
-from cassandra.cluster import Session, ResponseFuture, NoHostAvailable, ProtocolVersion, ControlConnectionQueryFallback
+from cassandra import (ConsistencyLevel, DriverException, OperationTimedOut,
+                       SchemaChangeType, SchemaTargetType, Unavailable)
+from cassandra.cluster import (Session, ResponseFuture, NoHostAvailable,
+                               ProtocolVersion, ControlConnectionQueryFallback,
+                               _prepared_metadata_decoder_context,
+                               _prepared_metadata_protocol_handler_snapshot)
 from cassandra.connection import Connection, ConnectionException
 from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessage,
                                 UnavailableErrorMessage, ResultMessage, QueryMessage,
@@ -36,11 +40,24 @@ from tests.util import assertEqual, assertIsInstance
 import pytest
 
 
+_PREPARED_METADATA_CONTEXT = object()
+
+
+def _decoder_context(protocol_handler=ProtocolHandler,
+                     cluster_context=_PREPARED_METADATA_CONTEXT):
+    protocol_handler = _prepared_metadata_protocol_handler_snapshot(
+        protocol_handler)
+    return _prepared_metadata_decoder_context(
+        protocol_handler, cluster_context)
+
+
 class ResponseFutureTests(unittest.TestCase):
 
     def make_basic_session(self):
         s = Mock(spec=Session)
         s.row_factory = lambda col_names, rows: [(col_names, rows)]
+        s.client_protocol_handler = ProtocolHandler
+        s.cluster._prepared_metadata_context = _PREPARED_METADATA_CONTEXT
         s.cluster.control_connection._tablets_routing_v1 = False
         s.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Disabled
         return s
@@ -884,6 +901,31 @@ class ResponseFutureTests(unittest.TestCase):
         assert isinstance(args[-4], PrepareMessage)
         assert args[-4].query == "SELECT * FROM foobar"
 
+    def test_prepared_query_not_found_restores_cache_through_cluster(self):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Mock(spec=Connection)
+        pool.borrow_connection.return_value = (connection, 1)
+
+        query_id = b'a' * 16
+        prepared_statement = Mock(
+            query_id=query_id,
+            query_string="SELECT * FROM foobar",
+            keyspace="FooKeyspace")
+        rf = self.make_response_future(session)
+        rf.prepared_statement = prepared_statement
+        rf.send_request()
+
+        session.cluster.protocol_version = ProtocolVersion.V4
+        session.cluster._prepared_statements = {}
+        rf._connection.keyspace = "FooKeyspace"
+
+        result = Mock(spec=PreparedQueryNotFound, info=query_id)
+        rf._set_result(None, None, None, result)
+
+        session.cluster.add_prepared.assert_called_once_with(
+            query_id, prepared_statement)
+
     def test_prepared_query_not_found_bad_keyspace(self):
         session = self.make_session()
         pool = session._pools.get.return_value
@@ -915,6 +957,7 @@ class ResponseFutureTests(unittest.TestCase):
                         result_metadata_id=b'foo')
         response.results = (None, None, None, None, None)
         response.query_id = query_id
+        response.column_metadata = []
 
         rf._query = Mock(return_value=True)
         rf._execute_after_prepare('host', None, None, response)
@@ -928,6 +971,35 @@ class ResponseFutureTests(unittest.TestCase):
         rf._execute_after_prepare('host', None, None, response)
         rf._query.assert_called_once_with('host')
         assert rf.prepared_statement.result_metadata_id == b'foo'
+
+    def test_execute_after_prepare_id_mismatch_preserves_metadata_snapshot(self):
+        session = self.make_session()
+        connection = Mock(spec=Connection)
+        old_metadata = [('ks', 'tb', 'old_col', Mock())]
+        prepared_statement = self._make_prepared_statement(
+            old_metadata, b'old_hash', query_id=b'expected_query_id')
+        rf = self._make_execute_response_future(
+            session, connection, prepared_statement)
+        prepared_snapshot = prepared_statement._result_metadata_snapshot
+        request_snapshot = rf._request_snapshot
+
+        response = Mock(
+            spec=ResultMessage,
+            kind=RESULT_KIND_PREPARED,
+            query_id=b'unexpected_query_id',
+            column_metadata=[('ks', 'tb', 'foreign_col', Mock())],
+            result_metadata_id=b'foreign_hash')
+        rf._query = Mock(return_value=True)
+
+        rf._execute_after_prepare('host', None, None, response)
+
+        assert isinstance(rf._final_exception, DriverException)
+        assert prepared_statement._result_metadata_snapshot == prepared_snapshot
+        assert rf._request_snapshot == request_snapshot
+        assert rf._bound_result_metadata == request_snapshot[1]
+        assert rf.message.result_metadata_id == b'old_hash'
+        assert rf.message.skip_meta is True
+        rf._query.assert_not_called()
 
     def test_execute_after_prepare_updates_result_metadata_id(self):
         """
@@ -956,7 +1028,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf._execute_after_prepare('host', None, None, response)
 
         # Both metadata fields must be refreshed from the reprepare response.
-        assert rf.prepared_statement.result_metadata is new_meta
+        assert rf.prepared_statement.result_metadata == new_meta
         assert rf.prepared_statement.result_metadata_id == b'new_hash'
         assert rf.prepared_statement.result_metadata_and_id == (new_meta, b'new_hash')
         # Recovering the metadata re-arms the anomaly warning, on this path too.
@@ -995,7 +1067,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         # result_metadata is refreshed (always); result_metadata_id is cleared, not
         # carried forward from the old pair.
-        assert rf.prepared_statement.result_metadata is new_meta
+        assert rf.prepared_statement.result_metadata == new_meta
         assert rf.prepared_statement.result_metadata_id is None
 
     def test_timeout_does_not_release_stream_id(self):
@@ -1105,36 +1177,48 @@ class ResponseFutureTests(unittest.TestCase):
         return response
 
     def _make_prepared_statement(self, result_metadata, result_metadata_id, query_id=b'qid'):
-        return PreparedStatement(
+        prepared_statement = PreparedStatement(
             column_metadata=[], query_id=query_id, routing_key_indexes=None,
             query="SELECT * FROM foo", keyspace='ks', protocol_version=4,
             result_metadata=result_metadata, result_metadata_id=result_metadata_id)
+        prepared_statement._update_result_metadata(
+            result_metadata, result_metadata_id,
+            _decoder_context())
+        return prepared_statement
 
     def _make_execute_response_future(self, session, connection, prepared_statement):
         """
         Return a ResponseFuture whose message is an ExecuteMessage and which
         has a prepared_statement set, as _create_response_future would build it.
         """
-        execute_msg = ExecuteMessage(b'qid', [], ConsistencyLevel.ONE)
+        metadata, metadata_id, decoder_context = \
+            prepared_statement._result_metadata_snapshot
+        execute_msg = ExecuteMessage(
+            prepared_statement.query_id, [], ConsistencyLevel.ONE,
+            skip_meta=bool(metadata) and metadata_id is not None,
+            result_metadata_id=metadata_id)
         query = SimpleStatement("SELECT * FROM foo")
         rf = ResponseFuture(
             session, execute_msg, query, timeout=1,
             prepared_statement=prepared_statement,
             # mirror _create_response_future: snapshot the metadata paired with the id
-            bound_result_metadata=prepared_statement.result_metadata,
+            bound_result_metadata=metadata,
+            result_metadata_decoder_context=decoder_context,
+            protocol_handler=ProtocolHandler,
         )
         pool = session._pools.get.return_value
         pool.borrow_connection.return_value = (connection, 1)
         return rf
 
-    def _create_execute_future(self, prepared_statement, continuous_paging_options=None):
+    def _create_execute_future(self, prepared_statement,
+                               continuous_paging_options=None, session=None):
         """
         Drive the real Session._create_response_future (with a mock session) for
         a statement bound to `prepared_statement`, returning the ResponseFuture.
         This exercises the ExecuteMessage construction path where skip_meta and
         result_metadata_id are decided from the statement's metadata pair.
         """
-        session = self.make_session()
+        session = session or self.make_session()
         profile = session._maybe_get_execution_profile.return_value
         profile.consistency_level = ConsistencyLevel.ONE
         profile.serial_consistency_level = None
@@ -1179,7 +1263,7 @@ class ResponseFutureTests(unittest.TestCase):
         )
         rf._set_result(None, None, None, response)
 
-        assert ps.result_metadata is new_meta
+        assert ps.result_metadata == new_meta
         assert ps.result_metadata_id == b'new_id'
         # the pair is replaced as one unit — a snapshot can never be torn
         assert ps.result_metadata_and_id == (new_meta, b'new_id')
@@ -1212,7 +1296,7 @@ class ResponseFutureTests(unittest.TestCase):
         )
         rf._set_result(None, None, None, response)
 
-        assert ps.result_metadata is old_meta
+        assert ps.result_metadata == old_meta
         assert ps.result_metadata_id == b'old_id'
 
     def test_set_result_warns_when_metadata_id_but_no_column_metadata(self):
@@ -1383,6 +1467,20 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf.message.skip_meta is True
         assert rf.message.result_metadata_id == b'meta_hash'
 
+    def test_session_snapshot_validation_is_not_repeated_per_execute(self):
+        session = self.make_session()
+        ps = self._make_prepared_statement(
+            [('ks', 'tbl', 'col', Mock())], b'meta_hash')
+
+        with patch(
+                'cassandra.cluster.'
+                '_prepared_metadata_protocol_handler_snapshot',
+                wraps=_prepared_metadata_protocol_handler_snapshot) as snapshot:
+            self._create_execute_future(ps, session=session)
+            self._create_execute_future(ps, session=session)
+
+        assert snapshot.call_count == 1
+
     def test_create_execute_message_without_metadata_id(self):
         """
         A statement prepared before the extension was active (result_metadata_id
@@ -1426,13 +1524,11 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf.message.skip_meta is False
         assert rf.message.result_metadata_id == b'meta_hash'
 
-    def test_create_execute_message_continuous_paging_disables_skip_meta(self):
+    def test_continuous_paging_option_disables_skip_meta(self):
         """
-        Continuous paging sessions must never get skip_meta=True, even with a
-        statement that otherwise qualifies (valid cached metadata + id):
-        Connection.process_msg hardcodes result_metadata=None for every page
-        after the first (it isn't threaded through the paging session), so a
-        skip_meta response would leave nothing to decode page 2+ against.
+        Continuous paging cannot decode later metadata-less pages because its
+        connection path does not thread cached result metadata through the
+        paging session.
         """
         ps = self._make_prepared_statement([('ks', 'tbl', 'col', Mock())], b'meta_hash')
 
@@ -1440,6 +1536,165 @@ class ResponseFutureTests(unittest.TestCase):
 
         assert rf.message.skip_meta is False
         assert rf.message.result_metadata_id == b'meta_hash'
+
+    def test_cross_cluster_execute_rejects_foreign_decoder_metadata(self):
+        """
+        Decoder revisions are cluster-unique. Two clusters with no UDT
+        registrations must not consider their cached metadata interchangeable.
+        """
+        ps = self._make_prepared_statement(
+            [('ks', 'tbl', 'col', Mock())], b'meta_hash')
+        other_session = self.make_session()
+        other_session.cluster._prepared_metadata_context = object()
+
+        rf = self._create_execute_future(ps, session=other_session)
+
+        assert rf.message.skip_meta is False
+        assert rf.message.result_metadata_id is None
+        assert not rf._bound_result_metadata
+
+    def test_protocol_handler_is_set_before_response_future_timer_starts(self):
+        """
+        A speculative timer may fire from ResponseFuture.__init__, so the
+        handler must be installed before the timer is created.
+        """
+        class CustomProtocolHandler(ProtocolHandler):
+            pass
+
+        session = self.make_session()
+        session.client_protocol_handler = CustomProtocolHandler
+        metadata = [('ks', 'tbl', 'col', Mock())]
+        ps = self._make_prepared_statement(metadata, b'meta_hash')
+        ps._update_result_metadata(
+            metadata, b'meta_hash',
+            _decoder_context(CustomProtocolHandler))
+        handlers_at_timer_start = []
+
+        def capture_handler(future):
+            handlers_at_timer_start.append(future._protocol_handler)
+
+        with patch.object(ResponseFuture, '_start_timer',
+                          new=capture_handler):
+            rf = self._create_execute_future(ps, session=session)
+
+        assert handlers_at_timer_start == [CustomProtocolHandler]
+        assert rf._protocol_handler is CustomProtocolHandler
+
+    def test_direct_constructor_uses_matching_metadata_snapshot(self):
+        session = self.make_session()
+        metadata = [('ks', 'tbl', 'col', Mock())]
+        ps = self._make_prepared_statement(metadata, b'meta_hash')
+        message = ExecuteMessage(
+            ps.query_id, [], ConsistencyLevel.ONE,
+            skip_meta=True, result_metadata_id=b'meta_hash')
+
+        rf = ResponseFuture(
+            session, message, SimpleStatement("SELECT * FROM foo"), 1,
+            prepared_statement=ps)
+
+        assert rf._bound_result_metadata == tuple(metadata)
+        assert rf.message.skip_meta is True
+        assert rf.message.result_metadata_id == b'meta_hash'
+
+    def test_direct_constructor_disables_skip_for_mismatched_snapshot(self):
+        session = self.make_session()
+        ps = self._make_prepared_statement(
+            [('ks', 'tbl', 'new_col', Mock())], b'new_hash')
+        message = ExecuteMessage(
+            ps.query_id, [], ConsistencyLevel.ONE,
+            skip_meta=True, result_metadata_id=b'old_hash')
+
+        rf = ResponseFuture(
+            session, message, SimpleStatement("SELECT * FROM foo"), 1,
+            prepared_statement=ps)
+
+        assert not rf._bound_result_metadata
+        assert rf.message is not message
+        assert rf.message.skip_meta is False
+        assert rf.message.result_metadata_id is None
+        assert message.skip_meta is True
+        assert message.result_metadata_id == b'old_hash'
+
+    def test_direct_constructor_rejects_explicit_snapshot_without_context(self):
+        session = self.make_session()
+        metadata = [('ks', 'tbl', 'old_col', Mock())]
+        ps = self._make_prepared_statement(metadata, b'meta_hash')
+        message = ExecuteMessage(
+            ps.query_id, [], ConsistencyLevel.ONE,
+            skip_meta=True, result_metadata_id=b'meta_hash')
+
+        rf = ResponseFuture(
+            session, message, SimpleStatement("SELECT * FROM foo"), 1,
+            prepared_statement=ps,
+            bound_result_metadata=metadata)
+
+        assert not rf._bound_result_metadata
+        assert rf._result_metadata_decoder_context == _decoder_context()
+        assert rf.message is not message
+        assert rf.message.skip_meta is False
+        assert rf.message.result_metadata_id is None
+        assert message.skip_meta is True
+        assert message.result_metadata_id == b'meta_hash'
+
+    def test_noop_continuous_paging_option_uses_normal_result_path(self):
+        metadata = [('ks', 'tbl', 'col', Mock())]
+        ps = self._make_prepared_statement(metadata, b'meta_hash')
+        rf = self._create_execute_future(
+            ps, continuous_paging_options=Mock())
+        rf._handle_continuous_paging_first_response = Mock()
+        rf._set_final_result = Mock()
+        response = self._make_rows_response(
+            column_metadata=metadata)
+
+        rf._set_result(None, None, None, response)
+
+        assert not hasattr(rf.message, 'continuous_paging_options')
+        rf._handle_continuous_paging_first_response.assert_not_called()
+        rf._set_final_result.assert_called_once()
+
+    def test_next_page_refreshes_prepared_metadata_snapshot(self):
+        old_metadata = [('ks', 'tbl', 'old_col', Mock())]
+        new_metadata = [('ks', 'tbl', 'new_col', Mock())]
+        ps = self._make_prepared_statement(old_metadata, b'old_hash')
+        rf = self._create_execute_future(ps)
+        rf._paging_state = b'next-page'
+        ps._update_result_metadata(
+            new_metadata, b'new_hash',
+            _decoder_context())
+        rf._make_query_plan = Mock()
+        rf._start_timer = Mock()
+        rf.send_request = Mock()
+
+        rf.start_fetching_next_page()
+
+        assert rf._bound_result_metadata == tuple(new_metadata)
+        assert rf.message.result_metadata_id == b'new_hash'
+        assert rf.message.skip_meta is True
+        rf.send_request.assert_called_once_with()
+
+    def test_reprepare_refreshes_rerun_metadata_snapshot(self):
+        session = self.make_session()
+        connection = Mock(spec=Connection)
+        old_metadata = [('ks', 'tbl', 'old_col', Mock())]
+        new_metadata = [('ks', 'tbl', 'new_col', Mock())]
+        ps = self._make_prepared_statement(
+            old_metadata, b'old_hash', query_id=b'reprepare_qid')
+        rf = self._make_execute_response_future(session, connection, ps)
+        response = Mock(
+            spec=ResultMessage,
+            kind=RESULT_KIND_PREPARED,
+            query_id=ps.query_id,
+            column_metadata=new_metadata,
+            result_metadata_id=b'new_hash')
+        rf._query = Mock(return_value=True)
+
+        rf._execute_after_prepare('host', None, None, response)
+
+        assert rf._bound_result_metadata == tuple(new_metadata)
+        assert rf.message.result_metadata_id == b'new_hash'
+        assert rf.message.skip_meta is True
+        assert rf._result_metadata_decoder_context == _decoder_context()
+        rf._query.assert_called_once_with('host')
 
     def test_query_does_not_mutate_execute_message(self):
         """
@@ -1473,6 +1728,42 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf.message.result_metadata_id is original_id
         assert not hasattr(rf.message, 'use_metadata_id')
 
+    def test_prepared_future_freezes_builtin_decoder_maps(self):
+        """
+        Mutating the public built-in handler map after future construction must
+        not turn an old-metadata request into a new-decoder response.
+        """
+        class _ReplacementResultMessage(ResultMessage):
+            pass
+
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        pool = self.make_pool()
+        session._pools.get.return_value = pool
+        connection = Mock(spec=Connection)
+        pool.borrow_connection.return_value = (connection, 1)
+        ps = self._make_prepared_statement(
+            [('ks', 'tbl', 'col', Mock())], b'meta_hash')
+        rf = self._make_execute_response_future(
+            session, connection, ps)
+        frozen_handler = rf._protocol_handler
+        frozen_result_message = \
+            frozen_handler.message_types_by_opcode[ResultMessage.opcode]
+
+        with patch.dict(
+                ProtocolHandler.message_types_by_opcode,
+                {ResultMessage.opcode: _ReplacementResultMessage}):
+            rf.send_request()
+
+        sent_decoder = connection.send_msg.call_args.kwargs['decoder']
+        assert sent_decoder.__self__ is frozen_handler
+        assert frozen_handler.message_types_by_opcode[
+            ResultMessage.opcode] is frozen_result_message
+        assert frozen_result_message is not _ReplacementResultMessage
+        with pytest.raises(TypeError):
+            frozen_handler.message_types_by_opcode[
+                ResultMessage.opcode] = _ReplacementResultMessage
+
     def test_query_decodes_with_construction_snapshot_not_live_cache(self):
         """
         The metadata handed to the decoder must be the snapshot taken when the message
@@ -1495,14 +1786,65 @@ class ResponseFutureTests(unittest.TestCase):
         ps = self._make_prepared_statement(meta_v1, b'id1')
         rf = self._make_execute_response_future(session, connection, ps)
         # snapshot captured at construction, independent of the live pair
-        assert rf._bound_result_metadata is meta_v1
+        assert rf._bound_result_metadata == tuple(meta_v1)
 
         # a concurrent METADATA_CHANGED replaces the statement's cached pair
         ps.update_result_metadata([('ks', 'tbl', 'col_v2', Mock())], b'id2')
-        assert rf._bound_result_metadata is meta_v1
+        assert rf._bound_result_metadata == tuple(meta_v1)
 
         rf.send_request()
 
         connection.send_msg.assert_called_once()
         # _query decodes with the construction snapshot, not the mutated cache
-        assert connection.send_msg.call_args.kwargs['result_metadata'] is meta_v1
+        assert connection.send_msg.call_args.kwargs['result_metadata'] == tuple(meta_v1)
+
+    def test_concurrent_refresh_publishes_message_and_metadata_together(self):
+        """
+        A speculative send that has captured a request snapshot must retain its
+        matching message/metadata pair if paging or reprepare publishes a new
+        snapshot while that send is borrowing a connection.
+        """
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        pool = self.make_pool()
+        session._pools.get.return_value = pool
+        connection = Mock(spec=Connection)
+        old_metadata = [('ks', 'tbl', 'old_col', Mock())]
+        new_metadata = [('ks', 'tbl', 'new_col', Mock())]
+        ps = self._make_prepared_statement(old_metadata, b'old_hash')
+        rf = self._make_execute_response_future(session, connection, ps)
+        old_message = rf.message
+        new_decoder_context = object()
+
+        def refresh_while_borrowing(**kwargs):
+            session.cluster._prepared_metadata_context = new_decoder_context
+            ps._update_result_metadata(
+                new_metadata, b'new_hash',
+                _decoder_context(cluster_context=new_decoder_context))
+            rf._refresh_prepared_result_metadata()
+            return connection, 1
+
+        pool.borrow_connection.side_effect = refresh_while_borrowing
+
+        rf.send_request()
+
+        sent_message = connection.send_msg.call_args.args[0]
+        sent_metadata = connection.send_msg.call_args.kwargs['result_metadata']
+        assert sent_message is old_message
+        assert sent_message.result_metadata_id == b'old_hash'
+        assert sent_metadata == tuple(old_metadata)
+        assert rf.message.result_metadata_id == b'new_hash'
+        assert rf._bound_result_metadata == tuple(new_metadata)
+
+        late_metadata = [('ks', 'tbl', 'late_col', Mock())]
+        response = self._make_rows_response(
+            result_metadata_id=b'late_hash',
+            column_metadata=late_metadata)
+        connection.send_msg.call_args.kwargs['cb'](response)
+
+        # The late callback is tagged with the context captured by its own
+        # request, not the future's newer mutable context.
+        assert ps._result_metadata_snapshot == (
+            tuple(late_metadata),
+            b'late_hash',
+            _decoder_context())

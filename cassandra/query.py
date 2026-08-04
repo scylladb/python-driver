@@ -426,15 +426,13 @@ class PreparedStatement(object):
     A :class:`.PreparedStatement` should be prepared only once. Re-preparing a statement
     may affect performance (as the operation requires a network roundtrip).
 
-    |prepared_stmt_head|: Do not use ``*`` in prepared statements if you might
-    change the schema of the table being queried. The driver and server each
-    maintain a map between metadata for a schema and statements that were
-    prepared against that schema. When a user changes a schema, e.g. by adding
-    or removing a column, the server invalidates its mappings involving that
-    schema. However, there is currently no way to propagate that invalidation
-    to drivers. Thus, after a schema change, the driver will incorrectly
-    interpret the results of ``SELECT *`` queries prepared before the schema
-    change. This is currently being addressed in `CASSANDRA-10786
+    |prepared_stmt_head|: Take care when using ``*`` in a prepared statement if
+    the queried table's schema may change. On connections that negotiate
+    ``SCYLLA_USE_METADATA_ID``, the server reports a result-metadata change and
+    the driver refreshes its cached column definitions before decoding rows.
+    Other connections do not use this driver's skip-metadata optimization and
+    continue to receive column definitions with each result. The general
+    prepared-metadata invalidation problem is tracked by `CASSANDRA-10786
     <https://issues.apache.org/jira/browse/CASSANDRA-10786>`_.
 
     .. |prepared_stmt_head| raw:: html
@@ -451,7 +449,10 @@ class PreparedStatement(object):
     protocol_version = None
     query_id = None
     query_string = None
-    _result_metadata_and_id = (None, None)
+    # Cached result metadata, its server-provided id, and the decoder context
+    # that produced the type descriptors. Keep these in one tuple: execute paths
+    # may read the state while response callbacks replace it.
+    _result_metadata_state = (None, None, None)
     column_encryption_policy = None
     routing_key_indexes = None
     _routing_key_index_set = None
@@ -464,39 +465,78 @@ class PreparedStatement(object):
 
     def __init__(self, column_metadata, query_id, routing_key_indexes, query,
                  keyspace, protocol_version, result_metadata, result_metadata_id,
-                 is_lwt=False, column_encryption_policy=None):
+                 is_lwt=False, column_encryption_policy=None,
+                 result_metadata_decoder_context=None):
         self.column_metadata = column_metadata
         self.query_id = query_id
         self.routing_key_indexes = routing_key_indexes
         self.query_string = query
         self.keyspace = keyspace
         self.protocol_version = protocol_version
-        self._result_metadata_and_id = (result_metadata, result_metadata_id)
+        self._result_metadata_state = (
+            self._freeze_result_metadata(result_metadata),
+            result_metadata_id,
+            result_metadata_decoder_context)
         self.column_encryption_policy = column_encryption_policy
         self.is_idempotent = False
         self._is_lwt = is_lwt
 
+    @staticmethod
+    def _freeze_result_metadata(result_metadata):
+        """
+        Return immutable column-definition sequences.
+
+        Type descriptor classes are intentionally left untouched, but neither
+        the ordered result sequence nor a list-valued column entry may remain
+        aliased to mutable application state after publication.
+        """
+        if result_metadata is None:
+            return None
+        frozen_metadata = []
+        for column in result_metadata:
+            column = tuple(column)
+            if len(column) != 4:
+                raise ValueError(
+                    "Result metadata columns must contain exactly four "
+                    "items: keyspace, table, name, and type")
+            frozen_metadata.append(column)
+        return tuple(frozen_metadata)
+
+    @property
+    def _result_metadata_snapshot(self):
+        """
+        Atomically snapshot ``(metadata, metadata_id, decoder_context)``.
+
+        ``decoder_context`` is ``None`` when its provenance is unknown.
+        """
+        return self._result_metadata_state
+
     @property
     def result_metadata_and_id(self):
         """
-        The cached result metadata and its metadata id as one immutable
-        ``(result_metadata, result_metadata_id)`` pair.
+        A defensive copy of the cached result metadata and its metadata id as
+        one ``(result_metadata, result_metadata_id)`` pair.
 
-        Read this property when both values are needed together: the tuple is
-        replaced atomically by :meth:`update_result_metadata`, so a single read
-        can never observe the metadata of one schema version paired with the
-        metadata id of another.
+        Read this property when both values are needed together. A single state
+        snapshot supplies both values, and mutating the returned metadata list
+        cannot alter the cached metadata associated with the id.
         """
-        return self._result_metadata_and_id
+        result_metadata_state = self._result_metadata_state
+        result_metadata = result_metadata_state[0]
+        return (
+            list(result_metadata) if result_metadata is not None else None,
+            result_metadata_state[1])
 
     @property
     def result_metadata(self):
         """
-        Cached result metadata (column definitions) from PREPARE. Read-only:
-        :meth:`update_result_metadata` is the only way to replace it, so it can
-        never be assigned separately from the id it belongs to.
+        A defensive list copy of cached result metadata from PREPARE.
+
+        The property cannot be assigned, and mutating the returned list does
+        not change the metadata cached with :attr:`result_metadata_id`.
         """
-        return self._result_metadata_and_id[0]
+        result_metadata = self._result_metadata_state[0]
+        return list(result_metadata) if result_metadata is not None else None
 
     @property
     def result_metadata_id(self):
@@ -505,7 +545,7 @@ class PreparedStatement(object):
         :meth:`update_result_metadata` is the only way to replace it, so it can
         never be assigned separately from the metadata it describes.
         """
-        return self._result_metadata_and_id[1]
+        return self._result_metadata_state[1]
 
     def update_result_metadata(self, result_metadata, result_metadata_id):
         """
@@ -518,18 +558,94 @@ class PreparedStatement(object):
 
         Also re-arms :attr:`_warned_missing_column_metadata`, so an anomaly that
         recurs after the metadata was recovered is logged again.
+
+        This compatibility method cannot establish which decoder context
+        produced ``result_metadata``, so its provenance is cleared. Internal
+        response paths should use :meth:`_update_result_metadata` instead.
         """
-        self._result_metadata_and_id = (result_metadata, result_metadata_id)
+        self._update_result_metadata(result_metadata, result_metadata_id, None)
+
+    def _update_result_metadata(self, result_metadata, result_metadata_id,
+                                decoder_context):
+        """
+        Replace metadata, id, and decoder context atomically.
+        """
+        self._result_metadata_state = (
+            self._freeze_result_metadata(result_metadata),
+            result_metadata_id,
+            decoder_context)
         self._warned_missing_column_metadata = False
+
+    def _invalidate_result_metadata_id(self):
+        """
+        Invalidate the server metadata id without losing cached metadata or its
+        decoder context.
+
+        The next execute must request fresh definitions rather than allowing
+        the server to omit them based on a no-longer-safe id.
+        """
+        result_metadata, _, decoder_context = self._result_metadata_state
+        self._result_metadata_state = (
+            result_metadata, None, decoder_context)
+        self._warned_missing_column_metadata = False
+
+    def __getstate__(self):
+        """
+        Do not persist runtime-only decoder provenance.
+
+        A protocol handler may not be picklable, and a Cluster context token is
+        meaningful only to the process that created it. Clearing the context
+        makes a restored statement request fresh metadata before skipping it.
+        """
+        state = self.__dict__.copy()
+        # This also lets an object reconstructed with a legacy instance layout
+        # retain that layout until __setstate__ migrates it.
+        if '_result_metadata_state' not in state:
+            return state
+        result_metadata, result_metadata_id, _ = \
+            self._result_metadata_state
+        state['_result_metadata_state'] = (
+            result_metadata, result_metadata_id, None)
+        return state
+
+    def __setstate__(self, state):
+        """
+        Restore pickles created before ``_result_metadata_state`` was added.
+
+        Pair-based pickles predate decoder-context provenance, while still
+        older pickles stored the metadata and id as independent attributes.
+        Both therefore migrate with unknown provenance.
+        """
+        state = state.copy()
+        result_metadata_state = state.get('_result_metadata_state')
+        if result_metadata_state is None:
+            result_metadata_and_id = state.pop(
+                '_result_metadata_and_id', (None, None))
+            result_metadata = state.pop(
+                'result_metadata', result_metadata_and_id[0])
+            result_metadata_id = state.pop(
+                'result_metadata_id', result_metadata_and_id[1])
+            decoder_context = None
+        else:
+            result_metadata, result_metadata_id, decoder_context = \
+                result_metadata_state
+
+        state['_result_metadata_state'] = (
+            self._freeze_result_metadata(result_metadata),
+            result_metadata_id,
+            decoder_context)
+        self.__dict__.update(state)
 
     @classmethod
     def from_message(cls, query_id, column_metadata, pk_indexes, cluster_metadata,
                      query, prepared_keyspace, protocol_version, result_metadata,
-                     result_metadata_id, is_lwt, column_encryption_policy=None):
+                     result_metadata_id, is_lwt, column_encryption_policy=None,
+                     result_metadata_decoder_context=None):
         if not column_metadata:
             return PreparedStatement(column_metadata, query_id, None,
                                      query, prepared_keyspace, protocol_version, result_metadata,
-                                     result_metadata_id, is_lwt, column_encryption_policy)
+                                     result_metadata_id, is_lwt, column_encryption_policy,
+                                     result_metadata_decoder_context)
 
         if pk_indexes:
             routing_key_indexes = pk_indexes
@@ -555,7 +671,8 @@ class PreparedStatement(object):
 
         return PreparedStatement(column_metadata, query_id, routing_key_indexes,
                                  query, prepared_keyspace, protocol_version, result_metadata,
-                                 result_metadata_id, is_lwt, column_encryption_policy)
+                                 result_metadata_id, is_lwt, column_encryption_policy,
+                                 result_metadata_decoder_context)
 
     def bind(self, values):
         """

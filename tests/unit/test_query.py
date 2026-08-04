@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pickle
 import unittest
 
 import pytest
@@ -138,7 +139,8 @@ class PreparedStatementMetadataPairTest(unittest.TestCase):
     def test_constructor_sets_pair(self):
         meta = [('ks', 'tb', 'col', None)]
         ps = self._make_statement(meta, b'hash')
-        assert ps.result_metadata is meta
+        assert ps.result_metadata == meta
+        assert isinstance(ps.result_metadata, list)
         assert ps.result_metadata_id == b'hash'
         assert ps.result_metadata_and_id == (meta, b'hash')
 
@@ -152,6 +154,99 @@ class PreparedStatementMetadataPairTest(unittest.TestCase):
         # a snapshot taken before the update stays internally consistent
         assert snapshot_before == ([('ks', 'tb', 'old', None)], b'old')
         assert ps.result_metadata_and_id == (new_meta, b'new')
+
+    def test_constructor_does_not_retain_mutable_metadata_sequence(self):
+        meta = [
+            ('ks', 'tb', 'first', None),
+            ('ks', 'tb', 'second', None),
+        ]
+        ps = self._make_statement(meta, b'hash')
+
+        meta.reverse()
+        meta.append(('ks', 'tb', 'third', None))
+
+        assert ps.result_metadata == [
+            ('ks', 'tb', 'first', None),
+            ('ks', 'tb', 'second', None),
+        ]
+
+    def test_update_does_not_retain_mutable_metadata_sequence(self):
+        ps = self._make_statement([], None)
+        meta = [('ks', 'tb', 'col', None)]
+
+        ps.update_result_metadata(meta, b'hash')
+        meta.clear()
+
+        assert ps.result_metadata == [('ks', 'tb', 'col', None)]
+        assert ps.result_metadata_id == b'hash'
+
+    def test_public_metadata_is_a_defensive_copy(self):
+        ps = self._make_statement(
+            [('ks', 'tb', 'col', None)], b'hash')
+
+        returned_metadata = ps.result_metadata
+        returned_metadata.clear()
+
+        assert ps.result_metadata == [('ks', 'tb', 'col', None)]
+        assert ps.result_metadata_id == b'hash'
+
+    def test_update_freezes_mutable_column_definition(self):
+        ps = self._make_statement([], None)
+        column = ['ks', 'tb', 'col', None]
+        ps.update_result_metadata([column], b'hash')
+
+        column[2] = 'changed'
+        column[3] = object()
+
+        assert ps.result_metadata == [('ks', 'tb', 'col', None)]
+
+    def test_rejects_malformed_column_definition(self):
+        ps = self._make_statement([], None)
+
+        with pytest.raises(ValueError, match='exactly four'):
+            ps.update_result_metadata([('ks', 'tb', 'col')], b'hash')
+
+    def test_internal_update_tracks_decoder_context_atomically(self):
+        ps = self._make_statement([], None)
+        decoder_context = object()
+        meta = [('ks', 'tb', 'col', None)]
+
+        ps._update_result_metadata(meta, b'hash', decoder_context)
+        snapshot = ps._result_metadata_snapshot
+
+        assert snapshot == (tuple(meta), b'hash', decoder_context)
+
+        ps._update_result_metadata([], b'new-hash', object())
+        assert snapshot == (tuple(meta), b'hash', decoder_context)
+
+    def test_public_update_clears_decoder_context_provenance(self):
+        ps = self._make_statement([], None)
+        ps._update_result_metadata([], b'old-hash', object())
+
+        ps.update_result_metadata([], b'new-hash')
+
+        assert ps._result_metadata_snapshot == ((), b'new-hash', None)
+
+    def test_invalidate_id_preserves_metadata_and_decoder_context(self):
+        ps = self._make_statement([], None)
+        decoder_context = object()
+        meta = [('ks', 'tb', 'col', None)]
+        ps._update_result_metadata(meta, b'hash', decoder_context)
+
+        ps._invalidate_result_metadata_id()
+
+        assert ps._result_metadata_snapshot == (
+            tuple(meta), None, decoder_context)
+
+    def test_pickle_drops_runtime_decoder_context(self):
+        ps = self._make_statement([], None)
+        ps._update_result_metadata(
+            [('ks', 'tb', 'col', None)], b'hash', lambda: None)
+
+        restored = pickle.loads(pickle.dumps(ps))
+
+        assert restored._result_metadata_snapshot == (
+            (('ks', 'tb', 'col', None),), b'hash', None)
 
     def test_halves_of_the_pair_cannot_be_assigned_individually(self):
         # Assigning one half alone would leave the other stale, which is exactly
@@ -167,3 +262,31 @@ class PreparedStatementMetadataPairTest(unittest.TestCase):
             ps.result_metadata = []
 
         assert ps.result_metadata_and_id == (meta, b'hash')
+
+    def test_migrates_pickle_with_metadata_pair(self):
+        ps = self._make_statement([], None)
+        ps.__dict__.pop('_result_metadata_state')
+        ps.__dict__['_result_metadata_and_id'] = (
+            [('ks', 'tb', 'col', None)], b'hash')
+
+        restored = pickle.loads(pickle.dumps(ps))
+
+        assert restored._result_metadata_snapshot == (
+            (('ks', 'tb', 'col', None),), b'hash', None)
+        assert '_result_metadata_and_id' not in restored.__dict__
+
+    def test_migrates_pickle_with_independent_metadata_attributes(self):
+        ps = self._make_statement([], None)
+        state = ps.__dict__.copy()
+        state.pop('_result_metadata_state')
+        state['result_metadata'] = [
+            ('ks', 'tb', 'col', None)]
+        state['result_metadata_id'] = b'hash'
+
+        restored = object.__new__(PreparedStatement)
+        restored.__setstate__(state)
+
+        assert restored._result_metadata_snapshot == (
+            (('ks', 'tb', 'col', None),), b'hash', None)
+        assert 'result_metadata' not in restored.__dict__
+        assert 'result_metadata_id' not in restored.__dict__

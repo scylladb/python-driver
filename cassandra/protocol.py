@@ -730,6 +730,7 @@ class ResultMessage(_MessageType):
     new_keyspace = None
     column_metadata = None
     query_id = None
+    result_metadata_id = None
     bind_metadata = None
     pk_indexes = None
     schema_change_event = None
@@ -891,9 +892,9 @@ class ResultMessage(_MessageType):
             num_fields = read_short(f)
             names, types = zip(*((read_string(f), cls.read_type(f, user_type_map))
                                  for _ in range(num_fields)))
-            specialized_type = typeclass.make_udt_class(ks, udt_name, names, types)
-            specialized_type.mapped_class = user_type_map.get(ks, {}).get(udt_name)
-            typeclass = specialized_type
+            mapped_class = user_type_map.get(ks, {}).get(udt_name)
+            typeclass = typeclass.make_udt_class(
+                ks, udt_name, names, types, mapped_class=mapped_class)
         elif typeclass == CUSTOM_TYPE:
             classname = read_string(f)
             typeclass = lookup_casstype(classname)
@@ -1100,6 +1101,95 @@ class ReviseRequestMessage(_MessageType):
                     "Continuous paging backpressure is not supported.")
 
 
+def _class_attribute(cls, name):
+    for base in cls.__mro__:
+        if name in vars(base):
+            return vars(base)[name]
+    return None
+
+
+_PREPARED_METADATA_RESULT_ATTRIBUTE_EXCLUSIONS = frozenset((
+    '__dict__',
+    '__doc__',
+    '__module__',
+    '__weakref__',
+    'type_codes',
+    '_cqltypes_by_code',
+    # Retained by FastResultMessage but unused by the Python and Cython
+    # decoders. It therefore is not part of prepared-metadata provenance.
+    'code_to_type',
+))
+
+
+def _prepared_metadata_result_attributes(result_message_type):
+    """
+    Capture every effective result-message attribute except decoder type maps.
+
+    Deriving this from the MRO avoids a hand-maintained allowlist silently
+    falling behind when ResultMessage gains another decoding attribute.
+    """
+    attributes = {}
+    for base in reversed(result_message_type.__mro__[:-1]):
+        for name, value in vars(base).items():
+            if name not in _PREPARED_METADATA_RESULT_ATTRIBUTE_EXCLUSIONS:
+                attributes[name] = value
+    return tuple(attributes.items())
+
+
+_PREPARED_METADATA_CONFIG_UNSET = object()
+
+
+def _prepared_metadata_cache_config(
+        handler, result_message_type,
+        message_types=_PREPARED_METADATA_CONFIG_UNSET,
+        type_codes=_PREPARED_METADATA_CONFIG_UNSET,
+        cqltypes_by_code=_PREPARED_METADATA_CONFIG_UNSET,
+        decode_message=_PREPARED_METADATA_CONFIG_UNSET,
+        result_attributes=_PREPARED_METADATA_CONFIG_UNSET,
+        column_encryption_policy=_PREPARED_METADATA_CONFIG_UNSET):
+    """
+    Capture the canonical driver-owned result-decoder configuration.
+
+    Cluster-side snapshots compare against this exact configuration. Installing
+    an application ResultMessage or mutating a decoding attribute therefore
+    makes the handler ineligible for skip-metadata instead of attempting to
+    freeze arbitrary application class state.
+    """
+    message_types = (
+        handler.message_types_by_opcode
+        if message_types is _PREPARED_METADATA_CONFIG_UNSET
+        else message_types)
+    type_codes = (
+        result_message_type.type_codes
+        if type_codes is _PREPARED_METADATA_CONFIG_UNSET
+        else type_codes)
+    cqltypes_by_code = (
+        result_message_type._cqltypes_by_code
+        if cqltypes_by_code is _PREPARED_METADATA_CONFIG_UNSET
+        else cqltypes_by_code)
+    decode_message = (
+        _class_attribute(handler, 'decode_message')
+        if decode_message is _PREPARED_METADATA_CONFIG_UNSET
+        else decode_message)
+    result_attributes = (
+        _prepared_metadata_result_attributes(result_message_type)
+        if result_attributes is _PREPARED_METADATA_CONFIG_UNSET
+        else result_attributes)
+    column_encryption_policy = (
+        handler.column_encryption_policy
+        if column_encryption_policy is _PREPARED_METADATA_CONFIG_UNSET
+        else column_encryption_policy)
+    return (
+        tuple(message_types.items()),
+        result_message_type,
+        tuple(type_codes.items()),
+        tuple(cqltypes_by_code.items()),
+        decode_message,
+        result_attributes,
+        column_encryption_policy,
+    )
+
+
 class _ProtocolHandler(object):
     """
     _ProtocolHander handles encoding and decoding messages.
@@ -1120,6 +1210,11 @@ class _ProtocolHandler(object):
 
     column_encryption_policy = None
     """Instance of :class:`cassandra.policies.ColumnEncryptionPolicy` in use by this handler"""
+
+    # Marks handlers whose result-decoder configuration the driver may copy
+    # into an immutable per-request snapshot. Subclasses do not inherit
+    # eligibility because their opcode and type maps are application-owned.
+    _prepared_metadata_cache_token = object()
 
     @classmethod
     def encode_message(cls, msg, stream_id, protocol_version, compressor, allow_beta_protocol_version,
@@ -1245,6 +1340,10 @@ class _ProtocolHandler(object):
         return msg
 
 
+_ProtocolHandler._prepared_metadata_cache_config = \
+    _prepared_metadata_cache_config(_ProtocolHandler, ResultMessage)
+
+
 def cython_protocol_handler(colparser):
     """
     Given a column parser to deserialize ResultMessages, return a suitable
@@ -1284,7 +1383,11 @@ def cython_protocol_handler(colparser):
         message_types_by_opcode = my_opcodes
 
         col_parser = colparser
+        _prepared_metadata_cache_token = object()
 
+    CythonProtocolHandler._prepared_metadata_cache_config = \
+        _prepared_metadata_cache_config(
+            CythonProtocolHandler, FastResultMessage)
     return CythonProtocolHandler
 
 

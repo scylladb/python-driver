@@ -7,13 +7,35 @@ Features
   statements skip re-sending result metadata on EXECUTE, and the driver automatically
   refreshes cached metadata when the server detects a schema change (DRIVER-153)
 
+Bug Fixes
+---------
+* Harden prepared-result metadata caching against concurrent schema/client decoder
+  changes. Cached metadata, ids, and decoder provenance are published atomically;
+  UDT descriptors are isolated by registered Python class; UDT registration
+  invalidates cached ids before publishing mapping changes; and futures refresh
+  their request snapshot before fetching another page or after re-prepare.
+* Restrict ``skip_meta`` to immutable snapshots of built-in protocol handlers.
+  A Session keeps using the immutable configuration it captured, while modified
+  built-in handlers and custom handlers cannot create an eligible snapshot and
+  continue to receive full result metadata.
+* Stop retrying a prepared query when re-prepare returns a different query id;
+  the future now remains failed instead of updating metadata and issuing another
+  request.
+* Restore an evicted prepared-statement cache entry through the Cluster's
+  lock-protected ``add_prepared()`` path during UNPREPARED recovery.
+
 Others
 ------
 * ``PreparedStatement.result_metadata`` and ``PreparedStatement.result_metadata_id`` are
   now read-only. They are replaced together by
   ``PreparedStatement.update_result_metadata()``, so a request can never observe a metadata
   id paired with result metadata from a different schema version. Code that assigned either
-  attribute directly must call ``update_result_metadata()`` instead.
+  attribute directly must call ``update_result_metadata()`` instead. The metadata getter
+  keeps its historical list shape but returns a defensive copy, so mutating it cannot
+  change the internal metadata/id pair.
+* Client-initiated PREPARE responses now use
+  ``Session.client_protocol_handler``, matching the handler used for subsequent
+  EXECUTE responses. This is user-visible for custom protocol handlers.
 * Message serialization now receives the connection's negotiated ``ProtocolFeatures``:
   ``Connection.send_msg`` passes ``protocol_features`` to the encoder, and
   ``_ProtocolHandler.encode_message`` forwards it to each message's ``send_body``.
@@ -24,8 +46,10 @@ Others
   forward it. There is deliberately no compatibility fallback: protocol extensions
   are negotiated per connection at STARTUP, so an encoder unaware of
   ``protocol_features`` could silently omit fields a negotiated extension requires.
-  This release emits no new bytes on the wire; the parameter is groundwork for
-  upcoming protocol extensions (``SCYLLA_USE_METADATA_ID``, ``TABLETS_ROUTING_V2``).
+  When ``SCYLLA_USE_METADATA_ID`` is negotiated, EXECUTE messages use this plumbing
+  to include the extension's metadata id and may request that result metadata be
+  omitted. Connections that do not negotiate the extension retain their existing
+  frame layout.
 
 3.29.11
 =======
