@@ -16,34 +16,21 @@
 Regression tests for the ``TcpProxy`` test helper's connection
 shutdown/join synchronization path (GitHub issue #948).
 
-``TcpProxy`` is defined in
-``tests/integration/standard/test_client_routes.py`` because it backs the
-Client Routes / NLB integration tests, but it is a plain socket-based
-helper with no dependency on a running Cassandra/Scylla cluster or CCM.
-These tests exercise it directly against a local dummy TCP echo backend,
-so they run as fast, deterministic, checked-in unit tests instead of only
-being covered incidentally (and non-deterministically) by the integration
-suite.
-
-Importing that module pulls in ``tests.integration``, whose module-level
-code parses ``CASSANDRA_VERSION``/``SCYLLA_VERSION`` into a
-``packaging.version.Version`` and raises if neither is set. That parsing
-is the only thing gating the import -- no CCM/cluster is started merely by
-importing the module -- so a harmless default is provided below when
-running standalone (e.g. ``pytest tests/unit``), without overriding a real
-value if one is already set (e.g. under the integration test runner).
+``TcpProxy`` lives in ``tests/tcp_proxy.py`` because it backs the Client
+Routes / NLB integration tests, but it is a plain socket-based helper with
+no dependency on a running Cassandra/Scylla cluster or CCM.  These tests
+exercise it directly against a local dummy TCP echo backend, so they run as
+fast, deterministic, checked-in unit tests instead of only being covered
+incidentally (and non-deterministically) by the integration suite.
 """
 
-import os
 import socket
 import threading
 import time
 import unittest
 from unittest.mock import patch
 
-os.environ.setdefault("CASSANDRA_VERSION", "4.0.0")
-
-from tests.integration.standard.test_client_routes import TcpProxy  # noqa: E402
+from tests.tcp_proxy import TcpProxy
 
 
 class _EchoServer:
