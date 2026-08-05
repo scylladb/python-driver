@@ -383,7 +383,7 @@ class UserDefinedTypeTests(BaseCassEngTestCase):
         @test_category data_types:udt
         """
         ascii_name = 'normal name'
-        unicode_name = u'Fran\u00E7ois'
+        unicode_name = 'Fran\u00E7ois'
 
         class UserModelText(Model):
             id = columns.Text(primary_key=True)
