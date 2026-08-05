@@ -70,7 +70,8 @@ def initialize_registry(insights_registry):
                 'namespace': namespace(policy.__class__),
                 'options': {'child_policy': insights_registry.serialize(policy._child_policy,
                                                                         policy=True),
-                            'shuffle_replicas': policy.shuffle_replicas}
+                            'shuffle_replicas': policy.shuffle_replicas,
+                            'cache_replicas_size': policy.cache_replicas_size}
                 }
 
     @insights_registry.register_serializer_for(WhiteListRoundRobinPolicy)
