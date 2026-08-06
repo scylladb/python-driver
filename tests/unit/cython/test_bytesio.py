@@ -30,3 +30,7 @@ class BytesIOTest(unittest.TestCase):
     @cythontest
     def test_reading_error(self):
         bytesio_testhelper.test_read_eof()
+
+    @cythontest
+    def test_seek(self):
+        bytesio_testhelper.test_seek()
