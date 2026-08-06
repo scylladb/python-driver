@@ -51,6 +51,11 @@ class TcpProxy:
         self._running = False
         self._thread = None
         self._lock = threading.Lock()
+        # Serializes manager-side shutdown with forwarder-owned close. Socket
+        # methods release the GIL around their syscalls, so the registry lock
+        # alone cannot prevent a descriptor from being closed and reused
+        # between shutdown()'s descriptor lookup and the syscall.
+        self._lifecycle_lock = threading.Lock()
         self._connections = {}  # (client_sock, target_sock) -> forwarder thread
         self.total_connections = 0
 
@@ -112,7 +117,8 @@ class TcpProxy:
                 self._running = False
             connections = list(self._connections.items())
         for (csock, tsock), _thread in connections:
-            self._shutdown_pair(csock, tsock)
+            with self._lifecycle_lock:
+                self._shutdown_pair(csock, tsock)
         finished_keys = []
         for (csock, tsock), thread in connections:
             thread.join(timeout=5)
@@ -202,9 +208,13 @@ class TcpProxy:
         except (OSError, ConnectionResetError, BrokenPipeError):
             pass
         finally:
+            # Keep the connection registered until both sockets are closed,
+            # and serialize close with manager-side shutdown so neither can
+            # issue a syscall using a descriptor recycled by the other.
+            with self._lifecycle_lock:
+                self._close_pair(client_sock, target_sock)
             with self._lock:
                 self._connections.pop((client_sock, target_sock), None)
-            self._close_pair(client_sock, target_sock)
 
     @staticmethod
     def _close_pair(csock, tsock):

@@ -14,7 +14,7 @@
 
 """
 Regression tests for the ``TcpProxy`` test helper's connection
-shutdown/join synchronization path (GitHub issue #948).
+shutdown/join synchronization path (GitHub issues #948 and #962).
 
 ``TcpProxy`` lives in ``tests/tcp_proxy.py`` because it backs the Client
 Routes / NLB integration tests, but it is a plain socket-based helper with
@@ -91,14 +91,10 @@ def _open_client(host, port, timeout=5):
 
 class TestTcpProxyShutdownJoin(unittest.TestCase):
     """
-    Regression coverage for the forwarder-thread bookkeeping bug described
-    in issue #948: ``_shutdown_and_join_connections`` used to unconditionally
-    discard every tracked connection from ``_connections``, even ones whose
-    forwarder thread was still alive after ``thread.join(timeout=5)`` timed
-    out. That made ``active_connections`` under-report live connections and
-    made it impossible for a later ``stop()``/``drop_connections()`` call to
-    retry reaping an orphaned thread, permanently leaking the thread and its
-    file descriptors.
+    Regression coverage for the forwarder-thread bookkeeping bugs described
+    in issues #948 and #962. Connections must remain tracked both when a join
+    times out and while their sockets are being closed, so active connection
+    counts stay accurate and later shutdown calls can find live forwarders.
     """
 
     def setUp(self):
@@ -162,6 +158,117 @@ class TestTcpProxyShutdownJoin(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(self.proxy.active_connections, 0)
         self.assertNotIn((csock, tsock), self.proxy._connections)
+
+    def test_forwarder_is_tracked_until_socket_cleanup_finishes(self):
+        """Regression for #962: keep connections tracked through socket cleanup."""
+        client = _open_client(self.proxy.listen_host, self.proxy.listen_port)
+        self.addCleanup(client.close)
+        client.sendall(b"ping")
+        self.assertEqual(client.recv(16), b"ping")
+
+        self.assertEqual(self.proxy.active_connections, 1)
+        connection, thread = next(iter(self.proxy._connections.items()))
+        cleanup_started = threading.Event()
+        allow_cleanup = threading.Event()
+        real_close_pair = TcpProxy._close_pair
+
+        def blocking_close_pair(csock, tsock):
+            cleanup_started.set()
+            allow_cleanup.wait()
+            real_close_pair(csock, tsock)
+
+        try:
+            with patch.object(TcpProxy, "_close_pair",
+                              new=staticmethod(blocking_close_pair)):
+                client.shutdown(socket.SHUT_RDWR)
+                self.assertTrue(
+                    cleanup_started.wait(timeout=5),
+                    "forwarder did not begin socket cleanup")
+
+                self.assertTrue(thread.is_alive())
+                self.assertEqual(self.proxy.active_connections, 1)
+                self.assertIn(connection, self.proxy._connections)
+        finally:
+            allow_cleanup.set()
+
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(self.proxy.active_connections, 0)
+        self.assertNotIn(connection, self.proxy._connections)
+
+    def test_shutdown_is_serialized_with_socket_cleanup(self):
+        """Do not let shutdown race with the forwarder's final close."""
+        client = _open_client(self.proxy.listen_host, self.proxy.listen_port)
+        self.addCleanup(client.close)
+        client.sendall(b"ping")
+        self.assertEqual(client.recv(16), b"ping")
+
+        self.assertEqual(self.proxy.active_connections, 1)
+        _, forwarder = next(iter(self.proxy._connections.items()))
+        shutdown_started = threading.Event()
+        allow_shutdown = threading.Event()
+        close_lock_requested = threading.Event()
+        close_started = threading.Event()
+        dropper_errors = []
+        real_shutdown_pair = TcpProxy._shutdown_pair
+        real_close_pair = TcpProxy._close_pair
+
+        class ObservedLock:
+            def __init__(self):
+                self._lock = threading.Lock()
+
+            def __enter__(self):
+                if threading.current_thread() is forwarder:
+                    close_lock_requested.set()
+                self._lock.acquire()
+                return self
+
+            def __exit__(self, *args):
+                self._lock.release()
+
+        def blocking_shutdown_pair(csock, tsock):
+            shutdown_started.set()
+            allow_shutdown.wait()
+            real_shutdown_pair(csock, tsock)
+
+        def recording_close_pair(csock, tsock):
+            close_started.set()
+            real_close_pair(csock, tsock)
+
+        def drop_connections():
+            try:
+                self.proxy.drop_connections()
+            except Exception as exc:
+                dropper_errors.append(exc)
+
+        self.proxy._lifecycle_lock = ObservedLock()
+        dropper = threading.Thread(target=drop_connections)
+        try:
+            with patch.object(TcpProxy, "_shutdown_pair",
+                              new=staticmethod(blocking_shutdown_pair)), \
+                    patch.object(TcpProxy, "_close_pair",
+                                 new=staticmethod(recording_close_pair)):
+                dropper.start()
+                self.assertTrue(
+                    shutdown_started.wait(timeout=5),
+                    "dropper did not begin socket shutdown")
+
+                client.shutdown(socket.SHUT_RDWR)
+                self.assertTrue(
+                    close_lock_requested.wait(timeout=5),
+                    "forwarder did not attempt socket cleanup")
+                self.assertFalse(
+                    close_started.is_set(),
+                    "socket close overlapped an in-progress shutdown")
+        finally:
+            allow_shutdown.set()
+            dropper.join(timeout=5)
+
+        self.assertFalse(dropper.is_alive())
+        self.assertEqual(dropper_errors, [])
+        forwarder.join(timeout=5)
+        self.assertFalse(forwarder.is_alive())
+        self.assertEqual(self.proxy.active_connections, 0)
 
     def test_concurrent_stop_and_drop_leaves_no_live_forwarders(self):
         """
