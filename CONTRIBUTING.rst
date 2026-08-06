@@ -112,6 +112,28 @@ Use tee to capture logs and see them on your terminal::
 
     uv run pytest -s tests/unit/ 2>&1 | tee test.log
 
+Measuring Code Coverage
+------------------------
+``scripts/coverage.sh`` runs the unit suite (all event-loop reactors) and,
+if a Scylla/Cassandra version is available, the integration suite, under
+``coverage.py``, then combines and reports the result::
+
+    bash scripts/coverage.sh
+
+    # include the integration suite too
+    SCYLLA_VERSION="release:2026.1" bash scripts/coverage.sh
+
+Open ``htmlcov/index.html`` afterwards for a line-by-line, browsable report.
+``coverage.xml`` is also produced for tooling that consumes Cobertura-style
+XML.
+
+Note that ``cluster.py``, ``connection.py``, ``protocol.py`` and the other
+modules that are optionally Cython-compiled (see ``Dev setup`` above) are
+measured as plain Python here, since ``coverage.py`` cannot trace
+into compiled extensions -- the script sets ``CASS_DRIVER_NO_CYTHON=1`` for
+this reason. Modules that are Cython-only with no pure-Python fallback
+(``obj_parser``, ``numpy_parser``, ``row_parser``, and similar) are not built
+at all in that mode, so they are not measured by this script.
 
 Running the Benchmarks
 ======================

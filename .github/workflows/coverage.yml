@@ -1,0 +1,93 @@
+name: Code coverage
+
+on:
+  push:
+    branches:
+      - master
+      - 'branch-**'
+    paths-ignore:
+      - docs/*
+      - examples/*
+      - .gitignore
+      - '*.rst'
+      - '*.ini'
+      - LICENSE
+      - .github/dependabot.yml
+      - .github/pull_request_template.md
+      - "*.md"
+      - .github/workflows/docs-*
+  pull_request:
+    paths-ignore:
+     - docs/*
+     - examples/*
+     - .gitignore
+     - '*.rst'
+     - '*.ini'
+     - LICENSE
+     - .github/dependabot.yml
+     - .github/pull_request_template.md
+     - "*.md"
+     - .github/workflows/docs-*
+  workflow_dispatch:
+
+jobs:
+  coverage:
+    name: Measure code coverage
+    if: "!contains(github.event.pull_request.labels.*.name, 'disable-coverage-tests')"
+    runs-on: ubuntu-24.04
+    env:
+      SCYLLA_VERSION: release:2026.1
+      PROTOCOL_VERSION: 4
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+    - name: Set up JDK 8
+      uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+      with:
+        java-version: 8
+        distribution: 'adopt'
+
+    - name: Install libev
+      run: sudo apt-get install libev4 libev-dev
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      with:
+        python-version: "3.13"
+
+    - name: Build driver
+      run: uv sync
+
+    - name: Cache Scylla download
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: ~/.ccm/repository
+        key: scylla-${{ env.SCYLLA_VERSION }}-${{ runner.os }}
+
+    - name: Download Scylla
+      run: |
+        uv run ccm create scylla-driver-temp -n 1 --scylla --version ${SCYLLA_VERSION}
+        uv run ccm remove
+
+    - name: Run tests with coverage
+      run: bash scripts/coverage.sh
+
+    - name: Publish coverage summary
+      if: always()
+      run: |
+        {
+          echo '## Coverage report'
+          echo '```'
+          uv run coverage report -m
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload coverage report
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: coverage-report
+        path: |
+          htmlcov/
+          coverage.xml

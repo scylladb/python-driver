@@ -38,6 +38,9 @@ tests/unit/cython/bytesio_testhelper.c
 
 # Unit test / coverage reports
 .coverage
+.coverage.*
+htmlcov/
+coverage.xml
 .tox
 
 #iPython

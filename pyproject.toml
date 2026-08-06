@@ -52,6 +52,7 @@ dev = [
     "pyyaml",
     "numpy",
     "objgraph",
+    "coverage[toml]>=7.6",
     "ccm @ git+https://git@github.com/scylladb/scylla-ccm.git@master",
 ]
 
@@ -126,6 +127,24 @@ markers = [
 [tool.setuptools_scm]
 version_file = "cassandra/_version.py"
 tag_regex = '(?P<version>\d*?\.\d*?\.\d*?)-scylla'
+
+[tool.coverage.run]
+source = ["cassandra"]
+branch = true
+parallel = true
+relative_files = true
+omit = ["cassandra/_version.py"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
 
 #### CI BUILDWHEEL CONFIG ####
 
