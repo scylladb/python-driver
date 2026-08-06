@@ -24,12 +24,28 @@ export CASS_DRIVER_NO_CYTHON=1
 # files in place from a normal (Cython-enabled) build. Python's import system
 # prefers those over the .py source, so they must be removed -- otherwise
 # CASS_DRIVER_NO_CYTHON=1 silently has no effect and coverage reports 0% for
-# every affected module. `--reinstall-package` then rebuilds from scratch,
-# producing only the extensions CASS_DRIVER_NO_CYTHON=1 actually allows
-# (murmur3/libev, but none of the Cython ones). If any of this setup fails,
-# there's no point running any tests, so bail out immediately -- failure
-# tolerance below is scoped to test/report commands only.
-find cassandra -name "*.so" -delete -o -name "*.pyd" -delete || exit 1
+# every affected module (and, for the Cython-only modules with no .py
+# fallback like row_parser, HAVE_CYTHON would stay True off a stale .so,
+# defeating CASS_DRIVER_NO_CYTHON entirely). Only extensions matching the
+# *current* interpreter's own EXTENSION_SUFFIXES are removed -- the same
+# mechanism tests/conftest.py already uses to detect staleness -- so this
+# doesn't force a rebuild for other Python versions/venvs sharing this
+# checkout. murmur3/libev are excluded by name since they're unaffected by
+# CASS_DRIVER_NO_CYTHON. `--reinstall-package` then rebuilds from scratch,
+# producing only the extensions CASS_DRIVER_NO_CYTHON=1 actually allows. If
+# any of this setup fails, there's no point running any tests, so bail out
+# immediately -- failure tolerance below is scoped to test/report commands
+# only.
+uv run python -c "
+import importlib.machinery, pathlib
+exclude = {'cmurmur3', 'libevwrapper'}
+for path in pathlib.Path('cassandra').rglob('*'):
+    for suffix in importlib.machinery.EXTENSION_SUFFIXES:
+        if path.name.endswith(suffix):
+            if path.name[:-len(suffix)] not in exclude:
+                path.unlink()
+            break
+" || exit 1
 uv sync --reinstall-package scylla-driver || exit 1
 
 status=0
@@ -46,9 +62,13 @@ uv run coverage run -m pytest tests/unit -v \
     --ignore=tests/unit/io/test_asyncioreactor.py \
     || status=1
 
-EVENT_LOOP_MANAGER=gevent uv run coverage run -m pytest tests/unit/io/test_geventreactor.py -v || status=1
+# gevent/eventlet monkey-patch threading/sockets, which can confuse
+# coverage.py's default sys.settrace-based collector; --concurrency tells it
+# about the greenlet scheduler explicitly. asyncio and the default (thread)
+# runs need no such hint.
+EVENT_LOOP_MANAGER=gevent uv run coverage run --concurrency=gevent,thread -m pytest tests/unit/io/test_geventreactor.py -v || status=1
 EVENT_LOOP_MANAGER=asyncio uv run coverage run -m pytest tests/unit/io/test_asyncioreactor.py -v || status=1
-EVENT_LOOP_MANAGER=eventlet uv run coverage run -m pytest tests/unit/io/test_eventletreactor.py -v || status=1
+EVENT_LOOP_MANAGER=eventlet uv run coverage run --concurrency=eventlet,thread -m pytest tests/unit/io/test_eventletreactor.py -v || status=1
 
 if [[ -n "${SCYLLA_VERSION:-}" || -n "${CASSANDRA_VERSION:-}" ]]; then
     uv run coverage run -m pytest tests/integration/standard tests/integration/cqlengine/ -v || status=1

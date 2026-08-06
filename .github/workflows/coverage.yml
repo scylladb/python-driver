@@ -38,6 +38,12 @@ jobs:
     env:
       SCYLLA_VERSION: release:2026.1
       PROTOCOL_VERSION: 4
+      # Set once at job level so every step (including "Build driver" and the
+      # summary step, both of which invoke `uv run`) sees the same value.
+      # uv's cache-keys include this var, so a value that flips between steps
+      # makes each `uv run` re-detect a "changed" build config and rebuild the
+      # Cython extensions from scratch -- about two minutes wasted per flip.
+      CASS_DRIVER_NO_CYTHON: "1"
 
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

@@ -46,7 +46,6 @@ coverage.xml
 #iPython
 *.ipynb
 
-uv.lock
 .venv/
 
 
