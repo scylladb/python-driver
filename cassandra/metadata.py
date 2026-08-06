@@ -22,7 +22,7 @@ import json
 import logging
 import re
 import sys
-from threading import RLock
+from threading import Lock
 import struct
 import random
 import itertools
@@ -126,7 +126,7 @@ class Metadata(object):
         self.dbaas = False
         self._hosts = {}
         self._host_id_by_endpoint = {}
-        self._hosts_lock = RLock()
+        self._hosts_lock = Lock()
         self._tablets = Tablets({})
 
     def export_schema_as_string(self):
@@ -1778,7 +1778,7 @@ class TokenMap(object):
 
         self.tokens_to_hosts_by_ks = {}
         self._metadata = metadata
-        self._rebuild_lock = RLock()
+        self._rebuild_lock = Lock()
 
     def rebuild_keyspace(self, keyspace, build_if_absent=False):
         with self._rebuild_lock:

@@ -22,7 +22,7 @@ import logging
 import socket
 import struct
 import sys
-from threading import Thread, Event, RLock, Condition
+from threading import Thread, Event, Lock, Condition
 import time
 import ssl
 import uuid
@@ -928,7 +928,7 @@ class Connection(object):
         self.request_ids = deque(range(initial_size))
         self.highest_request_id = initial_size - 1
 
-        self.lock = RLock()
+        self.lock = Lock()
         self.connected_event = Event()
         self.features = ProtocolFeatures(shard_id=shard_id)
         self.total_shards = total_shards
@@ -1400,22 +1400,31 @@ class Connection(object):
                 decoder = paging_session.decoder
                 result_metadata = None
             else:
-                need_notify_of_release = False
-                with self.lock:
-                    if stream_id in self.orphaned_request_ids:
-                        self.in_flight -= 1
-                        self.orphaned_request_ids.remove(stream_id)
-                        need_notify_of_release = True
-                if need_notify_of_release and self._on_orphaned_stream_released:
-                    self._on_orphaned_stream_released()
-
                 try:
                     callback, decoder, result_metadata = self._requests.pop(stream_id)
-                # This can only happen if the stream_id was
-                # removed due to an OperationTimedOut
+                # This can only happen if the stream_id was removed due to an
+                # OperationTimedOut, in which case ResponseFuture._on_timeout
+                # may have recorded it in orphaned_request_ids (under
+                # self.lock). Checking membership only here -- instead of an
+                # unconditional pre-check ahead of the try/except -- means we
+                # never acquire the lock (or even look at
+                # orphaned_request_ids) on the common, non-orphaned path,
+                # while still always coordinating with the writer through
+                # self.lock on the rare path where it matters. This avoids
+                # the race where an unlocked truthiness check could observe
+                # orphaned_request_ids as empty and skip the bookkeeping
+                # entirely, even though the writer was concurrently adding
+                # this exact stream_id under the lock.
                 except KeyError:
+                    need_notify_of_release = False
                     with self.lock:
+                        if stream_id in self.orphaned_request_ids:
+                            self.in_flight -= 1
+                            self.orphaned_request_ids.remove(stream_id)
+                            need_notify_of_release = True
                         self.request_ids.append(stream_id)
+                    if need_notify_of_release and self._on_orphaned_stream_released:
+                        self._on_orphaned_stream_released()
                     return
 
         try:

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import itertools
+import threading
 import unittest
 from io import BytesIO
 import time
@@ -653,3 +654,89 @@ class TestShardawarePortGenerator(unittest.TestCase):
         second_run = list(itertools.islice(gen.generate(0, 2), 5))
 
         assert first_run == second_run
+
+
+class ProcessMsgOrphanRaceTest(unittest.TestCase):
+    """
+    Regression test for a race between process_msg's orphaned-stream
+    bookkeeping and ResponseFuture._on_timeout marking a stream as orphaned
+    from another thread (see cassandra/cluster.py ResponseFuture._on_timeout,
+    which does ``with connection.lock: connection.orphaned_request_ids.add(...)``).
+
+    _on_timeout removes the stream_id from connection._requests *before*,
+    and without needing, the lock, then separately adds it to
+    orphaned_request_ids *under* the lock. process_msg must therefore always
+    resolve "is this stream_id orphaned?" under that same lock whenever it
+    discovers the stream_id is no longer present in `_requests` -- an
+    unconditional, unlocked truthiness pre-check on orphaned_request_ids can
+    observe it as empty and skip the bookkeeping entirely, even though the
+    writer is concurrently adding this exact stream_id under the lock. That
+    silently loses the in_flight decrement, leaks the orphaned_request_ids
+    entry, and drops the release notification.
+    """
+
+    class _RacyRequests(dict):
+        """
+        A `_requests` stand-in that, the moment a lookup for a given
+        stream_id is about to raise KeyError (mirroring what a real dict
+        does once ResponseFuture._on_timeout has already popped the entry),
+        spawns a *separate* thread that concurrently marks that same
+        stream_id as orphaned -- using the real connection lock -- and
+        waits for it to finish before letting the KeyError propagate.
+
+        This deterministically reproduces the exact interleaving the review
+        flagged: by the time process_msg decides how to handle the missing
+        request, another thread has already added the id to
+        orphaned_request_ids under the lock.
+        """
+
+        def __init__(self, connection, race_stream_id):
+            super().__init__()
+            self._connection = connection
+            self._race_stream_id = race_stream_id
+            self.racer_ran = threading.Event()
+
+        def pop(self, stream_id):
+            if stream_id == self._race_stream_id and stream_id not in self:
+                def add_orphan():
+                    with self._connection.lock:
+                        self._connection.orphaned_request_ids.add(stream_id)
+                    self.racer_ran.set()
+
+                t = threading.Thread(target=add_orphan)
+                t.start()
+                t.join(timeout=5)
+            return dict.pop(self, stream_id)
+
+    def make_connection(self):
+        c = Connection(DefaultEndPoint('1.2.3.4'))
+        c._socket = Mock()
+        return c
+
+    def test_orphan_bookkeeping_survives_concurrent_marking(self):
+        stream_id = 500  # outside the connection's default pre-populated request_ids range
+        c = self.make_connection()
+        c.in_flight = 3
+        c.orphaned_request_ids = set()
+        c.request_ids.clear()
+        released = threading.Event()
+        c._on_orphaned_stream_released = released.set
+
+        racy_requests = self._RacyRequests(c, stream_id)
+        c._requests = racy_requests
+
+        header = _Frame(version=4, flags=0, stream=stream_id, opcode=0, body_offset=0, end_pos=0)
+        c.process_msg(header, b"")
+
+        self.assertTrue(racy_requests.racer_ran.wait(timeout=5),
+                         "the concurrent orphan-marking thread never ran")
+        self.assertEqual(c.in_flight, 2,
+                          "in_flight was not decremented for the response that raced "
+                          "with the concurrent orphan marking")
+        self.assertNotIn(stream_id, c.orphaned_request_ids,
+                          "orphaned_request_ids entry was leaked: process_msg's check "
+                          "missed the concurrently-added stream_id")
+        self.assertTrue(released.is_set(),
+                         "_on_orphaned_stream_released was not called even though the "
+                         "stream_id was (concurrently) marked orphaned")
+        self.assertIn(stream_id, c.request_ids)
