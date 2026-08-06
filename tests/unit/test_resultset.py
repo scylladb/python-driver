@@ -16,7 +16,7 @@ import unittest
 from unittest.mock import Mock, PropertyMock, patch
 
 from cassandra.cluster import ResultSet
-from cassandra.query import named_tuple_factory, dict_factory, tuple_factory
+from cassandra.query import named_tuple_factory, dict_factory, tuple_factory, SimpleStatement, BatchStatement
 
 from tests.util import assertListEqual
 import pytest
@@ -175,11 +175,18 @@ class ResultSetTests(unittest.TestCase):
         assert ResultSet(Mock(has_more_pages=False), [1])
 
     def test_was_applied(self):
+        # Create a non-LWT query so these assertions exercise the slow (regex) path.
+        # Without this, Mock().query.is_lwt() returns a truthy Mock, accidentally
+        # routing all checks through the fast path.
+        non_lwt_query = Mock(spec=SimpleStatement)
+        non_lwt_query.is_lwt.return_value = False
+        non_lwt_query.query_string = "INSERT INTO t (k) VALUES (1)"
+
         # unknown row factory raises
         with pytest.raises(RuntimeError):
-            ResultSet(Mock(), []).was_applied
+            ResultSet(Mock(query=non_lwt_query), []).was_applied
 
-        response_future = Mock(row_factory=named_tuple_factory)
+        response_future = Mock(row_factory=named_tuple_factory, query=non_lwt_query)
 
         # no row
         with pytest.raises(RuntimeError):
@@ -192,13 +199,93 @@ class ResultSetTests(unittest.TestCase):
         # various internal row factories
         for row_factory in (named_tuple_factory, tuple_factory):
             for applied in (True, False):
-                rs = ResultSet(Mock(row_factory=row_factory), [(applied,)])
+                rs = ResultSet(Mock(row_factory=row_factory, query=non_lwt_query), [(applied,)])
                 assert rs.was_applied == applied
 
         row_factory = dict_factory
         for applied in (True, False):
-            rs = ResultSet(Mock(row_factory=row_factory), [{'[applied]': applied}])
+            rs = ResultSet(Mock(row_factory=row_factory, query=non_lwt_query), [{'[applied]': applied}])
             assert rs.was_applied == applied
+
+
+    def test_was_applied_lwt_fast_path(self):
+        """Test that was_applied uses fast path for known LWT statements."""
+        # BoundStatement-like query with is_lwt() = True (fast path)
+        lwt_query = Mock()
+        lwt_query.is_lwt.return_value = True
+        for row_factory in (named_tuple_factory, tuple_factory):
+            for applied in (True, False):
+                rf = Mock(row_factory=row_factory, query=lwt_query)
+                rs = ResultSet(rf, [(applied,)])
+                assert rs.was_applied == applied
+
+        for applied in (True, False):
+            rf = Mock(row_factory=dict_factory, query=lwt_query)
+            rs = ResultSet(rf, [{'[applied]': applied}])
+            assert rs.was_applied == applied
+
+        # Fast path with too many rows should raise
+        rf = Mock(row_factory=named_tuple_factory, query=lwt_query)
+        with pytest.raises(RuntimeError, match="exactly one row"):
+            ResultSet(rf, [tuple(), tuple()]).was_applied
+
+    def test_was_applied_non_lwt_fallback(self):
+        """Test that was_applied falls back to slow path for non-LWT statements."""
+        # SimpleStatement-like query with is_lwt() = False (slow path, non-batch)
+        non_lwt_query = Mock(spec=SimpleStatement)
+        non_lwt_query.is_lwt.return_value = False
+        non_lwt_query.query_string = "INSERT INTO t (k) VALUES (1)"
+
+        for applied in (True, False):
+            rf = Mock(row_factory=tuple_factory, query=non_lwt_query)
+            rs = ResultSet(rf, [(applied,)])
+            assert rs.was_applied == applied
+
+    def test_was_applied_batch_statement(self):
+        """Test that was_applied handles BatchStatement correctly (slow path)."""
+        # BatchStatement with LWT should check column_names
+        batch_query = Mock(spec=BatchStatement)
+        batch_query.is_lwt.return_value = True
+
+        # Batch with [applied] column -- pass _col_names so ResultSet.__init__
+        # sets column_names correctly (instead of post-construction override).
+        rf = Mock(row_factory=tuple_factory, query=batch_query,
+                  _col_names=['[applied]'], _col_types=None)
+        rs = ResultSet(rf, [(True,)])
+        assert rs.was_applied
+
+        # Batch without [applied] column raises
+        rf = Mock(row_factory=tuple_factory, query=batch_query,
+                  _col_names=['other'], _col_types=None)
+        rs = ResultSet(rf, [(True,)])
+        with pytest.raises(RuntimeError, match="No LWT were present"):
+            rs.was_applied
+
+    def test_was_applied_query_without_is_lwt(self):
+        """Regression test: was_applied must not raise AttributeError when
+        response_future.query doesn't implement is_lwt().
+
+        The fast path used to call query.is_lwt() before confirming the query
+        even has that method (only guarding against BatchStatement). Any other
+        object without is_lwt() -- including a bare `None`, which is a real,
+        reachable value (ResponseFuture.query defaults to None, and
+        Session.prepare()/prepare_on_all_hosts construct ResponseFuture(...,
+        query=None, ...) explicitly) -- would blow up instead of falling
+        through to the same slow-path handling as any other non-LWT query.
+        """
+        rf = Mock(row_factory=named_tuple_factory, query=None, _col_names=None, _col_types=None)
+        rs = ResultSet(rf, [(True,)])
+        assert rs.was_applied is True
+
+        # A generic duck-typed statement predating the is_lwt() fast path,
+        # with no is_lwt() method at all.
+        class _StatementWithoutIsLwt:
+            query_string = "SELECT 1"
+
+        rf2 = Mock(row_factory=named_tuple_factory, query=_StatementWithoutIsLwt(),
+                   _col_names=None, _col_types=None)
+        rs2 = ResultSet(rf2, [(False,)])
+        assert rs2.was_applied is False
 
     def test_one(self):
         # no pages
