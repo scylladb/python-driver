@@ -746,14 +746,32 @@ class _ConnectionIOBuffer(object):
     def readable_cql_frame_bytes(self):
         return self.cql_frame_buffer.tell()
 
+    @staticmethod
+    def _reset_buffer(buf):
+        """
+        Reset a BytesIO buffer by discarding consumed data.
+
+        Uses ``getbuffer()[pos:]`` (a zero-copy memoryview slice) instead of
+        ``.read()`` which would first allocate an intermediate ``bytes`` object.
+        The ``BytesIO()`` constructor still copies the data into its own backing
+        store either way, so the net saving is one temporary ``bytes`` allocation
+        on the hot receive path.
+        """
+        pos = buf.tell()
+        view = buf.getbuffer()
+        try:
+            new_buf = io.BytesIO(view[pos:])
+        finally:
+            del view  # release memoryview before any buffer mutation
+        new_buf.seek(0, 2)  # 2 == SEEK_END
+        return new_buf
+
     def reset_io_buffer(self):
-        self._io_buffer = io.BytesIO(self._io_buffer.read())
-        self._io_buffer.seek(0, 2)  # 2 == SEEK_END
+        self._io_buffer = self._reset_buffer(self._io_buffer)
 
     def reset_cql_frame_buffer(self):
         if self.is_checksumming_enabled:
-            self._cql_frame_buffer = io.BytesIO(self._cql_frame_buffer.read())
-            self._cql_frame_buffer.seek(0, 2)  # 2 == SEEK_END
+            self._cql_frame_buffer = self._reset_buffer(self._cql_frame_buffer)
         else:
             self.reset_io_buffer()
 
@@ -787,7 +805,13 @@ class Connection(object):
 
     CALLBACK_ERR_THREAD_THRESHOLD = 100
 
-    in_buffer_size = 4096
+    # 16 KiB recv buffer reduces the number of syscalls when reading
+    # large result sets, at a modest per-connection memory cost (this is
+    # multiplied by the number of connections in the pool, so it can matter
+    # at scale). Override via the ``in_buffer_size`` kwarg, or globally via
+    # :attr:`.Cluster.in_buffer_size`, if the extra per-connection memory is
+    # a concern or if a different value benchmarks better for your workload.
+    in_buffer_size = 16384
     out_buffer_size = 4096
 
     cql_version = None
@@ -880,7 +904,8 @@ class Connection(object):
                  cql_version=None, protocol_version=ProtocolVersion.MAX_SUPPORTED, is_control_connection=False,
                  user_type_map=None, connect_timeout=None, allow_beta_protocol_version=False, no_compact=False,
                  ssl_context=None, owning_pool=None, shard_id=None, total_shards=None,
-                 on_orphaned_stream_released=None, application_info: Optional[ApplicationInfoBase] = None):
+                 on_orphaned_stream_released=None, application_info: Optional[ApplicationInfoBase] = None,
+                 in_buffer_size=None):
         # TODO next major rename host to endpoint and remove port kwarg.
         self.endpoint = host if isinstance(host, EndPoint) else DefaultEndPoint(host, port)
 
@@ -889,6 +914,8 @@ class Connection(object):
         self.ssl_context = ssl_context
         self.sockopts = sockopts
         self.compression = compression
+        if in_buffer_size is not None:
+            self.in_buffer_size = in_buffer_size
         self.cql_version = cql_version
         self.protocol_version = protocol_version
         self.is_control_connection = is_control_connection
@@ -1313,19 +1340,23 @@ class Connection(object):
 
     @defunct_on_error
     def _read_frame_header(self):
-        buf = self._io_buffer.cql_frame_buffer.getvalue()
-        pos = len(buf)
+        cql_buf = self._io_buffer.cql_frame_buffer
+        pos = cql_buf.tell()
         if pos:
-            version = buf[0] & PROTOCOL_VERSION_MASK
-            if version not in ProtocolVersion.SUPPORTED_VERSIONS:
-                raise ProtocolError("This version of the driver does not support protocol version %d" % version)
-            # this frame header struct is everything after the version byte
-            header_size = frame_header_v3.size + 1
-            if pos >= header_size:
-                flags, stream, op, body_len = frame_header_v3.unpack_from(buf, 1)
-                if body_len < 0:
-                    raise ProtocolError("Received negative body length: %r" % body_len)
-                self._current_frame = _Frame(version, flags, stream, op, header_size, body_len + header_size)
+            buf = cql_buf.getbuffer()
+            try:
+                version = buf[0] & PROTOCOL_VERSION_MASK
+                if version not in ProtocolVersion.SUPPORTED_VERSIONS:
+                    raise ProtocolError("This version of the driver does not support protocol version %d" % version)
+                # this frame header struct is everything after the version byte
+                header_size = frame_header_v3.size + 1
+                if pos >= header_size:
+                    flags, stream, op, body_len = frame_header_v3.unpack_from(buf, 1)
+                    if body_len < 0:
+                        raise ProtocolError("Received negative body length: %r" % body_len)
+                    self._current_frame = _Frame(version, flags, stream, op, header_size, body_len + header_size)
+            finally:
+                del buf  # release memoryview before any buffer mutation
         return pos
 
     @defunct_on_error
@@ -1379,8 +1410,16 @@ class Connection(object):
                 return
             else:
                 frame = self._current_frame
-                self._io_buffer.cql_frame_buffer.seek(frame.body_offset)
-                msg = self._io_buffer.cql_frame_buffer.read(frame.end_pos - frame.body_offset)
+                # Use memoryview to avoid intermediate allocation, then
+                # convert to bytes.  Explicitly release the memoryview
+                # before any buffer mutation (seek / reset).
+                cql_buf = self._io_buffer.cql_frame_buffer
+                buf = cql_buf.getbuffer()
+                try:
+                    msg = bytes(buf[frame.body_offset:frame.end_pos])
+                finally:
+                    del buf  # release memoryview before buffer mutation
+                cql_buf.seek(frame.end_pos)
                 self.process_msg(frame, msg)
                 self._io_buffer.reset_cql_frame_buffer()
                 self._current_frame = None
