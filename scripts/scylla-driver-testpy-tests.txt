@@ -1,0 +1,52 @@
+# Narrow Scylla test.py coverage for Python driver compatibility.
+#
+# Keep this list to tests that exercise non-standard Python driver behavior.
+# Generic Scylla CQL, topology, auth, or service-level coverage belongs in
+# Scylla CI, not in the driver compatibility job.
+
+# Driver-specific event decoding and control-connection watchers.
+test/cluster/test_client_routes.py::test_events
+
+# Topology-change notification handling through a pinned control connection.
+test/cluster/test_no_removed_node_event_on_ip_change.py::test_no_removed_node_event_on_ip_change
+
+# Prepared metadata ID and result metadata refresh behavior.
+test/cluster/auth_cluster/test_prepared_metadata_id.py::test_prepared_list_metadata_ids
+test/cluster/test_metadata_id.py::test_changed_prepared_statement_metadata_columns
+test/cluster/test_metadata_id.py::test_changed_prepared_statement_metadata_types
+test/cluster/test_metadata_id.py::test_changed_prepared_statement_metadata_udt
+
+# Driver control-connection service-level classification.
+test/cluster/auth_cluster/test_raft_service_levels.py::test_driver_service_level_not_used_for_user_queries
+test/cluster/auth_cluster/test_raft_service_levels.py::test_driver_service_level_used_for_driver_queries
+
+# Driver startup options exposed by system.clients.
+test/cqlpy/test_virtual_tables.py::test_clients
+
+# Driver per-shard connections and direct protocol messages used for service levels.
+test/cqlpy/test_service_level_api.py::test_count_opened_cql_connections
+
+# Native protocol custom payload support.
+test/cqlpy/test_native_transport.py::test_query_with_custom_payload
+test/cqlpy/test_native_transport.py::test_execute_prepared_with_custom_payload
+test/cqlpy/test_native_transport.py::test_batch_with_custom_payload
+test/cqlpy/test_native_transport.py::test_request_with_multiple_payload_entries
+test/cqlpy/test_native_transport.py::test_request_with_large_payload_value
+test/cqlpy/test_native_transport.py::test_custom_payload_does_not_affect_query_result
+
+# Prepared statement routing-key metadata parsed by the driver.
+test/cqlpy/test_prepare.py::test_single_pk_indexes
+test/cqlpy/test_prepare.py::test_single_pk_no_indexes
+test/cqlpy/test_prepare.py::test_composite_pk_indexes
+test/cqlpy/test_prepare.py::test_composite_pk_no_indexes
+test/cqlpy/test_prepare.py::test_single_pk_indexes_named_variables
+test/cqlpy/test_prepare.py::test_composite_pk_indexes_named_variables
+test/cqlpy/test_prepare.py::test_single_pk_indexes_duplicate_named_variables
+test/cqlpy/test_prepare.py::test_single_pk_indexes_duplicate_named_variables_cassandra_compatiblity_mode
+test/cqlpy/test_prepare.py::test_composite_pk_indexes_duplicate_named_variables
+test/cqlpy/test_prepare.py::test_composite_pk_indexes_duplicate_named_variables_cassandra_compatibility_mode
+test/cqlpy/test_prepare.py::test_duplicate_named_bind_marker_prepared
+test/cqlpy/test_prepare.py::test_duplicate_named_bind_marker_prepared_cassandra_compatibility_mode
+
+# Driver serializer edge cases.
+test/cqlpy/test_type_varint.py::test_varint_key_representation
