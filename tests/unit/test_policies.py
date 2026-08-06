@@ -972,6 +972,64 @@ class TokenAwarePolicyTest(unittest.TestCase):
                 assert patched_shuffle.call_count == 0, \
                     "shuffle should not be called for consistency level %s" % cl
 
+    def test_stale_tablet_not_reused_across_query_plans(self):
+        """
+        A Statement (e.g. a BoundStatement) may be rebound and re-executed by
+        the caller, so the same query object can be passed to
+        make_query_plan() multiple times with a different routing key each
+        time. Verify that a tablet stashed on the query object for shard-aware
+        connection selection (query._tablet) from one call doesn't leak into
+        a later call for which no tablet is found -- otherwise downstream
+        shard selection could pick a shard belonging to an unrelated,
+        previously-looked-up tablet.
+        """
+        cluster = self._prepare_cluster_with_tablets()
+        hosts = cluster.metadata.all_hosts()
+        tablet = cluster.metadata._tablets.get_tablet_for_key.return_value
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key='routing_key', keyspace='keyspace')
+        list(policy.make_query_plan('keyspace', query))
+        self.assertIs(query._tablet, tablet)
+
+        # Same (reused) query object, but this time no tablet is found for
+        # the (new) routing key -- e.g. it hasn't been discovered yet, or
+        # the table isn't tablets-based.
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        list(policy.make_query_plan('keyspace', query))
+        self.assertIsNone(query._tablet)
+
+    def test_stale_tablet_not_reused_when_no_routing_key(self):
+        """
+        Same as above, but covers the early-return path (no routing key /
+        no keyspace), which must also clear any previously stashed tablet.
+        """
+        cluster = self._prepare_cluster_with_tablets()
+        hosts = cluster.metadata.all_hosts()
+        tablet = cluster.metadata._tablets.get_tablet_for_key.return_value
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.distance.return_value = HostDistance.LOCAL
+
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key='routing_key', keyspace='keyspace')
+        list(policy.make_query_plan('keyspace', query))
+        self.assertIs(query._tablet, tablet)
+
+        # Reuse the same statement without a routing key this time.
+        query.routing_key = None
+        list(policy.make_query_plan('keyspace', query))
+        self.assertIsNone(query._tablet)
+
 
 class ConvictionPolicyTest(unittest.TestCase):
     def test_not_implemented(self):

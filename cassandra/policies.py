@@ -498,6 +498,11 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
         child = self._child_policy
         if query is None or query.routing_key is None or keyspace is None:
+            if query is not None:
+                # A Statement (e.g. BoundStatement) can be rebound and
+                # re-executed by the caller; make sure a tablet stashed by
+                # an earlier, unrelated execution isn't picked up below.
+                query._tablet = None
             for host in child.make_query_plan(keyspace, query):
                 yield host
             return
@@ -507,12 +512,22 @@ class TokenAwarePolicy(LoadBalancingPolicy):
             keyspace, query.table, self._cluster_metadata.token_map.token_class.from_key(query.routing_key))
 
         if tablet is not None:
-            replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
+            replica_dict = tablet._replica_dict
             child_plan = child.make_query_plan(keyspace, query)
 
-            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+            replicas = [host for host in child_plan if host.host_id in replica_dict]
+            # Stash the tablet so that downstream shard-aware
+            # connection selection can reuse it instead of
+            # repeating the bisect lookup.
+            query._tablet = tablet
         else:
             replicas = self._cluster_metadata.get_replicas(keyspace, query.routing_key)
+            # Clear any tablet stashed by a previous execution of this same
+            # query object (statements may be rebound and reused, e.g. via
+            # BoundStatement.bind()) so a stale tablet -- for a different
+            # routing key -- isn't reused for shard-aware connection
+            # selection below.
+            query._tablet = None
 
         if self.shuffle_replicas and not query.is_lwt() and not ConsistencyLevel.is_serial(query.consistency_level):
             shuffle(replicas)
