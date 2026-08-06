@@ -307,3 +307,130 @@ class ConcurrencyTest((unittest.TestCase)):
         for success, result in results:
             assert not success
             assert result is error
+
+    @pytest.mark.timeout(10)
+    def test_submitter_thread_survives_broken_iterable(self):
+        """
+        ConcurrentExecutorListResults dispatches follow-up requests from a
+        dedicated submitter thread that pulls from the caller's
+        statements_and_parameters iterable. If that iterable raises
+        something other than StopIteration (e.g. a generator that blows up
+        mid-stream), the submitter thread must not die silently: nothing
+        else ever advances `_current`/`_exec_count` or wakes `_results()`
+        after the initial batch, so an unhandled exception there would hang
+        execute_concurrent() forever instead of surfacing an error.
+        """
+        class ImmediateFuture:
+            _query_trace = None
+            _col_names = None
+            _col_types = None
+            has_more_pages = False
+
+            def add_callbacks(self, callback, errback,
+                              callback_args=(), callback_kwargs=None,
+                              errback_args=(), errback_kwargs=None):
+                # Fire the success callback synchronously and immediately,
+                # forcing the submitter thread to keep pulling from the
+                # iterable well past the initial batch.
+                callback("row", *callback_args, **(callback_kwargs or {}))
+
+            def clear_callbacks(self):
+                pass
+
+        def broken_statements():
+            for i in range(5):
+                yield ("SELECT 1", (i,))
+            raise ValueError("boom from user iterable")
+
+        mock_session = Mock()
+        mock_session.execute_async.side_effect = lambda *a, **kw: ImmediateFuture()
+
+        with pytest.raises(ValueError, match="boom from user iterable"):
+            execute_concurrent(mock_session, broken_statements(), concurrency=2,
+                               raise_on_first_error=False)
+
+    @pytest.mark.timeout(10)
+    def test_fail_fast_stops_submitter_promptly(self):
+        """
+        Regression test for a lost-wakeup + missing-check bug that broke the
+        ``raise_on_first_error=True`` ("fail-fast") contract.
+
+        Two bugs combined to break fail-fast:
+
+        1. ``_put_result``'s fail-fast path takes ``self._condition`` and
+           calls ``notify()`` to wake the main thread up immediately -- but
+           if the failure happens synchronously during the *initial* batch
+           dispatched by ``execute()`` (which itself holds
+           ``self._condition`` while dispatching), the main thread has not
+           reached ``_results()``'s ``wait()`` yet. ``Condition.notify()``
+           only wakes threads already parked in ``wait()``, so that
+           notification is silently dropped, and nothing else was checking
+           for the already-recorded exception before blocking.
+        2. ``_submitter_loop``'s dispatch path only checked ``stop_event``
+           before pulling more items from the caller's iterable and
+           dispatching them -- never ``_fail_fast``/``_exception`` -- so
+           even once the main thread noticed the failure, it had to wait
+           for the submitter thread to notice ``stop_event`` on its own
+           schedule.
+
+        Net effect: fail-fast degraded into consuming (and dispatching)
+        the entire iterable instead of stopping right after the first
+        failure -- unbounded for a generator input.
+
+        This test fails the very first dispatched statement synchronously
+        (so the failure is recorded during the initial batch, guaranteeing
+        the dropped-notify scenario rather than racing for it) against a
+        large iterable, and asserts that only a small, bounded number of
+        statements were ever pulled from it. Pre-fix, this either hangs
+        (caught by the ``pytest.mark.timeout`` guard) or consumes/dispatches
+        the entire iterable; post-fix, dispatch stops right after the first
+        failure.
+        """
+        consumed = []
+        TOTAL_STATEMENTS = 20000
+
+        def many_statements():
+            for i in range(TOTAL_STATEMENTS):
+                consumed.append(i)
+                yield ("SELECT 1", (i,))
+
+        class ImmediateFuture:
+            _query_trace = None
+            _col_names = None
+            _col_types = None
+            has_more_pages = False
+
+            def __init__(self, idx):
+                self._idx = idx
+
+            def add_callbacks(self, callback, errback,
+                              callback_args=(), callback_kwargs=None,
+                              errback_args=(), errback_kwargs=None):
+                # Fail only the very first statement (idx 0); every other
+                # statement succeeds synchronously and immediately, so
+                # nothing but the fail-fast logic itself would ever stop
+                # dispatch.
+                if self._idx == 0:
+                    errback(ValueError("boom on first statement"), *errback_args,
+                            **(errback_kwargs or {}))
+                else:
+                    callback("row", *callback_args, **(callback_kwargs or {}))
+
+            def clear_callbacks(self):
+                pass
+
+        def fake_execute_async(statement, params, timeout=None, execution_profile=None):
+            return ImmediateFuture(params[0])
+
+        mock_session = Mock()
+        mock_session.execute_async.side_effect = fake_execute_async
+
+        with pytest.raises(ValueError, match="boom on first statement"):
+            execute_concurrent(mock_session, many_statements(), concurrency=5,
+                               raise_on_first_error=True)
+
+        assert len(consumed) < 100, (
+            "fail-fast did not stop dispatch promptly: consumed %d of %d "
+            "statements from the iterable after the first failure"
+            % (len(consumed), TOTAL_STATEMENTS)
+        )
