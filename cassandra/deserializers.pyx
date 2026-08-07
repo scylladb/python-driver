@@ -296,7 +296,6 @@ cdef _deserialize_map(Buffer *buf, int protocol_version,
 
     cdef int32_t numelements
     cdef int offset
-    cdef list result = []
 
     _unpack_len(buf, 0, &numelements)
     offset = sizeof(int32_t)
@@ -330,7 +329,6 @@ cdef class DesTupleType(_DesParameterizedType):
         protocol_version = max(3, protocol_version)
 
         p = 0
-        values = []
         for i in range(self.subtypes_len):
             item = None
             if p < buf.size:
