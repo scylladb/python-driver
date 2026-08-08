@@ -148,7 +148,10 @@ class EventletConnection(Connection):
             msg = "Connection to %s was closed" % self.endpoint
             if self.last_error:
                 msg += ": %s" % (self.last_error,)
-            self.error_all_requests(ConnectionShutdown(msg))
+            shutdown_exc = ConnectionShutdown(msg)
+            self.error_all_requests(shutdown_exc)
+            if not self.connected_event.is_set():
+                self.last_error = shutdown_exc
             # don't leave in-progress operations hanging
             self.connected_event.set()
 
@@ -185,6 +188,8 @@ class EventletConnection(Connection):
                 self.process_io_buffer()
             else:
                 log.debug("Connection %s closed by server", self)
+                self.last_error = ConnectionShutdown(
+                    "Connection to %s was closed by server" % self.endpoint)
                 self.close()
                 return
 
