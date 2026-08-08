@@ -70,6 +70,9 @@ docs/geo_types.rst
 docs/graph.rst
 docs/graph_fluent.rst
 
+# pytest-benchmark saved results
+.benchmarks/
+
 # Personal list of items to do
 TODO.md
 
