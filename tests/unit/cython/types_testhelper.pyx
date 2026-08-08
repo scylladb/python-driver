@@ -14,12 +14,14 @@
 
 import calendar
 import datetime
+import struct
 import time
 
 include '../../../cassandra/ioutils.pyx'
 
 import io
 
+from cassandra import cqltypes
 from cassandra.cqltypes import DateType
 from cassandra.protocol import write_value
 from cassandra.deserializers import find_deserializer
@@ -70,6 +72,75 @@ def test_datetype():
     # Large date overflow (PYTHON-452)
     expected = 2177403010.123
     assert deserialize(expected) == datetime.datetime(2038, 12, 31, 10, 10, 10, 123000)
+
+
+def test_composite_long_element():
+    """
+    Regression test: DesCompositeType.deserialize used to store the
+    wire-provided (unsigned) 2-byte element length in a signed int16_t
+    local. Any element length greater than INT16_MAX (32767) would then
+    wrap around to a negative number, corrupting both the bounds check
+    and the buffer-advancing arithmetic that follows (element_length is
+    now a uint16_t, matching the actual wire type).
+    """
+    cdef Deserializer des
+    cdef BytesIOReader reader
+    cdef Buffer buf
+
+    element_length = 40000  # > INT16_MAX (32767)
+    payload = b'x' * element_length
+
+    composite_type = cqltypes.CompositeType.apply_parameters([cqltypes.UTF8Type])
+    des = find_deserializer(composite_type)
+
+    # Composite wire format: 2-byte big-endian length, element bytes, 1 EOC byte
+    blob = struct.pack('>H', element_length) + payload + b'\x00'
+    reader = BytesIOReader(blob)
+    buf.ptr = reader.read()
+    buf.size = reader.size
+
+    result = from_binary(des, &buf, 0)
+    assert result == (payload.decode('utf-8'),)
+
+
+def test_tuple_itemlen_int32_max_no_overflow():
+    """
+    Confirms a reported false-positive: DesTupleType.deserialize checks
+    `p + itemlen <= buf.size` where `p` is Py_ssize_t (64-bit) and `itemlen`
+    is int32_t. Because C's usual arithmetic conversions promote the
+    narrower int32_t operand to match the wider Py_ssize_t before the
+    addition, this cannot wrap around even when itemlen == INT32_MAX -- the
+    addition happens in 64-bit space, not 32-bit. This test constructs a
+    tuple value whose declared item length is INT32_MAX against a buffer far
+    too small to hold it, and confirms the bounds check correctly rejects it
+    (raises IndexError) rather than silently passing and creating an
+    out-of-bounds buffer view.
+    """
+    cdef Deserializer des
+    cdef BytesIOReader reader
+    cdef Buffer buf
+
+    INT32_MAX = 2147483647
+
+    tuple_type = cqltypes.TupleType.apply_parameters([cqltypes.Int32Type])
+    des = find_deserializer(tuple_type)
+
+    # Only the 4-byte big-endian item length is present -- no payload bytes
+    # follow. If `p + itemlen` ever overflowed (e.g. computed as plain 32-bit
+    # arithmetic), it would wrap negative and incorrectly satisfy `<= buf.size`,
+    # which would then attempt to build a Buffer view spanning ~2GiB past the
+    # end of a 4-byte allocation.
+    blob = struct.pack('>i', INT32_MAX)
+    reader = BytesIOReader(blob)
+    buf.ptr = reader.read()
+    buf.size = reader.size
+
+    try:
+        from_binary(des, &buf, 3)
+    except IndexError as e:
+        assert "exceeds buffer size" in str(e)
+    else:
+        assert False, "expected IndexError from oversized tuple item length"
 
 
 def test_date_side_by_side():

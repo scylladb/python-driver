@@ -329,6 +329,11 @@ On OSX, via homebrew:
                 cython_candidates = ['cluster', 'concurrent', 'connection', 'cqltypes', 'metadata',
                                      'pool', 'protocol', 'query', 'util', 'shard_info']
                 compile_args = [] if is_windows else ['-Wno-unused-function']
+                # cython_marshal.pyx (included by deserializers.pyx, and by ioutils.pyx which
+                # is in turn included by numpy_parser.pyx/obj_parser.pyx/row_parser.pyx) declares
+                # ntohs/ntohl via winsock2.h on Windows. Those symbols are implemented in
+                # ws2_32.lib, so every *.pyx extension needs to link against it on Windows.
+                platform_libraries = ['ws2_32'] if is_windows else []
                 self.extensions.extend(cythonize(
                     [Extension('cassandra.%s' % m, ['cassandra/%s.py' % m],
                                extra_compile_args=compile_args)
@@ -339,7 +344,8 @@ On OSX, via homebrew:
                 ))
 
                 self.extensions.extend(cythonize(
-                    NoPatchExtension("*", ["cassandra/*.pyx"], extra_compile_args=compile_args),
+                    NoPatchExtension("*", ["cassandra/*.pyx"], extra_compile_args=compile_args,
+                                      libraries=platform_libraries),
                     nthreads=build_concurrency,
                     compiler_directives={'language_level': 3},
                 ))
