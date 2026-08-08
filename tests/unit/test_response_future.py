@@ -922,7 +922,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf.prepared_statement = PreparedStatement(
             column_metadata=[], query_id=query_id, routing_key_indexes=None,
-            query="SELECT * FROM foo", keyspace='ks', protocol_version=4,
+            query="SELECT * FROM foo", keyspace='ks',
             result_metadata=[], result_metadata_id=None)
         rf._query = Mock(return_value=True)
         rf._execute_after_prepare('host', None, None, response)
@@ -1107,7 +1107,7 @@ class ResponseFutureTests(unittest.TestCase):
     def _make_prepared_statement(self, result_metadata, result_metadata_id, query_id=b'qid'):
         return PreparedStatement(
             column_metadata=[], query_id=query_id, routing_key_indexes=None,
-            query="SELECT * FROM foo", keyspace='ks', protocol_version=4,
+            query="SELECT * FROM foo", keyspace='ks',
             result_metadata=result_metadata, result_metadata_id=result_metadata_id)
 
     def _make_execute_response_future(self, session, connection, prepared_statement):

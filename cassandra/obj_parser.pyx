@@ -81,9 +81,9 @@ cdef class TupleRowParser(RowParser):
                     decrypted_bytes = ce_policy.decrypt(coldesc, to_bytes(&buf))
                     PyBytes_AsStringAndSize(decrypted_bytes, &newbuf.ptr, &newbuf.size)
                     deserializer = find_deserializer(ce_policy.column_type(coldesc))
-                    val = from_binary(deserializer, &newbuf, desc.protocol_version)
+                    val = from_binary(deserializer, &newbuf)
                 else:
-                    val = from_binary(deserializer, &buf, desc.protocol_version)
+                    val = from_binary(deserializer, &buf)
             except Exception as e:
                 raise DriverException('Failed decoding result column "%s" of type %s: %s' % (desc.colnames[i],
                                                                                              desc.coltypes[i].cql_parameterized_type(),

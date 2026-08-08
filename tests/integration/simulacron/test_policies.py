@@ -19,14 +19,12 @@ from cassandra.query import SimpleStatement
 from cassandra.policies import ConstantSpeculativeExecutionPolicy, RoundRobinPolicy, RetryPolicy, WriteType
 from cassandra.protocol import OverloadedErrorMessage, IsBootstrappingErrorMessage, TruncateError, ServerError
 
-from tests.integration import greaterthancass21, requiressimulacron, SIMULACRON_JAR, \
-    CASSANDRA_VERSION
+from tests.integration import requiressimulacron, SIMULACRON_JAR
 from tests.integration.simulacron import PROTOCOL_VERSION
 from tests.integration.simulacron.utils import start_and_prime_singledc, prime_query, \
     stop_simulacron, NO_THEN, clear_queries
 
 from itertools import count
-from packaging.version import Version
 import pytest
 
 
@@ -48,7 +46,7 @@ class SpecExecTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if SIMULACRON_JAR is None or CASSANDRA_VERSION < Version("2.1"):
+        if SIMULACRON_JAR is None:
             return
 
         start_and_prime_singledc()
@@ -73,7 +71,7 @@ class SpecExecTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        if SIMULACRON_JAR is None or CASSANDRA_VERSION < Version("2.1"):
+        if SIMULACRON_JAR is None:
             return
 
         cls.cluster.shutdown()
@@ -82,7 +80,6 @@ class SpecExecTest(unittest.TestCase):
     def tearDown(self):
         clear_queries()
 
-    @greaterthancass21
     def test_speculative_execution(self):
         """
         Test to ensure that speculative execution honors LBP, and that they retry appropriately.
@@ -254,13 +251,13 @@ class CounterRetryPolicy(RetryPolicy):
 class RetryPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if SIMULACRON_JAR is None or CASSANDRA_VERSION < Version("2.1"):
+        if SIMULACRON_JAR is None:
             return
         start_and_prime_singledc()
 
     @classmethod
     def tearDownClass(cls):
-        if SIMULACRON_JAR is None or CASSANDRA_VERSION < Version("2.1"):
+        if SIMULACRON_JAR is None:
             return
         stop_simulacron()
 

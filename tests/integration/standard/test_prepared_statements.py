@@ -199,23 +199,14 @@ class PreparedStatementTests(unittest.TestCase):
         prepared.bind({'k': 1, 'v': 2, 'v2': 3})
 
         # right number, but one does not belong
-        if PROTOCOL_VERSION < 4:
-            # pre v4, the driver bails with key error when 'v' is found missing
-            with pytest.raises(KeyError):
-                prepared.bind({'k': 1, 'v2': 3})
-        else:
-            # post v4, the driver uses UNSET_VALUE for 'v' and 'v2' is ignored
-            prepared.bind({'k': 1, 'v2': 3})
+        # the driver uses UNSET_VALUE for 'v' and 'v2' is ignored
+        prepared.bind({'k': 1, 'v2': 3})
 
         # also catch too few variables with dicts
         assert isinstance(prepared, PreparedStatement)
-        if PROTOCOL_VERSION < 4:
-            with pytest.raises(KeyError):
-                prepared.bind({})
-        else:
-            # post v4, the driver attempts to use UNSET_VALUE for unspecified keys
-            with pytest.raises(ValueError):
-                prepared.bind({})
+        # the driver attempts to use UNSET_VALUE for unspecified keys
+        with pytest.raises(ValueError):
+            prepared.bind({})
 
     def test_none_values(self):
         """
@@ -255,8 +246,6 @@ class PreparedStatementTests(unittest.TestCase):
 
         @test_category prepared_statements:binding
         """
-        if PROTOCOL_VERSION < 4:
-            raise unittest.SkipTest("Binding UNSET values is not supported in protocol version < 4")
 
         # table with at least two values so one can be used as a marker
         self.session.execute("CREATE TABLE IF NOT EXISTS test1rf.test_unset_values (k int PRIMARY KEY, v0 int, v1 int)")

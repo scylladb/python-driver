@@ -24,7 +24,7 @@ For example, suppose Cassandra is setup with its default
     from cassandra.auth import PlainTextAuthProvider
 
     auth_provider = PlainTextAuthProvider(username='cassandra', password='cassandra')
-    cluster = Cluster(auth_provider=auth_provider, protocol_version=2)
+    cluster = Cluster(auth_provider=auth_provider)
 
 
 

@@ -21,7 +21,7 @@ from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.concurrent import execute_concurrent, execute_concurrent_with_args, ExecutionResult
 from cassandra.query import dict_factory, tuple_factory, SimpleStatement
 
-from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster
+from tests.integration import use_singledc, TestCluster
 
 import unittest
 import pytest
@@ -177,11 +177,6 @@ class ClusterTests(unittest.TestCase):
                 next(results)
 
     def test_execute_concurrent_paged_result(self):
-        if PROTOCOL_VERSION < 2:
-            raise unittest.SkipTest(
-                "Protocol 2+ is required for Paging, currently testing against %r"
-                % (PROTOCOL_VERSION,))
-
         num_statements = 201
         statement = SimpleStatement(
             "INSERT INTO test3rf.test (k, v) VALUES (%s, %s)",
@@ -220,11 +215,6 @@ class ClusterTests(unittest.TestCase):
 
         @test_category paging
         """
-        if PROTOCOL_VERSION < 2:
-            raise unittest.SkipTest(
-                "Protocol 2+ is required for Paging, currently testing against %r"
-                % (PROTOCOL_VERSION,))
-
         num_statements = 201
         statement = SimpleStatement(
             "INSERT INTO test3rf.test (k, v) VALUES (%s, %s)",

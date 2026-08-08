@@ -41,11 +41,11 @@ def test_datetype():
         dt = datetime.datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc)
 
         bytes = io.BytesIO()
-        write_value(bytes, DateType.serialize(dt, 0))
+        write_value(bytes, DateType.serialize(dt))
         bytes.seek(0)
         reader = BytesIOReader(bytes.read())
         get_buf(reader, &buf)
-        deserialized_dt = from_binary(des, &buf, 0)
+        deserialized_dt = from_binary(des, &buf)
 
         return deserialized_dt
 
@@ -85,12 +85,12 @@ def test_date_side_by_side():
     import time
 
     def verify_time(ms):
-        blob = DateType.serialize(ms, 0)
+        blob = DateType.serialize(ms)
         bior = BytesIOReader(blob)
         buf.ptr = bior.read()
         buf.size = bior.size
-        cython_deserialized = from_binary(cython_deserializer, &buf, 0)
-        python_deserialized = DateType.deserialize(blob, 0)
+        cython_deserialized = from_binary(cython_deserializer, &buf)
+        python_deserialized = DateType.deserialize(blob)
         assert cython_deserialized == python_deserialized
 
     # min -> 0
