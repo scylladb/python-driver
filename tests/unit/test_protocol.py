@@ -20,6 +20,7 @@ from typing import ClassVar
 from unittest.mock import Mock
 
 from cassandra import ConsistencyLevel, ProtocolVersion, UnsupportedOperation
+from cassandra.cqltypes import Int32Type, UTF8Type
 from cassandra.protocol import (
     PrepareMessage, QueryMessage, ExecuteMessage,
     BatchMessage, StartupMessage, OptionsMessage, RegisterMessage,
@@ -28,8 +29,11 @@ from cassandra.protocol import (
 )
 from cassandra.protocol_features import ProtocolFeatures
 from cassandra.query import BatchType
+from cassandra.marshal import int32_pack
 import pytest
 
+from cassandra.policies import ColDesc
+from tests.unit.cython.utils import cythontest, numpytest
 
 class MessageTest(unittest.TestCase):
 
@@ -555,3 +559,350 @@ class FrameByteIdentityTest(unittest.TestCase):
 
     def test_frames_with_default_features(self):
         self._assert_frames(ProtocolFeatures())
+
+
+class _BoolCountingPolicy:
+    """
+    Minimal column_encryption_policy stand-in whose truthiness (__bool__)
+    is instrumented with a counter.
+
+    A plain Mock() is always truthy regardless of how many times it is
+    evaluated in a boolean context, so asserting on contains_column's call
+    count cannot distinguish the optimized "check policy truthiness once
+    per result message" code path from the old "column_encryption_policy
+    and ..." per-value check: both call contains_column the same number of
+    times. Counting __bool__ invocations directly proves which one runs.
+    """
+
+    def __init__(self):
+        self.bool_call_count = 0
+        self.contains_column_call_count = 0
+
+    def __bool__(self):
+        self.bool_call_count += 1
+        return True
+
+    def contains_column(self, col_desc):
+        self.contains_column_call_count += 1
+        return False
+
+
+class ResultTest(unittest.TestCase):
+    """
+    Tests to verify the optimization of column_encryption_policy checks
+    in recv_results_rows. The optimization checks if the policy exists once
+    per result message, avoiding the redundant 'column_encryption_policy and ...'
+    check for every value.
+    """
+
+    def _create_mock_result_metadata(self):
+        """Create mock result metadata for testing"""
+        return [
+            ('keyspace1', 'table1', 'col1', Int32Type),
+            ('keyspace1', 'table1', 'col2', UTF8Type),
+        ]
+
+    def _create_mock_result_message(self):
+        """Create a mock result message with data"""
+        msg = ResultMessage(kind=RESULT_KIND_ROWS)
+        msg.column_metadata = self._create_mock_result_metadata()
+        msg.recv_results_metadata = Mock()
+        msg.recv_row = Mock(side_effect=[
+            [int32_pack(42), b'hello'],
+            [int32_pack(100), b'world'],
+        ])
+        return msg
+
+    def _create_mock_stream(self):
+        """Create a mock stream for reading rows"""
+        # Pack rowcount (2 rows)
+        data = int32_pack(2)
+        return io.BytesIO(data)
+
+    def test_decode_without_encryption_policy(self):
+        """
+        Test that decoding works correctly without column encryption policy.
+        This should use the optimized simple path.
+        """
+        msg = self._create_mock_result_message()
+        f = self._create_mock_stream()
+
+        msg.recv_results_rows(f, ProtocolVersion.V4, {}, None, None)
+
+        # Verify results
+        self.assertEqual(len(msg.parsed_rows), 2)
+        self.assertEqual(msg.parsed_rows[0][0], 42)
+        self.assertEqual(msg.parsed_rows[0][1], 'hello')
+        self.assertEqual(msg.parsed_rows[1][0], 100)
+        self.assertEqual(msg.parsed_rows[1][1], 'world')
+
+    def test_decode_with_encryption_policy_no_encrypted_columns(self):
+        """
+        Test that decoding works with encryption policy when no columns are encrypted.
+        """
+        msg = self._create_mock_result_message()
+        f = self._create_mock_stream()
+
+        # Create mock encryption policy that has no encrypted columns
+        mock_policy = Mock()
+        mock_policy.contains_column = Mock(return_value=False)
+
+        msg.recv_results_rows(f, ProtocolVersion.V4, {}, None, mock_policy)
+
+        # Verify results
+        self.assertEqual(len(msg.parsed_rows), 2)
+        self.assertEqual(msg.parsed_rows[0][0], 42)
+        self.assertEqual(msg.parsed_rows[0][1], 'hello')
+
+        # Verify contains_column was called for each value (but policy existence check happens once)
+        # Should be called 4 times (2 rows x 2 columns)
+        self.assertEqual(mock_policy.contains_column.call_count, 4)
+
+    def test_decode_with_encryption_policy_with_encrypted_column(self):
+        """
+        Test that decoding works with encryption policy when one column is encrypted.
+        """
+        msg = self._create_mock_result_message()
+        f = self._create_mock_stream()
+
+        # Create mock encryption policy where first column is encrypted
+        mock_policy = Mock()
+        def contains_column_side_effect(col_desc):
+            return col_desc.col == 'col1'
+        mock_policy.contains_column = Mock(side_effect=contains_column_side_effect)
+        mock_policy.column_type = Mock(return_value=Int32Type)
+        mock_policy.decrypt = Mock(side_effect=lambda col_desc, val: val)
+
+        msg.recv_results_rows(f, ProtocolVersion.V4, {}, None, mock_policy)
+
+        # Verify results
+        self.assertEqual(len(msg.parsed_rows), 2)
+        self.assertEqual(msg.parsed_rows[0][0], 42)
+        self.assertEqual(msg.parsed_rows[0][1], 'hello')
+
+        # Verify contains_column was called for each value (but policy existence check happens once)
+        # Should be called 4 times (2 rows x 2 columns)
+        self.assertEqual(mock_policy.contains_column.call_count, 4)
+
+        # Verify decrypt was called for each encrypted value (2 rows * 1 encrypted column)
+        self.assertEqual(mock_policy.decrypt.call_count, 2)
+
+    def test_optimization_efficiency(self):
+        """
+        Verify that the optimization checks policy existence once per result message.
+        The key optimization is checking 'if column_encryption_policy:' once,
+        rather than 'column_encryption_policy and ...' for every value.
+
+        A plain Mock() is always truthy no matter how many times it is
+        evaluated, so counting contains_column calls alone cannot tell the
+        optimized code apart from the old per-value
+        'column_encryption_policy and column_encryption_policy.contains_column(...)'
+        check: both call contains_column 200 times (100 rows * 2 columns)
+        either way. Using a policy whose __bool__ is instrumented catches a
+        regression back to the old hot-loop check, where truthiness would
+        be evaluated once per value instead of once per result message.
+        """
+        msg = self._create_mock_result_message()
+
+        # Create more rows to make the check pattern clear
+        msg.recv_row = Mock(side_effect=[
+            [int32_pack(i), f'text{i}'.encode()] for i in range(100)
+        ])
+
+        # Create mock stream with 100 rows
+        f = io.BytesIO(int32_pack(100))
+
+        policy = _BoolCountingPolicy()
+
+        msg.recv_results_rows(f, ProtocolVersion.V4, {}, None, policy)
+
+        # With optimization: policy existence checked once, contains_column called per value
+        # = 100 rows * 2 columns = 200 calls to contains_column
+        # The key is we avoid checking 'column_encryption_policy and ...' 200 times
+        self.assertEqual(policy.contains_column_call_count, 200,
+                        "contains_column should be called for each value when policy exists")
+
+        # The actual optimization being verified: policy truthiness ('if
+        # column_encryption_policy:') is evaluated exactly once per result
+        # message, not once per value/row (which would be 200, or 100 if
+        # checked once per row).
+        self.assertEqual(policy.bool_call_count, 1,
+                        "column_encryption_policy truthiness should be checked exactly once "
+                        "per result message, not in the per-value/per-row hot loop")
+
+
+@cythontest
+class CythonParserTest(unittest.TestCase):
+    """
+    Tests for the Cython fast-path parsers (ListParser, TupleRowParser)
+    to verify the column_encryption_policy optimization in obj_parser.pyx.
+
+    Requires the Cython extensions (cassandra.bytesio, cassandra.obj_parser,
+    cassandra.parsing, ...) to be built, which is not the case e.g. on PyPy
+    wheels (see setup.py: try_cython is disabled for PyPy). Without this
+    guard these tests fail with ModuleNotFoundError instead of skipping.
+    """
+
+    def _build_binary_rows(self, rows):
+        """
+        Build a binary buffer containing encoded rows.
+
+        Each row is a list of (size, raw_bytes) pairs.
+        Prepends a 4-byte big-endian row count.
+        """
+        import struct
+        data = struct.pack('>i', len(rows))
+        for row in rows:
+            for raw in row:
+                if raw is None:
+                    data += struct.pack('>i', -1)  # NULL
+                else:
+                    data += struct.pack('>i', len(raw)) + raw
+        return data
+
+    def _make_parse_desc(self, column_encryption_policy=None):
+        from cassandra.parsing import ParseDesc
+        from cassandra.deserializers import make_deserializers
+        from cassandra.policies import ColDesc
+
+        colnames = ['col1', 'col2']
+        coltypes = [Int32Type, UTF8Type]
+        coldescs = [ColDesc('ks', 'tbl', 'col1'), ColDesc('ks', 'tbl', 'col2')]
+        deserializers = make_deserializers(coltypes)
+        return ParseDesc(colnames, coltypes, column_encryption_policy,
+                         coldescs, deserializers, ProtocolVersion.V4)
+
+    def _int32_bytes(self, val):
+        import struct
+        return struct.pack('>i', val)
+
+    def test_parse_desc_rejects_mismatched_deserializers_length(self):
+        """
+        ParseDesc.__init__ must validate that deserializers has the same
+        length as colnames.
+
+        TupleRowParser.unpack_plain_row / unpack_col_encrypted_row (in
+        obj_parser.pyx) index into desc.deserializers[i] for i in
+        range(desc.rowsize), where rowsize == len(colnames), under
+        @cython.boundscheck(False). If deserializers were ever shorter than
+        colnames, that indexing would become an out-of-bounds memory read
+        instead of a safe IndexError. Since that can't be constructed by
+        the normal production code path (row_parser.pyx always builds
+        colnames/coltypes/deserializers from the same column_metadata),
+        this test instead verifies the construction-time guard itself:
+        it must raise on a mismatch and stay silent when lengths agree.
+        See GH PR #630 review discussion.
+        """
+        from cassandra.parsing import ParseDesc
+        from cassandra.deserializers import make_deserializers
+        from cassandra.policies import ColDesc
+
+        colnames = ['col1', 'col2']
+        coltypes = [Int32Type, UTF8Type]
+        coldescs = [ColDesc('ks', 'tbl', 'col1'), ColDesc('ks', 'tbl', 'col2')]
+
+        # Mismatched: only one deserializer for two columns.
+        short_deserializers = make_deserializers(coltypes[:1])
+        with self.assertRaises(ValueError):
+            ParseDesc(colnames, coltypes, None, coldescs, short_deserializers, ProtocolVersion.V4)
+
+        # Matching lengths must not raise.
+        deserializers = make_deserializers(coltypes)
+        desc = ParseDesc(colnames, coltypes, None, coldescs, deserializers, ProtocolVersion.V4)
+        self.assertEqual(desc.colnames, colnames)
+
+    def test_list_parser_without_encryption(self):
+        """ListParser decodes rows correctly without encryption policy."""
+        from cassandra.bytesio import BytesIOReader
+        from cassandra.obj_parser import ListParser
+
+        desc = self._make_parse_desc(column_encryption_policy=None)
+        data = self._build_binary_rows([
+            [self._int32_bytes(42), b'hello'],
+            [self._int32_bytes(100), b'world'],
+        ])
+        reader = BytesIOReader(data)
+        result = ListParser().parse_rows(reader, desc)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], (42, 'hello'))
+        self.assertEqual(result[1], (100, 'world'))
+
+    def test_list_parser_with_encryption_no_encrypted_cols(self):
+        """ListParser decodes rows correctly when policy exists but no columns are encrypted."""
+        from cassandra.bytesio import BytesIOReader
+        from cassandra.obj_parser import ListParser
+
+        mock_policy = Mock()
+        mock_policy.contains_column = Mock(return_value=False)
+
+        desc = self._make_parse_desc(column_encryption_policy=mock_policy)
+        data = self._build_binary_rows([
+            [self._int32_bytes(42), b'hello'],
+        ])
+        reader = BytesIOReader(data)
+        result = ListParser().parse_rows(reader, desc)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0], (42, 'hello'))
+        # 1 row * 2 columns = 2 calls
+        self.assertEqual(mock_policy.contains_column.call_count, 2)
+
+    def test_list_parser_with_encrypted_column(self):
+        """ListParser decodes rows with an encrypted column (mock decrypt is identity)."""
+        from cassandra.bytesio import BytesIOReader
+        from cassandra.obj_parser import ListParser
+        from cassandra.deserializers import find_deserializer
+
+        mock_policy = Mock()
+        mock_policy.contains_column = Mock(
+            side_effect=lambda cd: cd.col == 'col1')
+        mock_policy.column_type = Mock(return_value=Int32Type)
+        # decrypt returns the raw bytes unchanged (identity)
+        mock_policy.decrypt = Mock(side_effect=lambda cd, val: val)
+
+        desc = self._make_parse_desc(column_encryption_policy=mock_policy)
+        data = self._build_binary_rows([
+            [self._int32_bytes(7), b'test'],
+        ])
+        reader = BytesIOReader(data)
+        result = ListParser().parse_rows(reader, desc)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0], (7, 'test'))
+        self.assertEqual(mock_policy.decrypt.call_count, 1)
+        self.assertEqual(mock_policy.column_type.call_count, 1)
+
+    @numpytest
+    def test_numpy_parser_rejects_encryption(self):
+        """
+        NumPy result parsing + column_encryption_policy is an unsupported
+        combination and must raise NotImplementedError.
+
+        This exercises the real production path -
+        row_parser.make_recv_results_rows(NumpyParser()), the same wrapper
+        used by NumpyProtocolHandler - rather than calling
+        NumpyParser().parse_rows() directly. That wrapper has a broad
+        'except Exception' fallback to TupleRowParser for decoding
+        failures; it must not swallow NotImplementedError raised for this
+        unsupported configuration (see GH PR #630 review discussion).
+        """
+        from cassandra.numpy_parser import NumpyParser
+        from cassandra.row_parser import make_recv_results_rows
+
+        class _FastResultMessageForTest(ResultMessage):
+            recv_results_rows = make_recv_results_rows(NumpyParser())
+
+        mock_policy = Mock()
+        msg = _FastResultMessageForTest(kind=RESULT_KIND_ROWS)
+        msg.column_metadata = [
+            ('ks', 'tbl', 'col1', Int32Type),
+            ('ks', 'tbl', 'col2', UTF8Type),
+        ]
+        msg.recv_results_metadata = Mock()
+
+        data = self._build_binary_rows([[self._int32_bytes(1), b'x']])
+        f = io.BytesIO(data)
+
+        with self.assertRaises(NotImplementedError):
+            msg.recv_results_rows(f, ProtocolVersion.V4, {}, None, mock_policy)
