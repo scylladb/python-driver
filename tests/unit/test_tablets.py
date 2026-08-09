@@ -1,4 +1,5 @@
 import unittest
+import uuid
 
 from cassandra.tablets import Tablets, Tablet
 
@@ -124,3 +125,64 @@ class GetTabletForKeyTest(unittest.TestCase):
         # Token value 50 is not > first_token (100) of the tablet whose
         # last_token (200) is >= 50, so no match.
         self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))
+
+
+class DropTabletsByHostIdTest(unittest.TestCase):
+    """
+    Regression tests: drop_tablets_by_host_id must delete a table's key
+    from _tablets entirely once its tablet list becomes empty, so that
+    table_has_tablets() (and any other truthiness/membership check on
+    _tablets, e.g. bool(tablets)) correctly reflects that no tablets are
+    left -- rather than leaving a stale empty list behind.
+    """
+
+    def test_drop_last_tablet_removes_table_key(self):
+        host_id = uuid.uuid4()
+        t1 = Tablet(0, 100, [(host_id, 0)])
+        tablets = Tablets({("ks", "tb"): [t1]})
+
+        assert tablets.table_has_tablets("ks", "tb") is True
+
+        tablets.drop_tablets_by_host_id(host_id)
+
+        # The no-tablet fast path must now be correctly signalled: the key
+        # must be gone from the dict (not just left as an empty list), and
+        # table_has_tablets must report False.
+        assert ("ks", "tb") not in tablets._tablets
+        assert tablets.table_has_tablets("ks", "tb") is False
+        assert bool(tablets) is False
+
+    def test_drop_some_tablets_keeps_remaining(self):
+        removed_host_id = uuid.uuid4()
+        remaining_host_id = uuid.uuid4()
+        t1 = Tablet(0, 100, [(removed_host_id, 0)])
+        t2 = Tablet(100, 200, [(remaining_host_id, 0)])
+        tablets = Tablets({("ks", "tb"): [t1, t2]})
+
+        tablets.drop_tablets_by_host_id(removed_host_id)
+
+        assert ("ks", "tb") in tablets._tablets
+        assert tablets._tablets[("ks", "tb")] == [t2]
+        assert tablets.table_has_tablets("ks", "tb") is True
+        assert bool(tablets) is True
+
+    def test_drop_last_tablet_for_one_table_keeps_other_tables(self):
+        host_id = uuid.uuid4()
+        other_host_id = uuid.uuid4()
+        t1 = Tablet(0, 100, [(host_id, 0)])
+        t2 = Tablet(0, 100, [(other_host_id, 0)])
+        tablets = Tablets({("ks", "tb1"): [t1], ("ks", "tb2"): [t2]})
+
+        tablets.drop_tablets_by_host_id(host_id)
+
+        assert ("ks", "tb1") not in tablets._tablets
+        assert tablets.table_has_tablets("ks", "tb1") is False
+        assert ("ks", "tb2") in tablets._tablets
+        assert tablets.table_has_tablets("ks", "tb2") is True
+        # Overall dict is still non-empty because tb2 still has tablets.
+        assert bool(tablets) is True
+
+    def test_drop_by_host_id_none_is_noop(self):
+        tablets = Tablets({("ks", "tb"): []})
+        tablets.drop_tablets_by_host_id(None)
+        assert ("ks", "tb") in tablets._tablets

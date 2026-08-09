@@ -55,6 +55,9 @@ class Tablets(object):
         self._tablets = tablets
         self._lock = Lock()
 
+    def __bool__(self):
+        return bool(self._tablets)
+
     def table_has_tablets(self, keyspace, table) -> bool:
         return bool(self._tablets.get((keyspace, table), []))
 
@@ -86,6 +89,7 @@ class Tablets(object):
         if host_id is None:
             return
         with self._lock:
+            empty_keys = []
             for key, tablets in self._tablets.items():
                 to_be_deleted = []
                 for tablet_id, tablet in enumerate(tablets):
@@ -94,6 +98,18 @@ class Tablets(object):
 
                 for tablet_id in reversed(to_be_deleted):
                     tablets.pop(tablet_id)
+
+                if not tablets:
+                    empty_keys.append(key)
+
+            # Delete keys whose tablet list is now empty (can't do this
+            # while iterating self._tablets.items() above -- that would
+            # mutate the dict's size mid-iteration). Leaving an empty list
+            # behind would keep bool(self._tablets) truthy forever for a
+            # table that no longer has any tablets, defeating the
+            # table_has_tablets()/bool(tablets) no-tablet fast path.
+            for key in empty_keys:
+                del self._tablets[key]
 
     def add_tablet(self, keyspace, table, tablet):
         with self._lock:
