@@ -73,8 +73,7 @@ Running Unit Tests
 Unit tests can be run like so::
 
     uv run pytest tests/unit
-    EVENT_LOOP_MANAGER=gevent uv run pytest tests/unit/io/test_geventreactor.py
-    EVENT_LOOP_MANAGER=eventlet uv run pytest tests/unit/io/test_eventletreactor.py
+    EVENT_LOOP_MANAGER=asyncio CASS_DRIVER_NO_SKIP=1 uv run pytest tests/unit/io/test_asyncioreactor.py
 
 You can run a specific test method like so::
 

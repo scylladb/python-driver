@@ -36,7 +36,6 @@ from random import random
 import re
 import queue
 import socket
-import sys
 import time
 from threading import Lock, RLock, Thread, Event
 import uuid
@@ -99,55 +98,9 @@ from cassandra.datastax import cloud as dscloud
 from cassandra.application_info import ApplicationInfoBase
 
 try:
-    from cassandra.io.twistedreactor import TwistedConnection
-except ImportError:
-    TwistedConnection = None
-
-try:
-    from cassandra.io.eventletreactor import EventletConnection
-except (ImportError, AttributeError):
-    # AttributeError was add for handling python 3.12 https://github.com/eventlet/eventlet/issues/812
-    # TODO: remove it when eventlet issue would be fixed
-    EventletConnection = None
-
-try:
     from weakref import WeakSet
 except ImportError:
     from cassandra.util import WeakSet  # NOQA
-
-def _is_gevent_monkey_patched():
-    if 'gevent.monkey' not in sys.modules:
-        return False
-    try:
-        import gevent.socket
-        return socket.socket is gevent.socket.socket    # Another case related to PYTHON-1364
-    except (AttributeError, ImportError):
-        return False
-
-def _try_gevent_import():
-    if _is_gevent_monkey_patched():
-        from cassandra.io.geventreactor import GeventConnection
-        return (GeventConnection,None)
-    else:
-        return (None,None)
-
-def _is_eventlet_monkey_patched():
-    if 'eventlet.patcher' not in sys.modules:
-        return False
-    try:
-        import eventlet.patcher
-        return eventlet.patcher.is_monkey_patched('socket')
-    except (ImportError, AttributeError):
-        # AttributeError was add for handling python 3.12 https://github.com/eventlet/eventlet/issues/812
-        # TODO: remove it when eventlet issue would be fixed
-        return False
-
-def _try_eventlet_import():
-    if _is_eventlet_monkey_patched():
-        from cassandra.io.eventletreactor import EventletConnection
-        return (EventletConnection,None)
-    else:
-        return (None,None)
 
 def _try_libev_import():
     try:
@@ -177,7 +130,7 @@ def _connection_reduce_fn(val,import_fn):
         excs.append(exc)
     return (rv or import_result, excs)
 
-conn_fns = (_try_gevent_import, _try_eventlet_import, _try_libev_import, _try_asyncore_import, _try_asyncio_import)
+conn_fns = (_try_libev_import, _try_asyncore_import, _try_asyncio_import)
 (conn_class, excs) = reduce(_connection_reduce_fn, conn_fns, (None,[]))
 if not conn_class:
     raise DependencyException("Exception loading connection class dependencies", excs)
@@ -944,18 +897,12 @@ class Cluster(object):
 
     * :class:`cassandra.io.asyncorereactor.AsyncoreConnection`
     * :class:`cassandra.io.libevreactor.LibevConnection`
-    * :class:`cassandra.io.eventletreactor.EventletConnection` (requires monkey-patching - see doc for details)
-    * :class:`cassandra.io.geventreactor.GeventConnection` (requires monkey-patching - see doc for details)
-    * :class:`cassandra.io.twistedreactor.TwistedConnection`
     * EXPERIMENTAL: :class:`cassandra.io.asyncioreactor.AsyncioConnection`
 
     By default, ``AsyncoreConnection`` will be used, which uses
     the ``asyncore`` module in the Python standard library.
 
     If ``libev`` is installed, ``LibevConnection`` will be used instead.
-
-    If ``gevent`` or ``eventlet`` monkey-patching is detected, the corresponding
-    connection class will be used automatically.
 
     ``AsyncioConnection``, which uses the ``asyncio`` module in the Python
     standard library, is also available, but currently experimental. Note that
@@ -1301,9 +1248,7 @@ class Cluster(object):
                 raise ValueError("contact_points, endpoint_factory, ssl_context, and ssl_options "
                                  "cannot be specified with a cloud configuration")
 
-            uses_twisted = TwistedConnection and issubclass(self.connection_class, TwistedConnection)
-            uses_eventlet = EventletConnection and issubclass(self.connection_class, EventletConnection)
-            cloud_config = dscloud.get_cloud_config(cloud, create_pyopenssl_context=uses_twisted or uses_eventlet)
+            cloud_config = dscloud.get_cloud_config(cloud)
 
             ssl_context = cloud_config.ssl_context
             ssl_options = {'check_hostname': True}
@@ -1601,39 +1546,12 @@ class Cluster(object):
 
     def _create_thread_pool_executor(self, **kwargs):
         """
-        Create a ThreadPoolExecutor for the cluster. In most cases, the built-in
-        `concurrent.futures.ThreadPoolExecutor` is used.
-
-        Python 3.7+ and Eventlet cause the `concurrent.futures.ThreadPoolExecutor`
-        to hang indefinitely. In that case, the user needs to have the `futurist`
-        package so we can use the `futurist.GreenThreadPoolExecutor` class instead.
+        Create a ThreadPoolExecutor for the cluster.
 
         :param kwargs: All keyword args are passed to the ThreadPoolExecutor constructor.
         :return: A ThreadPoolExecutor instance.
         """
-        tpe_class = ThreadPoolExecutor
-        if sys.version_info[0] >= 3 and sys.version_info[1] >= 7:
-            try:
-                from cassandra.io.eventletreactor import EventletConnection
-                is_eventlet = issubclass(self.connection_class, EventletConnection)
-            except:
-                # Eventlet is not available or can't be detected
-                return tpe_class(**kwargs)
-
-            if is_eventlet:
-                try:
-                    from futurist import GreenThreadPoolExecutor
-                    tpe_class = GreenThreadPoolExecutor
-                except ImportError:
-                    # futurist is not available
-                    raise ImportError(
-                        ("Python 3.7+ and Eventlet cause the `concurrent.futures.ThreadPoolExecutor` "
-                         "to hang indefinitely. If you want to use the Eventlet reactor, you "
-                         "need to install the `futurist` package to allow the driver to use "
-                         "the GreenThreadPoolExecutor. See https://github.com/eventlet/eventlet/issues/508 "
-                         "for more details."))
-
-        return tpe_class(**kwargs)
+        return ThreadPoolExecutor(**kwargs)
 
     def register_user_type(self, keyspace, user_type, klass):
         """
