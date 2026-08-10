@@ -104,11 +104,6 @@ jobs:
         run: |
           uv tool install 'cibuildwheel==3.2.1'
 
-      - name: Install OpenSSL for Windows
-        if: runner.os == 'Windows'
-        run: |
-          choco install openssl.light --no-progress -y
-
       - name: Install Conan
         if: runner.os == 'Windows'
         uses: turtlebrowser/get-conan@c171f295f3f507360ee018736a6608731aa2109d # v1.2
