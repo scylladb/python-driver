@@ -69,7 +69,7 @@ from cassandra.protocol import (QueryMessage, ResultMessage,
                                 RESULT_KIND_SET_KEYSPACE, RESULT_KIND_ROWS,
                                 RESULT_KIND_SCHEMA_CHANGE, ProtocolHandler,
                                 RESULT_KIND_VOID, ProtocolException)
-from cassandra.metadata import Metadata, Token, protect_name, murmur3, _NodeInfo
+from cassandra.metadata import Metadata, Token, protect_name, murmur3, _NodeInfo, ReplicationStrategy
 from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, SimpleConvictionPolicy,
                                 ExponentialReconnectionPolicy, HostDistance,
                                 RetryPolicy, IdentityTranslator, NoSpeculativeExecutionPlan,
@@ -1153,8 +1153,9 @@ class Cluster(object):
         Flag indicating whether internal schema metadata is updated.
 
         When disabled, the driver does not populate Cluster.metadata.keyspaces on connect, or on schema change events. This
-        can be used to speed initial connection, and reduce load on client and server during operation. Turning this off
-        gives away token aware request routing, and programmatic inspection of the metadata model.
+        can be used to speed initial connection, and reduce load on client and server during operation. Token aware request
+        routing is still maintained using a lightweight query of keyspace replication strategies, but programmatic inspection
+        of the metadata model is not available.
         """
         return self.control_connection._schema_meta_enabled
 
@@ -3843,6 +3844,8 @@ class ControlConnection(object):
     _SELECT_SCHEMA_PEERS_TEMPLATE = "SELECT peer, host_id, {nt_col_name}, schema_version FROM system.peers"
     _SELECT_SCHEMA_LOCAL = "SELECT schema_version FROM system.local WHERE key='local'"
 
+    _SELECT_KEYSPACES_REPLICATION = "SELECT keyspace_name, replication FROM system_schema.keyspaces"
+
     _SELECT_PEERS_V2 = "SELECT * FROM system.peers_v2"
     _SELECT_PEERS_NO_TOKENS_V2 = "SELECT host_id, peer, peer_port, data_center, rack, native_address, native_port, release_version, schema_version FROM system.peers_v2"
     _SELECT_SCHEMA_PEERS_V2 = "SELECT host_id, peer, peer_port, native_address, native_port, schema_version FROM system.peers_v2"
@@ -4132,17 +4135,64 @@ class ControlConnection(object):
             self._signal_error()
         return False
 
+    def _refresh_replication_strategies(self, connection):
+        """
+        Fetch the keyspace replication strategies from the lightweight
+        ``system_schema.keyspaces`` table. Used to support token-aware routing
+        when schema metadata is disabled.
+        """
+        if not self._token_meta_enabled:
+            return
+        cl = ConsistencyLevel.ONE
+        query = QueryMessage(
+            query=maybe_add_timeout_to_query(
+                self._SELECT_KEYSPACES_REPLICATION, self._metadata_request_timeout),
+            consistency_level=cl)
+        try:
+            result = connection.wait_for_response(query, timeout=self._timeout)
+            rows = dict_factory(result.column_names, result.parsed_rows)
+        except Exception as exc:
+            # not supported by very old servers; degrade to no token-aware routing
+            log.warning("[control connection] Failed to fetch keyspace replication strategies, "
+                        "token-aware routing may be degraded: %s", exc)
+            return
+
+        strategies = {}
+        for row in rows:
+            try:
+                replication = dict(row["replication"])
+                strategy_class = replication.pop("class")
+            except (TypeError, KeyError):
+                log.warning("[control connection] Skipping keyspace %s with unparseable "
+                            "replication settings", row.get("keyspace_name"))
+                continue
+            strategy = ReplicationStrategy.create(strategy_class, replication)
+            if strategy:
+                strategies[row["keyspace_name"]] = strategy
+        self._cluster.metadata._update_replication_strategies(strategies)
+
     def _refresh_schema(self, connection, preloaded_results=None, schema_agreement_wait=None, force=False, **kwargs):
         if self._cluster.is_shutdown:
+            return False
+
+        if not self._schema_meta_enabled and not force:
+            target_type = kwargs.get("target_type")
+            change_type = kwargs.get("change_type")
+            if not target_type or target_type.lower() == "keyspace":
+                # keep token-aware routing functional without fetching the full schema
+                self._refresh_replication_strategies(connection)
+            elif target_type.lower() == "table" and change_type == "DROPPED":
+                # keep tablet metadata up to date for dropped tables
+                keyspace = kwargs.get("keyspace")
+                table = kwargs.get("table")
+                if keyspace and table:
+                    self._cluster.metadata._table_removed(keyspace, table)
+            log.debug("[control connection] Skipping schema refresh because schema metadata is disabled")
             return False
 
         agreed = self._wait_for_schema_agreement(connection=connection,
                                                 preloaded_results=preloaded_results,
                                                 wait_time=schema_agreement_wait)
-
-        if not self._schema_meta_enabled and not force:
-            log.debug("[control connection] Skipping schema refresh because schema metadata is disabled")
-            return False
 
         if not agreed:
             log.debug("Skipping schema refresh due to lack of schema agreement")

@@ -24,6 +24,8 @@ from cassandra.pool import Host
 from cassandra.connection import EndPoint, DefaultEndPoint, DefaultEndPointFactory
 from cassandra.policies import (SimpleConvictionPolicy, RoundRobinPolicy,
                                 ConstantReconnectionPolicy, IdentityTranslator)
+from cassandra.metadata import SimpleStrategy, LocalStrategy, Metadata
+from cassandra.tablets import Tablet
 
 PEER_IP = "foobar"
 
@@ -490,6 +492,142 @@ class ControlConnectionTest(unittest.TestCase):
         self.cluster.scheduler.reset_mock()
         self.control_connection._handle_topology_change(event)
         self.cluster.scheduler.schedule_unique.assert_called_once_with(ANY, self.control_connection._refresh_nodes_if_not_up, None)
+
+    def test_refresh_schema_disabled_fetches_replication_strategies(self):
+        """
+        When schema metadata is disabled, the full schema refresh is skipped
+        but keyspace replication strategies are fetched for token-aware routing.
+        """
+        self.control_connection._schema_meta_enabled = False
+        result = ResultMessage(kind=RESULT_KIND_ROWS)
+        result.column_names = ["keyspace_name", "replication"]
+        result.parsed_rows = [
+            ["ks", {"class": "org.apache.cassandra.locator.SimpleStrategy", "replication_factor": "1"}],
+            ["system", {"class": "org.apache.cassandra.locator.LocalStrategy", "replication_factor": "1"}],
+        ]
+        self.connection.wait_for_response = Mock(return_value=result)
+        self.cluster.metadata._update_replication_strategies = Mock()
+
+        self.control_connection._refresh_schema(self.connection)
+
+        assert self.connection.wait_for_response.call_count == 1
+        strategies = self.cluster.metadata._update_replication_strategies.call_args[0][0]
+        assert isinstance(strategies["ks"], SimpleStrategy)
+        assert strategies["ks"].replication_factor == 1
+        assert isinstance(strategies["system"], LocalStrategy)
+
+    def test_refresh_schema_disabled_keyspace_event_fetches_replication_strategies(self):
+        """
+        Keyspace schema change events are processed when schema metadata is
+        disabled to keep token-aware routing up to date.
+        """
+        self.control_connection._schema_meta_enabled = False
+        result = ResultMessage(kind=RESULT_KIND_ROWS)
+        result.column_names = ["keyspace_name", "replication"]
+        result.parsed_rows = [
+            ["ks", {"class": "org.apache.cassandra.locator.SimpleStrategy", "replication_factor": "1"}],
+        ]
+        self.connection.wait_for_response = Mock(return_value=result)
+        self.cluster.metadata._update_replication_strategies = Mock()
+
+        self.control_connection._refresh_schema(
+            self.connection, target_type="KEYSPACE", change_type="CREATED", keyspace="ks")
+
+        self.cluster.metadata._update_replication_strategies.assert_called_once()
+        strategies = self.cluster.metadata._update_replication_strategies.call_args[0][0]
+        assert set(strategies) == {"ks"}
+
+    def test_refresh_schema_disabled_table_dropped_invalidates_tablets(self):
+        """
+        Dropped table events are processed when schema metadata is disabled so
+        tablet metadata stays up to date.
+        """
+        self.control_connection._schema_meta_enabled = False
+        metadata = Metadata()
+        metadata._tablets.add_tablet("ks", "tb", Tablet(0, 100, [("host1", 0)]))
+        self.cluster.metadata = metadata
+
+        self.control_connection._refresh_schema(
+            self.connection, target_type="TABLE", change_type="DROPPED", keyspace="ks", table="tb")
+
+        assert metadata._tablets.table_has_tablets("ks", "tb") is False
+
+    def test_refresh_schema_disabled_table_dropped_without_names(self):
+        """
+        A dropped table event without keyspace/table names is ignored without
+        raising, keeping the control connection healthy.
+        """
+        self.control_connection._schema_meta_enabled = False
+        self.cluster.metadata._table_removed = Mock()
+
+        self.control_connection._refresh_schema(
+            self.connection, target_type="TABLE", change_type="DROPPED")
+
+        self.cluster.metadata._table_removed.assert_not_called()
+
+    def test_refresh_schema_disabled_ignores_other_events(self):
+        """
+        Non-keyspace, non-dropped-table schema events are ignored when schema
+        metadata is disabled.
+        """
+        self.control_connection._schema_meta_enabled = False
+        self.cluster.metadata._update_replication_strategies = Mock()
+        self.cluster.metadata._table_removed = Mock()
+
+        self.control_connection._refresh_schema(
+            self.connection, target_type="TABLE", change_type="CREATED", keyspace="ks", table="tb")
+
+        self.cluster.metadata._update_replication_strategies.assert_not_called()
+        self.cluster.metadata._table_removed.assert_not_called()
+
+    def test_refresh_schema_disabled_skips_strategies_without_token_metadata(self):
+        """
+        Replication strategies are not fetched when token metadata is disabled.
+        """
+        self.control_connection._schema_meta_enabled = False
+        self.control_connection._token_meta_enabled = False
+        self.connection.wait_for_response = Mock()
+        self.cluster.metadata._update_replication_strategies = Mock()
+
+        self.control_connection._refresh_schema(self.connection)
+
+        self.connection.wait_for_response.assert_not_called()
+        self.cluster.metadata._update_replication_strategies.assert_not_called()
+
+    def test_refresh_schema_disabled_degrades_gracefully_on_fetch_error(self):
+        """
+        A failure fetching replication strategies is not propagated, so the
+        control connection stays healthy on servers without system_schema.keyspaces.
+        """
+        self.control_connection._schema_meta_enabled = False
+        self.connection.wait_for_response = Mock(side_effect=OperationTimedOut())
+        self.cluster.metadata._update_replication_strategies = Mock()
+
+        assert self.control_connection._refresh_schema(self.connection) is False
+
+        self.cluster.metadata._update_replication_strategies.assert_not_called()
+
+    def test_refresh_schema_disabled_skips_malformed_strategy_row(self):
+        """
+        A malformed row is skipped without discarding the strategies parsed
+        from the remaining valid rows.
+        """
+        self.control_connection._schema_meta_enabled = False
+        result = ResultMessage(kind=RESULT_KIND_ROWS)
+        result.column_names = ["keyspace_name", "replication"]
+        result.parsed_rows = [
+            ["bad", None],
+            ["good", {"class": "org.apache.cassandra.locator.SimpleStrategy", "replication_factor": "1"}],
+        ]
+        self.connection.wait_for_response = Mock(return_value=result)
+        self.cluster.metadata._update_replication_strategies = Mock()
+
+        self.control_connection._refresh_schema(self.connection)
+
+        self.cluster.metadata._update_replication_strategies.assert_called_once()
+        strategies = self.cluster.metadata._update_replication_strategies.call_args[0][0]
+        assert set(strategies) == {"good"}
+        assert isinstance(strategies["good"], SimpleStrategy)
 
     def test_handle_status_change(self):
         event = {

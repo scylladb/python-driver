@@ -9,6 +9,10 @@ Features
 
 Others
 ------
+* Token-aware request routing is now maintained when ``schema_metadata_enabled`` is
+  disabled: the driver fetches the keyspace replication strategies from the lightweight
+  ``system_schema.keyspaces`` table (on connect and on keyspace schema change events),
+  and drops tablet metadata for dropped tables and keyspaces.
 * ``PreparedStatement.result_metadata`` and ``PreparedStatement.result_metadata_id`` are
   now read-only. They are replaced together by
   ``PreparedStatement.update_result_metadata()``, so a request can never observe a metadata
