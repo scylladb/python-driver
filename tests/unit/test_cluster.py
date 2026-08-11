@@ -20,11 +20,12 @@ from types import SimpleNamespace
 
 from unittest.mock import patch, Mock
 import uuid
+from weakref import WeakValueDictionary
 
 from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, RequestExecutionException, ReadTimeout, WriteTimeout, CoordinationFailure, ReadFailure, WriteFailure, FunctionFailure, AlreadyExists,\
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
 from cassandra.cluster import _Scheduler, Session, Cluster, ResultSet, SchemaAgreementScope, ControlConnectionQueryFallback, default_lbp_factory, \
-    ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
+    ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT, EagerPrepareScope
 from cassandra.connection import ConnectionBusy, ConnectionException
 from cassandra.pool import Host
 from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
@@ -186,6 +187,106 @@ class ClusterTest(unittest.TestCase):
         for invalid_port in [0, 65536, -1]:
             with pytest.raises(ValueError):
                 cluster = Cluster(contact_points=['127.0.0.1'], port=invalid_port)
+
+    def test_eager_prepare_scope_default(self):
+        assert Cluster().eager_prepare_scope is EagerPrepareScope.ALL
+
+    def test_eager_prepare_scope_rejects_non_enum_values(self):
+        for invalid_value in (True, False, 'ALL', 1, None):
+            with pytest.raises(TypeError):
+                Cluster(eager_prepare_scope=invalid_value)
+
+    def test_eager_prepare_scope_includes_distance(self):
+        assert EagerPrepareScope.NONE.includes_distance(HostDistance.LOCAL_RACK) is False
+        assert EagerPrepareScope.NONE.includes_distance(HostDistance.LOCAL) is False
+        assert EagerPrepareScope.NONE.includes_distance(HostDistance.REMOTE) is False
+
+        assert EagerPrepareScope.LOCAL_RACK.includes_distance(HostDistance.LOCAL_RACK) is True
+        assert EagerPrepareScope.LOCAL_RACK.includes_distance(HostDistance.LOCAL) is False
+        assert EagerPrepareScope.LOCAL_RACK.includes_distance(HostDistance.REMOTE) is False
+
+        assert EagerPrepareScope.LOCAL_DC.includes_distance(HostDistance.LOCAL_RACK) is True
+        assert EagerPrepareScope.LOCAL_DC.includes_distance(HostDistance.LOCAL) is True
+        assert EagerPrepareScope.LOCAL_DC.includes_distance(HostDistance.REMOTE) is False
+
+        assert EagerPrepareScope.ALL.includes_distance(HostDistance.LOCAL_RACK) is True
+        assert EagerPrepareScope.ALL.includes_distance(HostDistance.LOCAL) is True
+        assert EagerPrepareScope.ALL.includes_distance(HostDistance.REMOTE) is True
+
+        for scope in EagerPrepareScope:
+            assert scope.includes_distance(HostDistance.IGNORED) is False
+
+    def test_prepare_all_queries_skips_hosts_outside_eager_prepare_scope(self):
+        cluster = Cluster(
+            allow_control_connection_query_fallback=ControlConnectionQueryFallback.SkipPoolCreation,
+            monitor_reporting_enabled=False,
+            eager_prepare_scope=EagerPrepareScope.LOCAL_DC,
+        )
+        prepared_statement = Mock(keyspace=None)
+        cluster._prepared_statements = WeakValueDictionary({'query_id': prepared_statement})
+        cluster.profile_manager.distance = Mock(return_value=HostDistance.REMOTE)
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+        with patch.object(Cluster, "connection_factory") as mocked_connection_factory:
+            cluster._prepare_all_queries(host)
+
+        mocked_connection_factory.assert_not_called()
+
+        cluster.profile_manager.distance = Mock(return_value=HostDistance.LOCAL)
+        with patch.object(Cluster, "connection_factory") as mocked_connection_factory:
+            cluster._prepare_all_queries(host)
+
+        mocked_connection_factory.assert_called_once_with(host.endpoint)
+
+    def test_prepare_all_queries_reuses_caller_provided_distance(self):
+        cluster = Cluster(
+            allow_control_connection_query_fallback=ControlConnectionQueryFallback.SkipPoolCreation,
+            monitor_reporting_enabled=False,
+            eager_prepare_scope=EagerPrepareScope.LOCAL_DC,
+        )
+        prepared_statement = Mock(keyspace=None)
+        cluster._prepared_statements = WeakValueDictionary({'query_id': prepared_statement})
+        cluster.profile_manager.distance = Mock(
+            side_effect=AssertionError("distance() should not be recomputed when already provided by the caller"))
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+        with patch.object(Cluster, "connection_factory") as mocked_connection_factory:
+            cluster._prepare_all_queries(host, HostDistance.LOCAL)
+
+        mocked_connection_factory.assert_called_once_with(host.endpoint)
+
+    def test_prepare_on_all_hosts_skips_hosts_outside_eager_prepare_scope(self):
+        cluster = Cluster(
+            allow_control_connection_query_fallback=ControlConnectionQueryFallback.SkipPoolCreation,
+            monitor_reporting_enabled=False,
+            eager_prepare_scope=EagerPrepareScope.LOCAL_DC,
+        )
+        session = Session(cluster, [])
+
+        excluded_host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        excluded_host.set_up()
+        remote_host = Host("127.0.0.2", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        remote_host.set_up()
+        local_host = Host("127.0.0.3", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        local_host.set_up()
+        down_host = Host("127.0.0.4", SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+        session._pools = {
+            excluded_host: Mock(),
+            remote_host: Mock(),
+            local_host: Mock(),
+            down_host: Mock(),
+        }
+        session._profile_manager.distance = Mock(
+            side_effect=lambda h: HostDistance.REMOTE if h is remote_host else HostDistance.LOCAL)
+
+        mock_future = Mock()
+        mock_future._query.return_value = 1
+        with patch('cassandra.cluster.ResponseFuture', Mock(return_value=mock_future)):
+            session.prepare_on_all_hosts('SELECT 1', excluded_host)
+
+        queried_hosts = [call.args[0] for call in mock_future._query.call_args_list]
+        assert queried_hosts == [local_host]
 
     def test_control_connection_query_fallback_modes(self):
         assert Cluster().allow_control_connection_query_fallback is ControlConnectionQueryFallback.Disabled

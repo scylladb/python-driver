@@ -650,6 +650,41 @@ class ControlConnectionQueryFallback(enum.Enum):
     SkipPoolCreation = "SkipPoolCreation"
 
 
+class EagerPrepareScope(enum.Enum):
+    """
+    Controls which hosts are eligible for the eager statement preparation performed by
+    :attr:`Cluster.prepare_on_all_hosts` and :attr:`Cluster.reprepare_on_up`, via
+    :attr:`Cluster.eager_prepare_scope`.
+
+    Levels are ordered from narrowest to widest: ``NONE`` makes no host eligible
+    (statements are only ever prepared lazily, on first use against a given host, the
+    same as setting :attr:`Cluster.prepare_on_all_hosts` and
+    :attr:`Cluster.reprepare_on_up` to :const:`False`); ``LOCAL_RACK`` includes only
+    hosts at :attr:`~.HostDistance.LOCAL_RACK`; ``LOCAL_DC`` additionally includes
+    hosts at :attr:`~.HostDistance.LOCAL`; ``ALL`` additionally includes hosts at
+    :attr:`~.HostDistance.REMOTE` (i.e. every host with an open connection pool, which
+    was the only behavior available before this setting was introduced).
+    """
+
+    NONE = 0
+    LOCAL_RACK = 1
+    LOCAL_DC = 2
+    ALL = 3
+
+    def includes_distance(self, distance):
+        """
+        Whether a host at the given :class:`~.HostDistance` is eligible for eager
+        preparation under this scope.
+        """
+        if self is EagerPrepareScope.NONE:
+            return False
+        if self is EagerPrepareScope.LOCAL_RACK:
+            return distance == HostDistance.LOCAL_RACK
+        if self is EagerPrepareScope.LOCAL_DC:
+            return distance in (HostDistance.LOCAL_RACK, HostDistance.LOCAL)
+        return distance != HostDistance.IGNORED
+
+
 class Cluster(object):
     """
     The main class to use when interacting with a Cassandra cluster.
@@ -1046,6 +1081,8 @@ class Cluster(object):
     This can reasonably be disabled on long-running applications with numerous clients preparing statements on startup,
     where a randomized initial condition of the load balancing policy can be expected to distribute prepares from
     different clients across the cluster.
+
+    Which hosts count as "all hosts" is controlled by :attr:`.eager_prepare_scope`.
     """
 
     reprepare_on_up = True
@@ -1055,6 +1092,22 @@ class Cluster(object):
     May be used to avoid overwhelming a node on return, or if it is supposed that the node was only marked down due to
     network. If statements are not reprepared, they are prepared on the first execution, causing
     an extra roundtrip for one or more client requests.
+
+    Whether a given node coming up is eligible for this is controlled by :attr:`.eager_prepare_scope`.
+    """
+
+    eager_prepare_scope = EagerPrepareScope.ALL
+    """
+    An :class:`.EagerPrepareScope` value controlling which hosts are eligible for the eager
+    preparation performed by :attr:`.prepare_on_all_hosts` and :attr:`.reprepare_on_up`.
+
+    Defaults to :attr:`EagerPrepareScope.ALL`, preserving the historical behavior of eagerly
+    preparing on every host with an open connection pool, including hosts at
+    :attr:`~.HostDistance.REMOTE` (kept connected only as a cross-DC fallback via
+    :attr:`.connect_to_remote_hosts` and ``used_hosts_per_remote_dc``). Applications on large,
+    multi-DC clusters that don't want to pay the eager-prepare cost on rarely-queried remote hosts
+    can narrow this to :attr:`EagerPrepareScope.LOCAL_DC` or :attr:`EagerPrepareScope.LOCAL_RACK`;
+    those hosts still fall back to lazy, on-first-use preparation, so correctness is unaffected.
     """
 
     connect_timeout = 5
@@ -1267,7 +1320,8 @@ class Cluster(object):
                  column_encryption_policy=None,
                  application_info:Optional[ApplicationInfoBase]=None,
                  client_routes_config:Optional[ClientRoutesConfig]=None,
-                 allow_control_connection_query_fallback:Optional[ControlConnectionQueryFallback]=ControlConnectionQueryFallback.Disabled
+                 allow_control_connection_query_fallback:Optional[ControlConnectionQueryFallback]=ControlConnectionQueryFallback.Disabled,
+                 eager_prepare_scope=EagerPrepareScope.ALL,
                  ):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
@@ -1288,6 +1342,9 @@ class Cluster(object):
         if not isinstance(allow_control_connection_query_fallback, ControlConnectionQueryFallback):
             raise TypeError(
                 "allow_control_connection_query_fallback must be a ControlConnectionQueryFallback value")
+
+        if not isinstance(eager_prepare_scope, EagerPrepareScope):
+            raise TypeError("eager_prepare_scope must be an EagerPrepareScope value")
 
         if connection_class is not None:
             self.connection_class = connection_class
@@ -1530,6 +1587,7 @@ class Cluster(object):
         self.connect_timeout = connect_timeout
         self.prepare_on_all_hosts = prepare_on_all_hosts
         self.reprepare_on_up = reprepare_on_up
+        self.eager_prepare_scope = eager_prepare_scope
         self.monitor_reporting_enabled = monitor_reporting_enabled
         self.monitor_reporting_interval = monitor_reporting_interval
         self.shard_aware_options = ShardAwareOptions(opts=shard_aware_options)
@@ -1995,8 +2053,9 @@ class Cluster(object):
                 log.debug("Now that host %s is up, cancelling the reconnection handler", host)
                 reconnector.cancel()
 
-            if self.profile_manager.distance(host) != HostDistance.IGNORED:
-                self._prepare_all_queries(host)
+            distance = self.profile_manager.distance(host)
+            if distance != HostDistance.IGNORED:
+                self._prepare_all_queries(host, distance)
                 log.debug("Done preparing all queries for host %s, ", host)
 
             for session in tuple(self.sessions):
@@ -2113,7 +2172,7 @@ class Cluster(object):
 
         distance = self.profile_manager.distance(host)
         if distance != HostDistance.IGNORED:
-            self._prepare_all_queries(host)
+            self._prepare_all_queries(host, distance)
             log.debug("Done preparing queries for new host %r", host)
 
         if distance == HostDistance.IGNORED:
@@ -2403,8 +2462,16 @@ class Cluster(object):
                     log.debug("Got unexpected response when preparing "
                               "statement on host %s: %r", host, response)
 
-    def _prepare_all_queries(self, host):
+    def _prepare_all_queries(self, host, distance=None):
         if not self._prepared_statements or not self.reprepare_on_up:
+            return
+
+        if distance is None:
+            distance = self.profile_manager.distance(host)
+
+        if not self.eager_prepare_scope.includes_distance(distance):
+            log.debug("Not preparing known prepared statements against host %s: "
+                      "outside eager_prepare_scope %s", host, self.eager_prepare_scope)
             return
 
         log.debug("Preparing all known prepared statements against host %s", host)
@@ -3242,31 +3309,40 @@ class Session(object):
 
     def prepare_on_all_hosts(self, query, excluded_host, keyspace=None):
         """
-        Prepare the given query on all hosts, excluding ``excluded_host``.
+        Prepare the given query on all hosts within :attr:`Cluster.eager_prepare_scope`,
+        excluding ``excluded_host``.
         Intended for internal use only.
         """
+        scope = self.cluster.eager_prepare_scope
         futures = []
         for host in tuple(self._pools.keys()):
-            if host != excluded_host and host.is_up:
-                future = ResponseFuture(self, PrepareMessage(query=query, keyspace=keyspace),
-                                            None, self.default_timeout)
+            if host == excluded_host or not host.is_up:
+                continue
 
-                # we don't care about errors preparing against specific hosts,
-                # since we can always prepare them as needed when the prepared
-                # statement is used.  Just log errors and continue on.
-                try:
-                    request_id = future._query(host)
-                except Exception:
-                    log.exception("Error preparing query for host %s:", host)
-                    continue
+            if not scope.includes_distance(self._profile_manager.distance(host)):
+                log.debug("Not preparing query for host %s: outside eager_prepare_scope %s",
+                          host, scope)
+                continue
 
-                if request_id is None:
-                    # the error has already been logged by ResponsFuture
-                    log.debug("Failed to prepare query for host %s: %r",
-                              host, future._errors.get(host))
-                    continue
+            future = ResponseFuture(self, PrepareMessage(query=query, keyspace=keyspace),
+                                        None, self.default_timeout)
 
-                futures.append((host, future))
+            # we don't care about errors preparing against specific hosts,
+            # since we can always prepare them as needed when the prepared
+            # statement is used.  Just log errors and continue on.
+            try:
+                request_id = future._query(host)
+            except Exception:
+                log.exception("Error preparing query for host %s:", host)
+                continue
+
+            if request_id is None:
+                # the error has already been logged by ResponsFuture
+                log.debug("Failed to prepare query for host %s: %r",
+                          host, future._errors.get(host))
+                continue
+
+            futures.append((host, future))
 
         for host, future in futures:
             try:

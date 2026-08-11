@@ -6,6 +6,12 @@ Features
 * Negotiate and implement the ``SCYLLA_USE_METADATA_ID`` protocol extension: prepared
   statements skip re-sending result metadata on EXECUTE, and the driver automatically
   refreshes cached metadata when the server detects a schema change (DRIVER-153)
+* Add ``Cluster.eager_prepare_scope``, an ``EagerPrepareScope`` value controlling which
+  hosts are eligible for the eager preparation performed by ``prepare_on_all_hosts`` and
+  ``reprepare_on_up``. Defaults to ``EagerPrepareScope.ALL`` (today's behavior, unchanged);
+  applications on large, multi-DC clusters can narrow it to ``LOCAL_DC``, ``LOCAL_RACK``, or
+  ``NONE`` to avoid eagerly preparing statements on rarely-queried remote hosts
+  (scylla-drivers#127).
 
 Others
 ------

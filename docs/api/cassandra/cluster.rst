@@ -64,6 +64,9 @@ Clusters and Sessions
 
    .. autoattribute:: reprepare_on_up
 
+   .. autoattribute:: eager_prepare_scope
+      :annotation: = EagerPrepareScope.ALL
+
    .. autoattribute:: connect_timeout
 
    .. autoattribute:: schema_metadata_enabled
@@ -109,6 +112,9 @@ Clusters and Sessions
    .. automethod:: set_meta_refresh_enabled
 
 .. autoclass:: ControlConnectionQueryFallback
+   :members:
+
+.. autoclass:: EagerPrepareScope
    :members:
 
 .. autoclass:: ExecutionProfile (load_balancing_policy=<object object>, retry_policy=None, consistency_level=ConsistencyLevel.LOCAL_ONE, serial_consistency_level=None, request_timeout=10.0, row_factory=<function named_tuple_factory>, speculative_execution_policy=None)
