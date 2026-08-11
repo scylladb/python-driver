@@ -225,6 +225,7 @@ class Metadata(object):
         except KeyError:
             # can happen if keyspace disappears while processing async event
             pass
+        self._table_removed(keyspace, table)
 
     def _update_type(self, type_meta):
         try:

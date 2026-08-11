@@ -218,6 +218,37 @@ class TestTabletsIntegration:
 
         self.run_tablets_invalidation_test(drop_ks)
 
+    def test_tablets_invalidation_drop_table(self):
+        """Dropping a table invalidates its tablet metadata via the schema change event."""
+        keyspace, table = "test_drop_table", "table1"
+
+        # Own keyspace/table so this test doesn't disturb state shared with other tests
+        self.session.execute(f"DROP KEYSPACE IF EXISTS {keyspace}")
+        self.session.execute(
+            f"""
+            CREATE KEYSPACE {keyspace}
+            WITH replication = {{
+                'class': 'NetworkTopologyStrategy',
+                'replication_factor': 2
+            }} AND tablets = {{
+                'initial': 8
+            }}
+            """)
+        self.session.execute(f"CREATE TABLE {keyspace}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+
+        prepared = self.session.prepare(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES (?, ?, ?)")
+        for i in range(50):
+            self.session.execute(prepared.bind((i, i % 5, i % 2)))
+
+        def drop_table(_):
+            # Drop table to trigger tablets invalidation
+            self.session.execute(f"DROP TABLE {keyspace}.{table}")
+
+        try:
+            self.run_tablets_invalidation_test(drop_table, keyspace=keyspace, table=table)
+        finally:
+            self.session.execute(f"DROP KEYSPACE IF EXISTS {keyspace}")
+
     @pytest.mark.last
     def test_tablets_invalidation_decommission_non_cc_node(self):
         def decommission_non_cc_node(rec):
@@ -245,12 +276,12 @@ class TestTabletsIntegration:
         self.run_tablets_invalidation_test(decommission_non_cc_node)
 
 
-    def run_tablets_invalidation_test(self, invalidate):
+    def run_tablets_invalidation_test(self, invalidate, keyspace="test1", table="table1"):
         # Make sure driver holds tablet info
         # By landing query to the host that is not in replica set
         bound = self.session.prepare(
-            """
-            SELECT pk, ck, v FROM test1.table1 WHERE pk = ?
+            f"""
+            SELECT pk, ck, v FROM {keyspace}.{table} WHERE pk = ?
             """).bind([(2)])
 
         rec = None

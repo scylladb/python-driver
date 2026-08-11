@@ -36,6 +36,7 @@ from cassandra.metadata import (Murmur3Token, MD5Token,
 from cassandra.policies import SimpleConvictionPolicy
 from cassandra.pool import Host
 from cassandra.protocol import QueryMessage
+from cassandra.tablets import Tablet
 from tests.util import assertCountEqual
 import pytest
 
@@ -439,6 +440,32 @@ class GetReplicasTest(unittest.TestCase):
 
     def test_bytes_tokens(self):
         self._get_replicas(BytesToken)
+
+
+class DropTableMetadataTest(unittest.TestCase):
+    """Metadata._drop_table should invalidate tablets for the dropped table."""
+
+    def setUp(self):
+        """Set up metadata containing a table with a tablet record."""
+        self.metadata = Metadata()
+        keyspace = KeyspaceMetadata("ks", True, "NetworkTopologyStrategy", {"dc1": "1"})
+        keyspace.tables["tb"] = TableMetadata("ks", "tb")
+        self.metadata.keyspaces["ks"] = keyspace
+        self.metadata._tablets.add_tablet("ks", "tb", Tablet(0, 100, [("host1", 0)]))
+
+    def test_drop_table_invalidates_tablets(self):
+        """Dropping a known table removes its tablet and table metadata."""
+        self.metadata._drop_table("ks", "tb")
+
+        assert self.metadata._tablets.table_has_tablets("ks", "tb") is False
+        assert "tb" not in self.metadata.keyspaces["ks"].tables
+
+    def test_drop_table_invalidates_tablets_for_unknown_keyspace(self):
+        """Dropping a table in an unknown keyspace still removes its tablet metadata."""
+        self.metadata._tablets.add_tablet("unknown", "tb", Tablet(0, 100, [("host1", 0)]))
+        self.metadata._drop_table("unknown", "tb")
+
+        assert self.metadata._tablets.table_has_tablets("unknown", "tb") is False
 
 
 class Murmur3TokensTest(unittest.TestCase):
