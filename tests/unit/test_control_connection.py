@@ -51,6 +51,7 @@ class MockMetadata(object):
         self.partitioner = None
         self.token_map = {}
         self.removed_hosts = []
+        self._keyspace_replication_strategies = {}
 
     def get_host(self, endpoint_or_address, port=None):
         if not isinstance(endpoint_or_address, EndPoint):
@@ -519,9 +520,11 @@ class ControlConnectionTest(unittest.TestCase):
     def test_refresh_schema_disabled_keyspace_event_fetches_replication_strategies(self):
         """
         Keyspace schema change events are processed when schema metadata is
-        disabled to keep token-aware routing up to date.
+        disabled to keep token-aware routing up to date. The read is filtered
+        to the changed keyspace and merged into the known strategies.
         """
         self.control_connection._schema_meta_enabled = False
+        self.cluster.metadata._keyspace_replication_strategies = {"other": SimpleStrategy({"replication_factor": "3"})}
         result = ResultMessage(kind=RESULT_KIND_ROWS)
         result.column_names = ["keyspace_name", "replication"]
         result.parsed_rows = [
@@ -533,9 +536,82 @@ class ControlConnectionTest(unittest.TestCase):
         self.control_connection._refresh_schema(
             self.connection, target_type="KEYSPACE", change_type="CREATED", keyspace="ks")
 
+        query = self.connection.wait_for_response.call_args[0][0].query
+        assert "WHERE keyspace_name = 'ks'" in query
         self.cluster.metadata._update_replication_strategies.assert_called_once()
         strategies = self.cluster.metadata._update_replication_strategies.call_args[0][0]
-        assert set(strategies) == {"ks"}
+        assert set(strategies) == {"ks", "other"}
+
+    def test_refresh_schema_disabled_keyspace_drop_removes_strategy(self):
+        """
+        A dropped keyspace's strategy is removed: the filtered read returns no
+        row and the merge drops the keyspace from the known strategies.
+        """
+        self.control_connection._schema_meta_enabled = False
+        self.cluster.metadata._keyspace_replication_strategies = {
+            "ks": SimpleStrategy({"replication_factor": "1"}),
+            "other": SimpleStrategy({"replication_factor": "3"}),
+        }
+        result = ResultMessage(kind=RESULT_KIND_ROWS)
+        result.column_names = ["keyspace_name", "replication"]
+        result.parsed_rows = []
+        self.connection.wait_for_response = Mock(return_value=result)
+        self.cluster.metadata._update_replication_strategies = Mock()
+
+        self.control_connection._refresh_schema(
+            self.connection, target_type="KEYSPACE", change_type="DROPPED", keyspace="ks")
+
+        strategies = self.cluster.metadata._update_replication_strategies.call_args[0][0]
+        assert set(strategies) == {"other"}
+
+    def test_refresh_schema_disabled_waits_for_schema_agreement(self):
+        """
+        The replication-strategy read runs at ConsistencyLevel.ONE, so it must
+        only happen after schema agreement; a pre-agreement read can return the
+        stale pre-change replication settings.
+        """
+        self.control_connection._schema_meta_enabled = False
+
+        # one peer starts on a different schema version and converges later
+        self.connection.peer_results[1][1][2] = 'b'
+
+        def converge_then_respond(*args, **kwargs):
+            if self.time.clock >= 1:
+                self.connection.peer_results[1][1][2] = 'a'
+            return _node_meta_results(self.connection.local_results, self.connection.peer_results)
+
+        self.connection.wait_for_responses = Mock(side_effect=converge_then_respond)
+
+        result = ResultMessage(kind=RESULT_KIND_ROWS)
+        result.column_names = ["keyspace_name", "replication"]
+        result.parsed_rows = [
+            ["ks", {"class": "org.apache.cassandra.locator.SimpleStrategy", "replication_factor": "1"}],
+        ]
+        self.connection.wait_for_response = Mock(return_value=result)
+        self.cluster.metadata._update_replication_strategies = Mock()
+
+        self.control_connection._refresh_schema(
+            self.connection, target_type="KEYSPACE", change_type="UPDATED", keyspace="ks")
+
+        # slept until the disagreeing peer converged, then fetched strategies
+        assert self.time.clock > 0
+        self.cluster.metadata._update_replication_strategies.assert_called_once()
+
+    def test_refresh_schema_disabled_no_agreement_skips_strategies(self):
+        """
+        Without schema agreement the strategies are not fetched at all, rather
+        than being fetched from a node with a stale schema.
+        """
+        self.control_connection._schema_meta_enabled = False
+        # a peer that never agrees
+        self.connection.peer_results[1][1][2] = 'b'
+        self.connection.wait_for_response = Mock()
+        self.cluster.metadata._update_replication_strategies = Mock()
+
+        assert self.control_connection._refresh_schema(self.connection) is False
+
+        self.connection.wait_for_response.assert_not_called()
+        self.cluster.metadata._update_replication_strategies.assert_not_called()
 
     def test_refresh_schema_disabled_table_dropped_invalidates_tablets(self):
         """
@@ -628,6 +704,32 @@ class ControlConnectionTest(unittest.TestCase):
         strategies = self.cluster.metadata._update_replication_strategies.call_args[0][0]
         assert set(strategies) == {"good"}
         assert isinstance(strategies["good"], SimpleStrategy)
+
+    def test_refresh_schema_disabled_keeps_strategy_for_malformed_options(self):
+        """
+        A SimpleStrategy row missing replication_factor fails to build but does
+        not abort the refresh; the keyspace keeps its previously known strategy.
+        """
+        self.control_connection._schema_meta_enabled = False
+        self.cluster.metadata._keyspace_replication_strategies = {
+            "ks": SimpleStrategy({"replication_factor": "1"}),
+        }
+        result = ResultMessage(kind=RESULT_KIND_ROWS)
+        result.column_names = ["keyspace_name", "replication"]
+        result.parsed_rows = [
+            ["ks", {"class": "org.apache.cassandra.locator.SimpleStrategy"}],
+            ["good", {"class": "org.apache.cassandra.locator.SimpleStrategy", "replication_factor": "3"}],
+        ]
+        self.connection.wait_for_response = Mock(return_value=result)
+        self.cluster.metadata._update_replication_strategies = Mock()
+
+        self.control_connection._refresh_schema(self.connection)
+
+        self.cluster.metadata._update_replication_strategies.assert_called_once()
+        strategies = self.cluster.metadata._update_replication_strategies.call_args[0][0]
+        assert set(strategies) == {"ks", "good"}
+        assert strategies["ks"].replication_factor == 1
+        assert strategies["good"].replication_factor == 3
 
     def test_handle_status_change(self):
         event = {

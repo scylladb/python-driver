@@ -24,6 +24,7 @@ import logging
 import re
 import sys
 from threading import RLock
+from warnings import warn
 import struct
 import random
 import itertools
@@ -1902,6 +1903,8 @@ class TokenMap(object):
                 log.exception("Failed creating a token map for keyspace '%s' with %s. PLEASE REPORT THIS: https://datastax-oss.atlassian.net/projects/PYTHON", keyspace, self.token_to_host_owner)
 
     def replica_map_for_keyspace(self, ks_metadata):
+        warn("TokenMap.replica_map_for_keyspace is deprecated and will be "
+             "removed in a future release.", DeprecationWarning, stacklevel=2)
         strategy = ks_metadata.replication_strategy
         if strategy:
             return strategy.make_token_replica_map(self.token_to_host_owner, self.ring)

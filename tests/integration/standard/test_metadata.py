@@ -200,7 +200,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
             rs = no_schema_session.execute(statement)
             assert rs.one() is not None
             replicas = set(no_schema.metadata.get_replicas(self.ks_name, statement.routing_key))
-            assert rs.response_future._current_host in replicas
+            # the first host attempted; retries may move the query off a replica
+            assert rs.response_future.attempted_hosts[0] in replicas
         finally:
             no_schema.shutdown()
 

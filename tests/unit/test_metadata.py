@@ -780,10 +780,12 @@ class ScyllaKeyspaceConsistencyParsingTest(unittest.TestCase):
     """
 
     def _parser_with_rows(self, rows):
-        # Build the parser without a connection and drive only the aggregation
+        # Build the parser without a connection and drive the real aggregation
         # step; _query_all's batching is exercised by the integration tests.
-        parser = SchemaParserV3.__new__(SchemaParserV3)
+        parser = SchemaParserV3(None, 1.0, 100, None)
+        parser.views_result = []  # populated by _query_all, not __init__
         parser.scylla_keyspaces_result = rows
+        parser._aggregate_results()
         return parser
 
     def test_consistency_modes_are_mapped_from_rows(self):
@@ -796,8 +798,7 @@ class ScyllaKeyspaceConsistencyParsingTest(unittest.TestCase):
             {'keyspace_name': 'e', 'consistency': 'eventual'},
             {'keyspace_name': 'n', 'consistency': None},
         ])
-        modes = {row["keyspace_name"]: _consistency_mode_from_string(row.get("consistency"))
-                 for row in parser.scylla_keyspaces_result}
+        modes = parser.keyspace_consistency_modes
         assert modes['g'] == _ConsistencyMode.GLOBAL
         assert modes['l'] == _ConsistencyMode.LOCAL
         assert modes['e'] == _ConsistencyMode.EVENTUAL
@@ -806,8 +807,9 @@ class ScyllaKeyspaceConsistencyParsingTest(unittest.TestCase):
     def test_keyspace_absent_from_the_map_is_eventual(self):
         # Covers the whole-cluster fallbacks too: no rows is what a skipped read
         # (no TABLETS_ROUTING_V2) and a missing table/column both produce.
-        parser = SchemaParserV3.__new__(SchemaParserV3)
-        parser.keyspace_consistency_modes = {'g': _ConsistencyMode.GLOBAL}
+        parser = self._parser_with_rows([
+            {'keyspace_name': 'g', 'consistency': 'global'},
+        ])
         assert parser.keyspace_consistency_modes.get(
             'absent', _ConsistencyMode.EVENTUAL) == _ConsistencyMode.EVENTUAL
 

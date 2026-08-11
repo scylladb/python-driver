@@ -4135,18 +4135,21 @@ class ControlConnection(object):
             self._signal_error()
         return False
 
-    def _refresh_replication_strategies(self, connection):
+    def _refresh_replication_strategies(self, connection, keyspace=None):
         """
         Fetch the keyspace replication strategies from the lightweight
         ``system_schema.keyspaces`` table. Used to support token-aware routing
-        when schema metadata is disabled.
+        when schema metadata is disabled. When ``keyspace`` is given, only that
+        keyspace is re-read and merged into the current strategies.
         """
         if not self._token_meta_enabled:
             return
+        select = self._SELECT_KEYSPACES_REPLICATION
+        if keyspace is not None:
+            select += bind_params(" WHERE keyspace_name = %s", (keyspace,), Encoder())
         cl = ConsistencyLevel.ONE
         query = QueryMessage(
-            query=maybe_add_timeout_to_query(
-                self._SELECT_KEYSPACES_REPLICATION, self._metadata_request_timeout),
+            query=maybe_add_timeout_to_query(select, self._metadata_request_timeout),
             consistency_level=cl)
         try:
             result = connection.wait_for_response(query, timeout=self._timeout)
@@ -4159,35 +4162,35 @@ class ControlConnection(object):
 
         strategies = {}
         for row in rows:
+            keyspace_name = row.get("keyspace_name")
             try:
                 replication = dict(row["replication"])
                 strategy_class = replication.pop("class")
+                strategy = ReplicationStrategy.create(strategy_class, replication)
             except (TypeError, KeyError):
                 log.warning("[control connection] Skipping keyspace %s with unparseable "
-                            "replication settings", row.get("keyspace_name"))
-                continue
-            strategy = ReplicationStrategy.create(strategy_class, replication)
+                            "replication settings", keyspace_name)
+                strategy = None
             if strategy:
-                strategies[row["keyspace_name"]] = strategy
+                strategies[keyspace_name] = strategy
+            elif keyspace_name:
+                # keep the known strategy so a malformed row does not drop the
+                # keyspace from token-aware routing
+                existing = self._cluster.metadata._keyspace_replication_strategies.get(keyspace_name)
+                if existing:
+                    strategies[keyspace_name] = existing
+
+        if keyspace is not None:
+            # merge the single re-read keyspace into the current map; a missing
+            # row means the keyspace was dropped
+            merged = dict(self._cluster.metadata._keyspace_replication_strategies)
+            merged.pop(keyspace, None)
+            merged.update(strategies)
+            strategies = merged
         self._cluster.metadata._update_replication_strategies(strategies)
 
     def _refresh_schema(self, connection, preloaded_results=None, schema_agreement_wait=None, force=False, **kwargs):
         if self._cluster.is_shutdown:
-            return False
-
-        if not self._schema_meta_enabled and not force:
-            target_type = kwargs.get("target_type")
-            change_type = kwargs.get("change_type")
-            if not target_type or target_type.lower() == "keyspace":
-                # keep token-aware routing functional without fetching the full schema
-                self._refresh_replication_strategies(connection)
-            elif target_type.lower() == "table" and change_type == "DROPPED":
-                # keep tablet metadata up to date for dropped tables
-                keyspace = kwargs.get("keyspace")
-                table = kwargs.get("table")
-                if keyspace and table:
-                    self._cluster.metadata._table_removed(keyspace, table)
-            log.debug("[control connection] Skipping schema refresh because schema metadata is disabled")
             return False
 
         agreed = self._wait_for_schema_agreement(connection=connection,
@@ -4196,6 +4199,24 @@ class ControlConnection(object):
 
         if not agreed:
             log.debug("Skipping schema refresh due to lack of schema agreement")
+            return False
+
+        if not self._schema_meta_enabled and not force:
+            target_type = kwargs.get("target_type")
+            change_type = kwargs.get("change_type")
+            if not target_type:
+                # keep token-aware routing functional without fetching the full schema
+                self._refresh_replication_strategies(connection)
+            elif target_type.lower() == "keyspace":
+                # a single keyspace changed; no need to re-read the whole table
+                self._refresh_replication_strategies(connection, keyspace=kwargs.get("keyspace"))
+            elif target_type.lower() == "table" and change_type == "DROPPED":
+                # keep tablet metadata up to date for dropped tables
+                keyspace = kwargs.get("keyspace")
+                table = kwargs.get("table")
+                if keyspace and table:
+                    self._cluster.metadata._table_removed(keyspace, table)
+            log.debug("[control connection] Skipping schema refresh because schema metadata is disabled")
             return False
 
         self._cluster.metadata.refresh(
