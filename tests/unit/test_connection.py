@@ -11,8 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import gc
 import itertools
+import ssl
 import unittest
+import weakref
 from io import BytesIO
 import time
 from threading import Lock
@@ -22,9 +25,11 @@ from cassandra import OperationTimedOut
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, HeartbeatFuture, _Frame, Timer, TimerManager,
-                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator)
+                                  ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator,
+                                  SSLSessionCache)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
+                                AuthSuccessMessage, ReadyMessage,
                                 SupportedMessage, ProtocolHandler, ResultMessage,
                                 RESULT_KIND_SET_KEYSPACE)
 
@@ -585,6 +590,343 @@ class TimerTest(unittest.TestCase):
         tm.add_timer(t2)
         # Prior to #466: "TypeError: unorderable types: Timer() < Timer()"
         tm.service_timeouts()
+
+
+class TlsSessionResumptionTest(unittest.TestCase):
+    """
+    Connection-level wiring of :class:`~.SSLSessionCache`.  The end-to-end
+    behaviour against a real TLS server lives in
+    ``tests/unit/io/test_tls_resumption.py``.
+    """
+
+    def make_connection(self, **kwargs):
+        c = Connection(DefaultEndPoint('1.2.3.4'), **kwargs)
+        c._socket = Mock()
+        return c
+
+    def make_ssl_connection(self, cache=None, **kwargs):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        return context, self.make_connection(
+            ssl_context=context,
+            ssl_session_cache=SSLSessionCache() if cache is None else cache,
+            **kwargs)
+
+    def test_cache_is_used_with_a_supplied_ssl_context(self):
+        cache = SSLSessionCache()
+        _, connection = self.make_ssl_connection(cache)
+
+        assert connection._ssl_session_cache is cache
+
+    def test_cache_is_ignored_without_tls(self):
+        connection = self.make_connection(ssl_session_cache=SSLSessionCache())
+
+        assert connection._ssl_session_cache is None
+
+    def test_cache_is_ignored_for_a_context_derived_from_ssl_options(self):
+        # Each such connection builds its own SSLContext, and a session cannot
+        # be replayed onto a different context, so there is nothing to cache.
+        connection = self.make_connection(
+            ssl_options={'ca_certs': None, 'check_hostname': False},
+            ssl_session_cache=SSLSessionCache())
+
+        assert connection.ssl_context is not None
+        assert connection._ssl_session_cache is None
+
+    def test_cache_is_ignored_when_the_reactor_cannot_resume(self):
+        class NoResumptionConnection(Connection):
+            supports_tls_session_resumption = False
+
+        connection = NoResumptionConnection(
+            DefaultEndPoint('1.2.3.4'),
+            ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
+            ssl_session_cache=SSLSessionCache())
+
+        assert connection._ssl_session_cache is None
+
+    def test_cache_key_separates_endpoints_and_contexts(self):
+        context, connection = self.make_ssl_connection()
+        other_endpoint_connection = self.make_connection(
+            ssl_context=context, ssl_session_cache=connection._ssl_session_cache)
+        other_endpoint_connection.endpoint = DefaultEndPoint('5.6.7.8')
+        _, other_context_connection = self.make_ssl_connection()
+
+        assert connection._tls_session_cache_key() == \
+            (weakref.ref(context), ('1.2.3.4', 9042), '1.2.3.4')
+        assert connection._tls_session_cache_key() != \
+            other_endpoint_connection._tls_session_cache_key()
+        assert connection._tls_session_cache_key() != \
+            other_context_connection._tls_session_cache_key()
+
+    def test_cache_key_does_not_keep_the_context_alive(self):
+        # A cache shared between clusters would otherwise pin every one of
+        # their SSLContexts -- certificate chain, CA store and all -- for as
+        # long as the entry sat there.
+        cache = SSLSessionCache()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        connection = self.make_connection(ssl_context=context,
+                                          ssl_session_cache=cache)
+        cache.set(connection._tls_session_cache_key(), 'the-session')
+        weak = weakref.ref(context)
+
+        del context, connection
+        gc.collect()
+
+        assert weak() is None
+        assert len(cache) == 1  # the entry lingers, but nothing heavy with it
+
+    def test_cache_key_separates_verified_hostnames(self):
+        # A resumed handshake sends no Certificate, so the name the peer was
+        # verified against is never re-checked.  Two connections to one address
+        # that verify different names must not share a session.
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        one = self.make_connection(ssl_context=context,
+                                   ssl_options={'server_hostname': 'one.example'},
+                                   ssl_session_cache=SSLSessionCache())
+        other = self.make_connection(ssl_context=context,
+                                     ssl_options={'server_hostname': 'other.example'},
+                                     ssl_session_cache=one._ssl_session_cache)
+
+        assert one._tls_session_cache_key() != other._tls_session_cache_key()
+
+    def test_cache_key_uses_the_name_wrap_socket_is_given(self):
+        # The key has to be derived from the same value _wrap_socket_from_context
+        # passes to wrap_socket, or the two can drift apart.
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        connection = self.make_connection(ssl_context=context,
+                                          ssl_options={'server_hostname': 'sni.example'},
+                                          ssl_session_cache=SSLSessionCache())
+        connection.ssl_context = Mock(check_hostname=False)
+
+        connection._wrap_socket_from_context()
+
+        _, kwargs = connection.ssl_context.wrap_socket.call_args
+        assert kwargs['server_hostname'] == 'sni.example'
+        assert connection._tls_session_cache_key()[2] == 'sni.example'
+
+    def test_cache_key_falls_back_to_the_endpoint_address(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        checking = self.make_connection(ssl_context=context,
+                                        ssl_session_cache=SSLSessionCache())
+        context_without_checks = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context_without_checks.check_hostname = False
+        not_checking = self.make_connection(ssl_context=context_without_checks,
+                                           ssl_session_cache=SSLSessionCache())
+
+        assert context.check_hostname is True
+        assert checking._tls_session_cache_key()[2] == '1.2.3.4'
+        # Nothing is verified, so there is no name to pin the session to.
+        assert not_checking._tls_session_cache_key()[2] is None
+
+    def test_cache_key_can_be_overridden_for_an_alternate_listener(self):
+        # A shard-aware connection reaches the same node on a different port
+        # (HostConnection._get_shard_aware_endpoint), and has to share the
+        # session cached for the node rather than key on its own endpoint.
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        node = Connection(DefaultEndPoint('1.2.3.4', 9042), ssl_context=context,
+                          ssl_session_cache=SSLSessionCache())
+        shard_aware = Connection(
+            DefaultEndPoint('1.2.3.4', 19142), ssl_context=context,
+            ssl_session_cache=node._ssl_session_cache,
+            tls_session_cache_key=node.endpoint.tls_session_cache_key)
+
+        assert shard_aware._tls_session_cache_key() == node._tls_session_cache_key()
+
+    def test_cache_key_without_an_override_follows_the_endpoint(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        node = Connection(DefaultEndPoint('1.2.3.4', 9042), ssl_context=context,
+                          ssl_session_cache=SSLSessionCache())
+        other_port = Connection(DefaultEndPoint('1.2.3.4', 19142), ssl_context=context,
+                                ssl_session_cache=node._ssl_session_cache)
+
+        assert other_port._tls_session_cache_key() != node._tls_session_cache_key()
+
+    def test_restore_offers_the_cached_session(self):
+        cache = SSLSessionCache()
+        _, connection = self.make_ssl_connection(cache)
+        session = object()
+        cache.set(connection._tls_session_cache_key(), session)
+        sock = Mock()
+
+        connection._restore_tls_session(sock)
+
+        assert sock.session is session
+        # The session stays available for the next connection.
+        assert cache.get(connection._tls_session_cache_key()) is session
+
+    def test_restore_is_a_no_op_without_a_cached_session(self):
+        _, connection = self.make_ssl_connection()
+        sock = Mock(spec=[])
+
+        connection._restore_tls_session(sock)
+
+        assert not hasattr(sock, 'session')
+
+    def test_restore_tolerates_a_rejected_session(self):
+        cache = SSLSessionCache()
+        _, connection = self.make_ssl_connection(cache)
+        cache.set(connection._tls_session_cache_key(), object())
+        sock = Mock()
+        type(sock).session = property(
+            lambda self: None,
+            Mock(side_effect=ValueError("Session refers to a different SSLContext")))
+
+        # A rejected session must cost a full handshake, not the connection.
+        connection._restore_tls_session(sock)
+
+    def test_store_caches_a_session_carrying_a_ticket(self):
+        cache = SSLSessionCache()
+        _, connection = self.make_ssl_connection(cache)
+        session = Mock(has_ticket=True, id=b'', ticket_lifetime_hint=7200,
+                       time=time.time(), timeout=7200)
+        connection._socket.session = session
+
+        connection._store_tls_session()
+
+        assert cache.get(connection._tls_session_cache_key()) is session
+
+    def test_store_caches_a_session_carrying_only_an_id(self):
+        # Below TLS 1.3 a session id is offerable on its own, whether or not
+        # the server turns out to honour it.
+        cache = SSLSessionCache()
+        _, connection = self.make_ssl_connection(cache)
+        session = Mock(has_ticket=False, id=b'\x01' * 32, ticket_lifetime_hint=0,
+                       time=time.time(), timeout=7200)
+        connection._socket.session = session
+
+        connection._store_tls_session()
+
+        assert cache.get(connection._tls_session_cache_key()) is session
+
+    def test_store_skips_a_ticket_with_a_zero_lifetime(self):
+        # RFC 8446 4.6.1: a ticket announced with a lifetime of zero is to be
+        # discarded immediately.
+        cache = SSLSessionCache()
+        _, connection = self.make_ssl_connection(cache)
+        connection._socket.session = Mock(has_ticket=True, id=b'x' * 32,
+                                          ticket_lifetime_hint=0,
+                                          time=time.time(), timeout=7200)
+
+        connection._store_tls_session()
+
+        assert cache.get(connection._tls_session_cache_key()) is None
+
+    def test_store_caps_the_lifetime_at_seven_days(self):
+        # RFC 8446 4.6.1: no ticket may be kept longer than 7 days, whatever
+        # lifetime the server asked for.
+        _, connection = self.make_ssl_connection()
+        connection._ssl_session_cache.set = Mock()
+        connection._socket.session = Mock(has_ticket=True, id=b'',
+                                          ticket_lifetime_hint=30 * 24 * 3600,
+                                          time=time.time(), timeout=7200)
+
+        connection._store_tls_session()
+
+        _, kwargs = connection._ssl_session_cache.set.call_args
+        lifetime = kwargs.get('lifetime', connection._ssl_session_cache.set.call_args[0][-1])
+        assert 7 * 24 * 3600 - 5 < lifetime <= 7 * 24 * 3600
+
+    def test_store_uses_the_announced_ticket_lifetime_not_the_local_timeout(self):
+        # SSLSession.timeout is the local context default and says nothing about
+        # what the peer will still accept.
+        _, connection = self.make_ssl_connection()
+        connection._ssl_session_cache.set = Mock()
+        connection._socket.session = Mock(has_ticket=True, id=b'',
+                                          ticket_lifetime_hint=60,
+                                          time=time.time(), timeout=7200)
+
+        connection._store_tls_session()
+
+        lifetime = connection._ssl_session_cache.set.call_args[0][-1]
+        assert 55 < lifetime <= 60
+
+    def test_store_subtracts_the_age_already_elapsed(self):
+        _, connection = self.make_ssl_connection()
+        connection._ssl_session_cache.set = Mock()
+        connection._socket.session = Mock(has_ticket=True, id=b'',
+                                          ticket_lifetime_hint=100,
+                                          time=time.time() - 40, timeout=7200)
+
+        connection._store_tls_session()
+
+        lifetime = connection._ssl_session_cache.set.call_args[0][-1]
+        assert 55 < lifetime <= 60
+
+    def test_store_skips_a_session_whose_lifetime_has_already_passed(self):
+        cache = SSLSessionCache()
+        _, connection = self.make_ssl_connection(cache)
+        connection._socket.session = Mock(has_ticket=True, id=b'',
+                                          ticket_lifetime_hint=10,
+                                          time=time.time() - 3600, timeout=7200)
+
+        connection._store_tls_session()
+
+        assert cache.get(connection._tls_session_cache_key()) is None
+
+    def test_store_falls_back_to_the_timeout_for_an_id_only_session(self):
+        # A session that resumes by id carries no announced lifetime, so the
+        # local timeout is all there is to go on.
+        _, connection = self.make_ssl_connection()
+        connection._ssl_session_cache.set = Mock()
+        connection._socket.session = Mock(has_ticket=False, id=b'x' * 32,
+                                          ticket_lifetime_hint=0,
+                                          time=time.time(), timeout=300)
+
+        connection._store_tls_session()
+
+        lifetime = connection._ssl_session_cache.set.call_args[0][-1]
+        assert 295 < lifetime <= 300
+
+    def test_store_skips_a_session_with_nothing_to_offer(self):
+        # This is a TLS 1.3 session read before the server's NewSessionTicket
+        # has arrived: no ticket and no id, so it could never resume and must
+        # not displace a usable entry.
+        cache = SSLSessionCache()
+        _, connection = self.make_ssl_connection(cache)
+        cache.set(connection._tls_session_cache_key(), 'earlier-session')
+        connection._socket.session = Mock(has_ticket=False, id=b'')
+
+        connection._store_tls_session()
+
+        assert cache.get(connection._tls_session_cache_key()) == 'earlier-session'
+
+    def test_store_tolerates_a_failure(self):
+        _, connection = self.make_ssl_connection()
+        connection._ssl_session_cache.set = Mock(side_effect=RuntimeError('boom'))
+        connection._socket.session = 'the-session'
+        connection._socket.version.return_value = 'TLSv1.2'
+
+        # _store_tls_session runs inside @defunct_on_error-wrapped handlers;
+        # a caching failure must never take the connection down.
+        connection._store_tls_session()
+
+    def test_store_is_a_no_op_without_a_cache(self):
+        connection = self.make_connection()
+
+        connection._store_tls_session()
+
+    def test_session_is_stored_once_the_connection_is_ready(self):
+        _, connection = self.make_ssl_connection()
+        connection._compressor = None
+        connection._store_tls_session = Mock()
+        connection.defunct = Mock()
+
+        connection._handle_startup_response(ReadyMessage())
+
+        connection.defunct.assert_not_called()
+        connection._store_tls_session.assert_called_once_with()
+
+    def test_session_is_stored_once_authentication_succeeds(self):
+        _, connection = self.make_ssl_connection()
+        connection._compressor = None
+        connection._store_tls_session = Mock()
+        connection.authenticator = Mock()
+        connection.defunct = Mock()
+
+        connection._handle_auth_response(AuthSuccessMessage(token=None))
+
+        connection.defunct.assert_not_called()
+        connection._store_tls_session.assert_called_once_with()
 
 
 class DefaultEndPointTest(unittest.TestCase):

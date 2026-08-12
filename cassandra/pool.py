@@ -739,7 +739,12 @@ class HostConnection(object):
             try:
                 conn = self._session.cluster.connection_factory(shard_aware_endpoint, host_conn=self, on_orphaned_stream_released=self.on_orphaned_stream_released,
                                                                 shard_id=shard_id,
-                                                                total_shards=self.host.sharding_info.shards_count)
+                                                                total_shards=self.host.sharding_info.shards_count,
+                                                                # The shard-aware port is another listener of this
+                                                                # same node, with the same TLS credentials, so it
+                                                                # offers and refreshes the session cached for the
+                                                                # node rather than one of its own.
+                                                                tls_session_cache_key=self.host.endpoint.tls_session_cache_key)
                 conn.original_endpoint = self.host.endpoint
             except Exception as exc:
                 log.error("Failed to open connection to %s, on shard_id=%i: %s", self.host, shard_id, exc)
