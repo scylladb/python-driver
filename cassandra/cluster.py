@@ -873,44 +873,27 @@ class Cluster(object):
     :const:`True`, else :const:`None`.
     """
 
-    ssl_options = None
-    """
-    Using ssl_options without ssl_context is deprecated and will be removed in the
-    next major release.
+    _ssl_options = None
 
-    An optional dict which will be used as kwargs for ``ssl.SSLContext.wrap_socket``
-    when new sockets are created. This should be used when client encryption is enabled
-    in Cassandra.
+    @property
+    def ssl_options(self):
+        """
+        Deprecated TLS configuration option retained to provide migration
+        guidance. Passing or assigning a value raises :class:`ValueError`.
+        Configure an ``ssl.SSLContext`` and pass it using
+        :attr:`.ssl_context` instead.
+        """
+        return None
 
-    The following documentation only applies when ssl_options is used without ssl_context.
-
-    By default, a ``ca_certs`` value should be supplied (the value should be
-    a string pointing to the location of the CA certs file), and you probably
-    want to specify ``ssl_version`` as ``ssl.PROTOCOL_TLS`` to match
-    Cassandra's default protocol.
-
-    .. versionchanged:: 3.3.0
-
-    In addition to ``wrap_socket`` kwargs, clients may also specify ``'check_hostname': True`` to verify the cert hostname
-    as outlined in RFC 2818 and RFC 6125. Note that this requires the certificate to be transferred, so
-    should almost always require the option ``'cert_reqs': ssl.CERT_REQUIRED``. Note also that this functionality was not built into
-    Python standard library until (2.7.9, 3.2). To enable this mechanism in earlier versions, patch ``ssl.match_hostname``
-    with a custom or `back-ported function <https://pypi.org/project/backports.ssl_match_hostname/>`_.
-
-    .. versionchanged:: 3.29.0
-
-    ``ssl.match_hostname`` has been deprecated since Python 3.7 (and removed in Python 3.12).  This functionality is now implemented
-    via ``ssl.SSLContext.check_hostname``.  All options specified above (including ``check_hostname``) should continue to behave in a
-    way that is consistent with prior implementations.
-    """
+    @ssl_options.setter
+    def ssl_options(self, value):
+        if value is not None:
+            self._raise_ssl_options_migration_error()
 
     ssl_context = None
     """
     An optional ``ssl.SSLContext`` instance which will be used when new sockets are created.
     This should be used when client encryption is enabled in Cassandra.
-
-    ``wrap_socket`` options can be set using :attr:`~Cluster.ssl_options`. ssl_options will
-    be used as kwargs for ``ssl.SSLContext.wrap_socket``.
 
     .. versionadded:: 3.17.0
     """
@@ -1276,6 +1259,9 @@ class Cluster(object):
         Any of the mutable Cluster attributes may be set as keyword arguments to the constructor.
         """
 
+        if ssl_options is not None:
+            self._raise_ssl_options_migration_error()
+
         # Handle port passed as string
         if isinstance(port, str):
             if not port.isdigit():
@@ -1507,14 +1493,10 @@ class Cluster(object):
 
         self.metrics_enabled = metrics_enabled
 
-        if ssl_options and not ssl_context:
-            warn('Using ssl_options without ssl_context is '
-                 'deprecated and will result in an error in '
-                 'the next major release. Please use ssl_context '
-                 'to prepare for that release.',
-                 DeprecationWarning)
-
-        self.ssl_options = ssl_options
+        # Cloud configuration still carries internal per-endpoint TLS routing
+        # metadata. Keep it private so callers cannot accidentally reach the
+        # legacy public ssl_options path.
+        self._ssl_options = ssl_options
         self.ssl_context = ssl_context
         self.sockopts = sockopts
         self.cql_version = cql_version
@@ -1761,7 +1743,7 @@ class Cluster(object):
         kwargs_dict.setdefault('port', self.port)
         kwargs_dict.setdefault('compression', self.compression)
         kwargs_dict.setdefault('sockopts', self.sockopts)
-        kwargs_dict.setdefault('ssl_options', self.ssl_options)
+        kwargs_dict.setdefault('ssl_options', self._ssl_options)
         kwargs_dict.setdefault('ssl_context', self.ssl_context)
         kwargs_dict.setdefault('cql_version', self.cql_version)
         kwargs_dict.setdefault('protocol_version', self.protocol_version)
@@ -1771,6 +1753,18 @@ class Cluster(object):
         kwargs_dict.setdefault('application_info', self.application_info)
 
         return kwargs_dict
+
+    @staticmethod
+    def _raise_ssl_options_migration_error():
+        raise ValueError(
+            "ssl_options is deprecated and can no longer configure TLS. "
+            "Create an ssl.SSLContext and pass it using ssl_context instead. "
+            "For example, ca_certs maps to "
+            "SSLContext.load_verify_locations(), and certfile/keyfile map to "
+            "SSLContext.load_cert_chain(). Migration guide: "
+            "https://python-driver.docs.scylladb.com/stable/"
+            "security.html#ssl-options-migration"
+        )
 
     def protocol_downgrade(self, host_endpoint, previous_version):
         if self._protocol_version_explicit:

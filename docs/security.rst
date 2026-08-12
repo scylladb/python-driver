@@ -47,17 +47,124 @@ These docs will include some examples for how to achieve common configurations,
 but the `ssl.SSLContext <https://docs.python.org/3/library/ssl.html#ssl.SSLContext>`_ documentation
 gives a more complete description of what is possible.
 
-To enable SSL with version 3.17.0 and higher, you will need to set :attr:`.Cluster.ssl_context` to a
-``ssl.SSLContext`` instance to enable SSL. Optionally, you can also set :attr:`.Cluster.ssl_options`
-to a dict of options. These will be passed as kwargs to ``ssl.SSLContext.wrap_socket()``
-when new sockets are created.
+To enable SSL with version 3.17.0 and higher, set :attr:`.Cluster.ssl_context` to an
+``ssl.SSLContext`` instance. The legacy :attr:`.Cluster.ssl_options` argument remains
+in the API only to raise an error with migration guidance when it is used.
+
+.. _ssl-options-migration:
+
+Migrating from ``ssl_options``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Replace the legacy options dictionary with a context configured through the
+standard-library ``ssl`` API. For example, replace:
+
+.. code-block:: python
+
+    import ssl
+    from cassandra.cluster import Cluster
+
+    cluster = Cluster(
+        ['node.example.com'],
+        ssl_options={
+            'ca_certs': '/path/to/rootca.pem',
+            'cert_reqs': ssl.CERT_REQUIRED,
+            'check_hostname': True,
+        },
+    )
+
+with:
+
+.. code-block:: python
+
+    context = ssl.create_default_context(cafile='/path/to/rootca.pem')
+    context.check_hostname = True
+
+    cluster = Cluster(
+        ['node.example.com'],
+        ssl_context=context,
+    )
+
+Use the following mappings for other legacy options:
+
+.. list-table:: ``ssl_options`` migration reference
+   :header-rows: 1
+   :widths: 22 38 40
+
+   * - Legacy option
+     - Standard-library context
+     - Twisted/Eventlet pyOpenSSL context
+   * - ``ca_certs``
+     - ``context.load_verify_locations(path)``
+     - ``context.load_verify_locations(path)``
+   * - ``certfile`` and ``keyfile``
+     - ``context.load_cert_chain(certfile, keyfile, password)``
+     - ``context.use_certificate_file(certfile)`` and
+       ``context.use_privatekey_file(keyfile)``
+   * - ``cert_reqs``
+     - ``context.verify_mode``
+     - ``context.set_verify(mode, callback)``
+   * - ``check_hostname``
+     - ``context.check_hostname``
+     - There is no direct context attribute. Configure hostname verification
+       in a vetted pyOpenSSL verification layer, or migrate to a
+       standard-library-backed reactor when hostname verification is required.
+   * - ``ciphers``
+     - ``context.set_ciphers(value)``
+     - ``context.set_cipher_list(value.encode('ascii'))``
+   * - ``ssl_version``
+     - Start with ``ssl.PROTOCOL_TLS_CLIENT`` and configure
+       ``minimum_version`` and ``maximum_version`` when pinning is required.
+     - Start with ``SSL.TLS_CLIENT_METHOD`` and configure protocol bounds on
+       the context when pinning is required.
+   * - ``server_hostname``
+     - The driver derives this from the endpoint. Use
+       :class:`~cassandra.connection.SniEndPoint` when explicit SNI routing is
+       required.
+     - The driver derives this from the endpoint. Use
+       :class:`~cassandra.connection.SniEndPoint` when explicit SNI routing is
+       required.
+   * - ``server_side``, ``do_handshake_on_connect``, and
+       ``suppress_ragged_eofs``
+     - No migration. The driver owns client-side socket creation and TLS
+       handshakes; these low-level overrides are no longer configurable.
+     - No migration. The driver owns client-side socket creation and TLS
+       handshakes; these low-level overrides are no longer configurable.
+
+An empty ``ssl_options={}`` previously left the intended verification policy
+ambiguous. Replace it with an explicit context. For an insecure development
+connection with no certificate verification:
+
+.. code-block:: python
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    cluster = Cluster(['127.0.0.1'], ssl_context=context)
+
+Do not use this configuration in production. Prefer
+``ssl.create_default_context()`` with a trusted CA and hostname verification.
+
+For mutual TLS, load the client certificate and private key on the context:
+
+.. code-block:: python
+
+    context = ssl.create_default_context(cafile='/path/to/rootca.pem')
+    context.load_cert_chain(
+        certfile='/path/to/client.crt',
+        keyfile='/path/to/client.key',
+        password='optional-key-password',
+    )
+    cluster = Cluster(['node.example.com'], ssl_context=context)
+
+Twisted and Eventlet require an ``OpenSSL.SSL.Context`` instead of a standard
+``ssl.SSLContext``. See `SSL with Twisted or Eventlet`_ below for a complete
+example. Cloud secure-connect bundles require no migration; the driver creates
+their TLS context internally.
 
 If you create your SSLContext using `ssl.create_default_context <https://docs.python.org/3/library/ssl.html#ssl.create_default_context>`_,
-be aware that SSLContext.check_hostname is set to True by default, so the hostname validation will be done
-by Python and not the driver. For this reason, we need to set the server_hostname at best effort, which is the
-resolved ip address. If this validation needs to be done against the FQDN, consider enabling it using the ssl_options
-as described in the following examples or implement your own :class:`~.connection.EndPoint` and
-:class:`~.connection.EndPointFactory`.
+be aware that SSLContext.check_hostname is set to True by default, so hostname validation is done
+by Python rather than the driver. The driver uses the endpoint address as the TLS server name.
 
 
 The following examples assume you have generated your Scylla certificate and
@@ -135,7 +242,7 @@ to `CERT_REQUIRED`. Otherwise, the loaded verify certificate will have no effect
     cluster = Cluster(['127.0.0.1'], ssl_context=ssl_context)
     session = cluster.connect()
 
-Additionally, you can also force the driver to verify the `hostname` of the server by passing additional options to `ssl_context.wrap_socket` via the `ssl_options` kwarg:
+To verify the hostname of the server, enable hostname checking on the context:
 
 .. code-block:: python
 
@@ -146,9 +253,7 @@ Additionally, you can also force the driver to verify the `hostname` of the serv
     ssl_context.load_verify_locations('/path/to/rootca.crt')
     ssl_context.verify_mode = CERT_REQUIRED
     ssl_context.check_hostname = True
-    ssl_options = {'server_hostname': '127.0.0.1'}
-
-    cluster = Cluster(['127.0.0.1'], ssl_context=ssl_context, ssl_options=ssl_options)
+    cluster = Cluster(['127.0.0.1'], ssl_context=ssl_context)
     session = cluster.connect()
 
 .. _ssl-server-verifies-client:
@@ -263,8 +368,7 @@ for more details about ``SSLContext`` configuration.
     cluster = Cluster(
         contact_points=['127.0.0.1'],
         connection_class=TwistedConnection,
-        ssl_context=ssl_context,
-        ssl_options={'check_hostname': True}
+        ssl_context=ssl_context
     )
     session = cluster.connect()
 

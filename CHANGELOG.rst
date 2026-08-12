@@ -9,6 +9,10 @@ Features
 
 Others
 ------
+* The deprecated ``Cluster.ssl_options`` parameter is retained as a migration
+  aid but can no longer configure TLS. Supplying or assigning it, including an
+  empty dictionary, raises ``ValueError`` with guidance for configuring an
+  ``ssl.SSLContext`` and passing it using ``ssl_context`` instead.
 * ``PreparedStatement.result_metadata`` and ``PreparedStatement.result_metadata_id`` are
   now read-only. They are replaced together by
   ``PreparedStatement.update_result_metadata()``, so a request can never observe a metadata
