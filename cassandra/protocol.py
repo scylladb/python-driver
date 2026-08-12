@@ -71,6 +71,28 @@ _message_types_by_opcode = {}
 
 _UNSET_VALUE = object()
 
+# Inline constants mirroring ProtocolVersion.has_checksumming_support(), to
+# avoid the classmethod call overhead (~94 ns per call) on the encode/decode
+# hot path:
+#
+#     ProtocolVersion.has_checksumming_support(v) == (
+#         _CHECKSUMMING_MIN_VERSION <= v < _CHECKSUMMING_MAX_VERSION_EXCLUSIVE)
+#
+# _CHECKSUMMING_MAX_VERSION_EXCLUSIVE is an *exclusive* upper bound -- DSE_V1
+# itself is deliberately NOT considered checksumming-capable. DSE_V1/DSE_V2
+# are private DSE protocol extensions that do not carry the checksumming
+# feature introduced with the (Cassandra) V5 native protocol, even though
+# their numeric values (0x41/0x42) are greater than V5/V6. This matches the
+# other V5-only feature gates on ProtocolVersion (uses_prepare_flags,
+# uses_prepared_metadata, uses_keyspace_flag), which all explicitly exclude
+# DSE_V1 too. See ProtocolVersion.has_checksumming_support(), which remains
+# the canonical definition (still used as-is in connection.py to decide
+# whether to enable frame-level checksumming for a connection); if it ever
+# changes, these constants must be updated to match -- test_protocol.py
+# asserts the two stay in sync.
+_CHECKSUMMING_MIN_VERSION = ProtocolVersion.V5
+_CHECKSUMMING_MAX_VERSION_EXCLUSIVE = ProtocolVersion.DSE_V1
+
 
 def register_class(cls):
     _message_types_by_opcode[cls.opcode] = cls
@@ -1156,40 +1178,52 @@ class _ProtocolHandler(object):
             flags |= USE_BETA_FLAG
 
         buff = io.BytesIO()
-        buff.seek(9)
 
         # With checksumming, the compression is done at the segment frame encoding
-        if (compressor and not ProtocolVersion.has_checksumming_support(protocol_version)):
-            body = io.BytesIO()
+        if (compressor and not (_CHECKSUMMING_MIN_VERSION <= protocol_version < _CHECKSUMMING_MAX_VERSION_EXCLUSIVE)):
             if msg.custom_payload:
-                write_bytesmap(body, msg.custom_payload)
-            msg.send_body(body, protocol_version, protocol_features)
-            body = body.getvalue()
+                write_bytesmap(buff, msg.custom_payload)
+            msg.send_body(buff, protocol_version, protocol_features)
+            body = buff.getvalue()
 
             if len(body) > 0:
                 body = compressor(body)
                 flags |= COMPRESSED_FLAG
 
-            buff.write(body)
             length = len(body)
+            # Same header layout as the non-compression path below: both go
+            # through _pack_header so the two can never silently diverge.
+            return cls._pack_header(protocol_version, flags, stream_id, msg.opcode, length) + body
         else:
+            buff.seek(9)
+
             if msg.custom_payload:
                 write_bytesmap(buff, msg.custom_payload)
             msg.send_body(buff, protocol_version, protocol_features)
 
             length = buff.tell() - 9
 
-        buff.seek(0)
-        cls._write_header(buff, protocol_version, flags, stream_id, msg.opcode, length)
-        return buff.getvalue()
+            buff.seek(0)
+            cls._write_header(buff, protocol_version, flags, stream_id, msg.opcode, length)
+            return buff.getvalue()
 
     @staticmethod
-    def _write_header(f, version, flags, stream_id, opcode, length):
+    def _pack_header(version, flags, stream_id, opcode, length):
+        """
+        Pack a CQL protocol frame header into bytes.
+
+        This is the single source of truth for the frame header layout;
+        ``_write_header`` and the compressed encode path both go through
+        this method so they cannot silently diverge.
+        """
+        return v3_header_pack(version, flags, stream_id, opcode) + int32_pack(length)
+
+    @classmethod
+    def _write_header(cls, f, version, flags, stream_id, opcode, length):
         """
         Write a CQL protocol frame header.
         """
-        f.write(v3_header_pack(version, flags, stream_id, opcode))
-        write_int(f, length)
+        f.write(cls._pack_header(version, flags, stream_id, opcode, length))
 
     @classmethod
     def decode_message(cls, protocol_version, protocol_features, user_type_map, stream_id, flags, opcode, body,
@@ -1206,7 +1240,7 @@ class _ProtocolHandler(object):
         :param decompressor: optional decompression function to inflate the body
         :return: a message decoded from the body and frame attributes
         """
-        if (not ProtocolVersion.has_checksumming_support(protocol_version) and
+        if (not (_CHECKSUMMING_MIN_VERSION <= protocol_version < _CHECKSUMMING_MAX_VERSION_EXCLUSIVE) and
                 flags & COMPRESSED_FLAG):
             if decompressor is None:
                 raise RuntimeError("No de-compressor available for compressed frame!")
