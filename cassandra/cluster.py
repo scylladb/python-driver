@@ -51,7 +51,8 @@ from cassandra.client_routes import ClientRoutesChangeType, ClientRoutesConfig, 
 from cassandra.connection import (ClientRoutesEndPointFactory, ConnectionException, ConnectionShutdown,
                                   ConnectionHeartbeat, ProtocolVersionUnsupported,
                                   EndPoint, DefaultEndPoint, DefaultEndPointFactory,
-                                  SniEndPointFactory, ConnectionBusy, locally_supported_compressions)
+                                  SniEndPointFactory, ConnectionBusy, locally_supported_compressions,
+                                  SSLSessionCache)
 from cassandra.cqltypes import UserType
 import cassandra.cqltypes as types
 from cassandra.encoder import Encoder
@@ -868,6 +869,42 @@ class Cluster(object):
     .. versionadded:: 3.17.0
     """
 
+    ssl_session_cache = None
+    """
+    A :class:`~cassandra.connection.SSLSessionCache` shared by every
+    connection this cluster opens, letting them resume TLS sessions instead of
+    performing a full handshake each time.  This matters most for the group of
+    per-shard connections opened to a node at once, and for reconnections.
+
+    One is created automatically when :attr:`~Cluster.ssl_context` is set.
+    That decision is made while the :class:`.Cluster` is being constructed, as
+    it is for the other state derived from the TLS configuration, so setting
+    ``ssl_context`` afterwards leaves resumption off; assign a cache here
+    yourself if you configure TLS that way.
+
+    Pass ``ssl_session_cache=None`` to :class:`.Cluster` to turn resumption
+    off, or pass your own instance to size it or to share it between
+    clusters::
+
+        from cassandra.connection import SSLSessionCache
+
+        cluster = Cluster(ssl_context=ssl_context,
+                          ssl_session_cache=SSLSessionCache(max_size=64))
+
+    Resumption is available when TLS is configured through
+    :attr:`~Cluster.ssl_context` and the reactor establishes TLS with the
+    standard library's ``ssl`` module: the ``libev`` and ``asyncore`` reactors,
+    which is to say the default one.
+
+    It is not available with the deprecated :attr:`~Cluster.ssl_options`-only
+    configuration, because each connection builds its own ``SSLContext`` and a
+    session cannot be replayed onto a different one; nor on the ``asyncio``
+    reactor, which performs the handshake inside
+    ``loop.create_connection()``, leaving no point at which to restore a
+    session.  In those cases no cache is created and connections handshake in
+    full.
+    """
+
     sockopts = None
     """
     An optional list of tuples which will be used as arguments to
@@ -1214,7 +1251,8 @@ class Cluster(object):
                  column_encryption_policy=None,
                  application_info:Optional[ApplicationInfoBase]=None,
                  client_routes_config:Optional[ClientRoutesConfig]=None,
-                 allow_control_connection_query_fallback:Optional[ControlConnectionQueryFallback]=ControlConnectionQueryFallback.Disabled
+                 allow_control_connection_query_fallback:Optional[ControlConnectionQueryFallback]=ControlConnectionQueryFallback.Disabled,
+                 ssl_session_cache=_NOT_SET
                  ):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
@@ -1461,6 +1499,21 @@ class Cluster(object):
 
         self.ssl_options = ssl_options
         self.ssl_context = ssl_context
+
+        if ssl_session_cache is _NOT_SET:
+            # Resume TLS sessions by default, but only where it can work: the
+            # session has to be replayed onto the same SSLContext, and the
+            # reactor has to give the driver a chance to offer it before the
+            # handshake.
+            # connection_class is not required to derive from Connection, so
+            # treat one that does not report the capability as lacking it.
+            resumable = (ssl_context is not None and
+                         getattr(self.connection_class,
+                                 'supports_tls_session_resumption', False))
+            self.ssl_session_cache = SSLSessionCache() if resumable else None
+        else:
+            self.ssl_session_cache = ssl_session_cache
+
         self.sockopts = sockopts
         self.cql_version = cql_version
         self.max_schema_agreement_wait = max_schema_agreement_wait
@@ -1681,6 +1734,7 @@ class Cluster(object):
         kwargs_dict.setdefault('sockopts', self.sockopts)
         kwargs_dict.setdefault('ssl_options', self.ssl_options)
         kwargs_dict.setdefault('ssl_context', self.ssl_context)
+        kwargs_dict.setdefault('ssl_session_cache', self.ssl_session_cache)
         kwargs_dict.setdefault('cql_version', self.cql_version)
         kwargs_dict.setdefault('protocol_version', self.protocol_version)
         kwargs_dict.setdefault('user_type_map', self._user_types)
