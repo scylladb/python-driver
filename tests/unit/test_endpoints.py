@@ -9,8 +9,10 @@
 import unittest
 
 import itertools
+import uuid
 
-from cassandra.connection import DefaultEndPoint, SniEndPointFactory
+from cassandra.connection import (ClientRoutesEndPoint, DefaultEndPoint,
+                                  SniEndPointFactory, UnixSocketEndPoint)
 
 from unittest.mock import patch
 
@@ -53,3 +55,46 @@ class SniEndPointTest(unittest.TestCase):
         for i in range(10):
             (address, _) = endpoint.resolve()
             assert address == next(it)
+
+    def test_tls_session_cache_key_distinguishes_server_names(self):
+        # All SNI endpoints behind a proxy share an address and port, so the
+        # server name has to be part of the key or they would share sessions.
+        one = self.endpoint_factory.create_from_sni('node1')
+        other = self.endpoint_factory.create_from_sni('node2')
+
+        assert one.tls_session_cache_key != other.tls_session_cache_key
+        assert one.tls_session_cache_key == \
+            self.endpoint_factory.create_from_sni('node1').tls_session_cache_key
+        assert one.tls_session_cache_key != DefaultEndPoint(
+            'proxy.datastax.com', 30002).tls_session_cache_key
+
+
+class TlsSessionCacheKeyTest(unittest.TestCase):
+
+    def test_default_endpoint_key(self):
+        assert DefaultEndPoint('10.0.0.1', 9042).tls_session_cache_key == ('10.0.0.1', 9042)
+        assert DefaultEndPoint('10.0.0.1', 9042).tls_session_cache_key != \
+            DefaultEndPoint('10.0.0.1', 9142).tls_session_cache_key
+
+    def test_unix_socket_endpoint_key(self):
+        assert UnixSocketEndPoint('/tmp/a').tls_session_cache_key != \
+            UnixSocketEndPoint('/tmp/b').tls_session_cache_key
+
+    def test_client_routes_endpoint_key_follows_the_node_not_the_route(self):
+        host_id = uuid.uuid4()
+        endpoint = ClientRoutesEndPoint(host_id, handler=None,
+                                        original_address='10.0.0.1',
+                                        original_port=9042)
+        other = ClientRoutesEndPoint(uuid.uuid4(), handler=None,
+                                     original_address='10.0.0.1',
+                                     original_port=9042)
+
+        assert endpoint.tls_session_cache_key == (host_id, '10.0.0.1', 9042)
+        assert endpoint.tls_session_cache_key != other.tls_session_cache_key
+
+    def test_keys_are_hashable(self):
+        # Keys are used as dict keys in SSLSessionCache.
+        for endpoint in (DefaultEndPoint('10.0.0.1'),
+                         UnixSocketEndPoint('/tmp/a'),
+                         ClientRoutesEndPoint(uuid.uuid4(), None, '10.0.0.1', 9042)):
+            hash(endpoint.tls_session_cache_key)

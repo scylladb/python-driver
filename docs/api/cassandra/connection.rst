@@ -21,3 +21,6 @@ Low Level Connection Info
 .. autoclass:: SniEndPointFactory
 
 .. autoclass:: UnixSocketEndPoint
+
+.. autoclass:: SSLSessionCache
+   :members:

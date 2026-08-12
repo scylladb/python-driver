@@ -21,7 +21,7 @@ import logging
 import socket
 import struct
 import sys
-from threading import Thread, Event, RLock, Condition
+from threading import Thread, Event, Lock, RLock, Condition
 import time
 import ssl
 import uuid
@@ -159,6 +159,16 @@ class EndPoint(object):
         """
         return socket.AF_UNSPEC
 
+    @property
+    def tls_session_cache_key(self):
+        """
+        A hashable value identifying the TLS peer this endpoint connects to,
+        used to look up cached TLS sessions (see
+        :class:`~.SSLSessionCache`).  Two endpoints may share a key only if a
+        TLS session established with one is valid for the other.
+        """
+        return (self.address, self.port)
+
     def resolve(self):
         """
         Resolve the endpoint to an address/port. This is called
@@ -272,6 +282,12 @@ class SniEndPoint(EndPoint):
     @property
     def ssl_options(self):
         return self._ssl_options
+
+    @property
+    def tls_session_cache_key(self):
+        # Several SNI endpoints share a proxy address and port, but each one
+        # presents a different server_name and therefore a different TLS peer.
+        return (self.address, self.port, self._server_name)
 
     def resolve(self):
         try:
@@ -450,6 +466,12 @@ class ClientRoutesEndPoint(EndPoint):
     @property
     def host_id(self) -> uuid.UUID:
         return self._host_id
+
+    @property
+    def tls_session_cache_key(self):
+        # The proxy address this endpoint resolves to may change between
+        # connections; the TLS peer is identified by the node behind it.
+        return (self._host_id, self._original_address, self._original_port)
 
     def resolve(self) -> Tuple[str, int]:
         """
@@ -777,6 +799,108 @@ class ShardAwarePortGenerator:
 
 
 DefaultShardAwarePortGenerator = ShardAwarePortGenerator(DEFAULT_LOCAL_PORT_LOW, DEFAULT_LOCAL_PORT_HIGH)
+
+
+class SSLSessionCache(object):
+    """
+    A thread-safe, bounded cache of TLS sessions, keyed by TLS peer identity.
+
+    TLS clients can skip the expensive part of a handshake by replaying a
+    session established earlier with the same peer (RFC 5077 session tickets
+    for TLS 1.2, RFC 8446 pre-shared keys for TLS 1.3).  OpenSSL never does
+    this on its own -- the client has to hold on to the session and offer it
+    on the next connection -- so the driver keeps one of these caches per
+    :class:`~.Cluster` and reuses sessions across every connection it opens,
+    most importantly the burst of per-shard connections opened to a node at
+    once.
+
+    A cached session is not consumed by being used: the same session can be
+    replayed by any number of concurrent connections, and each successful
+    handshake stores a fresh session back, so the entry keeps rolling
+    forward.  Entries are dropped when the lifetime the caller gave them runs
+    out, and otherwise only replaced or evicted; a session the server declines
+    for any other reason simply results in a full handshake, which is what
+    would have happened anyway.
+
+    Instances may be shared between clusters, and are safe to use from
+    multiple threads.
+    """
+
+    def __init__(self, max_size=1024):
+        """
+        :param max_size: maximum number of peers to keep sessions for.  When
+            exceeded, the least recently used entry is evicted.
+        """
+        # Anything but a positive integer is rejected outright rather than
+        # compared against: a float such as nan or inf would pass a `< 1` check
+        # and then leave the cache growing without bound, while True is an int
+        # that passes it and would quietly cap the cache at one entry.
+        if (not isinstance(max_size, int) or isinstance(max_size, bool)
+                or max_size < 1):
+            raise ValueError(
+                "max_size must be a positive integer, got %r" % (max_size,))
+        self._max_size = max_size
+        self._sessions = OrderedDict()
+        self._lock = Lock()
+
+    @property
+    def max_size(self):
+        """The maximum number of peers this cache keeps sessions for."""
+        return self._max_size
+
+    def get(self, key):
+        """
+        Return the cached session for *key*, or :const:`None` if there is none
+        or its lifetime has run out.  A session that is still live stays in the
+        cache; an expired one is dropped.
+        """
+        with self._lock:
+            entry = self._sessions.get(key)
+            if entry is None:
+                return None
+            session, expires_at = entry
+            if expires_at is not None and time.monotonic() >= expires_at:
+                del self._sessions[key]
+                return None
+            self._sessions.move_to_end(key)
+            return session
+
+    def set(self, key, session, lifetime=None):
+        """
+        Store *session* as the session to offer for *key*, replacing any
+        previous one.  A :const:`None` session is ignored.
+
+        :param lifetime: how much longer, in seconds, the session may be
+            offered.  Once it has passed, the entry is dropped rather than
+            returned.  :const:`None` means no limit, which callers should
+            reserve for sessions that carry no lifetime of their own.
+        """
+        if session is None:
+            return
+        expires_at = None if lifetime is None else time.monotonic() + lifetime
+        with self._lock:
+            self._sessions[key] = (session, expires_at)
+            self._sessions.move_to_end(key)
+            while len(self._sessions) > self._max_size:
+                self._sessions.popitem(last=False)
+
+    def discard(self, key):
+        """Drop the session cached for *key*, if any."""
+        with self._lock:
+            self._sessions.pop(key, None)
+
+    def clear(self):
+        """Drop all cached sessions."""
+        with self._lock:
+            self._sessions.clear()
+
+    def __len__(self):
+        with self._lock:
+            return len(self._sessions)
+
+    def __repr__(self):
+        return "<%s max_size=%d size=%d>" % (
+            self.__class__.__name__, self._max_size, len(self))
 
 
 class Connection(object):
