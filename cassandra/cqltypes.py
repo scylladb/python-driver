@@ -129,7 +129,7 @@ def cqltype_to_python(cql_string):
         (r'<', lambda s, t: ', ['),
         (r'>', lambda s, t: ']'),
         (r'[, ]', lambda s, t: t),
-        (r'".*?"', lambda s, t: "'{}'".format(t)),
+        (r'".*?"', lambda s, t: "'{}'".format(t.replace('\\', '\\\\').replace("'", "\\'"))),
     ))
 
     scanned_tokens = scanner.scan(cql_string)[0]
@@ -155,7 +155,7 @@ def python_to_cqltype(types):
     ))
 
     scanned_tokens = scanner.scan(repr(types))[0]
-    cql = ''.join(scanned_tokens).replace('\\\\', '\\')
+    cql = ''.join(scanned_tokens).replace('\\\\', '\\').replace("\\'", "'")
     return cql
 
 
