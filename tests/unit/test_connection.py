@@ -596,7 +596,7 @@ class TlsSessionResumptionTest(unittest.TestCase):
     """
     Connection-level wiring of :class:`~.SSLSessionCache`.  The end-to-end
     behaviour against a real TLS server lives in
-    ``tests/unit/io/test_tls_resumption.py``.
+    ``tests/unit/test_tls_resumption.py``.
     """
 
     def make_connection(self, **kwargs):
