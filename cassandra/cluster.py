@@ -903,6 +903,15 @@ class Cluster(object):
     ``loop.create_connection()``, leaving no point at which to restore a
     session.  In those cases no cache is created and connections handshake in
     full.
+
+    It equally requires the server to hand out something it will honour later.
+    Scylla issues session tickets only when ``enable_session_tickets`` is set
+    in its ``client_encryption_options``, which is off by default; without it
+    nothing resumes and every connection performs a full handshake, as it would
+    have anyway.  Over TLS 1.3 the cache then stays empty, while over TLS 1.2
+    such a server still assigns a session id, so the cache may hold an entry it
+    will not honour -- offering that costs nothing and the handshake simply
+    completes in full.
     """
 
     sockopts = None
