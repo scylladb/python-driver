@@ -57,19 +57,27 @@ class LibevLoop(object):
 
         self._started = False
         self._shutdown = False
+        # Single lock for _started/_shutdown *and* _live_conns/_new_conns/
+        # _closed_conns. The exit check in _run_loop() must see the started/
+        # shutdown flags and the live connection set as one atomic snapshot,
+        # otherwise connection_created() can register a connection in the
+        # instant after the exit check reads an empty _live_conns but before
+        # _started is flipped to False -- a lost wakeup that hangs the
+        # connection forever (see issue #980). Two separate locks can't give
+        # that atomicity no matter which one each side takes, so there is
+        # only one lock here, not a hold-both-locks protocol.
         self._lock = Lock()
         self._lock_thread = Lock()
 
         self._thread = None
 
         # set of all connections; only replaced with a new copy
-        # while holding _conn_set_lock, never modified in place
+        # while holding _lock, never modified in place
         self._live_conns = set()
         # newly created connections that need their write/read watcher started
         self._new_conns = set()
         # recently closed connections that need their write/read watcher stopped
         self._closed_conns = set()
-        self._conn_set_lock = Lock()
 
         self._preparer = libev.Prepare(self._loop, self._loop_will_run)
         # prevent _preparer from keeping the loop from returning
@@ -101,6 +109,16 @@ class LibevLoop(object):
             self._loop.start()
             # there are still active watchers, no deadlock
             with self._lock:
+                # Reading _live_conns and deciding/committing the exit here
+                # happen atomically under the same lock that guards
+                # connection_created()/connection_destroyed(). So any
+                # concurrent connection_created() either finishes-before this
+                # read (its connection is seen in _live_conns, loop
+                # restarts) or finishes-after this block sets _started =
+                # False (maybe_start(), called right after
+                # connection_created(), then observes _started == False and
+                # starts a fresh thread). There is no interleaving in which
+                # the new connection is invisible to both.
                 if not self._shutdown and self._live_conns:
                     log.debug("Restarting event loop")
                     continue
@@ -159,7 +177,7 @@ class LibevLoop(object):
         self._notifier.send()
 
     def connection_created(self, conn):
-        with self._conn_set_lock:
+        with self._lock:
             new_live_conns = self._live_conns.copy()
             new_live_conns.add(conn)
             self._live_conns = new_live_conns
@@ -169,7 +187,7 @@ class LibevLoop(object):
             self._new_conns = new_new_conns
 
     def connection_destroyed(self, conn):
-        with self._conn_set_lock:
+        with self._lock:
             new_conns = self._new_conns.copy()
             new_conns.discard(conn)
             self._new_conns = new_conns
@@ -198,7 +216,7 @@ class LibevLoop(object):
                 changed = True
 
         if self._new_conns:
-            with self._conn_set_lock:
+            with self._lock:
                 to_start = self._new_conns
                 self._new_conns = set()
 
@@ -209,7 +227,7 @@ class LibevLoop(object):
             changed = True
 
         if self._closed_conns:
-            with self._conn_set_lock:
+            with self._lock:
                 to_stop = self._closed_conns
                 self._closed_conns = set()
 
