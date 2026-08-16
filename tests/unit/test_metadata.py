@@ -17,7 +17,6 @@ from binascii import unhexlify
 import logging
 from unittest.mock import Mock
 import os
-import timeit
 import uuid
 
 import cassandra
@@ -226,12 +225,13 @@ class StrategiesTest(unittest.TestCase):
 
     def test_nts_token_performance(self):
         """
-        Tests to ensure that when rf exceeds the number of nodes available, that we dont'
-        needlessly iterate trying to construct tokens for nodes that don't exist.
+        When rf exceeds the number of nodes available, the replica map must
+        only contain the nodes that exist (one replica set per token), not
+        iterate to build replicas for nodes that don't exist.
 
         @since 3.7
         @jira_ticket PYTHON-379
-        @expected_result timing with 1500 rf should be same/similar to 3rf if we have 3 nodes
+        @expected_result 1500 rf with 3 nodes produces the same replica map as 3 rf
 
         @test_category metadata
         """
@@ -251,17 +251,21 @@ class StrategiesTest(unittest.TestCase):
                 ring.append(md5_token)
             current_token += 1000
 
-        nts = NetworkTopologyStrategy({'dc1': 3})
-        start_time = timeit.default_timer()
-        nts.make_token_replica_map(token_to_host_owner, ring)
-        elapsed_base = timeit.default_timer() - start_time
+        expected_replicas = set(token_to_host_owner.values())
 
-        nts = NetworkTopologyStrategy({'dc1': 1500})
-        start_time = timeit.default_timer()
-        nts.make_token_replica_map(token_to_host_owner, ring)
-        elapsed_bad = timeit.default_timer() - start_time
-        difference = elapsed_bad - elapsed_base
-        assert difference < 1 and difference > -1
+        replica_map_rf3 = NetworkTopologyStrategy({'dc1': 3}).make_token_replica_map(
+            token_to_host_owner, ring)
+        replica_map_rf1500 = NetworkTopologyStrategy({'dc1': 1500}).make_token_replica_map(
+            token_to_host_owner, ring)
+
+        for replica_map in (replica_map_rf3, replica_map_rf1500):
+            assert set(replica_map) == set(ring)
+            assert all(
+                len(replicas) == dc1hostnum
+                and set(replicas) == expected_replicas
+                for replicas in replica_map.values()
+            )
+        assert replica_map_rf1500 == replica_map_rf3
 
     def test_nts_make_token_replica_map_multi_rack(self):
         token_to_host_owner = {}
