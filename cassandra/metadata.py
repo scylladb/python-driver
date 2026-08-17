@@ -24,6 +24,7 @@ import logging
 import re
 import sys
 from threading import RLock
+from warnings import warn
 import struct
 import random
 import itertools
@@ -129,6 +130,7 @@ class Metadata(object):
         self._host_id_by_endpoint = {}
         self._hosts_lock = RLock()
         self._tablets = Tablets({})
+        self._keyspace_replication_strategies = {}
 
     def export_schema_as_string(self):
         """
@@ -273,16 +275,52 @@ class Metadata(object):
     def _keyspace_added(self, ksname):
         if self.token_map:
             self.token_map.rebuild_keyspace(ksname, build_if_absent=False)
+        ks_meta = self.keyspaces.get(ksname)
+        if ks_meta and ks_meta.replication_strategy:
+            self._keyspace_replication_strategies[ksname] = ks_meta.replication_strategy
 
     def _keyspace_updated(self, ksname):
         if self.token_map:
             self.token_map.rebuild_keyspace(ksname, build_if_absent=False)
         self._tablets.drop_tablets(ksname)
+        ks_meta = self.keyspaces.get(ksname)
+        if ks_meta and ks_meta.replication_strategy:
+            self._keyspace_replication_strategies[ksname] = ks_meta.replication_strategy
 
     def _keyspace_removed(self, ksname):
         if self.token_map:
             self.token_map.remove_keyspace(ksname)
         self._tablets.drop_tablets(ksname)
+        self._keyspace_replication_strategies.pop(ksname, None)
+
+    def _update_replication_strategies(self, replication_strategies):
+        """
+        Update the keyspace replication strategies used for token-aware routing.
+
+        Used to maintain the token map when schema metadata is disabled and
+        full keyspace metadata is not available.
+        """
+        removed = set(self._keyspace_replication_strategies) - set(replication_strategies)
+        for keyspace in removed:
+            self._keyspace_replication_strategies.pop(keyspace, None)
+            self.keyspaces.pop(keyspace, None)  # stale metadata if it was previously enabled
+            self._tablets.drop_tablets(keyspace)
+            if self.token_map:
+                self.token_map.remove_keyspace(keyspace)
+        changed = [(keyspace, strategy) for keyspace, strategy in replication_strategies.items()
+                   if self._keyspace_replication_strategies.get(keyspace) != strategy]
+        self._keyspace_replication_strategies.update(replication_strategies)
+        token_map = self.token_map
+        for keyspace, strategy in changed:
+            ks_meta = self.keyspaces.get(keyspace)
+            if ks_meta is not None and ks_meta.replication_strategy != strategy:
+                # keep the metadata in sync so the token map rebuild uses the fresh strategy
+                ks_meta.replication_strategy = strategy
+            # a replication change can alter the tablet layout, so stale tablets are dropped
+            self._tablets.drop_tablets(keyspace)
+            if token_map:
+                token_map.remove_keyspace(keyspace)
+                token_map.rebuild_keyspace(keyspace, build_if_absent=True)
 
     def rebuild_token_map(self, partitioner, token_map):
         """
@@ -1847,10 +1885,17 @@ class TokenMap(object):
             try:
                 current = self.tokens_to_hosts_by_ks.get(keyspace, None)
                 if (build_if_absent and current is None) or (not build_if_absent and current is not None):
+                    strategy = None
                     ks_meta = self._metadata.keyspaces.get(keyspace)
                     if ks_meta:
-                        replica_map = self.replica_map_for_keyspace(self._metadata.keyspaces[keyspace])
-                        self.tokens_to_hosts_by_ks[keyspace] = replica_map
+                        strategy = ks_meta.replication_strategy
+                    if strategy is None:
+                        strategy = self._metadata._keyspace_replication_strategies.get(keyspace)
+                    if strategy:
+                        replica_map = strategy.make_token_replica_map(self.token_to_host_owner, self.ring)
+                    else:
+                        replica_map = None
+                    self.tokens_to_hosts_by_ks[keyspace] = replica_map
             except Exception:
                 # should not happen normally, but we don't want to blow up queries because of unexpected meta state
                 # bypass until new map is generated
@@ -1858,6 +1903,8 @@ class TokenMap(object):
                 log.exception("Failed creating a token map for keyspace '%s' with %s. PLEASE REPORT THIS: https://datastax-oss.atlassian.net/projects/PYTHON", keyspace, self.token_to_host_owner)
 
     def replica_map_for_keyspace(self, ks_metadata):
+        warn("TokenMap.replica_map_for_keyspace is deprecated and will be "
+             "removed in a future release.", DeprecationWarning, stacklevel=2)
         strategy = ks_metadata.replication_strategy
         if strategy:
             return strategy.make_token_replica_map(self.token_to_host_owner, self.ring)

@@ -30,6 +30,7 @@ from cassandra.metadata import (IndexMetadata, Token, murmur3, Function, Aggrega
                                 RegisteredTableExtension, _RegisteredExtensionType, get_schema_parser,
                                 group_keys_by_replica, NO_VALID_REPLICA)
 from cassandra.protocol import QueryMessage, ProtocolHandler
+from cassandra.query import SimpleStatement
 
 from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, execute_until_pass,
                                BasicSegregatedKeyspaceUnitTestCase, BasicSharedKeyspaceUnitTestCase,
@@ -169,6 +170,40 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         assert no_token_rs.one() is not None
         no_schema.shutdown()
         no_token.shutdown()
+
+    def test_schema_metadata_disable_token_aware_routing(self):
+        """
+        Token-aware routing is maintained when schema metadata is disabled.
+
+        @since 3.30
+        @expected_result The token map is populated from keyspace replication strategies without full schema metadata
+
+        @test_category metadata
+        """
+        no_schema = TestCluster(schema_metadata_enabled=False)
+        try:
+            no_schema_session = no_schema.connect()
+            assert len(no_schema.metadata.keyspaces) == 0
+
+            # replication strategies are fetched without the full schema
+            assert no_schema.metadata._keyspace_replication_strategies.get(self.ks_name) is not None
+
+            # token-aware routing works via the replication strategies
+            token_map = no_schema.metadata.token_map
+            replicas = token_map.get_replicas(self.ks_name, token_map.token_class.from_string("0"))
+            assert replicas
+
+            # a token-aware query is routed to a replica of the keyspace
+            statement = SimpleStatement(
+                "SELECT * FROM system.local WHERE key='local'",
+                keyspace=self.ks_name, routing_key=b"routing-key")
+            rs = no_schema_session.execute(statement)
+            assert rs.one() is not None
+            replicas = set(no_schema.metadata.get_replicas(self.ks_name, statement.routing_key))
+            # the first host attempted; retries may move the query off a replica
+            assert rs.response_future.attempted_hosts[0] in replicas
+        finally:
+            no_schema.shutdown()
 
     def make_create_statement(self, partition_cols, clustering_cols=None, other_cols=None):
         clustering_cols = clustering_cols or []

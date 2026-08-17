@@ -15,7 +15,7 @@ import unittest
 
 from binascii import unhexlify
 import logging
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import os
 import uuid
 
@@ -447,6 +447,145 @@ class GetReplicasTest(unittest.TestCase):
         self._get_replicas(BytesToken)
 
 
+class TokenMapReplicationStrategiesTest(unittest.TestCase):
+    """
+    TokenMap should use Metadata._keyspace_replication_strategies to compute
+    replicas when keyspace metadata is unavailable (schema_metadata_enabled=False).
+    """
+
+    def _build_metadata(self):
+        tokens = [Murmur3Token(i) for i in range(0, 500, 100)]
+        hosts = [Host("ip%d" % i, SimpleConvictionPolicy, datacenter="dc1", rack="rack1", host_id=uuid.uuid4())
+                 for i in range(len(tokens))]
+        metadata = Metadata()
+        metadata.rebuild_token_map(
+            "org.apache.cassandra.dht.Murmur3Partitioner",
+            {host: [str(token.value)] for host, token in zip(hosts, tokens)})
+        return metadata, tokens, hosts
+
+    def test_get_replicas_without_keyspace_metadata(self):
+        """Replica lookup works without keyspace metadata when the replication strategy is known."""
+        metadata, tokens, hosts = self._build_metadata()
+        metadata._update_replication_strategies({
+            "ks": ReplicationStrategy.create(
+                "org.apache.cassandra.locator.SimpleStrategy", {"replication_factor": "1"})})
+
+        replicas = metadata.token_map.get_replicas("ks", tokens[0])
+        assert set(replicas) == {hosts[0]}
+        assert metadata.keyspaces == {}
+
+    def test_update_replication_strategies_removes_dropped_keyspaces(self):
+        """Removing a keyspace drops its token map entry and tablets."""
+        metadata, _, _ = self._build_metadata()
+        metadata._update_replication_strategies({
+            "ks": ReplicationStrategy.create(
+                "org.apache.cassandra.locator.SimpleStrategy", {"replication_factor": "1"})})
+        metadata._tablets.add_tablet("ks", "tb", Tablet(0, 100, [("host1", 0)]))
+        assert "ks" in metadata._keyspace_replication_strategies
+        assert "ks" in metadata.token_map.tokens_to_hosts_by_ks
+
+        metadata._update_replication_strategies({})
+
+        assert metadata._keyspace_replication_strategies == {}
+        assert metadata.token_map.tokens_to_hosts_by_ks == {}
+        assert metadata._tablets.table_has_tablets("ks", "tb") is False
+
+    def test_keyspace_added_syncs_replication_strategies(self):
+        """Schema refresh keeps _keyspace_replication_strategies in sync with keyspace metadata."""
+        metadata, _, _ = self._build_metadata()
+        keyspace = KeyspaceMetadata("ks", True, "NetworkTopologyStrategy", {"dc1": "1"})
+        metadata.keyspaces["ks"] = keyspace
+        metadata._keyspace_added("ks")
+
+        assert metadata._keyspace_replication_strategies["ks"] is keyspace.replication_strategy
+
+    def test_keyspace_removed_syncs_replication_strategies(self):
+        """Removing a keyspace clears its replication strategy and tablets."""
+        metadata, _, _ = self._build_metadata()
+        metadata._update_replication_strategies({
+            "ks": ReplicationStrategy.create(
+                "org.apache.cassandra.locator.SimpleStrategy", {"replication_factor": "1"})})
+        metadata._tablets.add_tablet("ks", "tb", Tablet(0, 100, [("host1", 0)]))
+
+        metadata._keyspace_removed("ks")
+
+        assert metadata._keyspace_replication_strategies == {}
+        assert metadata._tablets.table_has_tablets("ks", "tb") is False
+
+    def test_rebuild_token_map_keeps_routing_after_topology_change(self):
+        """A rebuilt token map still routes when schema metadata is disabled (rebuilt lazily)."""
+        metadata, tokens, hosts = self._build_metadata()
+        metadata._update_replication_strategies({
+            "ks": ReplicationStrategy.create(
+                "org.apache.cassandra.locator.SimpleStrategy", {"replication_factor": "1"})})
+
+        metadata.rebuild_token_map(
+            "org.apache.cassandra.dht.Murmur3Partitioner",
+            {host: [str(token.value)] for host, token in zip(hosts, tokens)})
+
+        assert set(metadata.token_map.get_replicas("ks", tokens[0])) == {hosts[0]}
+
+    def test_update_replication_strategies_change_drops_tablets_and_rebuilds(self):
+        """A changed replication strategy drops tablets and rebuilds the token map."""
+        metadata, tokens, hosts = self._build_metadata()
+        metadata._update_replication_strategies({
+            "ks": ReplicationStrategy.create(
+                "org.apache.cassandra.locator.SimpleStrategy", {"replication_factor": "1"})})
+        metadata._tablets.add_tablet("ks", "tb", Tablet(0, 100, [("host1", 0)]))
+
+        metadata._update_replication_strategies({
+            "ks": ReplicationStrategy.create(
+                "org.apache.cassandra.locator.SimpleStrategy", {"replication_factor": "2"})})
+
+        assert metadata._tablets.table_has_tablets("ks", "tb") is False
+        assert set(metadata.token_map.get_replicas("ks", tokens[0])) == {hosts[0], hosts[1]}
+
+    def test_update_replication_strategies_skips_unchanged(self):
+        """An unchanged replication strategy does not rebuild the token map or drop tablets."""
+        metadata, _, _ = self._build_metadata()
+        metadata._update_replication_strategies({
+            "ks": ReplicationStrategy.create(
+                "org.apache.cassandra.locator.SimpleStrategy", {"replication_factor": "1"})})
+        metadata._tablets.add_tablet("ks", "tb", Tablet(0, 100, [("host1", 0)]))
+        before = dict(metadata.token_map.tokens_to_hosts_by_ks["ks"])
+
+        with patch.object(TokenMap, "rebuild_keyspace") as rebuild_keyspace:
+            metadata._update_replication_strategies({
+                "ks": ReplicationStrategy.create(
+                    "org.apache.cassandra.locator.SimpleStrategy", {"replication_factor": "1"})})
+
+        rebuild_keyspace.assert_not_called()
+        assert metadata._tablets.table_has_tablets("ks", "tb") is True
+        assert metadata.token_map.tokens_to_hosts_by_ks["ks"] == before
+
+    def test_update_replication_strategies_change_syncs_keyspace_metadata(self):
+        """A strategy change updates stale keyspace metadata so the token map uses the fresh strategy."""
+        metadata, tokens, hosts = self._build_metadata()
+        keyspace = KeyspaceMetadata("ks", True, "NetworkTopologyStrategy", {"dc1": "1"})
+        metadata.keyspaces["ks"] = keyspace
+        metadata._keyspace_added("ks")
+        assert set(metadata.token_map.get_replicas("ks", tokens[0])) == {hosts[0]}
+
+        metadata._update_replication_strategies({
+            "ks": ReplicationStrategy.create(
+                "org.apache.cassandra.locator.NetworkTopologyStrategy", {"dc1": "2"})})
+
+        assert keyspace.replication_strategy is metadata._keyspace_replication_strategies["ks"]
+        assert set(metadata.token_map.get_replicas("ks", tokens[0])) == {hosts[0], hosts[1]}
+
+    def test_update_replication_strategies_removed_syncs_keyspace_metadata(self):
+        """A dropped keyspace is removed from keyspace metadata when it was previously enabled."""
+        metadata, _, _ = self._build_metadata()
+        metadata.keyspaces["ks"] = KeyspaceMetadata("ks", True, "NetworkTopologyStrategy", {"dc1": "1"})
+        metadata._keyspace_added("ks")
+
+        metadata._update_replication_strategies({})
+
+        assert metadata.keyspaces == {}
+        assert metadata._keyspace_replication_strategies == {}
+        assert metadata.token_map.tokens_to_hosts_by_ks == {}
+
+
 class Murmur3TokensTest(unittest.TestCase):
 
     def test_murmur3_init(self):
@@ -645,10 +784,12 @@ class ScyllaKeyspaceConsistencyParsingTest(unittest.TestCase):
     """
 
     def _parser_with_rows(self, rows):
-        # Build the parser without a connection and drive only the aggregation
+        # Build the parser without a connection and drive the real aggregation
         # step; _query_all's batching is exercised by the integration tests.
-        parser = SchemaParserV3.__new__(SchemaParserV3)
+        parser = SchemaParserV3(None, 1.0, 100, None)
+        parser.views_result = []  # populated by _query_all, not __init__
         parser.scylla_keyspaces_result = rows
+        parser._aggregate_results()
         return parser
 
     def test_consistency_modes_are_mapped_from_rows(self):
@@ -661,8 +802,7 @@ class ScyllaKeyspaceConsistencyParsingTest(unittest.TestCase):
             {'keyspace_name': 'e', 'consistency': 'eventual'},
             {'keyspace_name': 'n', 'consistency': None},
         ])
-        modes = {row["keyspace_name"]: _consistency_mode_from_string(row.get("consistency"))
-                 for row in parser.scylla_keyspaces_result}
+        modes = parser.keyspace_consistency_modes
         assert modes['g'] == _ConsistencyMode.GLOBAL
         assert modes['l'] == _ConsistencyMode.LOCAL
         assert modes['e'] == _ConsistencyMode.EVENTUAL
@@ -671,8 +811,9 @@ class ScyllaKeyspaceConsistencyParsingTest(unittest.TestCase):
     def test_keyspace_absent_from_the_map_is_eventual(self):
         # Covers the whole-cluster fallbacks too: no rows is what a skipped read
         # (no TABLETS_ROUTING_V2) and a missing table/column both produce.
-        parser = SchemaParserV3.__new__(SchemaParserV3)
-        parser.keyspace_consistency_modes = {'g': _ConsistencyMode.GLOBAL}
+        parser = self._parser_with_rows([
+            {'keyspace_name': 'g', 'consistency': 'global'},
+        ])
         assert parser.keyspace_consistency_modes.get(
             'absent', _ConsistencyMode.EVENTUAL) == _ConsistencyMode.EVENTUAL
 
