@@ -15,7 +15,6 @@
 import unittest
 
 import logging
-import sys
 import time
 import os
 
@@ -40,7 +39,7 @@ from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, exec
                                TestCluster, requires_java_udf, requires_composite_type,
                                requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, requirescompactstorage, get_tablets_disabled_ddl_suffix, execute_with_long_wait_retry)
 
-from tests.util import wait_until, assertRegex, assertDictEqual, assertListEqual, assert_startswith_diff
+from tests.util import wait_until, assertRegex, assertDictEqual, assertListEqual
 
 log = logging.getLogger(__name__)
 
@@ -238,9 +237,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         assert tablemeta.name == self.function_table_name
         assert tablemeta.name == self.function_table_name
 
-        assert [u'a'] == [c.name for c in tablemeta.partition_key]
+        assert ['a'] == [c.name for c in tablemeta.partition_key]
         assert [] == tablemeta.clustering_key
-        assert [u'a', u'b', u'c'] == sorted(tablemeta.columns.keys())
+        assert ['a', 'b', 'c'] == sorted(tablemeta.columns.keys())
 
         cc = self.cluster.control_connection._connection
         parser = get_schema_parser(
@@ -262,9 +261,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a'] == [c.name for c in tablemeta.partition_key]
-        assert [u'b'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'a', u'b', u'c'] == sorted(tablemeta.columns.keys())
+        assert ['a'] == [c.name for c in tablemeta.partition_key]
+        assert ['b'] == [c.name for c in tablemeta.clustering_key]
+        assert ['a', 'b', 'c'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -274,9 +273,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'Aa'] == [c.name for c in tablemeta.partition_key]
-        assert [u'Bb'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'Aa', u'Bb', u'Cc'] == sorted(tablemeta.columns.keys())
+        assert ['Aa'] == [c.name for c in tablemeta.partition_key]
+        assert ['Bb'] == [c.name for c in tablemeta.clustering_key]
+        assert ['Aa', 'Bb', 'Cc'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -286,9 +285,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a'] == [c.name for c in tablemeta.partition_key]
-        assert [u'b', u'c'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'a', u'b', u'c', u'd', u'e', u'f'] == sorted(tablemeta.columns.keys())
+        assert ['a'] == [c.name for c in tablemeta.partition_key]
+        assert ['b', 'c'] == [c.name for c in tablemeta.clustering_key]
+        assert ['a', 'b', 'c', 'd', 'e', 'f'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -297,9 +296,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a', u'b'] == [c.name for c in tablemeta.partition_key]
+        assert ['a', 'b'] == [c.name for c in tablemeta.partition_key]
         assert [] == tablemeta.clustering_key
-        assert [u'a', u'b', u'c'] == sorted(tablemeta.columns.keys())
+        assert ['a', 'b', 'c'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -309,9 +308,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a', u'b'] == [c.name for c in tablemeta.partition_key]
-        assert [u'c'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'a', u'b', u'c', u'd', u'e'] == sorted(tablemeta.columns.keys())
+        assert ['a', 'b'] == [c.name for c in tablemeta.partition_key]
+        assert ['c'] == [c.name for c in tablemeta.clustering_key]
+        assert ['a', 'b', 'c', 'd', 'e'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -321,9 +320,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a'] == [c.name for c in tablemeta.partition_key]
-        assert [u'b'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'a', u'b', u'c'] == sorted(tablemeta.columns.keys())
+        assert ['a'] == [c.name for c in tablemeta.partition_key]
+        assert ['b'] == [c.name for c in tablemeta.clustering_key]
+        assert ['a', 'b', 'c'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -355,9 +354,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a'] == [c.name for c in tablemeta.partition_key]
-        assert [u'b', u'c'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'a', u'b', u'c', u'd'] == sorted(tablemeta.columns.keys())
+        assert ['a'] == [c.name for c in tablemeta.partition_key]
+        assert ['b', 'c'] == [c.name for c in tablemeta.clustering_key]
+        assert ['a', 'b', 'c', 'd'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -366,9 +365,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a', u'b'] == [c.name for c in tablemeta.partition_key]
+        assert ['a', 'b'] == [c.name for c in tablemeta.partition_key]
         assert [] == tablemeta.clustering_key
-        assert [u'a', u'b', u'c'] == sorted(tablemeta.columns.keys())
+        assert ['a', 'b', 'c'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -378,9 +377,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a', u'b'] == [c.name for c in tablemeta.partition_key]
-        assert [u'c'] == [c.name for c in tablemeta.clustering_key]
-        assert [u'a', u'b', u'c', u'd'] == sorted(tablemeta.columns.keys())
+        assert ['a', 'b'] == [c.name for c in tablemeta.partition_key]
+        assert ['c'] == [c.name for c in tablemeta.clustering_key]
+        assert ['a', 'b', 'c', 'd'] == sorted(tablemeta.columns.keys())
 
         self.check_create_statement(tablemeta, create_statement)
 
@@ -393,9 +392,9 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
         self.session.execute(create_statement)
         tablemeta = self.get_table_metadata()
 
-        assert [u'a'] == [c.name for c in tablemeta.partition_key]
+        assert ['a'] == [c.name for c in tablemeta.partition_key]
         assert [] == tablemeta.clustering_key
-        assert [u'a', u'b', u'c', u'd'] == sorted(tablemeta.columns.keys())
+        assert ['a', 'b', 'c', 'd'] == sorted(tablemeta.columns.keys())
 
         assert tablemeta.is_cql_compatible
 
@@ -1116,82 +1115,6 @@ class TestCodeCoverage(unittest.TestCase):
             keyspace_metadata = cluster.metadata.keyspaces[keyspace]
             assert isinstance(keyspace_metadata.export_as_string(), str)
             assert isinstance(keyspace_metadata.as_cql_query(), str)
-        cluster.shutdown()
-
-    @greaterthancass20
-    def test_export_keyspace_schema_udts(self):
-        """
-        Test udt exports
-        """
-
-        if PROTOCOL_VERSION < 3:
-            raise unittest.SkipTest(
-                "Protocol 3.0+ is required for UDT change events, currently testing against %r"
-                % (PROTOCOL_VERSION,))
-
-        if sys.version_info[0:2] != (2, 7):
-            raise unittest.SkipTest('This test compares static strings generated from dict items, which may change orders. Test with 2.7.')
-
-        cluster = TestCluster()
-        session = cluster.connect()
-
-        session.execute("""
-            CREATE KEYSPACE export_udts
-            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
-            AND durable_writes = true;
-        """)
-        session.execute("""
-            CREATE TYPE export_udts.street (
-                street_number int,
-                street_name text)
-        """)
-        session.execute("""
-            CREATE TYPE export_udts.zip (
-                zipcode int,
-                zip_plus_4 int)
-        """)
-        session.execute("""
-            CREATE TYPE export_udts.address (
-                street_address frozen<street>,
-                zip_code frozen<zip>)
-        """)
-        session.execute("""
-            CREATE TABLE export_udts.users (
-            user text PRIMARY KEY,
-            addresses map<text, frozen<address>>)
-        """)
-
-        expected_prefix = """CREATE KEYSPACE export_udts WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}  AND durable_writes = true;
-
-CREATE TYPE export_udts.street (
-    street_number int,
-    street_name text
-);
-
-CREATE TYPE export_udts.zip (
-    zipcode int,
-    zip_plus_4 int
-);
-
-CREATE TYPE export_udts.address (
-    street_address frozen<street>,
-    zip_code frozen<zip>
-);
-
-CREATE TABLE export_udts.users (
-    user text PRIMARY KEY,
-    addresses map<text, frozen<address>>"""
-
-        assert_startswith_diff(cluster.metadata.keyspaces['export_udts'].export_as_string(), expected_prefix)
-
-        table_meta = cluster.metadata.keyspaces['export_udts'].tables['users']
-
-        expected_prefix = """CREATE TABLE export_udts.users (
-    user text PRIMARY KEY,
-    addresses map<text, frozen<address>>"""
-
-        assert_startswith_diff(table_meta.export_as_string(), expected_prefix)
-
         cluster.shutdown()
 
     @greaterthancass21
