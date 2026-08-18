@@ -134,6 +134,31 @@ class TypeTests(unittest.TestCase):
         subtypes = (cassandra.cqltypes.UTF8Type, cassandra.cqltypes.UTF8Type)
         assert 'map<text, text>' == cassandra.cqltypes.MapType.apply_parameters(subtypes).cql_parameterized_type()
 
+    def test_cql_parameterized_type_not_inherited_from_cached_base(self):
+        """
+        cql_parameterized_type() memoizes its result on the type class itself
+        (see _cql_type_str). Dynamically created parameterized type classes
+        (via apply_parameters()/type()) must reset this cache in their own
+        class dict; otherwise, a class dict lookup falls through the MRO to
+        a base class whose cache is already populated, and the new class
+        silently returns the base's (wrong) cached string instead of
+        computing its own.
+        """
+        # Create a parameterized type and force its cache to populate first.
+        parent = MapType.apply_parameters([UTF8Type, Int32Type], [None, None])
+        parent_str = parent.cql_parameterized_type()
+        assert parent_str == 'map<text, int>'
+        # confirm the cache really is populated on the parent's own class dict
+        assert parent.__dict__.get('_cql_type_str') == parent_str
+
+        # Now create a *different* parameterized type using the (now-cached)
+        # parent as the base class, as apply_parameters() does internally.
+        child = parent.apply_parameters([UTF8Type, LongType], [None, None])
+        child_str = child.cql_parameterized_type()
+
+        assert child_str == 'map<text, bigint>'
+        assert child_str != parent_str
+
     def test_datetype_from_string(self):
         # Ensure all formats can be parsed, without exception
         for format in cassandra.cqltypes.cql_timestamp_formats:
