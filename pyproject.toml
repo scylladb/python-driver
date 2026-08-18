@@ -154,7 +154,8 @@ manylinux-pypy_aarch64-image = "manylinux_2_28"
 enable = ["pypy"]
 [tool.cibuildwheel.linux]
 
-before-build = "rm -rf ~/.pyxbld && rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux && yum install -y libffi-devel libev libev-devel openssl openssl-devel"
+# Original: yum install -y libffi-devel libev libev-devel openssl openssl-devel
+before-build = "rm -rf ~/.pyxbld && rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux && yum install -y libffi-devel libev libev-devel"
 # Install the optional lz4 compression dependency so the lz4 segment tests run
 # (and fail loudly under CASS_DRIVER_NO_SKIP) instead of skipping silently.
 test-extras = ["compress-lz4"]
