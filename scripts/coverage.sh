@@ -26,49 +26,44 @@ export CASS_DRIVER_NO_CYTHON=1
 # CASS_DRIVER_NO_CYTHON=1 silently has no effect and coverage reports 0% for
 # every affected module (and, for the Cython-only modules with no .py
 # fallback like row_parser, HAVE_CYTHON would stay True off a stale .so,
-# defeating CASS_DRIVER_NO_CYTHON entirely). Only extensions matching the
-# *current* interpreter's own EXTENSION_SUFFIXES are removed -- the same
-# mechanism tests/conftest.py already uses to detect staleness -- so this
-# doesn't force a rebuild for other Python versions/venvs sharing this
-# checkout. murmur3/libev are excluded by name since they're unaffected by
-# CASS_DRIVER_NO_CYTHON. `--reinstall-package` then rebuilds from scratch,
-# producing only the extensions CASS_DRIVER_NO_CYTHON=1 actually allows. If
-# any of this setup fails, there's no point running any tests, so bail out
+# defeating CASS_DRIVER_NO_CYTHON entirely). Candidates are built from the
+# exact list of optionally-cythonized module names (setup.py's
+# cython_candidates) plus the *current* interpreter's own EXTENSION_SUFFIXES,
+# then only deleted if that exact file exists -- unlike a generic endswith()
+# scan, this can't match a foreign-ABI build of the same module (e.g.
+# cluster.cpython-311-...so when the current interpreter is 3.12) or a
+# module never in the list (cmurmur3, libevwrapper are unaffected by
+# CASS_DRIVER_NO_CYTHON and always left alone since they're simply not
+# candidates). `--reinstall-package` then rebuilds from scratch, producing
+# only the extensions CASS_DRIVER_NO_CYTHON=1 actually allows. If any of
+# this setup fails, there's no point running any tests, so bail out
 # immediately -- failure tolerance below is scoped to test/report commands
 # only.
 uv run python -c "
 import importlib.machinery, pathlib
-exclude = {'cmurmur3', 'libevwrapper'}
-for path in pathlib.Path('cassandra').rglob('*'):
+candidates = ['cluster', 'concurrent', 'connection', 'cqltypes', 'metadata',
+              'pool', 'protocol', 'query', 'util', 'shard_info']
+for name in candidates:
     for suffix in importlib.machinery.EXTENSION_SUFFIXES:
-        if path.name.endswith(suffix):
-            if path.name[:-len(suffix)] not in exclude:
-                path.unlink()
-            break
+        path = pathlib.Path('cassandra') / (name + suffix)
+        if path.exists():
+            path.unlink()
 " || exit 1
 uv sync --reinstall-package scylla-driver || exit 1
 
 status=0
 
-# Unlike the gevent/eventlet/asyncio reactor tests below, tests/unit/io/
-# test_asyncorereactor.py is deliberately NOT in the --ignore list: it needs
-# no separate EVENT_LOOP_MANAGER run, since it self-skips via
-# ASYNCCORE_AVAILABLE on Python 3.12+ (where the stdlib `asyncore` module was
-# removed) and otherwise runs normally here, gaining coverage on 3.9-3.11.
+# Unlike the asyncio reactor test below, tests/unit/io/test_asyncorereactor.py
+# is deliberately NOT in the --ignore list: it needs no separate
+# EVENT_LOOP_MANAGER run, since it self-skips via ASYNCCORE_AVAILABLE on
+# Python 3.12+ (where the stdlib `asyncore` module was removed) and
+# otherwise runs normally here, gaining coverage on 3.9-3.11.
 uv run coverage run -m pytest tests/unit -v \
     --ignore=tests/unit/column_encryption \
-    --ignore=tests/unit/io/test_geventreactor.py \
-    --ignore=tests/unit/io/test_eventletreactor.py \
     --ignore=tests/unit/io/test_asyncioreactor.py \
     || status=1
 
-# gevent/eventlet monkey-patch threading/sockets, which can confuse
-# coverage.py's default sys.settrace-based collector; --concurrency tells it
-# about the greenlet scheduler explicitly. asyncio and the default (thread)
-# runs need no such hint.
-EVENT_LOOP_MANAGER=gevent uv run coverage run --concurrency=gevent,thread -m pytest tests/unit/io/test_geventreactor.py -v || status=1
 EVENT_LOOP_MANAGER=asyncio uv run coverage run -m pytest tests/unit/io/test_asyncioreactor.py -v || status=1
-EVENT_LOOP_MANAGER=eventlet uv run coverage run --concurrency=eventlet,thread -m pytest tests/unit/io/test_eventletreactor.py -v || status=1
 
 if [[ -n "${SCYLLA_VERSION:-}" || -n "${CASSANDRA_VERSION:-}" ]]; then
     uv run coverage run -m pytest tests/integration/standard tests/integration/cqlengine/ -v || status=1
