@@ -782,15 +782,55 @@ class ClusterTests(unittest.TestCase):
 
         connections = [c for holders in cluster.get_connection_holders() for c in holders.get_connections()]
 
-        # make sure requests were sent on all connections
-        for c in connections:
+        # _wait_for_all_shard_connections() above prevents the common KeyError caused by
+        # shard connections still being opened during pool warm-up. It does not cover a
+        # narrower, still-possible race: HostConnection can swap an existing connection
+        # for a new object in the same shard slot independently of the connection count,
+        # e.g. via _open_connection_to_missing_shard() once orphaned_threshold_reached, or
+        # via return_connection()/_replace() when a connection is defunct/closed. The
+        # latter has a genuine asynchronous gap: return_connection() pops the old
+        # connection out of the pool's dict synchronously, but _replace() (which inserts
+        # the replacement) runs later on another thread via session.submit(). A snapshot
+        # taken during that gap sees fewer *current* connections than were recorded, and
+        # every one of them is still "known" (nothing new has been inserted yet) - so
+        # checking only "is every current connection known" can't distinguish "fewer
+        # connections than snapshotted" from "same connections, none replaced". Compare
+        # both directions of the snapshot/current intersection so partial removals (as
+        # well as outright replacements) stay visible, and log loudly if either side
+        # actually differs so a recurrence stays visible in CI instead of being silently
+        # absorbed.
+        current_ids = {id(c) for c in connections}
+        snapshot_ids = set(connection_request_ids)
+        # snapshotted connections no longer present at all (removed, replacement may
+        # not have landed yet)
+        missing_from_current = snapshot_ids - current_ids
+        # connections present now that weren't in the snapshot (replacement landed)
+        unknown_in_current = current_ids - snapshot_ids
+        known_connections = [c for c in connections if id(c) in connection_request_ids]
+        if missing_from_current or unknown_in_current:
+            log.warning(
+                "test_idle_heartbeat: connections changed between the snapshot and "
+                "validation (%d snapshotted connections missing, %d new connections "
+                "observed, out of %d snapshotted / %d current); validating only the "
+                "%d connections common to both",
+                len(missing_from_current), len(unknown_in_current),
+                len(snapshot_ids), len(current_ids), len(known_connections)
+            )
+        assert len(known_connections) > 0, (
+            "All connections were replaced during the test; "
+            "no heartbeats could be validated"
+        )
+
+        # make sure heartbeat requests were sent on all known connections
+        for c in known_connections:
             expected_ids = connection_request_ids[id(c)]
             expected_ids.rotate(-1)
             with c.lock:
                 assertListEqual(list(c.request_ids), list(expected_ids))
 
-        # assert idle status
-        assert all(c.is_idle for c in connections)
+        # assert idle status on known connections only (replaced connections
+        # may not have had their idle state set yet)
+        assert all(c.is_idle for c in known_connections)
 
         # send enough messages to ensure all connections are used
         # (with shard-aware routing, each query only hits one shard per host,
