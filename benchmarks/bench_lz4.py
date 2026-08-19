@@ -79,8 +79,8 @@ REPEAT = 5
 def make_payload(size):
     """Generate a pseudo-realistic compressible payload."""
     # Mix of repetitive and random-ish bytes to simulate CQL result rows.
-    chunk = (b"row_value_" + os.urandom(6)) * (size // 16 + 1)
-    return chunk[:size]
+    blocks = [b"row_value_" + os.urandom(6) for _ in range(size // 16 + 1)]
+    return b"".join(blocks)[:size]
 
 
 def bench(label, func, arg, inner=INNER, repeat=REPEAT):

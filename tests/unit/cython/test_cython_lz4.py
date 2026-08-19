@@ -74,11 +74,11 @@ class CythonLZ4Test(unittest.TestCase):
         self.assertEqual(lz4_decompress(lz4_compress(data)), data)
 
     def test_round_trip_heap_buffer(self):
-        """Inputs above the 128 KiB stack threshold use the malloc path."""
-        # LZ4_compressBound(131072) = 131072 + 131072/255 + 16 = 131602,
+        """Inputs above the 16 KiB stack threshold use the malloc path."""
+        # LZ4_compressBound(16384) = 16384 + 16384/255 + 16 = 16464,
         # which exceeds STACK_ALLOC_THRESHOLD, so lz4_compress must fall
         # back to the heap buffer and free it on success.
-        data = os.urandom(131072)
+        data = os.urandom(16384)
         self.assertEqual(lz4_decompress(lz4_compress(data)), data)
 
     def test_round_trip_empty(self):
@@ -206,6 +206,17 @@ class CythonLZ4CrossCompatTest(unittest.TestCase):
 
     def test_cross_compat_empty(self):
         self._check_cross_compat(b"")
+
+    def test_connection_prefers_cython_codec(self):
+        """The connection layer selects the Cython codec when present."""
+        from cassandra import connection
+
+        self.assertIs(connection.locally_supported_compressions['lz4'][0],
+                      lz4_compress)
+        self.assertIs(connection.locally_supported_compressions['lz4'][1],
+                      lz4_decompress)
+        self.assertIs(connection.segment_codec_lz4.compressor, lz4_compress)
+        self.assertIs(connection.segment_codec_lz4.decompressor, lz4_decompress)
 
 
 if __name__ == "__main__":

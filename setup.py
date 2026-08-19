@@ -155,8 +155,8 @@ if is_macos:
 conan_envfile = Path(__file__).parent / 'build-release/conan/conandeps.env'
 if conan_envfile.exists():
     conan_paths = json.loads(conan_envfile.read_text())
-    libev_includes.extend([conan_paths.get('include_dirs')])
-    libev_libdirs.extend([conan_paths.get('library_dirs')])
+    libev_includes.extend(conan_paths.get('include_dirs', []))
+    libev_libdirs.extend(conan_paths.get('library_dirs', []))
 
 libev_ext = Extension('cassandra.io.libevwrapper',
                       sources=['cassandra/io/libevwrapper.c'],

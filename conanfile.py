@@ -26,7 +26,8 @@ class CommandlineDeps:
         build_req = self._conanfile.dependencies.build  # tool_requires
         test_req = self._conanfile.dependencies.test
 
-        content_buffer = ""
+        include_dirs = []
+        library_dirs = []
 
         # Filter the build_requires not activated for any requirement
         dependencies = [tup for tup in list(host_req.items()) + list(build_req.items()) + list(test_req.items()) if not tup[0].build]
@@ -37,9 +38,11 @@ class CommandlineDeps:
                 continue
             include_dir = Path(dep.package_folder) / 'include'
             package_dir = Path(dep.package_folder) / 'lib'
-            content_buffer += json.dumps(dict(include_dirs=str(include_dir), library_dirs=str(package_dir)))
+            include_dirs.append(str(include_dir))
+            library_dirs.append(str(package_dir))
 
-        save(self._conanfile, CONAN_COMMANDLINE_FILENAME, content_buffer)
+        content = json.dumps(dict(include_dirs=include_dirs, library_dirs=library_dirs))
+        save(self._conanfile, CONAN_COMMANDLINE_FILENAME, content)
         self._conanfile.output.info(f"Generated {CONAN_COMMANDLINE_FILENAME}")
 
 
@@ -47,7 +50,7 @@ class python_driverConan(ConanFile):
     win_bash = False
 
     settings = "os", "compiler", "build_type", "arch"
-    requires = "libev/4.33"
+    requires = "libev/4.33", "lz4/1.9.4"
 
     def layout(self):
         basic_layout(self)

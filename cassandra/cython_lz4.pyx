@@ -55,23 +55,22 @@ cdef extern from *:
 # theoretical maximum is ~2 GiB.  We use 256 MiB as a practical upper
 # bound (matching the server's default frame size limit) to avoid
 # accidentally allocating multi-GiB buffers on corrupt headers.
-DEF MAX_DECOMPRESSED_LENGTH = 268435456  # 256 MiB
+cdef enum:
+    MAX_DECOMPRESSED_LENGTH = 268435456  # 256 MiB
 
 # LZ4_MAX_INPUT_SIZE from lz4.h — the LZ4 C API uses C int (32-bit
 # signed) for sizes, so we must reject Python bytes objects that
 # exceed this before casting Py_ssize_t down to int.
-DEF LZ4_MAX_INPUT_SIZE = 0x7E000000  # 2 113 929 216 bytes
+cdef enum:
+    LZ4_MAX_INPUT_SIZE = 0x7E000000  # 2 113 929 216 bytes
 
 # Maximum LZ4_compressBound value for which we use a fixed-size buffer on
-# the C stack instead of malloc.  128 KiB is well within the default
-# 8 MiB thread stack size (POSIX) / 1 MiB (Windows) and covers CQL frames
-# up to ~127 KiB uncompressed — the vast majority of real traffic.  Larger
-# frames fall back to heap allocation.  A plain fixed-size array is used
-# (rather than alloca()) because alloca() is declared in <alloca.h>, which
-# does not exist on Windows/MSVC (it ships _alloca() in <malloc.h> instead
-# with subtly different semantics) — a fixed-size array avoids that
-# platform split entirely while remaining just as cheap.
-DEF STACK_ALLOC_THRESHOLD = 131072  # 128 KiB
+# the C stack instead of malloc.  16 KiB covers common CQL frames while
+# keeping the per-call stack frame small.  Larger frames fall back to heap
+# allocation.  A plain fixed-size array is used instead of alloca(), which
+# is not portable across Windows/MSVC and POSIX.
+cdef enum:
+    STACK_ALLOC_THRESHOLD = 16384  # 16 KiB
 
 
 cdef extern from "lz4.h":
