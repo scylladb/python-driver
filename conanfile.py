@@ -50,7 +50,7 @@ class python_driverConan(ConanFile):
     win_bash = False
 
     settings = "os", "compiler", "build_type", "arch"
-    requires = "libev/4.33", "lz4/1.9.4"
+    requires = "libev/4.33", "lz4/1.10.0"
 
     def layout(self):
         basic_layout(self)
