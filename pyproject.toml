@@ -42,7 +42,7 @@ auth-kerberos = [
 
 [dependency-groups]
 dev = [
-    "pytest~=8.0",
+    "pytest~=9.0",
     "PyYAML",
     "pure-sasl",
     "cryptography>=42.0",
