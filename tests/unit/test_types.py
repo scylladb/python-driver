@@ -212,11 +212,23 @@ class TypeTests(unittest.TestCase):
         assert str(EmptyValue()) == 'EMPTY'
 
     def test_datetype(self):
-        now_time_seconds = time.time()
-        now_datetime = datetime.datetime.fromtimestamp(now_time_seconds, tz=datetime.timezone.utc)
+        # Derive now_datetime and now_timestamp from the same integer
+        # millisecond value rather than independently from time.time().
+        # Computing them separately (e.g. now_datetime via
+        # datetime.fromtimestamp(now_time_seconds, ...) and now_timestamp via
+        # now_time_seconds * 1e3) can, in rare cases, round to different
+        # millisecond values: fromtimestamp() rounds the fractional seconds
+        # to the nearest microsecond internally, while a plain
+        # seconds * 1e3 multiplication is truncated towards zero by
+        # DateType.serialize(). When the fractional part sits very close to
+        # a millisecond boundary, those two paths can disagree by 1ms,
+        # making this assertion flaky. Using a single canonical millisecond
+        # source for both eliminates that divergence.
+        now_timestamp_ms = int(time.time() * 1000)
+        now_datetime = datetime.datetime.fromtimestamp(now_timestamp_ms / 1000.0, tz=datetime.timezone.utc)
 
         # Cassandra timestamps in millis
-        now_timestamp = now_time_seconds * 1e3
+        now_timestamp = float(now_timestamp_ms)
 
         # same results serialized
         assert DateType.serialize(now_datetime, 0) == DateType.serialize(now_timestamp, 0)
