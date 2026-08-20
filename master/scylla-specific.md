@@ -1,0 +1,330 @@
+# Scylla Specific Features
+
+## Shard Awareness
+
+**scylla-driver** is shard aware and contains extensions that work with the TokenAwarePolicy supported by Scylla 2.3 and onwards. Using this policy, the driver can select a connection to a particular shard based on the shard’s token.
+As a result, latency is significantly reduced because there is no need to pass data between the shards.
+
+Details on the scylla cql protocol extensions
+[https://github.com/scylladb/scylla/blob/master/docs/dev/protocol-extensions.md#intranode-sharding](https://github.com/scylladb/scylla/blob/master/docs/dev/protocol-extensions.md#intranode-sharding)
+
+For using it you only need to enable `TokenAwarePolicy` on the `Cluster`
+
+See the configuration of `native_shard_aware_transport_port` and `native_shard_aware_transport_port_ssl` on scylla.yaml:
+[https://github.com/scylladb/scylla/blob/master/docs/dev/protocols.md#cql-client-protocol](https://github.com/scylladb/scylla/blob/master/docs/dev/protocols.md#cql-client-protocol)
+
+```python
+from cassandra.cluster import Cluster
+from cassandra.policies import TokenAwarePolicy, RoundRobinPolicy
+
+cluster = Cluster(load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy()))
+```
+
+## New Cluster Helpers
+
+* `shard_aware_options`
+
+  Setting it to `dict(disable=True)` would disable the shard aware functionally, for cases favoring once connection per host (example, lots of processes connecting from one client host, generating a big load of connections
+
+  Other option is to configure scylla by setting `enable_shard_aware_drivers: false` on scylla.yaml.
+
+```python
+from cassandra.cluster import Cluster
+
+cluster = Cluster(shard_aware_options=dict(disable=True))
+session = cluster.connect()
+
+assert not cluster.is_shard_aware(), "Shard aware should be disabled"
+
+# or just disable the shard aware port logic
+cluster = Cluster(shard_aware_options=dict(disable_shardaware_port=True))
+session = cluster.connect()
+```
+
+* `cluster.is_shard_aware()`
+
+  New method available on `Cluster` allowing to check whether the remote cluster supports shard awareness (bool)
+
+```python
+from cassandra.cluster import Cluster
+
+cluster = Cluster()
+session = cluster.connect()
+
+if cluster.is_shard_aware():
+    print("connected to a scylla cluster")
+```
+
+* `cluster.shard_aware_stats()`
+
+  New method available on `Cluster` allowing to check the status of shard aware connections to all available hosts (dict)
+
+```python
+from cassandra.cluster import Cluster
+
+cluster = Cluster()
+session = cluster.connect()
+
+stats = cluster.shard_aware_stats()
+if all([v["shards_count"] == v["connected"] for v in stats.values()]):
+    print("successfully connected to all shards of all scylla nodes")
+```
+
+## New Error Types
+
+* `SCYLLA_RATE_LIMIT_ERROR` Error
+
+  The ScyllaDB 5.1 introduced a feature called per-partition rate limiting. In case the (user defined) per-partition rate limit is exceeded, the database will start returning a Scylla-specific type of error: RateLimitReached.
+
+```python
+from cassandra import RateLimitReached
+from cassandra.cluster import Cluster
+
+cluster = Cluster()
+session = cluster.connect()
+session.execute("""
+    CREATE KEYSPACE IF NOT EXISTS keyspace1
+    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+""")
+
+session.execute("USE keyspace1")
+session.execute("""
+    CREATE TABLE tbl (pk int PRIMARY KEY, v int)
+    WITH per_partition_rate_limit = {'max_writes_per_second': 1}
+""")
+
+prepared = session.prepare("""
+    INSERT INTO tbl (pk, v) VALUES (?, ?)
+""")
+
+try:
+    for _ in range(1000):
+        self.session.execute(prepared.bind((123, 456)))
+except RateLimitReached:
+    raise
+```
+
+## Paging Differences
+
+ScyllaDB has a built-in 1MB page size limit that Cassandra does not have. This means that even if you set a high `fetch_size` (e.g., 10000 rows), ScyllaDB may return fewer rows per page if the total response size exceeds 1MB.
+
+This behavior is particularly noticeable when:
+
+* Working with wide tables (many columns)
+* Using `NumpyProtocolHandler` where you want large arrays per page
+* Columns contain large values (blobs, long strings, etc.)
+
+For example, with a table containing 1000 columns, you might receive only 30-50 rows per page even with `fetch_size=10000`.
+
+**Workaround:** If you need to receive more rows per page (up to ScyllaDB’s 1MB limit), set `default_fetch_size` to `None`:
+
+```python
+from cassandra.cluster import Cluster
+from cassandra.protocol import NumpyProtocolHandler
+from cassandra.query import tuple_factory
+
+cluster = Cluster()
+session = cluster.connect(keyspace="mykeyspace")
+session.row_factory = tuple_factory
+session.client_protocol_handler = NumpyProtocolHandler
+session.default_fetch_size = None  # Let ScyllaDB control page sizes
+
+results = session.execute("SELECT * FROM wide_table")
+```
+
+With `default_fetch_size = None`, the driver won’t request a specific page size, allowing ScyllaDB to fill pages up to its 1MB limit. This results in larger arrays when using `NumpyProtocolHandler`.
+
+For more details on paging, see [Paging Large Queries](https://python-driver.docs.scylladb.com/master/query-paging.md#query-paging).
+
+## Tablet Awareness
+
+**scylla-driver** is tablet-aware, which means that it is able to parse the TABLETS_ROUTING_V1 and TABLETS_ROUTING_V2 extensions to ProtocolFeatures, receive tablet information sent by Scylla in the custom_payload part of the RESULT message, and utilize it.
+Thanks to this, queries to tablet-based tables are still shard-aware.
+
+Details on the scylla cql protocol extensions
+[https://github.com/scylladb/scylladb/blob/master/docs/dev/protocol-extensions.md#negotiate-sending-tablets-info-to-the-drivers](https://github.com/scylladb/scylladb/blob/master/docs/dev/protocol-extensions.md#negotiate-sending-tablets-info-to-the-drivers)
+
+Details on the sending tablet information to the drivers
+[https://github.com/scylladb/scylladb/blob/master/docs/dev/protocol-extensions.md#sending-tablet-info-to-the-drivers](https://github.com/scylladb/scylladb/blob/master/docs/dev/protocol-extensions.md#sending-tablet-info-to-the-drivers)
+
+## Tablet version tracking and leader-aware routing
+
+When the cluster offers it, the driver negotiates `TABLETS_ROUTING_V2` in
+preference to V1. The negotiation happens per connection, so V2 and V1
+connections can coexist in the same cluster; each connection uses whichever
+extension its node offers. V2 adds two capabilities on top of V1, both
+invisible to application code.
+
+**Tablet version tracking.** Every tablet now carries a `tablet_version` that
+changes whenever its replica set or leader changes. The driver caches the version
+it last saw for each tablet and, on every prepared-statement execution over a V2
+connection, appends a single `tablet_version_block` byte derived from it. The
+server returns updated routing information in the `custom_payload` only when
+that byte shows the driver’s cached view is stale, instead of attaching it to
+every response. This keeps the cached routing information fresh while avoiding
+the per-response overhead that V1 incurs.
+
+**Leader-aware routing for strongly-consistent tables.** Tables in a
+strongly-consistent keyspace – one created with a `consistency` option and
+backed by Raft – have a tablet leader that coordinates operations. For those
+tables, the driver sends each request directly to the leader, saving the extra
+hop the coordinator would otherwise take to forward it. Reads with consistency
+level `ONE` or `LOCAL_ONE` are an exception to this and retain normal
+token-aware replica ordering. Eventually-consistent tables are completely
+unaffected and keep their usual token-aware (optionally shuffled) replica
+ordering.
+
+The distinction follows from how ScyllaDB serves each operation on a
+strongly-consistent table:
+
+| Operation   | Consistency level        | How it is served                                                                                                                                                                           |
+|-------------|--------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Read        | `ONE`, `LOCAL_ONE`       | Non-linearizable: served by any replica, without taking a Raft read<br/>barrier. There is nothing to gain from preferring the leader, so the<br/>driver keeps normal token-aware ordering. |
+| Read        | `QUORUM`, `LOCAL_QUORUM` | Linearizable: goes through the Raft leader, so the driver routes it to<br/>the leader directly.                                                                                            |
+| Write       | `QUORUM`, `LOCAL_QUORUM` | Committed through Raft by the leader, so the driver routes it to the<br/>leader directly.                                                                                                  |
+| Write       | anything else            | Rejected by the server: strongly-consistent tables accept only<br/>`QUORUM` and `LOCAL_QUORUM` writes.                                                                                     |
+
+Leader-aware routing is best-effort and bounded by the load-balancing policy:
+the leader is only targeted directly if the wrapped policy would consider it in
+the first place. For example, a `DCAwareRoundRobinPolicy` configured with no
+remote hosts will not send cross-datacenter traffic to a leader in another
+datacenter; the request goes to a local replica and the server forwards it to
+the leader, exactly as it would without V2.
+
+Within the hosts the wrapped policy allows, though, the leader does outrank
+distance: it is yielded ahead of a nearer replica, since every write and every
+linearizable read has to be coordinated by it anyway and a globally-consistent
+table gains no consistency from staying in one datacenter.
+
+No configuration is required: as with V1, a `TokenAwarePolicy` is all that is
+needed. Leader preference can be turned off per policy instance with its private
+`_prefer_tablet_leader` option, which leaves strongly-consistent tables with
+plain token-aware ordering. The option is private and unstable while strong
+consistency is experimental.
+
+#### NOTE
+`TABLETS_ROUTING_V2` is still experimental: a Scylla node advertises it
+(on the wire as `TABLETS_ROUTING_V2_EXPERIMENTAL`) only when started with
+the `strongly-consistent-tables` experimental feature enabled. A node
+without it offers only `TABLETS_ROUTING_V1`.
+
+## Prepared Statement Metadata Caching (`SCYLLA_USE_METADATA_ID`)
+
+When the `SCYLLA_USE_METADATA_ID` extension is negotiated, the driver requests the
+server to skip sending full result metadata with each prepared SELECT’s EXECUTE
+response (the `skip_meta` optimization), relying instead on the metadata cached
+from the initial `PREPARE` call. Without change detection this would be unsafe: if
+the table schema changes after a statement is prepared (e.g., a column is added,
+removed, or its type is altered), the cached metadata becomes stale — leading to
+decoding errors or incorrect data.
+
+ScyllaDB solves this by backporting the `metadata_id` mechanism from CQL native
+protocol v5 as a v4 extension: `SCYLLA_USE_METADATA_ID`. When this extension is
+negotiated, the server includes a hash of the result metadata in the `PREPARE`
+response. The driver sends this hash back with every `EXECUTE` request. If the
+schema has changed, the server sets the `METADATA_CHANGED` flag and returns the
+new metadata hash together with the updated column definitions. The driver
+automatically updates its cache and uses the new metadata to decode the current
+response — all transparently, with no application code change required.
+
+**Behaviour summary:**
+
+- Automatically negotiated at connection time when the ScyllaDB node supports it.
+- `skip_meta` is enabled (metadata omitted from EXECUTE responses) only when it
+  is safe: the prepared statement must carry both a `result_metadata_id` and
+  usable cached result metadata from PREPARE, *and* the connection serving the
+  request must have negotiated `SCYLLA_USE_METADATA_ID` — decided per
+  connection when the request is serialized.
+- Plain CQL v5 connections are unaffected: the metadata id is part of the native
+  v5 EXECUTE frame layout and is still sent, but the driver does not request
+  skip-metadata there, so such connections keep receiving full result metadata.
+- When a schema change is detected by the server, the driver refreshes both the
+  cached column metadata and the metadata hash for that prepared statement so that
+  all subsequent executions benefit immediately.
+- Statements prepared before the extension was negotiated (e.g., during a rolling
+  upgrade) start without a metadata hash, but acquire one automatically: on their
+  first execution over a connection with the extension, the driver sends an empty
+  hash, the server detects the mismatch and responds with the current hash and
+  full metadata, and the driver caches both. Subsequent executions get the
+  `skip_meta` optimization — no re-prepare or client restart is needed.
+
+**Current scope:** the optimization applies to any prepared statement that has
+non-empty cached result columns — in practice, SELECT queries.
+UPDATE/INSERT/DELETE statements naturally return no result columns, so
+their `result_metadata` is always empty and `skip_meta` is never set for
+them. There is no code-level restriction to SELECT; the behaviour follows
+directly from the data.
+
+For full protocol details see the ScyllaDB CQL protocol extensions documentation:
+[https://github.com/scylladb/scylladb/blob/master/docs/dev/protocol-extensions.md](https://github.com/scylladb/scylladb/blob/master/docs/dev/protocol-extensions.md)
+
+## Client identification and configuration reporting
+
+The driver describes itself to the cluster in the CQL `STARTUP` options of
+each connection. ScyllaDB echoes those options into the `client_options`
+column of its clients table, so an operator investigating an incident can
+inspect them without access to the client host:
+
+```sql
+SELECT address, port, client_options FROM system.clients;
+```
+
+Two of the options are about the driver rather than the protocol:
+
+`SESSION_ID`
+: A UUID identifying the `Cluster` object, generated when it is created.
+  *Every* connection the `Cluster` opens reports it – the control connection
+  as well as the pools of each of its `Session` objects – so all of a
+  client’s connections can be told apart from those of other clients sharing
+  the same host. Applications can read it back from `cluster.session_id` and
+  log it, which is what allows client-side observations to be matched against
+  the rows above instead of correlating them by address and port.
+  <br/>
+  The option is named after the convention shared with the other ScyllaDB
+  drivers, where a “session” is what this driver calls a `Cluster`. It is
+  unrelated to `Session.session_id`, which identifies a `Session` within the
+  client and is never sent to the cluster.
+
+`DRIVER_CONFIG`
+: A JSON document describing the effective configuration of the `Cluster`. It
+  is the same for every one of its connections, so only the control connection
+  reports it, keeping the other `STARTUP` frames small. The document carries a
+  `version` key naming the schema it follows; further keys are added as the
+  driver learns to describe more of its configuration, and adding one does not
+  bump the version.
+
+```python
+from cassandra.cluster import Cluster
+
+cluster = Cluster()
+session = cluster.connect()
+
+print(cluster.session_id)  # matches SESSION_ID in the clients table
+
+for row in session.execute("SELECT client_options FROM system.clients"):
+    # client_options is null for rows the server has not filled in yet.
+    if not row.client_options:
+        continue
+    if row.client_options.get('SESSION_ID') == str(cluster.session_id):
+        print(row.client_options)
+```
+
+Reporting the configuration is a diagnostic aid and never interferes with
+connecting: a report that cannot be built, or that would not fit in a
+`STARTUP` option, is logged and left out instead of failing the handshake.
+
+It can be turned off with `driver_config_reporting_enabled`:
+
+```python
+cluster = Cluster(driver_config_reporting_enabled=False)
+```
+
+`SESSION_ID` is unaffected by that setting: it carries no configuration, only
+the identity that ties a client’s connections together, and every connection
+keeps reporting it.
+
+Alongside these, the `application_info` `Cluster` argument lets an
+application add its own name, version and identifier to the same options, as
+`APPLICATION_NAME`, `APPLICATION_VERSION` and `CLIENT_ID`. Those are the
+application’s to choose; `SESSION_ID` and `DRIVER_CONFIG` are driver-owned
+and cannot be overridden through it.
