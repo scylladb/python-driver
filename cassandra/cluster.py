@@ -983,11 +983,14 @@ class Cluster(object):
     establish connection pools. This can cause a rush of connections and queries if not mitigated with this factor.
     """
 
-    prepare_on_all_hosts = True
+    prepare_on_all_hosts = False
     """
     Specifies whether statements should be prepared on all hosts, or just one.
 
-    This can reasonably be disabled on long-running applications with numerous clients preparing statements on startup,
+    When enabled, statements are eagerly prepared on every host with an open connection pool. In multi-DC
+    deployments this includes remote hosts that are rarely or never queried on the happy path; preparing on them
+    is purely a latency optimization, since an ``UNPREPARED`` response always triggers on-demand reprepare and
+    retry. It can be enabled on long-running applications with numerous clients preparing statements on startup,
     where a randomized initial condition of the load balancing policy can be expected to distribute prepares from
     different clients across the cluster.
     """
@@ -1162,7 +1165,7 @@ class Cluster(object):
                  schema_metadata_page_size=1000,
                  address_translator=None,
                  status_event_refresh_window=2,
-                 prepare_on_all_hosts=True,
+                 prepare_on_all_hosts=False,
                  reprepare_on_up=True,
                  execution_profiles=None,
                  allow_beta_protocol_version=False,
