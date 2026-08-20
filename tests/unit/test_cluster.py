@@ -16,6 +16,7 @@ import unittest
 from concurrent.futures import Future
 import logging
 import socket
+import ssl
 from types import SimpleNamespace
 
 from unittest.mock import patch, Mock
@@ -25,7 +26,8 @@ from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, R
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
 from cassandra.cluster import _Scheduler, Session, Cluster, ResultSet, SchemaAgreementScope, ControlConnectionQueryFallback, default_lbp_factory, \
     ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
-from cassandra.connection import ConnectionBusy, ConnectionException
+from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
+                                  DefaultEndPoint, SSLSessionCache)
 from cassandra.pool import Host
 from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
@@ -1002,3 +1004,69 @@ class ExecutionProfileTest(unittest.TestCase):
             )
 
         patched_logger.warning.assert_not_called()
+
+
+class _ResumableConnection(Connection):
+    supports_tls_session_resumption = True
+
+
+class _NonResumableConnection(Connection):
+    supports_tls_session_resumption = False
+
+
+class ClusterSSLSessionCacheTest(unittest.TestCase):
+
+    @staticmethod
+    def make_cluster(connection_class=_ResumableConnection, **kwargs):
+        return Cluster(connection_class=connection_class, **kwargs)
+
+    def test_cache_is_created_for_an_ssl_context(self):
+        cluster = self.make_cluster(ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+
+        assert isinstance(cluster.ssl_session_cache, SSLSessionCache)
+
+    def test_no_cache_without_tls(self):
+        assert self.make_cluster().ssl_session_cache is None
+
+    def test_no_cache_for_ssl_options_only(self):
+        # Each connection builds its own SSLContext from ssl_options, and a
+        # session cannot be replayed onto a different context.
+        with patch('cassandra.cluster.warn'):
+            cluster = self.make_cluster(ssl_options={'ca_certs': '/dev/null'})
+
+        assert cluster.ssl_session_cache is None
+
+    def test_no_cache_for_a_reactor_that_cannot_resume(self):
+        cluster = self.make_cluster(connection_class=_NonResumableConnection,
+                                    ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+
+        assert cluster.ssl_session_cache is None
+
+    def test_no_cache_for_a_connection_class_that_reports_nothing(self):
+        # connection_class is not required to derive from Connection (see
+        # test_set_connection_class), so a class without the capability
+        # attribute must be treated as unable to resume, not blow up.
+        cluster = self.make_cluster(connection_class='not a connection class',
+                                    ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+
+        assert cluster.ssl_session_cache is None
+
+    def test_a_supplied_cache_is_used(self):
+        cache = SSLSessionCache(max_size=7)
+        cluster = self.make_cluster(ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
+                                    ssl_session_cache=cache)
+
+        assert cluster.ssl_session_cache is cache
+
+    def test_resumption_can_be_turned_off(self):
+        cluster = self.make_cluster(ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
+                                    ssl_session_cache=None)
+
+        assert cluster.ssl_session_cache is None
+
+    def test_cache_is_passed_to_connections(self):
+        cluster = self.make_cluster(ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+
+        kwargs = cluster._make_connection_kwargs(DefaultEndPoint('127.0.0.1'), {})
+
+        assert kwargs['ssl_session_cache'] is cluster.ssl_session_cache
