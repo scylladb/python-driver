@@ -24,6 +24,12 @@ from cassandra.pool import HostConnection, HostDistance
 from cassandra.connection import ShardingInfo, DefaultEndPoint
 from cassandra.metadata import Murmur3Token
 from cassandra.protocol_features import ProtocolFeatures
+from cassandra.shard_info import _ShardingInfo
+
+try:
+    from cassandra.c_shard_info import ShardingInfo as CShardingInfo
+except ImportError:
+    CShardingInfo = None
 
 LOGGER = logging.getLogger(__name__)
 
@@ -73,6 +79,20 @@ class MockSession(MagicMock):
 
 
 class TestShardAware(unittest.TestCase):
+    @unittest.skipUnless(CShardingInfo, "Cython sharding extension is not available")
+    def test_cython_sharding_info_matches_python(self):
+        for shards_count in (1, 2, 4, 12, 128, 1024):
+            for sharding_ignore_msb in (0, 1, 12, 63):
+                args = (1, shards_count, "", "", sharding_ignore_msb, 0, 0)
+                cython_info = CShardingInfo(*args)
+                python_info = _ShardingInfo(*args)
+                for token in (
+                        -9223372036854775808, -1, 0, 1,
+                        9223372036854775807):
+                    self.assertEqual(
+                        cython_info.shard_id_from_token(token),
+                        python_info.shard_id_from_token(token))
+
     def test_parsing_and_calculating_shard_id(self):
         """
         Testing the parsing of the options command
