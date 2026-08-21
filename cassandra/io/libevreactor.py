@@ -101,7 +101,12 @@ class LibevLoop(object):
             self._loop.start()
             # there are still active watchers, no deadlock
             with self._lock:
-                if not self._shutdown and self._live_conns:
+                # _live_conns is written under _conn_set_lock; read it under
+                # the same lock so this exit decision can't race a concurrent
+                # connection_created() (safe under the GIL, not free-threaded).
+                with self._conn_set_lock:
+                    live_conns = bool(self._live_conns)
+                if not self._shutdown and live_conns:
                     log.debug("Restarting event loop")
                     continue
                 else:
