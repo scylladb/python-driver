@@ -24,6 +24,18 @@ from cassandra.pool import HostConnection, HostDistance
 from cassandra.connection import ShardingInfo, DefaultEndPoint
 from cassandra.metadata import Murmur3Token
 from cassandra.protocol_features import ProtocolFeatures
+from cassandra.shard_info import _ShardingInfo
+
+try:
+    import cassandra.c_shard_info as c_shard_info
+    from cassandra.c_shard_info import ShardingInfo as CShardingInfo
+except ModuleNotFoundError as exc:
+    # Only tolerate the extension simply not being built. A missing transitive
+    # dependency or a failed module init must not silently skip the parity test.
+    if exc.name != "cassandra.c_shard_info":
+        raise
+    c_shard_info = None
+    CShardingInfo = None
 
 LOGGER = logging.getLogger(__name__)
 
@@ -73,6 +85,38 @@ class MockSession(MagicMock):
 
 
 class TestShardAware(unittest.TestCase):
+    @unittest.skipUnless(CShardingInfo, "Cython sharding extension is not available")
+    def test_cython_sharding_info_matches_python(self):
+        """
+        Testing that the compiled extension computes the same shard id as the
+        pure-Python fallback, for both of its multiply-high implementations.
+
+        The extension uses native 128-bit arithmetic where the compiler has it
+        and a portable 64-bit decomposition otherwise (MSVC). Only one of the
+        two is wired up on any given platform, so both are exercised directly
+        here to keep the MSVC path covered on every platform.
+        """
+        for shards_count in (1, 2, 4, 12, 128, 1024):
+            for sharding_ignore_msb in (0, 1, 12, 63):
+                args = (1, shards_count, "", "", sharding_ignore_msb, 0, 0)
+                cython_info = CShardingInfo(*args)
+                python_info = _ShardingInfo(*args)
+                for token in (
+                        -9223372036854775808, -1, 0, 1,
+                        9223372036854775807):
+                    with self.subTest(shards_count=shards_count,
+                                      sharding_ignore_msb=sharding_ignore_msb,
+                                      token=token):
+                        expected = python_info.shard_id_from_token(token)
+                        self.assertEqual(
+                            cython_info.shard_id_from_token(token), expected)
+                        for portable in (True, False):
+                            self.assertEqual(
+                                c_shard_info._shard_id_from_token_impl(
+                                    token, shards_count, sharding_ignore_msb,
+                                    portable),
+                                expected)
+
     def test_parsing_and_calculating_shard_id(self):
         """
         Testing the parsing of the options command
