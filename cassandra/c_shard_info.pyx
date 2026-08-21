@@ -14,9 +14,6 @@
 
 from libc.stdint cimport INT64_MIN, UINT32_MAX, uint64_t, int64_t
 
-cdef extern from *:
-    ctypedef unsigned int __uint128_t
-
 cdef class ShardingInfo():
     cdef readonly int shards_count
     cdef readonly unicode partitioner
@@ -39,5 +36,15 @@ cdef class ShardingInfo():
     def shard_id_from_token(self, int64_t token_input):
         cdef uint64_t biased_token = token_input + (<uint64_t>1 << 63);
         biased_token <<= self.sharding_ignore_msb;
-        cdef int shardId = (<__uint128_t>biased_token * self.shards_count) >> 64;
+        # Compute (biased_token * shards_count) >> 64, i.e. the high 64 bits of the
+        # 64x32-bit product, using only 64-bit arithmetic. This used to rely on the
+        # GCC/Clang-only __uint128_t extension type, which MSVC does not support at
+        # all (no 128-bit integer type), causing a compile error on Windows builds.
+        # The split below is a standard, portable multiply-high decomposition and is
+        # numerically identical to the previous 128-bit computation.
+        cdef uint64_t shards_count = <uint64_t>self.shards_count
+        cdef uint64_t low_product = (biased_token & <uint64_t>UINT32_MAX) * shards_count
+        cdef uint64_t carry = low_product >> 32
+        cdef uint64_t mid = (biased_token >> 32) * shards_count + carry
+        cdef int shardId = <int>(mid >> 32);
         return shardId
