@@ -40,6 +40,7 @@ import socket
 import time
 import struct
 import sys
+import threading
 from uuid import UUID
 
 from cassandra.marshal import (int8_pack, int8_unpack, int16_pack, int16_unpack,
@@ -275,6 +276,26 @@ class _CassandraType(object, metaclass=CassandraTypeType):
     num_subtypes = 0
     empty_binary_ok = False
 
+    # Cache of previously-constructed parameterized subtypes, keyed on
+    # (cls, subtypes, names) -- see apply_parameters() below. This is a
+    # single dict shared by every subclass that does not override
+    # apply_parameters() (e.g. ListType, SetType, MapType, TupleType,
+    # CompositeType). Growth is bounded by the number of distinct
+    # (type, subtypes, names) combinations actually seen, which in
+    # practice tracks the number of distinct column/type shapes across
+    # the schemas a session talks to -- not the number of rows or queries.
+    # UserType and VectorType define their own apply_parameters()
+    # overrides (with their own, differently-keyed caches) and never
+    # populate or consult this dict.
+    _apply_parameters_cache = {}  # noqa: RUF012  # shared cache is intentional
+
+    # Guards the get-then-create-then-set sequence in apply_parameters()
+    # below so that concurrent callers racing on the same (cls, subtypes,
+    # names) cannot each create their own class and clobber one another
+    # in the cache. Shared by every subclass using _apply_parameters_cache,
+    # for the same reason that cache itself is shared.
+    _apply_parameters_cache_lock = threading.Lock()
+
     support_empty_values = False
     """
     Back in the Thrift days, empty strings were used for "null" values of
@@ -372,8 +393,37 @@ class _CassandraType(object, metaclass=CassandraTypeType):
         if cls.num_subtypes != 'UNKNOWN' and len(subtypes) != cls.num_subtypes:
             raise ValueError("%s types require %d subtypes (%d given)"
                              % (cls.typename, cls.num_subtypes, len(subtypes)))
-        newname = cls.cass_parameterized_type_with(subtypes)
-        return type(newname, (cls,), {'subtypes': subtypes, 'cassname': cls.cassname, 'fieldnames': names})
+        subtypes = tuple(subtypes)
+        # Use `is not None` (rather than a truthiness check) so an explicit
+        # empty sequence (`names=[]`, e.g. for a type parameterized with zero
+        # subtypes) is normalized to a hashable `()` instead of being left as
+        # an unhashable list, which would raise on the dict lookup below.
+        # Normalize once and reuse the same value for both the cache key and
+        # the `fieldnames` stored on the created class -- otherwise, if the
+        # caller passed a mutable list, the cache key would be a tuple
+        # snapshot while `fieldnames` aliased the caller's original list, and
+        # a later mutation of that list would silently corrupt the cached
+        # class for every subsequent cache hit.
+        norm_names = tuple(names) if names is not None else None
+        cache_key = (cls, subtypes, norm_names)
+        cached = cls._apply_parameters_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        # The get-then-create-then-set sequence above is not atomic, so
+        # guard the miss path with a lock and re-check the cache once
+        # inside it: two threads can otherwise race past the check above
+        # for the same (cls, subtypes, names), each create its own class
+        # via type(), and stomp on each other's cache entry, leaving some
+        # callers holding a class that is not the one now cached (breaking
+        # `is`-based identity assumptions).
+        with cls._apply_parameters_cache_lock:
+            cached = cls._apply_parameters_cache.get(cache_key)
+            if cached is not None:
+                return cached
+            newname = cls.cass_parameterized_type_with(subtypes)
+            result = type(newname, (cls,), {'subtypes': subtypes, 'cassname': cls.cassname, 'fieldnames': norm_names})
+            cls._apply_parameters_cache[cache_key] = result
+        return result
 
     @classmethod
     def cql_parameterized_type(cls):
