@@ -1,13 +1,8 @@
 from bisect import bisect_left
-from operator import attrgetter
 from random import getrandbits
 from threading import Lock
 from typing import Optional
 from uuid import UUID
-
-# C-accelerated attrgetter avoids per-call lambda allocation overhead
-_get_first_token = attrgetter("first_token")
-_get_last_token = attrgetter("last_token")
 
 
 def choose_tablet_version_block(tablet_version: int) -> int:
@@ -42,17 +37,17 @@ class Tablet(object):
     It stores information about each replica, its host and shard,
     and the token interval in the format (first_token, last_token].
     """
-    first_token = 0
-    last_token = 0
-    replicas = None
-    # uint64 hash; None means unknown -- a cold start, or a tablet learned over
+# uint64 hash; None means unknown -- a cold start, or a tablet learned over
     # TABLETS_ROUTING_V1, which does not report a version.
-    tablet_version = None
+    __slots__ = ('first_token', 'last_token', 'replicas', 'tablet_version', '_replica_dict')
 
     def __init__(self, first_token=0, last_token=0, replicas=None, tablet_version=None):
         self.first_token = first_token
         self.last_token = last_token
-        self.replicas = replicas
+        # Materialize once: `replicas` may be a one-shot iterator, and both
+        # the tuple and the lookup dict must come from the same iteration.
+        self.replicas = tuple(replicas) if replicas is not None else None
+        self._replica_dict = {r[0]: r[1] for r in self.replicas} if self.replicas else {}
         self.tablet_version = tablet_version
 
     def __str__(self):
@@ -61,20 +56,20 @@ class Tablet(object):
     __repr__ = __str__
 
     @staticmethod
-    def _is_valid_tablet(replicas):
-        return replicas is not None and len(replicas) != 0
-
-    @staticmethod
     def from_row(first_token, last_token, replicas, tablet_version=None):
-        if Tablet._is_valid_tablet(replicas):
-            if tablet_version is not None:
-                # tablet_version is an unsigned 64-bit value, but it is
-                # deserialized from the wire as a signed LongType; normalize it
-                # back to unsigned so it matches the server's representation.
-                tablet_version &= 0xFFFFFFFFFFFFFFFF
-            tablet = Tablet(first_token, last_token, replicas, tablet_version)
-            return tablet
-        return None
+        # Materialize once: `replicas` may be a one-shot iterator (e.g. a
+        # generator), and a plain `if not replicas` truthiness check would
+        # always be False for such an object even when it yields nothing,
+        # since iterators have no __len__/__bool__ and are always truthy.
+        replicas_tuple = tuple(replicas) if replicas is not None else ()
+        if not replicas_tuple:
+            return None
+        if tablet_version is not None:
+            # tablet_version is an unsigned 64-bit value, but it is
+            # deserialized from the wire as a signed LongType; normalize it
+            # back to unsigned so it matches the server's representation.
+            tablet_version &= 0xFFFFFFFFFFFFFFFF
+        return Tablet(first_token, last_token, replicas_tuple, tablet_version)
 
     @property
     def leader(self) -> Optional[UUID]:
@@ -104,37 +99,53 @@ class Tablet(object):
         return self.replicas[0][0]
 
     def replica_contains_host_id(self, uuid: UUID) -> bool:
-        for replica in self.replicas:
-            if replica[0] == uuid:
-                return True
-        return False
+        return uuid in self._replica_dict
+
+    def get_replica_shard_id(self, uuid: UUID) -> Optional[int]:
+        return self._replica_dict.get(uuid)
 
 
 class Tablets(object):
-    _lock = None
-    _tablets = {}
-
     def __init__(self, tablets):
-        self._tablets = tablets
+        # NOTE: these are intentionally instance attributes only (not class
+        # attributes) to avoid mutable class-level dicts being shared across
+        # instances, e.g. if a future alternative constructor were to bypass
+        # __init__.
         self._lock = Lock()
+        self._tablets = tablets
+        # Build parallel token index lists from any pre-populated data
+        # (keyspace, table) -> list[int] for both _first_tokens/_last_tokens
+        self._first_tokens = {
+            key: [t.first_token for t in tlist]
+            for key, tlist in tablets.items()
+        }
+        self._last_tokens = {
+            key: [t.last_token for t in tlist]
+            for key, tlist in tablets.items()
+        }
 
     def table_has_tablets(self, keyspace, table) -> bool:
         return bool(self._tablets.get((keyspace, table), []))
 
     def get_tablet_for_key(self, keyspace, table, t):
-        tablet = self._tablets.get((keyspace, table), [])
-        if not tablet:
+        key = (keyspace, table)
+        last_tokens = self._last_tokens.get(key)
+        if not last_tokens:
             return None
 
-        id = bisect_left(tablet, t.value, key=_get_last_token)
-        if id < len(tablet) and t.value > tablet[id].first_token:
-            return tablet[id]
+        token_value = t.value
+        id = bisect_left(last_tokens, token_value)
+        if id < len(last_tokens) and token_value > self._first_tokens[key][id]:
+            return self._tablets[key][id]
         return None
 
     def drop_tablets(self, keyspace: str, table: Optional[str] = None):
         with self._lock:
             if table is not None:
-                self._tablets.pop((keyspace, table), None)
+                key = (keyspace, table)
+                self._tablets.pop(key, None)
+                self._first_tokens.pop(key, None)
+                self._last_tokens.pop(key, None)
                 return
 
             to_be_deleted = []
@@ -144,36 +155,48 @@ class Tablets(object):
 
             for key in to_be_deleted:
                 del self._tablets[key]
+                self._first_tokens.pop(key, None)
+                self._last_tokens.pop(key, None)
 
     def drop_tablets_by_host_id(self, host_id: Optional[UUID]):
         if host_id is None:
             return
         with self._lock:
             for key, tablets in self._tablets.items():
-                to_be_deleted = []
-                for tablet_id, tablet in enumerate(tablets):
-                    if tablet.replica_contains_host_id(host_id):
-                        to_be_deleted.append(tablet_id)
-
-                for tablet_id in reversed(to_be_deleted):
-                    tablets.pop(tablet_id)
+                # Filter in one pass instead of popping one-by-one (O(n) vs O(k*n))
+                keep = [i for i, t in enumerate(tablets)
+                        if not t.replica_contains_host_id(host_id)]
+                if len(keep) == len(tablets):
+                    continue  # nothing to drop
+                self._tablets[key] = [tablets[i] for i in keep]
+                first = self._first_tokens[key]
+                last = self._last_tokens[key]
+                self._first_tokens[key] = [first[i] for i in keep]
+                self._last_tokens[key] = [last[i] for i in keep]
 
     def add_tablet(self, keyspace, table, tablet):
         with self._lock:
-            tablets_for_table = self._tablets.setdefault((keyspace, table), [])
+            key = (keyspace, table)
+            tablets_for_table = self._tablets.setdefault(key, [])
+            first_tokens = self._first_tokens.setdefault(key, [])
+            last_tokens = self._last_tokens.setdefault(key, [])
 
             # find first overlapping range
-            start = bisect_left(tablets_for_table, tablet.first_token, key=_get_first_token)
-            if start > 0 and tablets_for_table[start - 1].last_token > tablet.first_token:
+            start = bisect_left(first_tokens, tablet.first_token)
+            if start > 0 and last_tokens[start - 1] > tablet.first_token:
                 start = start - 1
 
             # find last overlapping range
-            end = bisect_left(tablets_for_table, tablet.last_token, key=_get_last_token)
-            if end < len(tablets_for_table) and tablets_for_table[end].first_token >= tablet.last_token:
+            end = bisect_left(last_tokens, tablet.last_token)
+            if end < len(last_tokens) and first_tokens[end] >= tablet.last_token:
                 end = end - 1
 
             if start <= end:
                 del tablets_for_table[start:end + 1]
+                del first_tokens[start:end + 1]
+                del last_tokens[start:end + 1]
 
             tablets_for_table.insert(start, tablet)
+            first_tokens.insert(start, tablet.first_token)
+            last_tokens.insert(start, tablet.last_token)
 

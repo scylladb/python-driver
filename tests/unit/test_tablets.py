@@ -1,6 +1,6 @@
 import unittest
 from io import BytesIO
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from cassandra import ConsistencyLevel, ProtocolVersion
 from cassandra.protocol import ExecuteMessage
@@ -91,6 +91,31 @@ class TabletsTest(unittest.TestCase):
 
         self.compare_ranges(tablets_list, [(-8611686018427387905, -7917529027641081857),
                                            (-5011686018427387905, -2987529027641081857)])
+
+
+class TabletsInstanceStateTest(unittest.TestCase):
+    """Tests that Tablets' internal dicts are per-instance state, not
+    shared mutable class attributes (a well-known Python footgun)."""
+
+    def test_internal_dicts_are_not_class_attributes(self):
+        self.assertNotIn('_tablets', vars(Tablets))
+        self.assertNotIn('_first_tokens', vars(Tablets))
+        self.assertNotIn('_last_tokens', vars(Tablets))
+
+    def test_instances_do_not_share_internal_dicts(self):
+        a = Tablets({})
+        b = Tablets({})
+        self.assertIsNot(a._tablets, b._tablets)
+        self.assertIsNot(a._first_tokens, b._first_tokens)
+        self.assertIsNot(a._last_tokens, b._last_tokens)
+
+        t1 = Tablet(0, 100, [("host1", 0)])
+        a.add_tablet("ks", "tb", t1)
+        # Mutating `a` must not be visible through `b`.
+        self.assertFalse(b.table_has_tablets("ks", "tb"))
+        self.assertEqual(b._tablets, {})
+        self.assertEqual(b._first_tokens, {})
+        self.assertEqual(b._last_tokens, {})
 
 
 class GetTabletForKeyTest(unittest.TestCase):
@@ -279,3 +304,146 @@ class ExecuteMessageSerializationTest(unittest.TestCase):
         first_again = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=True))
         self.assertEqual(first, first_again)
         self.assertEqual(first, second_plain + bytes([0x3C]))
+
+class TabletFromRowTest(unittest.TestCase):
+    """Tests for Tablet.from_row, in particular that emptiness is detected
+    correctly regardless of whether `replicas` is a reusable sequence or a
+    one-shot iterator/generator."""
+
+    def test_empty_list_returns_none(self):
+        self.assertIsNone(Tablet.from_row(0, 100, []))
+
+    def test_empty_generator_returns_none(self):
+        # A generator is always truthy, even when empty, so a naive
+        # `if not replicas` check would fail to detect this case.
+        self.assertIsNone(Tablet.from_row(0, 100, (x for x in [])))
+
+    def test_none_returns_none(self):
+        self.assertIsNone(Tablet.from_row(0, 100, None))
+
+    def test_non_empty_list_builds_tablet(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        tablet = Tablet.from_row(0, 100, [(u1, 3), (u2, 7)])
+        self.assertIsNotNone(tablet)
+        self.assertEqual(tablet.replicas, ((u1, 3), (u2, 7)))
+        self.assertTrue(tablet.replica_contains_host_id(u1))
+        self.assertEqual(tablet.get_replica_shard_id(u2), 7)
+
+    def test_non_empty_generator_builds_tablet(self):
+        # Generators are single-use: confirm the fix materializes the
+        # replicas exactly once and doesn't lose data by iterating twice.
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+
+        def gen():
+            yield (u1, 3)
+            yield (u2, 7)
+
+        tablet = Tablet.from_row(0, 100, gen())
+        self.assertIsNotNone(tablet)
+        self.assertEqual(tablet.replicas, ((u1, 3), (u2, 7)))
+        self.assertTrue(tablet.replica_contains_host_id(u1))
+        self.assertTrue(tablet.replica_contains_host_id(u2))
+        self.assertEqual(tablet.get_replica_shard_id(u1), 3)
+        self.assertEqual(tablet.get_replica_shard_id(u2), 7)
+
+
+class TabletReplicaDictTest(unittest.TestCase):
+    """Tests for Tablet's replica/shard lookup behavior, backed internally
+    by a cached _replica_dict for O(1) host/shard lookup.
+
+    Most of these tests go through the public API (replica_contains_host_id
+    and get_replica_shard_id) so they keep working across internal
+    refactors of the cache; see test_replica_dict_populated_as_expected
+    for the one targeted check of the internal structure itself.
+    """
+
+    def test_replica_contains_host_id(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        u3 = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertTrue(t.replica_contains_host_id(u1))
+        self.assertTrue(t.replica_contains_host_id(u2))
+        self.assertFalse(t.replica_contains_host_id(u3))
+
+    def test_replica_contains_host_id_false_when_no_replicas(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        t = Tablet(0, 100, None)
+        self.assertFalse(t.replica_contains_host_id(u1))
+
+    def test_get_replica_shard_id(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        u3 = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertEqual(t.get_replica_shard_id(u1), 3)
+        self.assertEqual(t.get_replica_shard_id(u2), 7)
+        self.assertIsNone(t.get_replica_shard_id(u3))
+
+    def test_replicas_stored_as_tuple(self):
+        t = Tablet(0, 100, [("host1", 0), ("host2", 1)])
+        self.assertIsInstance(t.replicas, tuple)
+
+    def test_replica_lookup_from_iterator(self):
+        """Ensure replica lookups work correctly even when replicas is a
+        one-shot iterator (generator), not a reusable list."""
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+
+        def gen():
+            yield (u1, 3)
+            yield (u2, 7)
+
+        t = Tablet(0, 100, gen())
+        self.assertEqual(t.replicas, ((u1, 3), (u2, 7)))
+        self.assertTrue(t.replica_contains_host_id(u1))
+        self.assertTrue(t.replica_contains_host_id(u2))
+        self.assertEqual(t.get_replica_shard_id(u1), 3)
+        self.assertEqual(t.get_replica_shard_id(u2), 7)
+
+    def test_replica_dict_populated_as_expected(self):
+        """Minimal targeted regression test for the internal _replica_dict
+        cache: confirms the O(1)-lookup structure this optimization relies
+        on is actually populated as {host_id: shard_id}, which the public
+        API alone does not prove."""
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertEqual(t._replica_dict, {u1: 3, u2: 7})
+
+
+class DropTabletsByHostIdTest(unittest.TestCase):
+    """Tests for Tablets.drop_tablets_by_host_id batch-filter path."""
+
+    def test_drop_removes_matching_tablets(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        t1 = Tablet(0, 100, [(u1, 0)])
+        t2 = Tablet(100, 200, [(u2, 0)])
+        t3 = Tablet(200, 300, [(u1, 1), (u2, 1)])
+        tablets = Tablets({("ks", "tb"): [t1, t2, t3]})
+
+        tablets.drop_tablets_by_host_id(u1)
+
+        remaining = tablets._tablets[("ks", "tb")]
+        self.assertEqual(len(remaining), 1)
+        self.assertIs(remaining[0], t2)
+        # Verify token index lists are in sync
+        self.assertEqual(tablets._first_tokens[("ks", "tb")], [100])
+        self.assertEqual(tablets._last_tokens[("ks", "tb")], [200])
+
+    def test_drop_none_host_id_is_noop(self):
+        t1 = Tablet(0, 100, [("host1", 0)])
+        tablets = Tablets({("ks", "tb"): [t1]})
+        tablets.drop_tablets_by_host_id(None)
+        self.assertEqual(len(tablets._tablets[("ks", "tb")]), 1)
+
+    def test_drop_nonexistent_host_id_is_noop(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u_missing = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t1 = Tablet(0, 100, [(u1, 0)])
+        tablets = Tablets({("ks", "tb"): [t1]})
+        tablets.drop_tablets_by_host_id(u_missing)
+        self.assertEqual(len(tablets._tablets[("ks", "tb")]), 1)
