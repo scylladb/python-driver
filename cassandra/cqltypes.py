@@ -502,7 +502,9 @@ class AsciiType(_CassandraType):
 
     @staticmethod
     def serialize(var, protocol_version):
-        if isinstance(var, bytes):
+        # type() beats isinstance() here: no subclass/MRO check needed,
+        # and it's faster on the hot str path (see benchmark in commit msg).
+        if type(var) is bytes:
             return var
         return var.encode('ascii')
 
@@ -779,7 +781,9 @@ class UTF8Type(_CassandraType):
 
     @staticmethod
     def serialize(ustr, protocol_version):
-        if isinstance(ustr, bytes):
+        # type() beats isinstance() here: no subclass/MRO check needed,
+        # and it's faster on the hot str path (see benchmark in commit msg).
+        if type(ustr) is bytes:
             return ustr
         return ustr.encode('utf-8')
 
