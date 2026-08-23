@@ -71,7 +71,10 @@ class TestShardAwareIntegration(unittest.TestCase):
             assert shard_name in event.thread_name
         assert 'querying locally' in "\n".join([event.description for event in events])
 
-        trace_id = results.response_future.get_query_trace_ids()[0]
+        # Use the last trace id: prepare_on_all_hosts defaults to False now, so a query
+        # against a host that hasn't prepared the statement yet can get UNPREPARED and
+        # retry, which appends an earlier, incomplete trace before the one that matters.
+        trace_id = results.response_future.get_query_trace_ids()[-1]
         traces = self.session.execute("SELECT * FROM system_traces.events WHERE session_id = %s", (trace_id,))
         events = [event for event in traces]
         for event in events:
