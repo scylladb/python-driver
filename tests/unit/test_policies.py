@@ -1359,6 +1359,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
         # by distance (LOCAL vs LOCAL_RACK). Without leader-first routing,
         # other_replica would be yielded before the leader.
         child_policy.make_query_plan.return_value = [hosts[0], hosts[1], other_replica, leader]
+        child_policy.make_query_plan_with_exclusion.side_effect = \
+            lambda k, q, e: [h for h in child_policy.make_query_plan.return_value if h not in e]
         distances = {
             leader: HostDistance.LOCAL,
             other_replica: HostDistance.LOCAL_RACK,
@@ -1414,6 +1416,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         child_policy = Mock()
         child_policy.make_query_plan.return_value = hosts
+        child_policy.make_query_plan_with_exclusion.side_effect = \
+            lambda k, q, e: [h for h in hosts if h not in e]
         child_policy.distance.return_value = HostDistance.LOCAL
 
         policy = TokenAwarePolicy(child_policy)
@@ -1463,6 +1467,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
         # Order the child plan so the second replica comes before replicas[0]; if
         # leader-first wrongly triggered, first_replica would be forced to front.
         child_policy.make_query_plan.return_value = [second_replica, first_replica, hosts[0], hosts[1]]
+        child_policy.make_query_plan_with_exclusion.side_effect = \
+            lambda k, q, e: [h for h in child_policy.make_query_plan.return_value if h not in e]
         child_policy.distance.return_value = HostDistance.LOCAL
 
         # shuffle_replicas=False keeps replica ordering deterministic so we can
@@ -1511,6 +1517,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
         # leader-first logic wrongly triggered, first_replica would be forced to
         # the front instead.
         child_policy.make_query_plan.return_value = [second_replica, first_replica, hosts[0], hosts[1]]
+        child_policy.make_query_plan_with_exclusion.side_effect = \
+            lambda k, q, e: [h for h in child_policy.make_query_plan.return_value if h not in e]
         child_policy.distance.return_value = HostDistance.LOCAL
 
         # shuffle_replicas=False keeps replica ordering deterministic so we can
@@ -1554,6 +1562,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
         child_policy = Mock()
         child_policy.make_query_plan.return_value = [second_replica, first_replica, hosts[0], hosts[1]]
+        child_policy.make_query_plan_with_exclusion.side_effect = \
+            lambda k, q, e: [h for h in child_policy.make_query_plan.return_value if h not in e]
         child_policy.distance.return_value = HostDistance.LOCAL
 
         # shuffle_replicas=False keeps replica ordering deterministic so we can
@@ -1598,6 +1608,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
         # The child policy yields the leader but reports it as IGNORED, i.e. it
         # would never actually route to it.
         child_policy.make_query_plan.return_value = [leader, other_replica, hosts[0], hosts[1]]
+        child_policy.make_query_plan_with_exclusion.side_effect = \
+            lambda k, q, e: [h for h in child_policy.make_query_plan.return_value if h not in e]
         distances = {
             leader: HostDistance.IGNORED,
             other_replica: HostDistance.LOCAL,
@@ -1660,6 +1672,8 @@ class TokenAwarePolicyTest(unittest.TestCase):
         # Leader is last in the child plan and the farther replica (LOCAL vs
         # LOCAL_RACK); without leader-first, other_replica is yielded first.
         child_policy.make_query_plan.return_value = [hosts[0], hosts[1], other_replica, leader]
+        child_policy.make_query_plan_with_exclusion.side_effect = \
+            lambda k, q, e: [h for h in child_policy.make_query_plan.return_value if h not in e]
         distances = {
             leader: HostDistance.LOCAL,
             other_replica: HostDistance.LOCAL_RACK,
