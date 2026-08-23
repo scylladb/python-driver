@@ -27,10 +27,17 @@ Others
   come through unchanged. Previously ``DRIVER_NAME`` and ``DRIVER_VERSION`` could be
   overridden, which misreported the driver to the server for the life of the connection
   and, in the clients table, to the operator reading the row.
-* ``Cluster.prepare_on_all_hosts`` now defaults to ``False``. In multi-DC deployments eager
-  preparation previously ran on every pooled host, including remote hosts that are rarely or
-  never queried. Disabling it by default avoids that waste; an ``UNPREPARED`` response still
-  triggers on-demand reprepare and retry, so correctness is unaffected.
+* ``Cluster.prepare_on_all_hosts`` now defaults to unset instead of ``True``. In multi-DC
+  deployments eager preparation previously ran on every pooled host, including remote hosts
+  that are rarely or never queried. Left unset, a ``Session`` now eagerly prepares on all
+  hosts only during a short warm-up window after it connects (``prepare_on_all_hosts_warmup_seconds``,
+  default 15s), when hosts have just been discovered and many different statements are likely
+  to hit many different hosts in quick succession; afterwards it falls back to the lazy
+  behavior (``prepare_on_all_hosts=False``), since steady-state traffic for a given prepared
+  statement usually concentrates on a stable subset of replicas via token-aware routing.
+  Passing ``prepare_on_all_hosts=True`` or ``False`` explicitly disables the warm-up and pins
+  the old, unconditional behavior for the life of the cluster. An ``UNPREPARED`` response
+  still triggers on-demand reprepare and retry, so correctness is unaffected either way.
 * ``PreparedStatement.result_metadata`` and ``PreparedStatement.result_metadata_id`` are
   now read-only. They are replaced together by
   ``PreparedStatement.update_result_metadata()``, so a request can never observe a metadata

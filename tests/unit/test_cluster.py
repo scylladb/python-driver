@@ -16,6 +16,7 @@ import unittest
 from concurrent.futures import Future
 import logging
 import socket
+import time
 from types import SimpleNamespace
 
 from unittest.mock import patch, Mock
@@ -379,6 +380,115 @@ class ClusterTest(unittest.TestCase):
 
         assert factory.call_args.kwargs['session_id'] == cluster.session_id
         assert factory.call_args.kwargs['driver_config_reporter'] is None
+
+
+class PrepareOnAllHostsWarmupTest(unittest.TestCase):
+    """
+    Covers the post-connect warm-up window that decides whether Session.prepare()
+    eagerly broadcasts to all pooled hosts when Cluster.prepare_on_all_hosts was
+    left unset. See Session._should_prepare_on_all_hosts.
+    """
+
+    def _make_session(self, **cluster_kwargs):
+        cluster = Cluster(**cluster_kwargs)
+        self.addCleanup(cluster.shutdown)
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host.set_up()
+        cluster.metadata.add_or_return_host(host)
+        return Session(cluster, [host])
+
+    @mock_session_pools
+    def test_within_warmup_window_prepares_eagerly_by_default(self, *_):
+        session = self._make_session()
+        session._connect_time = time.time()
+
+        assert session._should_prepare_on_all_hosts() is True
+
+    @mock_session_pools
+    def test_after_warmup_window_falls_back_to_lazy_by_default(self, *_):
+        session = self._make_session()
+        session._connect_time = time.time() - session.cluster.prepare_on_all_hosts_warmup_seconds - 1
+
+        assert session._should_prepare_on_all_hosts() is False
+
+    @mock_session_pools
+    def test_explicit_true_is_respected_even_after_warmup_elapses(self, *_):
+        session = self._make_session(prepare_on_all_hosts=True)
+        session._connect_time = time.time() - session.cluster.prepare_on_all_hosts_warmup_seconds - 1
+
+        assert session._should_prepare_on_all_hosts() is True
+
+    @mock_session_pools
+    def test_explicit_false_is_respected_even_within_warmup_window(self, *_):
+        session = self._make_session(prepare_on_all_hosts=False)
+        session._connect_time = time.time()
+
+        assert session._should_prepare_on_all_hosts() is False
+
+    @mock_session_pools
+    def test_runtime_assignment_after_construction_is_respected(self, *_):
+        session = self._make_session()
+        session._connect_time = time.time() - session.cluster.prepare_on_all_hosts_warmup_seconds - 1
+
+        session.cluster.prepare_on_all_hosts = True
+        assert session._should_prepare_on_all_hosts() is True
+
+        session._connect_time = time.time()
+        session.cluster.prepare_on_all_hosts = False
+        assert session._should_prepare_on_all_hosts() is False
+
+    @mock_session_pools
+    def test_zero_warmup_seconds_disables_eager_behavior(self, *_):
+        session = self._make_session(prepare_on_all_hosts_warmup_seconds=0)
+        session._connect_time = time.time()
+
+        assert session._should_prepare_on_all_hosts() is False
+
+    @mock_session_pools
+    def test_prepare_uses_should_prepare_on_all_hosts_decision(self, *_):
+        session = self._make_session()
+        session._connect_time = time.time()
+
+        message = Mock(query_id=b'qid', bind_metadata=[], pk_indexes=[], column_metadata=[],
+                        result_metadata_id=None, is_lwt=False)
+        future = Mock()
+        future.result.return_value.one.return_value = message
+        future._current_host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+        with patch('cassandra.cluster.ResponseFuture', return_value=future), \
+             patch.object(session.cluster, 'add_prepared'), \
+             patch.object(Session, 'prepare_on_all_hosts') as prepare_on_all_hosts:
+            session.prepare("SELECT * FROM t")
+
+        assert prepare_on_all_hosts.call_count == 1
+
+        session._connect_time = time.time() - session.cluster.prepare_on_all_hosts_warmup_seconds - 1
+        with patch('cassandra.cluster.ResponseFuture', return_value=future), \
+             patch.object(session.cluster, 'add_prepared'), \
+             patch.object(Session, 'prepare_on_all_hosts') as prepare_on_all_hosts:
+            session.prepare("SELECT * FROM t")
+
+        assert prepare_on_all_hosts.call_count == 0
+
+    @mock_session_pools
+    def test_prepare_all_queries_on_host_up_is_unaffected_by_flag_or_warmup(self, *_):
+        # Cluster._prepare_all_queries (the reprepare_on_up path for late-joining hosts)
+        # is a separate mechanism from prepare_on_all_hosts/warmup and must keep firing
+        # regardless of either.
+        session = self._make_session(prepare_on_all_hosts=False, prepare_on_all_hosts_warmup_seconds=0)
+        session._connect_time = time.time() - 1000
+        cluster = session.cluster
+
+        prepared_statement = Mock(query_string="SELECT * FROM t", keyspace=None)
+        cluster._prepared_statements = {b'qid': prepared_statement}
+
+        new_host = Host("127.0.0.2", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        new_host.set_up()
+
+        with patch.object(cluster, 'connection_factory') as connection_factory:
+            cluster._prepare_all_queries(new_host)
+
+        assert connection_factory.call_count == 1
 
 
 class SchedulerTest(unittest.TestCase):
