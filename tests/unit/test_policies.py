@@ -1680,9 +1680,10 @@ class LWTTokenAwareRoutingTest(unittest.TestCase):
         )
         cluster.metadata._tablets.get_tablet_for_key.return_value = tablet
 
-        # Mock get_host_by_host_id to return hosts by their host_id
+        # Mock get_hosts_by_host_ids to return hosts by their host_id, in order
         host_id_map = {h.host_id: h for h in hosts}
-        cluster.metadata.get_host_by_host_id.side_effect = lambda hid: host_id_map.get(hid)
+        cluster.metadata.get_hosts_by_host_ids.side_effect = (
+            lambda host_ids: [host_id_map[hid] for hid in host_ids if hid in host_id_map])
 
         policy = TokenAwarePolicy(
             DCAwareRoundRobinPolicy("dc1")

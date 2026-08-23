@@ -541,12 +541,6 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                 yield host
             return
 
-        # Deferred: cassandra.metadata reaches this module through
-        # cassandra.protocol, so importing it at module scope closes an import
-        # cycle. Same reason cassandra.connection imports from metadata inside
-        # its functions.
-        from cassandra.metadata import _ConsistencyMode
-
         is_lwt = query.is_lwt()
 
         replicas = []
@@ -555,6 +549,11 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         tablet = self._cluster_metadata._tablets.get_tablet_for_key(keyspace, query.table, token)
 
         if tablet is not None:
+            # Deferred: cassandra.metadata reaches this module through
+            # cassandra.protocol, so importing it at module scope closes an
+            # import cycle. Same reason cassandra.connection imports from
+            # metadata inside its functions. Only needed here (tablet path).
+            from cassandra.metadata import _ConsistencyMode
             if is_lwt:
                 # For LWT queries, preserve the tablet's natural replica order
                 # so that the first replica is tried first by every client.
@@ -562,11 +561,10 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                 # and round-robin position is itself location/timing-dependent,
                 # which defeats the purpose -- see the detailed rationale in the
                 # "if is_lwt" block below, near yield_in_order().
-                replicas = [self._cluster_metadata.get_host_by_host_id(host_id)
-                            for host_id, _shard in tablet.replicas]
-                replicas = [r for r in replicas if r is not None]
+                replicas = self._cluster_metadata.get_hosts_by_host_ids(
+                    host_id for host_id, _shard in tablet.replicas)
             else:
-                replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
+                replicas_mapped = {host_id for host_id, _shard in tablet.replicas}
                 child_plan = child.make_query_plan(keyspace, query)
 
                 replicas = [host for host in child_plan if host.host_id in replicas_mapped]
@@ -612,12 +610,6 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
         if self.shuffle_replicas and not is_lwt and not ConsistencyLevel.is_serial(query.consistency_level):
             shuffle(replicas)
-
-        def yield_in_order(hosts):
-            for distance in [HostDistance.LOCAL_RACK, HostDistance.LOCAL, HostDistance.REMOTE]:
-                for replica in hosts:
-                    if replica.is_up and child.distance(replica) == distance:
-                        yield replica
 
         # If we have a leader hint, yield it first -- but respect the child
         # policy's own filter: never front-run a host the child policy would
@@ -701,18 +693,44 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                 replicas_yielded.add(replica)
                 yield replica
             # Yield remaining hosts (non-replicas) in distance order as fallback
-            yield from yield_in_order(
+            yield from self._yield_in_order(
+                child,
                 [host for host in child.make_query_plan(keyspace, query)
                  if host not in replicas_yielded])
         else:
             # yield replicas: local_rack, local, remote (skipping leader already yielded)
-            for host in yield_in_order(replicas):
+            for host in self._yield_in_order(child, replicas):
                 if host is not leader_host:
                     yield host
 
             # yield rest of the cluster: local_rack, local, remote
             # Note: The leader is always a replica, so we don't need to filter it out here.
-            yield from yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas])
+            yield from self._yield_in_order(
+                child, [host for host in child.make_query_plan(keyspace, query) if host not in replicas])
+
+    @staticmethod
+    def _yield_in_order(child, hosts):
+        # Single pass: compute each host's distance once (instead of up
+        # to 3x, once per distance bucket) and bucket accordingly.
+        local_rack_hosts = []
+        local_hosts = []
+        remote_hosts = []
+        for replica in hosts:
+            if not replica.is_up:
+                continue
+            distance = child.distance(replica)
+            if distance == HostDistance.LOCAL_RACK:
+                local_rack_hosts.append(replica)
+            elif distance == HostDistance.LOCAL:
+                local_hosts.append(replica)
+            elif distance == HostDistance.REMOTE:
+                remote_hosts.append(replica)
+        for replica in local_rack_hosts:
+            yield replica
+        for replica in local_hosts:
+            yield replica
+        for replica in remote_hosts:
+            yield replica
 
     def on_up(self, *args, **kwargs):
         return self._child_policy.on_up(*args, **kwargs)

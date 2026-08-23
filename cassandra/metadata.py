@@ -386,6 +386,16 @@ class Metadata(object):
         with self._hosts_lock:
             return self._hosts.get(host_id)
 
+    def get_hosts_by_host_ids(self, host_ids):
+        """
+        Same as get_host_by_host_id(), but for a batch of host ids: takes a
+        single lock instead of one per id. Returns a list, skipping any id
+        with no known host, in the same relative order as ``host_ids``.
+        """
+        with self._hosts_lock:
+            hosts = self._hosts
+            return [hosts[host_id] for host_id in host_ids if host_id in hosts]
+
     def _get_host_by_address(self, address, port=None):
         for host in self._hosts.values():
             if (host.broadcast_rpc_address == address and
