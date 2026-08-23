@@ -20,6 +20,12 @@ Features
 
 Others
 ------
+* Token-aware routing now caches the "no keyspace metadata" result per keyspace
+  instead of retrying the token map lookup on every query. This mainly benefits
+  ``schema_metadata_enabled=False``: the driver never fetches replication
+  strategies while schema metadata stays disabled, and cleanly falls back to
+  the child load-balancing policy (e.g. round robin) for that keyspace, as
+  documented for that setting.
 * The ``STARTUP`` options that describe the driver itself are no longer the
   application's to set. An ``ApplicationInfoBase.add_startup_options`` that sets
   ``DRIVER_NAME``, ``DRIVER_VERSION``, ``SESSION_ID`` or ``DRIVER_CONFIG`` now has that

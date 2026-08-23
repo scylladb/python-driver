@@ -605,6 +605,30 @@ class TokenAwarePolicyTest(unittest.TestCase):
 
             assert sorted(set(qplan)) == sorted(set(hosts))
 
+    def test_falls_back_to_child_policy_without_keyspace_metadata(self):
+        """
+        With schema_metadata_enabled=False the driver has no replica
+        information, so Metadata.get_replicas() returns []. TokenAwarePolicy
+        must fall back to the child policy's plan rather than raise or
+        return an incomplete/wrong plan.
+        """
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.return_value = None
+        cluster.metadata.get_replicas.return_value = []
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for host in hosts:
+            host.set_up()
+
+        policy = TokenAwarePolicy(RoundRobinPolicy())
+        policy.populate(cluster, hosts)
+
+        query = Statement(routing_key=struct.pack('>i', 0), keyspace='keyspace_name')
+        qplan = list(policy.make_query_plan(None, query))
+
+        assert sorted(qplan) == sorted(hosts)
+
     def test_wrap_dc_aware(self):
         cluster = Mock(spec=Cluster)
         cluster.metadata = Mock(spec=Metadata)

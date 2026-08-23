@@ -447,6 +447,45 @@ class GetReplicasTest(unittest.TestCase):
         self._get_replicas(BytesToken)
 
 
+class TokenMapNoKeyspaceMetadataTest(unittest.TestCase):
+    """
+    Token-aware routing must fall back cleanly (no crash, empty replica list)
+    for a keyspace whose metadata is unavailable, e.g. because
+    ``schema_metadata_enabled=False``.
+    """
+
+    def _token_map(self):
+        token_klass = Murmur3Token
+        tokens = [token_klass(i) for i in range(0, (2 ** 127 - 1), 2 ** 125)]
+        hosts = [Host("ip%d" % i, SimpleConvictionPolicy, datacenter="dc1", rack="rack1", host_id=uuid.uuid4())
+                 for i in range(len(tokens))]
+        token_to_primary_replica = dict(zip(tokens, hosts))
+        metadata = Mock(spec=Metadata, keyspaces={})
+        return TokenMap(token_klass, token_to_primary_replica, tokens, metadata), tokens[0]
+
+    def test_get_replicas_is_empty_without_keyspace_metadata(self):
+        token_map, token = self._token_map()
+
+        assert token_map.get_replicas("ks", token) == []
+
+    def test_missing_keyspace_result_is_cached(self):
+        """rebuild_keyspace should not repeatedly try to build a map that
+        will never succeed without keyspace metadata."""
+        token_map, token = self._token_map()
+
+        token_map.get_replicas("ks", token)
+        assert token_map.tokens_to_hosts_by_ks.get("ks") == {}
+
+        # a later call with build_if_absent=False (as done by schema-change
+        # handlers) should re-check for the keyspace, self-healing once
+        # metadata becomes available again
+        keyspace = KeyspaceMetadata("ks", True, "NetworkTopologyStrategy", {"dc1": "1"})
+        token_map._metadata.keyspaces = {"ks": keyspace}
+        token_map.rebuild_keyspace("ks", build_if_absent=False)
+
+        assert token_map.tokens_to_hosts_by_ks.get("ks")
+
+
 class DropTableMetadataTest(unittest.TestCase):
     """Metadata._drop_table should invalidate tablets for the dropped table."""
 
