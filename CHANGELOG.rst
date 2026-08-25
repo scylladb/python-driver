@@ -14,6 +14,17 @@ Features
   ``Cluster(driver_config_reporting_enabled=False)``; ``SESSION_ID`` is unaffected by
   that setting. Reporting is best effort and never prevents a connection from being
   established.
+* ``DRIVER_CONFIG`` now describes the configuration itself rather than only the schema
+  version it follows (DRIVER-379). The report covers connection settings (timeouts,
+  request capacity, shard awareness, socket options, reconnection policy, TLS hostname
+  verification), the driver's own control-plane query timeouts, and the query defaults
+  and policies a statement gets when it overrides none of them. It follows the JSON
+  schema shared with the other ScyllaDB drivers, so the same document describes a
+  client whichever driver wrote it. Custom policies are reported by type name only and
+  never by their attributes, so a policy holding a credential does not leak it into the
+  clients table.
+* ``Cluster.sockopts`` is now materialized at construction, so a one-shot iterable is
+  applied to every connection the cluster opens rather than only to the first one.
 * Negotiate and implement the ``SCYLLA_USE_METADATA_ID`` protocol extension: prepared
   statements skip re-sending result metadata on EXECUTE, and the driver automatically
   refreshes cached metadata when the server detects a schema change (DRIVER-153)
