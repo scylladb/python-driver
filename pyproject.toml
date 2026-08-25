@@ -53,6 +53,7 @@ dev = [
     "numpy",
     "objgraph",
     "coverage[toml]>=7.6",
+    "jsonschema>=4.18",
     "ccm @ git+https://git@github.com/scylladb/scylla-ccm.git@master",
 ]
 
