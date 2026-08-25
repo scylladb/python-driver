@@ -222,8 +222,23 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
     datacenters as a last resort.
     """
 
-    local_dc = None
+    _local_dc = None
+    _local_dc_explicit = False
     used_hosts_per_remote_dc = 0
+
+    @property
+    def local_dc(self):
+        """
+        The datacenter treated as local, whether it was configured through the
+        constructor or inferred from the first host to come up.
+
+        Read-only. It is the constructor's to set, and on_up()'s to fill in when
+        the constructor was given nothing: an assignment afterwards would be
+        indistinguishable from that inference, and telling the two apart is the
+        difference between a datacenter an application chose and one the driver
+        guessed.
+        """
+        return self._local_dc
 
     def __init__(self, local_dc='', used_hosts_per_remote_dc=0):
         """
@@ -241,7 +256,11 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         rest will be considered :attr:`~.HostDistance.IGNORED`.
         By default, all remote hosts are ignored.
         """
-        self.local_dc = local_dc
+        self._local_dc = local_dc
+        # Whether the datacenter was chosen here or is left to on_up() to infer.
+        # An empty local_dc is the default rather than a choice, which is also
+        # what makes on_up() infer one.
+        self._local_dc_explicit = bool(local_dc)
         self.used_hosts_per_remote_dc = used_hosts_per_remote_dc
         self._dc_live_hosts = {}
         self._position = 0
@@ -295,7 +314,7 @@ class DCAwareRoundRobinPolicy(LoadBalancingPolicy):
         # not worrying about threads because this will happen during
         # control connection startup/refresh
         if not self.local_dc and host.datacenter:
-            self.local_dc = host.datacenter
+            self._local_dc = host.datacenter
             log.info("Using datacenter '%s' for DCAwareRoundRobinPolicy (via host '%s'); "
                         "if incorrect, please specify a local_dc to the constructor, "
                         "or limit contact points to local cluster nodes" %
