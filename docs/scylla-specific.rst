@@ -328,6 +328,141 @@ Two of the options are about the driver rather than the protocol:
   driver learns to describe more of its configuration, and adding one does not
   bump the version.
 
+  The schema is shared with the other ScyllaDB drivers, so the same document
+  describes a Go or C# client in the same terms. It is maintained
+  `upstream
+  <https://github.com/scylladb/gocql/blob/master/docs/driver-config-schema.json>`_.
+
+What the report describes
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Three groups, each named for the part of the driver it covers:
+
+``connection``
+  What the driver does with a single connection: the connect timeout, how many
+  requests one connection carries, whether pools use ScyllaDB's shard-aware
+  port, the socket options from ``sockopts``, the reconnection policy, and --
+  when TLS is configured -- whether the server hostname is verified.
+
+``control-plane``
+  The timeouts on the driver's own queries, the ones it runs to discover the
+  cluster rather than on behalf of the application: ``control_connection_timeout``
+  as a client-side limit, ``metadata_request_timeout`` as the server-side one
+  the driver applies with ``USING TIMEOUT``, and ``max_schema_agreement_wait``.
+
+``query``
+  What a statement gets when it overrides nothing: the default consistency,
+  serial consistency, page size, request timeout and timestamp behaviour, along
+  with the retry, load balancing and speculative execution policies.
+
+A report from a default ``Cluster()`` looks like this, reformatted -- what goes
+on the wire has no whitespace:
+
+.. code:: json
+
+    {
+      "version": 1,
+      "connection": {
+        "connect": {"timeout-ms": 5000},
+        "requests": {"in-flight": {"max": 32767}, "orphaned": {"max": 24575}},
+        "pool": {"shard-aware": {"enabled": true}},
+        "socket": {"tcp-no-delay": false, "keep-alive": false, "reuse-address": false},
+        "reconnection": {"policy": {"type": "exponential", "base-ms": 1000, "max-ms": 600000}}
+      },
+      "control-plane": {
+        "queries": {"system": {"timeout": {"client-side-ms": 2000, "server-side-ms": 2000}}},
+        "schema": {"agreement": {"timeout-ms": 10000}}
+      },
+      "query": {
+        "defaults": {
+          "consistency": "LOCAL_ONE",
+          "idempotence": false,
+          "request": {"timeout-ms": 10000},
+          "page": {"size": 5000},
+          "client-timestamps": true
+        },
+        "retry": {"policy": {"type": "standard-error-aware"}},
+        "load-balancing": {
+          "policy": {
+            "type": "token-aware",
+            "load-distribution": "shuffle",
+            "fallback-to-non-preferred-nodes": false
+          },
+          "node-preference": {"type": "dc-auto"}
+        }
+      }
+    }
+
+Five things are worth knowing when reading one:
+
+**Only the default execution profile is described.** The schema has a single
+``query`` group, so what it reports is the profile a statement gets when it
+names none -- ``EXEC_PROFILE_DEFAULT``. Policies and defaults set on other
+profiles do not appear. A ``load_balancing_policy`` or ``default_retry_policy``
+passed to the ``Cluster`` constructor is folded into that same profile, so both
+ways of configuring the driver read identically here.
+
+**A custom policy is reported by name only.** The driver never serializes a
+policy object's attributes. A policy is an ordinary Python object and whatever
+it happens to hold -- an auth provider, a credential, a host list -- would
+otherwise land in the clients table for anyone who can read it. A policy the
+driver does not recognise is reported as
+``{"type": "custom", "name": "YourPolicy"}`` and nothing more, named after the
+policy you configured rather than whatever sits inside it.
+
+The load balancing group asks a little more than that. Its built-in
+``token-aware`` shape carries flags describing where a request may go, so it is
+claimed only when *every* policy in the chain is one the driver can account for
+-- a token-aware policy over ``DCAwareRoundRobinPolicy``,
+``RackAwareRoundRobinPolicy`` or ``RoundRobinPolicy``. A chain reaching anything
+else is reported as custom even with a token-aware policy wrapping it, because
+the flags would otherwise assert plain token-aware routing and say nothing of
+what the inner policy does. ``WhiteListRoundRobinPolicy`` and
+``HostFilterPolicy`` both fall here: each confines routing to a subset of the
+cluster that the flags have nowhere to record.
+
+``node-preference`` is reported either way -- it describes where requests go,
+not which policy sends them, so a ``DCAwareRoundRobinPolicy`` or
+``RackAwareRoundRobinPolicy`` reports its datacenter whether it is used on its
+own, wrapped, or sitting inside a chain reported as custom.
+
+**Some keys are absent rather than false.** The schema uses absence to mean
+"this does not apply" or "this is not knowable", so a missing key is not a
+disabled setting. ``tls`` is absent when TLS is not configured;
+``server-side-ms`` when the connection is not to a ScyllaDB node, since
+``USING TIMEOUT`` is a ScyllaDB extension; ``speculative-execution`` when no
+speculative execution is configured; and ``client-timestamps`` when a custom
+``timestamp_generator`` makes it impossible to say whether the client will
+assign a timestamp.
+
+**The datacenter says whether it was chosen or guessed.** A ``node-preference``
+of type ``dc`` carries a datacenter the application configured; ``dc-auto``
+means the driver inferred one from the first host it saw, and its ``local-dc``
+is absent until it has. The first report a cluster sends is usually the latter,
+since the control connection reports before any host has come up.
+
+**``query.defaults`` is a cluster-level snapshot.** It is built when the control
+connection is established, before any :class:`~.Session` exists. Under execution
+profiles the default profile is what it describes. In legacy configuration mode
+the consistency, the serial consistency and the request timeout come from the
+``Session`` instead -- ``Session.default_consistency_level``,
+``default_serial_consistency_level`` and ``default_timeout``, which is where a
+legacy request reads them -- and ``default_fetch_size`` and
+``use_client_timestamp`` come from there in both modes.
+
+All five live on the ``Session``, and no session exists yet when the report is
+built, so what is reported is the default every session created from the cluster
+will start with. Setting one of them on a session after ``connect()`` does not
+change what was reported, and is not picked up by a report a later control
+connection builds either.
+
+Values the driver has no way to express under this schema version --
+``idle_heartbeat_interval``, the protocol version, compression, and non-default
+execution profiles -- are left out rather than approximated.
+
+Reading and controlling the options
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 .. code:: python
 
     from cassandra.cluster import Cluster
