@@ -1605,7 +1605,13 @@ class Connection(object):
         # only the control connection reports it. A reporter left as None means
         # the cluster has configuration reporting disabled.
         if self.is_control_connection and self._driver_config_reporter is not None:
-            self._driver_config_reporter.add_startup_options(options)
+            # Whether this is a ScyllaDB node is already known: the features
+            # above were parsed from the SUPPORTED response, and sharding info
+            # is what the driver itself keys ScyllaDB-only behaviour off (see
+            # ControlConnection._try_connect), so the report describes what the
+            # driver will actually do rather than only what it was configured to.
+            self._driver_config_reporter.add_startup_options(
+                options, is_scylla=self.features.sharding_info is not None)
 
         if self.cql_version:
             if self.cql_version not in supported_cql_versions:

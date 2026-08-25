@@ -1520,7 +1520,7 @@ class Cluster(object):
         # Built whatever the flag says, so that the flag is the only thing that
         # decides whether a connection reports: see _make_connection_kwargs. The
         # reporter holds no state, so an unused one costs nothing.
-        self._driver_config_reporter = DriverConfigReporter()
+        self._driver_config_reporter = DriverConfigReporter(self)
 
         self.control_connection = ControlConnection(
             self, self.control_connection_timeout,

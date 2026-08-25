@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from functools import wraps
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from concurrent.futures import Future
 from cassandra.cluster import Session
@@ -35,7 +35,23 @@ def mock_session_pools(f):
     return wrapper
 
 
-class ThrowingReporter(DriverConfigReporter):
+class _ClusterlessReporter(DriverConfigReporter):
+    """
+    Base for the reporter doubles below, which override report building and so
+    never read the cluster. Supplying a Mock keeps them constructible without
+    one while leaving the weak reference the real reporter holds in place.
+
+    That reference is why the Mock is also held strongly: a temporary would be
+    collected before the report is built, and the double would then drop its
+    report because the cluster was gone rather than for the reason it exists to
+    demonstrate -- which is a test that passes while proving nothing.
+    """
+    def __init__(self, cluster=None):
+        self._strong_cluster = cluster if cluster is not None else Mock()
+        super().__init__(self._strong_cluster)
+
+
+class ThrowingReporter(_ClusterlessReporter):
     """
     A driver configuration reporter whose report cannot be built.
 
@@ -44,5 +60,21 @@ class ThrowingReporter(DriverConfigReporter):
     guarantee that such a failure leaves the STARTUP frame otherwise intact
     instead of failing the connection.
     """
-    def _build_report(self):
+    def _build_report(self, cluster, is_scylla):
         raise ValueError("simulated failure while building the report")
+
+
+class StubReporter(_ClusterlessReporter):
+    """
+    A driver configuration reporter with a fixed, recognisable report.
+
+    The connection tests are about where the report goes -- which connections
+    carry it, and that an application cannot supply its own -- not about what is
+    in it. Asserting the real report's text there would tie those guarantees to
+    every configuration group that lands afterwards, and break them all at once
+    for a reason that has nothing to do with connections.
+    """
+    REPORT = '{"stub-report":true}'
+
+    def _build_report(self, cluster, is_scylla):
+        return self.REPORT
