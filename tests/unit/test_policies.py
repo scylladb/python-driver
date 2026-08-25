@@ -570,6 +570,54 @@ class DCAwareRoundRobinPolicyTest(unittest.TestCase):
         policy.on_add(host_remote)
         assert policy.local_dc
 
+    def test_local_dc_explicit(self):
+        """
+        The configured/inferred distinction has to survive inference, since
+        that is the only point at which the two look alike.
+        """
+        assert DCAwareRoundRobinPolicy('local')._local_dc_explicit
+        assert not DCAwareRoundRobinPolicy()._local_dc_explicit
+        # An empty datacenter is what the default is, so it is not a choice.
+        assert not DCAwareRoundRobinPolicy('')._local_dc_explicit
+
+        host_local = Host(DefaultEndPoint(1), SimpleConvictionPolicy, 'local', host_id=uuid.uuid4())
+        cluster = Mock(endpoints_resolved=[DefaultEndPoint(1)])
+
+        policy = DCAwareRoundRobinPolicy()
+        policy.populate(cluster, [host_local])
+        policy.on_add(host_local)
+        assert policy.local_dc == 'local'
+        assert not policy._local_dc_explicit
+
+    def test_a_subclass_that_declares_a_datacenter_keeps_it(self):
+        """
+        local_dc is a read-only property, and a subclass is still free to
+        shadow it with a plain class attribute. Doing so declares a datacenter,
+        so inference leaves it alone -- on_up only fills in one that is unset.
+        """
+        class Pinned(DCAwareRoundRobinPolicy):
+            local_dc = 'configured'
+
+        host_local = Host(DefaultEndPoint(1), SimpleConvictionPolicy, 'local', host_id=uuid.uuid4())
+
+        policy = Pinned()
+        policy.on_up(host_local)
+
+        assert policy.local_dc == 'configured'
+
+    def test_the_datacenter_is_read_only(self):
+        """
+        Set through the constructor and nowhere else. An assignment afterwards
+        would be indistinguishable from on_up's inference, and the two mean
+        different things to anything reading the policy.
+        """
+        policy = DCAwareRoundRobinPolicy('dc1')
+
+        with pytest.raises(AttributeError):
+            policy.local_dc = 'dc2'
+
+        assert policy.local_dc == 'dc1'
+
 class TokenAwarePolicyTest(unittest.TestCase):
 
     def test_wrap_round_robin(self):

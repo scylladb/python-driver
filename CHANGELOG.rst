@@ -20,6 +20,12 @@ Features
 
 Others
 ------
+* ``DCAwareRoundRobinPolicy.local_dc`` is now read-only. It is set by the constructor,
+  and filled in by the policy itself when the constructor was given none, from the first
+  host to come up. Assigning it afterwards was indistinguishable from that inference,
+  and the two mean different things: a datacenter the application chose against one the
+  driver guessed. Code that assigned it should pass ``local_dc`` to the constructor
+  instead.
 * The ``STARTUP`` options that describe the driver itself are no longer the
   application's to set. An ``ApplicationInfoBase.add_startup_options`` that sets
   ``DRIVER_NAME``, ``DRIVER_VERSION``, ``SESSION_ID`` or ``DRIVER_CONFIG`` now has that
