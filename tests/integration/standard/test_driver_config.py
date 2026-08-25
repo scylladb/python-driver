@@ -12,12 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
+import socket
 import time
 import unittest
 
+from cassandra import ConsistencyLevel
+from cassandra.cluster import EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.driver_config import (DRIVER_CONFIG_OPTION, DRIVER_CONFIG_SCHEMA_VERSION,
                                      SESSION_ID_OPTION)
+from cassandra.policies import (ConstantReconnectionPolicy,
+                                ConstantSpeculativeExecutionPolicy, FallthroughRetryPolicy)
+from tests.driver_config_schema import validate_report
 from tests.integration import (TestCluster, get_client_options, use_single_node, remove_cluster,
                                xfail_scylla_version_lt)
 
@@ -76,32 +81,87 @@ def _settled_connection_count(session, timeout=CONNECTION_WAIT_TIMEOUT):
         time.sleep(0.5)
 
 
-def _wait_for_connections(session, session_id, count, timeout=CONNECTION_WAIT_TIMEOUT):
+def _poll_client_options(session, session_id, settled, timeout=CONNECTION_WAIT_TIMEOUT):
     """
-    Polls the clients table until at least ``count`` connections report
-    ``session_id``, and returns the client options of the ones that do.
+    Polls the clients table until `settled` accepts the options of the
+    connections reporting ``session_id``, and returns them however the wait
+    ended.
 
     ``Cluster.connect(wait_for_all_pools=True)`` waits for the pools to be
     created, but a connection shows up here only once the server has registered
     it, so the rows arrive later than the connections do.
 
-    Returns a short list if the timeout expires first rather than asserting, so
-    that the count stays the caller's claim to make: an "absent everywhere" or a
+    Returns whatever it has if the timeout expires first rather than asserting,
+    so that the claim stays the caller's to make: an "absent everywhere" or a
     "reported exactly once" holds trivially over a list that is short only
     because the rows had not appeared yet.
     """
     deadline = time.time() + timeout
     while True:
         options = [o for o in get_client_options(session) if o.get(SESSION_ID_OPTION) == session_id]
-        if len(options) >= count or time.time() >= deadline:
+        if settled(options) or time.time() >= deadline:
             return options
         time.sleep(0.5)
+
+
+def _wait_for_connections(session, session_id, count, timeout=CONNECTION_WAIT_TIMEOUT):
+    """
+    Polls the clients table until at least ``count`` connections report
+    ``session_id``, and returns the client options of the ones that do.
+    """
+    return _poll_client_options(session, session_id,
+                                lambda options: len(options) >= count, timeout)
+
+
+def _wait_for_reported_config(session, session_id, timeout=CONNECTION_WAIT_TIMEOUT):
+    """
+    Polls the clients table until one of ``session_id``'s connections is listed
+    with a configuration report, and returns the client options of all of them.
+
+    Waits on the report rather than on a count of rows, because a count is not
+    the same predicate. The control connection is the first the driver opens, but
+    the order rows appear in here is the server's, and on a shard aware cluster
+    the pool opens a connection per shard while the control connection is still
+    registering -- so a wait for one row can return one that carries no report,
+    and a test reading the report off it would fail for the timing rather than
+    for what it set out to check.
+    """
+    return _poll_client_options(
+        session, session_id,
+        lambda options: any(DRIVER_CONFIG_OPTION in o for o in options), timeout)
 
 
 def _assert_listed(options, count, session_id, timeout=CONNECTION_WAIT_TIMEOUT):
     assert len(options) >= count, \
         "only %d of %d connections with SESSION_ID %s were listed within %ss" % (
             len(options), count, session_id, timeout)
+
+
+def _reported_config(cluster):
+    """
+    Connects `cluster` and returns the configuration its control connection
+    reported, read back out of the clients table and validated against the
+    shared schema.
+
+    Read back rather than built locally, because what the server received is the
+    only thing these tests can say more about than the unit tests can. The
+    report is validated on the way through: every configuration a test here
+    connects with is one this driver may really send, so each of them is a
+    conformance case too.
+
+    Only the control connection reports, so the wait is for a listed connection
+    carrying a report rather than for a number of listed connections.
+    """
+    session = cluster.connect(wait_for_all_pools=True)
+    session_id = str(cluster.session_id)
+
+    options = _wait_for_reported_config(session, session_id)
+    _assert_listed(options, 1, session_id)
+
+    reports = [o[DRIVER_CONFIG_OPTION] for o in options if DRIVER_CONFIG_OPTION in o]
+    assert reports, "the control connection reported no configuration"
+
+    return validate_report(reports[0])
 
 
 @xfail_scylla_version_lt(reason='scylladb/scylla-enterprise#5467 - system.client_options is not yet supported',
@@ -194,7 +254,93 @@ class DriverConfigReportingTest(unittest.TestCase):
                 ("expected exactly one connection to report %s, got %d. If the control "
                  "connection reconnected during this test, the closed one may still be "
                  "listed with a report of its own." % (DRIVER_CONFIG_OPTION, len(reports)))
-            assert json.loads(reports[0]) == {'version': DRIVER_CONFIG_SCHEMA_VERSION}
+
+            # Validated rather than compared: what the report has to be is
+            # whatever the shared schema allows, and pinning the document itself
+            # here would duplicate the unit tests and break on every group added
+            # to it.
+            report = validate_report(reports[0])
+            assert report['version'] == DRIVER_CONFIG_SCHEMA_VERSION
+        finally:
+            cluster.shutdown()
+
+    def test_the_reported_configuration_survives_the_round_trip(self):
+        """
+        The report an operator reads out of the clients table describes the
+        client that wrote it.
+
+        Everything here is set away from its default, so a report built from the
+        wrong source, or from defaults, fails rather than happening to match.
+
+        TLS is not among them: the node these tests run against does not serve
+        it, so there is no configuration that would both connect and report a
+        tls group. What that group contains is settled in the unit tests.
+        """
+        cluster = TestCluster(
+            connect_timeout=11,
+            control_connection_timeout=7,
+            max_schema_agreement_wait=13,
+            reconnection_policy=ConstantReconnectionPolicy(2.5, max_attempts=4),
+            sockopts=[(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)],
+            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(
+                consistency_level=ConsistencyLevel.QUORUM,
+                serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+                request_timeout=6,
+                retry_policy=FallthroughRetryPolicy(),
+                speculative_execution_policy=ConstantSpeculativeExecutionPolicy(0.75, 2),
+            )})
+        try:
+            report = _reported_config(cluster)
+
+            assert report['connection']['connect']['timeout-ms'] == 11000
+            assert report['connection']['socket']['tcp-no-delay'] is True
+            assert report['connection']['reconnection']['policy'] == {
+                'type': 'constant', 'delay-ms': 2500, 'max-attempts': 4}
+            # No TLS on this node, so the group describing it is absent.
+            assert 'tls' not in report['connection']
+
+            control_plane = report['control-plane']
+            assert control_plane['queries']['system']['timeout']['client-side-ms'] == 7000
+            assert control_plane['schema']['agreement']['timeout-ms'] == 13000
+
+            query = report['query']
+            assert query['defaults']['consistency'] == 'QUORUM'
+            assert query['defaults']['serial-consistency'] == 'LOCAL_SERIAL'
+            assert query['defaults']['request']['timeout-ms'] == 6000
+            assert query['retry']['policy'] == {'type': 'fallthrough'}
+            assert query['speculative-execution']['policy'] == {
+                'type': 'constant', 'max-executions': 2, 'delay-ms': 750}
+        finally:
+            cluster.shutdown()
+
+    def test_the_server_side_timeout_is_reported_against_scylla(self):
+        """
+        USING TIMEOUT is a ScyllaDB extension, so this key is reported only on a
+        connection to a ScyllaDB node -- which is what these tests run against.
+        The unit tests can only assert it for a flag they pass in themselves;
+        this is the one place the detection itself is exercised.
+        """
+        cluster = TestCluster(metadata_request_timeout=9)
+        try:
+            report = _reported_config(cluster)
+
+            assert report['control-plane']['queries']['system']['timeout']['server-side-ms'] == 9000
+        finally:
+            cluster.shutdown()
+
+    def test_the_local_datacenter_is_reported_as_inferred(self):
+        """
+        The driver is not told a datacenter here, so it infers one, and the
+        report has to say which of the two happened: an operator reading `dc`
+        would take it for a deliberate choice the application made.
+        """
+        cluster = TestCluster()
+        try:
+            node_preference = _reported_config(cluster)['query']['load-balancing'].get(
+                'node-preference')
+
+            assert node_preference is not None
+            assert node_preference['type'] == 'dc-auto'
         finally:
             cluster.shutdown()
 
