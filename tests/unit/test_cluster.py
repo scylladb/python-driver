@@ -319,6 +319,16 @@ class ClusterTest(unittest.TestCase):
         assert factory.call_args.kwargs['session_id'] == cluster.session_id
         assert isinstance(factory.call_args.kwargs['driver_config_reporter'], DriverConfigReporter)
 
+    def test_the_reporter_describes_the_cluster_that_owns_it(self):
+        """
+        The reporter reads its configuration off the cluster when a connection
+        asks for the report, so it has to be pointed at the one that owns it.
+        """
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+
+        assert cluster._driver_config_reporter._cluster() is cluster
+
     def test_driver_config_reporting_can_be_toggled_after_construction(self):
         """
         The flag is a plain published attribute, so it is read when a connection
@@ -375,7 +385,7 @@ class ClusterTest(unittest.TestCase):
             cluster = Cluster(driver_config_reporting_enabled=False)
             self.addCleanup(cluster.shutdown)
             cluster.connection_factory(endpoint, session_id=uuid.uuid4(),
-                                       driver_config_reporter=DriverConfigReporter())
+                                       driver_config_reporter=DriverConfigReporter(cluster))
 
         assert factory.call_args.kwargs['session_id'] == cluster.session_id
         assert factory.call_args.kwargs['driver_config_reporter'] is None

@@ -26,14 +26,13 @@ from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, Protoc
                                   locally_supported_compressions, ConnectionHeartbeat, HeartbeatFuture, _Frame, Timer, TimerManager,
                                   ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator,
                                   DRIVER_NAME, DRIVER_VERSION)
-from cassandra.driver_config import (DriverConfigReporter, DRIVER_CONFIG_OPTION,
-                                     DRIVER_CONFIG_SCHEMA_VERSION, SESSION_ID_OPTION)
+from cassandra.driver_config import DRIVER_CONFIG_OPTION, SESSION_ID_OPTION
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 read_stringmap, SupportedMessage, ProtocolHandler,
                                 ResultMessage, RESULT_KIND_SET_KEYSPACE)
 
-from tests.unit.utils import ThrowingReporter
+from tests.unit.utils import StubReporter, ThrowingReporter
 from tests.util import wait_until, assertRegex
 import pytest
 
@@ -564,7 +563,7 @@ class StartupOptionsTest(unittest.TestCase):
         ABSENT = object()
         cases = [
             ("a pool connection reports no configuration at all",
-             {'driver_config_reporter': DriverConfigReporter()},
+             {'driver_config_reporter': StubReporter()},
              ABSENT),
             ("nor does a control connection with reporting disabled",
              {'is_control_connection': True},
@@ -573,8 +572,8 @@ class StartupOptionsTest(unittest.TestCase):
              {'is_control_connection': True, 'driver_config_reporter': ThrowingReporter()},
              ABSENT),
             ("the driver's own report wins where there is one",
-             {'is_control_connection': True, 'driver_config_reporter': DriverConfigReporter()},
-             '{"version":%d}' % DRIVER_CONFIG_SCHEMA_VERSION),
+             {'is_control_connection': True, 'driver_config_reporter': StubReporter()},
+             StubReporter.REPORT),
         ]
 
         for description, kwargs, expected in cases:
@@ -662,9 +661,9 @@ class StartupOptionsTest(unittest.TestCase):
 
     def test_driver_config_is_reported_on_the_control_connection(self):
         options = self.startup_options(is_control_connection=True,
-                                       driver_config_reporter=DriverConfigReporter())
+                                       driver_config_reporter=StubReporter())
 
-        assert options[DRIVER_CONFIG_OPTION] == '{"version":%d}' % DRIVER_CONFIG_SCHEMA_VERSION
+        assert options[DRIVER_CONFIG_OPTION] == StubReporter.REPORT
 
     def test_driver_config_is_not_reported_on_a_regular_connection(self):
         """
@@ -673,7 +672,7 @@ class StartupOptionsTest(unittest.TestCase):
         session id that ties them to it.
         """
         options = self.startup_options(session_id=self.SESSION_ID,
-                                       driver_config_reporter=DriverConfigReporter())
+                                       driver_config_reporter=StubReporter())
 
         assert SESSION_ID_OPTION in options
         assert DRIVER_CONFIG_OPTION not in options
