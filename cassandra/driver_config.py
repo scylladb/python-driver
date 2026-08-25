@@ -18,6 +18,7 @@ the CQL ``STARTUP`` options. ScyllaDB echoes those options into the
 incident can inspect the settings of a client without access to its host.
 """
 
+import datetime
 import json
 import logging
 import math
@@ -140,6 +141,33 @@ def _milliseconds(seconds):
     everything below half a millisecond still arrives there as zero.
     """
     return int(round(seconds * 1000))
+
+
+def _server_side_timeout_ms(seconds):
+    """
+    The server-side limit the driver will actually impose, in milliseconds, or
+    ``None`` when it will impose none.
+
+    Converted the way :func:`cassandra.util.maybe_add_timeout_to_query` converts
+    it rather than the way every other duration here is converted, because that
+    builder is what the server ends up being told: it divides a timedelta into
+    whole milliseconds, truncating, and appends no ``USING TIMEOUT`` at all when
+    that comes to zero. Rounding up, or promoting a sub-millisecond value to one
+    as the other converters do, would report a limit the server is never given
+    -- 0.0016 seconds is sent as 1ms, and 0.0006 seconds is not sent at all.
+
+    A negative value is left out too. The builder does append it, but the clause
+    is malformed and the server rejects it, and the schema has no way to carry a
+    negative anyway.
+
+    A duration that is not finite is left out as well. The builder cannot carry
+    one either -- it is a timedelta, and timedelta rejects both -- so no clause
+    is appended, which is what an absent server-side-ms says.
+    """
+    if seconds is None or not _finite(seconds):
+        return None
+    ms = int(datetime.timedelta(seconds=seconds) / datetime.timedelta(milliseconds=1))
+    return ms if ms > 0 else None
 
 
 def _optional_ms(seconds):
@@ -632,6 +660,7 @@ class DriverConfigReporter:
         Adds the configuration groups themselves to the report.
         """
         report['connection'] = self._connection_report(cluster)
+        report['control-plane'] = self._control_plane_report(cluster, is_scylla)
 
     def _connection_report(self, cluster):
         """
@@ -715,6 +744,44 @@ class DriverConfigReporter:
         if tls is not None:
             report['tls'] = tls
         return report
+
+    def _control_plane_report(self, cluster, is_scylla):
+        """
+        The ``control-plane`` group: the timeouts on the driver's own queries,
+        the ones it runs to discover the cluster rather than on behalf of the
+        application.
+
+        The two system-query timeouts are different things, which is why the
+        schema has both. The client-side one is how long the driver waits for a
+        reply; the server-side one is a limit the server enforces, which this
+        driver applies by appending ``USING TIMEOUT`` to the query.
+        """
+        timeout = {}
+
+        client_side_ms = _optional_ms(cluster.control_connection_timeout)
+        if client_side_ms is not None:
+            timeout['client-side-ms'] = client_side_ms
+
+        # USING TIMEOUT is a ScyllaDB extension, so against anything else the
+        # driver does not append it and there is no server-side limit to report:
+        # ControlConnection._try_connect drops metadata_request_timeout on a
+        # connection with no sharding info, and this reports what the driver
+        # will do rather than only what it was configured to do. A configured
+        # zero means the same thing, letting the server's own default apply.
+        if is_scylla:
+            server_side_ms = _server_side_timeout_ms(cluster.metadata_request_timeout)
+            if server_side_ms is not None:
+                timeout['server-side-ms'] = server_side_ms
+
+        return {
+            'queries': {'system': {'timeout': timeout}},
+            'schema': {
+                # nonNegativeInteger and required: zero means the driver does
+                # not wait for schema agreement at all, which is a setting
+                # rather than the absence of one.
+                'agreement': {'timeout-ms': _non_negative_ms(cluster.max_schema_agreement_wait)},
+            },
+        }
 
     def _tls_report(self, cluster):
         """

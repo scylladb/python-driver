@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import datetime
 import gc
 import json
 from decimal import Decimal
@@ -32,6 +33,7 @@ from cassandra.driver_config import (DriverConfigReporter, DRIVER_CONFIG_OPTION,
                                      DRIVER_CONFIG_SCHEMA_VERSION, MAX_DRIVER_CONFIG_LENGTH,
                                      _non_negative_ms, _optional_ms, _reconnection_policy_report,
                                      _required_ms, _socket_report)
+from cassandra.util import maybe_add_timeout_to_query
 from cassandra.policies import (ConstantReconnectionPolicy, ExponentialReconnectionPolicy,
                                 ReconnectionPolicy)
 from tests.unit.utils import _ClusterlessReporter, ThrowingReporter
@@ -1098,3 +1100,148 @@ class TlsReportTest(unittest.TestCase):
                                           'ca_certs': '/secret/ca.pem'})
 
         assert report == {'hostname-verification': True}
+
+
+def control_plane_report(test, is_scylla=True, **cluster_kwargs):
+    built = report_cluster(test, **cluster_kwargs)
+    report = built._driver_config_reporter._build_report(built, is_scylla=is_scylla)
+    return json.loads(report)['control-plane']
+
+
+class ControlPlaneGroupTest(unittest.TestCase):
+    def test_defaults(self):
+        assert control_plane_report(self) == {
+            'queries': {'system': {'timeout': {'client-side-ms': 2000,
+                                               'server-side-ms': 2000}}},
+            'schema': {'agreement': {'timeout-ms': 10000}},
+        }
+
+    def test_client_side_timeout(self):
+        report = control_plane_report(self, control_connection_timeout=4.5)
+
+        assert report['queries']['system']['timeout']['client-side-ms'] == 4500
+
+    def test_client_side_timeout_is_left_out_when_disabled(self):
+        report = control_plane_report(self, control_connection_timeout=0)
+
+        assert 'client-side-ms' not in report['queries']['system']['timeout']
+
+    def test_server_side_timeout_defaults_to_the_client_side_one(self):
+        """
+        Which is what the Cluster does with it when it is not given one.
+        """
+        report = control_plane_report(self, control_connection_timeout=3)
+
+        assert report['queries']['system']['timeout'] == {'client-side-ms': 3000,
+                                                          'server-side-ms': 3000}
+
+    def test_server_side_timeout(self):
+        report = control_plane_report(self, metadata_request_timeout=8)
+
+        assert report['queries']['system']['timeout']['server-side-ms'] == 8000
+
+    def test_the_server_side_timeout_is_the_clause_the_driver_sends(self):
+        """
+        This one value does not go through the usual conversion. What reaches
+        the server is whatever maybe_add_timeout_to_query builds, and that
+        divides a timedelta into whole milliseconds, truncating, and appends no
+        clause at all when it comes to zero. Rounding up or promoting a
+        sub-millisecond value -- as every other duration here is -- would report
+        a limit the server is never given.
+
+        Checked against the builder rather than against numbers written out
+        here, so the two cannot drift apart.
+        """
+        for seconds in (0.0004, 0.0006, 0.001, 0.0016, 0.002, 0.0025, 1.005, 2, 0):
+            statement = maybe_add_timeout_to_query(
+                'SELECT 1', datetime.timedelta(seconds=seconds))
+            sent = (int(statement.split('USING TIMEOUT ')[1][:-2])
+                    if 'USING TIMEOUT' in statement else None)
+
+            timeout = control_plane_report(
+                self, metadata_request_timeout=seconds)['queries']['system']['timeout']
+
+            assert timeout.get('server-side-ms') == sent, seconds
+
+    def test_a_negative_server_side_timeout_is_left_out(self):
+        """
+        The builder does append it, but the clause is malformed and the server
+        rejects it, and server-side-ms is a positiveInteger with nowhere to put
+        a negative.
+        """
+        timeout = control_plane_report(
+            self, metadata_request_timeout=-0.005)['queries']['system']['timeout']
+
+        assert 'server-side-ms' not in timeout
+
+    def test_no_server_side_timeout_against_a_non_scylla_node(self):
+        """
+        USING TIMEOUT is a ScyllaDB extension, so elsewhere the driver does not
+        append it and there is no server-side limit to report. The report
+        describes what the driver will do, not only what it was configured to.
+        """
+        report = control_plane_report(self, is_scylla=False, metadata_request_timeout=8)
+
+        assert 'server-side-ms' not in report['queries']['system']['timeout']
+        # The client-side timeout is the driver's own and applies regardless.
+        assert 'client-side-ms' in report['queries']['system']['timeout']
+
+    def test_no_server_side_timeout_when_disabled(self):
+        """
+        Zero means the driver appends no USING TIMEOUT and the server's own
+        default applies, so there is no limit of the driver's to report.
+        """
+        report = control_plane_report(self, metadata_request_timeout=0)
+
+        assert 'server-side-ms' not in report['queries']['system']['timeout']
+
+    def test_both_timeouts_can_be_absent(self):
+        """
+        The group stays, since the schema requires it; it is the timeouts inside
+        that are optional.
+        """
+        report = control_plane_report(self, control_connection_timeout=0,
+                                      metadata_request_timeout=0)
+
+        assert report['queries'] == {'system': {'timeout': {}}}
+
+    def test_schema_agreement_timeout(self):
+        report = control_plane_report(self, max_schema_agreement_wait=25)
+
+        assert report['schema']['agreement']['timeout-ms'] == 25000
+
+    def test_a_sub_millisecond_wait_is_still_a_wait(self):
+        """
+        _wait_for_schema_agreement bypasses agreement only for a timeout of zero
+        or less, so a sub-millisecond wait is one the driver really takes.
+        Truncating it to zero would report the bypass instead.
+        """
+        report = control_plane_report(self, max_schema_agreement_wait=0.0004)
+
+        assert report['schema']['agreement']['timeout-ms'] == 1
+
+    def test_not_waiting_for_schema_agreement_is_a_value(self):
+        """
+        nonNegativeInteger: zero says the driver does not wait, which is a
+        setting rather than the absence of one, so the key stays.
+        """
+        report = control_plane_report(self, max_schema_agreement_wait=0)
+
+        assert report['schema']['agreement']['timeout-ms'] == 0
+
+    def test_a_wait_the_schema_cannot_express_drops_the_report(self):
+        """
+        The one that stays a failure. schema.agreement.timeout-ms is required,
+        so a wait of no describable length has no conformant document to appear
+        in and the report is dropped -- deliberately, and with a message that
+        says which kind of value did it.
+        """
+        cluster = Cluster(max_schema_agreement_wait=float('inf'))
+        self.addCleanup(cluster.shutdown)
+
+        with pytest.raises(ValueError, match='cannot be reported'):
+            cluster._driver_config_reporter._build_report(cluster, is_scylla=True)
+
+        options = {}
+        cluster._driver_config_reporter.add_startup_options(options, is_scylla=True)
+        assert DRIVER_CONFIG_OPTION not in options
