@@ -319,6 +319,36 @@ class ClusterTest(unittest.TestCase):
         assert factory.call_args.kwargs['session_id'] == cluster.session_id
         assert isinstance(factory.call_args.kwargs['driver_config_reporter'], DriverConfigReporter)
 
+    def test_sockopts_are_materialized(self):
+        """
+        They are applied to every socket the cluster opens and are read again to
+        build the configuration report, so a one-shot iterable would leave
+        whichever consumer ran second with nothing -- the report claiming an
+        option is on while guaranteeing no connection ever sets it.
+        """
+        cluster = Cluster(sockopts=((6, 1, 1) for _ in range(1)))
+        self.addCleanup(cluster.shutdown)
+
+        # Twice: an iterable would be empty the second time round.
+        assert cluster.sockopts == [(6, 1, 1)]
+        assert cluster.sockopts == [(6, 1, 1)]
+
+        unset = Cluster(sockopts=None)
+        self.addCleanup(unset.shutdown)
+        assert unset.sockopts is None
+
+    def test_something_that_is_not_a_list_of_options_still_fails_at_connect(self):
+        """
+        sockopts is documented and public, and this constructor used to take
+        anything: what is wrong with it showed up on the socket, at connect time.
+        Materializing must not move that failure forward into a constructor that
+        used to build.
+        """
+        cluster = Cluster(sockopts=42)
+        self.addCleanup(cluster.shutdown)
+
+        assert cluster.sockopts == 42
+
     def test_the_reporter_describes_the_cluster_that_owns_it(self):
         """
         The reporter reads its configuration off the cluster when a connection

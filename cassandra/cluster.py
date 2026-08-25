@@ -1468,7 +1468,17 @@ class Cluster(object):
 
         self.ssl_options = ssl_options
         self.ssl_context = ssl_context
-        self.sockopts = sockopts
+        # Materialized once: these are applied to every socket the cluster opens
+        # and are read again to build the configuration report, so a one-shot
+        # iterable would leave whichever consumer ran second with nothing at all.
+        # Something that is not a sequence of options at all is kept as it was
+        # given, so that it still fails where it always did -- on the socket, at
+        # connect time -- rather than turning a constructor that used to build
+        # into one that raises.
+        try:
+            self.sockopts = list(sockopts) if sockopts is not None else None
+        except TypeError:
+            self.sockopts = sockopts
         self.cql_version = cql_version
         self.max_schema_agreement_wait = max_schema_agreement_wait
         self.control_connection_timeout = control_connection_timeout
