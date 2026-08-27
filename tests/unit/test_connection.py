@@ -414,6 +414,83 @@ class ConnectionTest(unittest.TestCase):
         assert "Bad file descriptor" in error_message
 
 
+class DerivedConnectionLimitsTest(unittest.TestCase):
+    """
+    max_request_id and orphaned_threshold are derived from max_in_flight, which
+    is tuned at runtime -- assigned on the class, or patched in a test -- so a
+    value derived once would not follow it.
+    """
+
+    def test_the_derivations(self):
+        assert Connection.max_request_id_for(32768) == 32767
+        assert Connection.max_request_id_for(256) == 255
+        # Capped at the stream id range the protocol can address.
+        assert Connection.max_request_id_for(2 ** 20) == (2 ** 15) - 1
+        assert Connection.orphaned_threshold_for(32768) == 24576
+        assert Connection.orphaned_threshold_for(256) == 192
+        # Capped the same way, and for the same reason.
+        assert Connection.orphaned_threshold_for(2 ** 20) == 24576
+
+    def test_the_threshold_stays_within_the_ids_a_connection_holds(self):
+        """
+        A connection hands out request ids zero through max_request_id, so it
+        can hold no more orphans than one more than that. A threshold above the
+        pool is one `len(orphaned_request_ids) >= orphaned_threshold` never
+        reaches, which leaves orphan-based connection replacement dead -- what a
+        max_in_flight raised past the stream id range used to do.
+        """
+        for max_in_flight in (2, 256, 32768, 2 ** 16, 2 ** 20):
+            pool = Connection.max_request_id_for(max_in_flight) + 1
+
+            assert Connection.orphaned_threshold_for(max_in_flight) <= pool, max_in_flight
+
+    def test_a_connection_derives_both_from_the_limit_in_force(self):
+        """
+        The regression this guards: __init__ derives them, so a limit tuned
+        before the connection is built is the one it carries. Deriving them once
+        on the class instead left every connection at the original bound.
+        """
+        with patch('cassandra.connection.Connection.max_in_flight', 50):
+            connection = Connection(DefaultEndPoint('1.2.3.4'))
+
+        assert connection.max_request_id == 49
+        assert connection.orphaned_threshold == 37
+
+    def test_the_limits_follow_a_runtime_assignment(self):
+        """
+        Connection.max_in_flight = N on the class, which the integration tests
+        covering the in-flight bound do. A limit derived once would leave the
+        pool's `in_flight < max_request_id` gate at the old value and never
+        trip.
+        """
+        original = Connection.max_in_flight
+        try:
+            Connection.max_in_flight = 50
+
+            assert Connection.max_request_id_for(Connection.max_in_flight) == 49
+            assert Connection.orphaned_threshold_for(Connection.max_in_flight) == 37
+        finally:
+            Connection.max_in_flight = original
+
+    def test_the_limits_follow_a_patched_limit(self):
+        """
+        The other shape the integration tests use.
+        """
+        with patch('cassandra.connection.Connection.max_in_flight', 2):
+            assert Connection.max_request_id_for(Connection.max_in_flight) == 1
+            assert Connection.orphaned_threshold_for(Connection.max_in_flight) == 1
+
+    def test_a_subclass_that_lowers_the_limit_derives_its_own(self):
+        class Small(Connection):
+            max_in_flight = 256
+
+        assert Small.max_request_id_for(Small.max_in_flight) == 255
+        assert Small.orphaned_threshold_for(Small.max_in_flight) == 192
+        # The point of deriving: a connection can hold no more orphans than it
+        # has request ids, so the base class's 24576 could never be reached.
+        assert Small.orphaned_threshold_for(Small.max_in_flight) < Small.max_in_flight
+
+
 class StartupOptionsTest(unittest.TestCase):
     """
     Covers the options the driver puts in the STARTUP frame, by driving a

@@ -26,6 +26,20 @@ Others
   and the two mean different things: a datacenter the application chose against one the
   driver guessed. Code that assigned it should pass ``local_dc`` to the constructor
   instead.
+* ``Connection.max_request_id`` and ``Connection.orphaned_threshold`` now follow the
+  ``max_in_flight`` actually in force. Both were computed in the class body, which runs
+  once, so a subclass that set its own ``max_in_flight`` inherited values derived from the
+  base class -- leaving, for example, a ``max_in_flight`` of 256 with a threshold of
+  24576, which a connection holding at most 256 orphaned stream ids can never reach, so
+  orphan-based connection replacement never happened for such a subclass. Each connection
+  now derives both in ``__init__`` from the limit in force when it is built, which
+  overrides a value a subclass sets in its class body. ``orphaned_threshold`` is also
+  capped at three quarters of the CQL stream id range, as ``max_request_id`` already was:
+  a ``max_in_flight`` raised past that range left the threshold above the number of stream
+  ids a connection can hold at all, which is the same bug in the other direction. The two
+  new static methods ``Connection.max_request_id_for()`` and
+  ``Connection.orphaned_threshold_for()`` expose the derivation, so that both limits can
+  be read for a given ``max_in_flight`` before any connection exists.
 * The ``STARTUP`` options that describe the driver itself are no longer the
   application's to set. An ``ApplicationInfoBase.add_startup_options`` that sets
   ``DRIVER_NAME``, ``DRIVER_VERSION``, ``SESSION_ID`` or ``DRIVER_CONFIG`` now has that
