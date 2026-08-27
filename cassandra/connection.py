@@ -844,10 +844,50 @@ class Connection(object):
     # and the connection will be replaced
     orphaned_threshold_reached = False
 
+    # The CQL stream id space, which is all the protocol can address however high
+    # max_in_flight is set. Both limits below are capped to it.
+    _MAX_STREAM_IDS = 2 ** 15
+
     # If the number of orphaned streams reaches this threshold, this connection
     # will become marked and will be replaced with a new connection by the
-    # owning pool (currently, only HostConnection supports this)
-    orphaned_threshold = 3  * max_in_flight // 4
+    # owning pool (currently, only HostConnection supports this). The default
+    # for this class's max_in_flight; a connection derives its own in __init__.
+    orphaned_threshold = 3 * min(max_in_flight, _MAX_STREAM_IDS) // 4
+
+    @staticmethod
+    def max_request_id_for(max_in_flight):
+        """
+        The highest request id a connection with this limit will hand out.
+
+        Request ids run from zero to this inclusive, and borrow_connection
+        admits a request only while in_flight is below it. Capped at the CQL
+        stream id range, which is all the protocol can address however high
+        max_in_flight is set.
+        """
+        return min(max_in_flight, Connection._MAX_STREAM_IDS) - 1
+
+    @staticmethod
+    def orphaned_threshold_for(max_in_flight):
+        """
+        The orphaned stream count at which a connection with this limit is
+        marked for replacement.
+
+        Three quarters of the stream ids a connection can actually hold, which
+        is max_in_flight capped the way :meth:`max_request_id_for` caps it.
+        Taken off that capped pool rather than off max_in_flight itself: a
+        connection holds at most max_request_id + 1 ids, so a threshold above
+        that is one `len(orphaned_request_ids) >= orphaned_threshold` never
+        reaches, leaving orphan-based replacement dead for a max_in_flight
+        raised past the stream id range.
+        """
+        return 3 * min(max_in_flight, Connection._MAX_STREAM_IDS) // 4
+
+    # Both limits are derived, and both are asked for rather than stored on the
+    # class, because max_in_flight is tuned at runtime -- assigned on the class,
+    # or patched in a test -- and a value derived once does not follow it. A
+    # connection derives both in __init__ from the limit in force when it is
+    # built, and the configuration report, which has to describe them before any
+    # connection exists, asks with the class's current limit.
 
     is_defunct = False
     is_closed = False
@@ -944,7 +984,9 @@ class Connection(object):
         if not self.ssl_context and self.ssl_options:
             self.ssl_context = self._build_ssl_context_from_options()
 
-        self.max_request_id = min(self.max_in_flight - 1, (2 ** 15) - 1)
+        self.max_request_id = self.max_request_id_for(self.max_in_flight)
+        self.orphaned_threshold = self.orphaned_threshold_for(self.max_in_flight)
+
         # Don't fill the deque with 2**15 items right away. Start with some and add
         # more if needed.
         initial_size = min(300, self.max_in_flight)
