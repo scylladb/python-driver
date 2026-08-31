@@ -710,6 +710,13 @@ class HostConnection(object):
             endpoint = copy.copy(self.host.endpoint)
             endpoint._port = self.host.sharding_info.shard_aware_port
 
+        if endpoint is not None:
+            # Another listener of this same node, with the same TLS
+            # credentials, so it offers and refreshes the session cached for
+            # the node rather than one of its own.
+            endpoint._tls_session_cache_key_override = \
+                self.host.endpoint.tls_session_cache_key
+
         return endpoint
 
     def _open_connection_to_missing_shard(self, shard_id):

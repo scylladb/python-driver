@@ -139,6 +139,27 @@ class TestShardAware(unittest.TestCase):
         assert shard_info.shard_id_from_token(Murmur3Token.from_key(b"e").value) == 4
         assert shard_info.shard_id_from_token(Murmur3Token.from_key(b"100000").value) == 2
 
+    def test_shard_aware_endpoint_carries_the_nodes_tls_identity(self):
+        """
+        The alternate listener must resume from the session cached for the node,
+        not key on its own port.
+        """
+        host = MagicMock()
+        host.endpoint = DefaultEndPoint("1.2.3.4")
+        session = MockSession(ssl_context=object())
+        pool = HostConnection(host=host, host_distance=HostDistance.REMOTE,
+                              session=session)
+        try:
+            for f in session.futures:
+                f.result()
+            shard_aware_endpoint = pool._get_shard_aware_endpoint()
+            assert shard_aware_endpoint.port == 19045
+            assert (shard_aware_endpoint.tls_session_cache_key ==
+                    host.endpoint.tls_session_cache_key)
+        finally:
+            pool.shutdown()
+            session.cluster.executor.shutdown(wait=True)
+
     def test_advanced_shard_aware_port(self):
         """
         Test that on given a `shard_aware_port` on the OPTIONS message (ShardInfo class)

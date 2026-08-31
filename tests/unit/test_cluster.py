@@ -16,6 +16,7 @@ import unittest
 from concurrent.futures import Future
 import logging
 import socket
+import ssl
 from types import SimpleNamespace
 
 from unittest.mock import patch, Mock
@@ -25,7 +26,8 @@ from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, R
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
 from cassandra.cluster import _Scheduler, Session, Cluster, ResultSet, SchemaAgreementScope, ControlConnectionQueryFallback, default_lbp_factory, \
     ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
-from cassandra.connection import ConnectionBusy, ConnectionException
+from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
+                                  DefaultEndPoint, SSLSessionCache)
 from cassandra.driver_config import DriverConfigReporter
 from cassandra.pool import Host
 from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
@@ -1127,3 +1129,217 @@ class ExecutionProfileTest(unittest.TestCase):
             )
 
         patched_logger.warning.assert_not_called()
+
+
+class _ResumableConnection(Connection):
+    supports_tls_session_resumption = True
+
+
+class _NonResumableConnection(Connection):
+    supports_tls_session_resumption = False
+
+
+class ClusterSSLSessionCacheTest(unittest.TestCase):
+
+    def make_cluster(self, connection_class=_ResumableConnection, **kwargs):
+        cluster = Cluster(connection_class=connection_class, **kwargs)
+        # Every Cluster starts a _Scheduler thread in __init__, so one that is
+        # constructed and dropped leaks it for the rest of the session.
+        self.addCleanup(cluster.shutdown)
+        return cluster
+
+    def test_cache_is_created_for_an_ssl_context(self):
+        cluster = self.make_cluster(ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+
+        assert isinstance(cluster.ssl_session_cache, SSLSessionCache)
+
+    def test_no_cache_without_tls(self):
+        assert self.make_cluster().ssl_session_cache is None
+
+    def test_no_cache_for_ssl_options_only(self):
+        # Each connection builds its own SSLContext from ssl_options, and a
+        # session cannot be replayed onto a different context.
+        with patch('cassandra.cluster.warn'):
+            cluster = self.make_cluster(ssl_options={'ca_certs': '/dev/null'})
+
+        assert cluster.ssl_session_cache is None
+
+    def test_no_cache_for_a_reactor_that_cannot_resume(self):
+        cluster = self.make_cluster(connection_class=_NonResumableConnection,
+                                    ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+
+        assert cluster.ssl_session_cache is None
+
+    def test_no_cache_for_a_connection_class_that_reports_nothing(self):
+        # connection_class is not required to derive from Connection (see
+        # test_set_connection_class), so a class without the capability
+        # attribute must be treated as unable to resume, not blow up.
+        cluster = self.make_cluster(connection_class='not a connection class',
+                                    ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+
+        assert cluster.ssl_session_cache is None
+
+    def test_a_supplied_cache_is_used(self):
+        cache = SSLSessionCache(max_size=7)
+        cluster = self.make_cluster(ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
+                                    ssl_session_cache=cache)
+
+        assert cluster.ssl_session_cache is cache
+
+    def test_warns_when_a_supplied_cache_cannot_be_used(self):
+        # Asking for resumption and silently getting none is worse than not
+        # having it: the cache stays reachable and empty either way.
+        with patch('cassandra.cluster.log') as logger:
+            with patch('cassandra.cluster.warn'):
+                self.make_cluster(ssl_options={'ca_certs': '/dev/null'},
+                                  ssl_session_cache=SSLSessionCache())
+
+        logger.warning.assert_called_once()
+        assert 'ssl_session_cache' in logger.warning.call_args[0][0]
+        assert 'ssl_context' in logger.warning.call_args[0][1]
+
+    def test_warns_when_the_reactor_cannot_resume(self):
+        with patch('cassandra.cluster.log') as logger:
+            self.make_cluster(connection_class=_NonResumableConnection,
+                              ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
+                              ssl_session_cache=SSLSessionCache())
+
+        logger.warning.assert_called_once()
+        assert '_NonResumableConnection' in logger.warning.call_args[0][1]
+
+    def test_an_unusable_cache_is_not_kept_or_passed_on(self):
+        # Warning and then handing the cache to every connection anyway is the
+        # worst of both: a connection class that does not take the keyword
+        # cannot even be constructed.
+        with patch('cassandra.cluster.log'):
+            cluster = self.make_cluster(
+                connection_class=_NonResumableConnection,
+                ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
+                ssl_session_cache=SSLSessionCache())
+
+        assert cluster.ssl_session_cache is None
+        kwargs = cluster._make_connection_kwargs(DefaultEndPoint('127.0.0.1'), {})
+        assert 'ssl_session_cache' not in kwargs
+
+    def test_does_not_warn_where_resumption_works_or_was_declined(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        with patch('cassandra.cluster.log') as logger:
+            self.make_cluster(ssl_context=context,
+                              ssl_session_cache=SSLSessionCache())
+            self.make_cluster(ssl_context=context, ssl_session_cache=None)
+            self.make_cluster()
+
+        logger.warning.assert_not_called()
+
+    def test_resumption_can_be_turned_off(self):
+        cluster = self.make_cluster(ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
+                                    ssl_session_cache=None)
+
+        assert cluster.ssl_session_cache is None
+
+    def test_shutdown_releases_only_this_clusters_sessions(self):
+        # A cached session holds its SSLContext alive, so a cluster has to take
+        # its own entries with it -- and leave a shared cache's others behind.
+        cache = SSLSessionCache()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        other_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        cluster = self.make_cluster(ssl_context=context, ssl_session_cache=cache)
+        # Taken when connections are about to use the cache; connect() does
+        # this for a cluster that is really used.
+        cluster._acquire_tls_session_context()
+        cache.set((context, ('10.0.0.1', 9042), None), object())
+        theirs = object()
+        cache.set((other_context, ('10.0.0.1', 9042), None), theirs)
+
+        cluster.shutdown()
+
+        assert len(cache) == 1
+        assert cache.get((other_context, ('10.0.0.1', 9042), None)) is theirs
+
+    def test_a_cache_assigned_after_construction_is_released(self):
+        # The documented way to get a cache when TLS is configured late.  The
+        # registration is taken when connections are about to use it, not in
+        # __init__, or a cache assigned afterwards would never be released.
+        cache = SSLSessionCache()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        cluster = self.make_cluster(ssl_context=context)
+        cluster.ssl_session_cache = cache
+        cluster._acquire_tls_session_context()
+        cache.set((context, ('10.0.0.1', 9042), None), object())
+
+        cluster.shutdown()
+
+        assert len(cache) == 0
+
+    def test_a_cluster_that_never_connects_pins_nothing(self):
+        # Registering in __init__ would leave a cluster that is constructed and
+        # dropped holding a share of the context for good, and a shared cache
+        # could then never drop it.
+        cache = SSLSessionCache()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        self.make_cluster(ssl_context=context, ssl_session_cache=cache)
+        user = self.make_cluster(ssl_context=context, ssl_session_cache=cache)
+        user._acquire_tls_session_context()
+        cache.set((context, ('10.0.0.1', 9042), None), object())
+
+        user.shutdown()
+
+        assert len(cache) == 0
+
+    def test_release_uses_the_pair_that_was_acquired(self):
+        # Whatever the attributes say by shutdown, what was taken is what is
+        # given back.
+        first, second = SSLSessionCache(), SSLSessionCache()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        cluster = self.make_cluster(ssl_context=context, ssl_session_cache=first)
+        cluster._acquire_tls_session_context()
+        first.set((context, ('10.0.0.1', 9042), None), object())
+        cluster.ssl_session_cache = second
+
+        cluster.shutdown()
+
+        assert len(first) == 0
+
+    def test_shutdown_survives_a_cache_that_raises(self):
+        # Giving the registration back is the last thing shutdown does, and the
+        # cache is the caller's object: a problem in it must not leave the
+        # cluster half torn down.
+        class Broken(SSLSessionCache):
+            def release_context(self, ssl_context):
+                raise RuntimeError('boom')
+
+        cluster = self.make_cluster(ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
+                                    ssl_session_cache=Broken())
+        cluster._acquire_tls_session_context()
+
+        with patch('cassandra.cluster._discard_cluster_shutdown') as discard:
+            with patch('cassandra.cluster.log') as logger:
+                cluster.shutdown()
+
+        discard.assert_called_once_with(cluster)
+        logger.warning.assert_called_once()
+
+    def test_cache_is_passed_to_connections(self):
+        cluster = self.make_cluster(ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+
+        kwargs = cluster._make_connection_kwargs(DefaultEndPoint('127.0.0.1'), {})
+
+        assert kwargs['ssl_session_cache'] is cluster.ssl_session_cache
+
+    def test_no_cache_keyword_when_resumption_is_inactive(self):
+        # A connection class that does not accept the keyword should not be
+        # handed one for a cluster that will never cache a session.
+        cluster = self.make_cluster()
+
+        kwargs = cluster._make_connection_kwargs(DefaultEndPoint('127.0.0.1'), {})
+
+        assert 'ssl_session_cache' not in kwargs
+
+    def test_an_explicitly_passed_cache_still_reaches_the_connection(self):
+        cache = SSLSessionCache()
+        cluster = self.make_cluster()
+
+        kwargs = cluster._make_connection_kwargs(DefaultEndPoint('127.0.0.1'),
+                                                 {'ssl_session_cache': cache})
+
+        assert kwargs['ssl_session_cache'] is cache

@@ -21,7 +21,7 @@ import logging
 import socket
 import struct
 import sys
-from threading import Thread, Event, RLock, Condition
+from threading import Thread, Event, Lock, RLock, Condition
 import time
 import ssl
 import uuid
@@ -173,6 +173,28 @@ class EndPoint(object):
         """
         return socket.AF_UNSPEC
 
+    _tls_session_cache_key_override = None
+
+    @property
+    def tls_session_cache_key(self):
+        """
+        A hashable value identifying the TLS peer this endpoint connects to,
+        used to look up cached TLS sessions (see
+        :class:`~.SSLSessionCache`).  Two endpoints may share a key only if a
+        TLS session established with one is valid for the other.
+
+        An endpoint built to reach a node that another one already describes --
+        an alternate listener of the same server -- carries that node's key
+        here, so both share one cached session.  Subclasses give their own
+        identity in :meth:`_default_tls_session_cache_key`.
+        """
+        if self._tls_session_cache_key_override is not None:
+            return self._tls_session_cache_key_override
+        return self._default_tls_session_cache_key()
+
+    def _default_tls_session_cache_key(self):
+        return (self.address, self.port)
+
     def resolve(self):
         """
         Resolve the endpoint to an address/port. This is called
@@ -286,6 +308,11 @@ class SniEndPoint(EndPoint):
     @property
     def ssl_options(self):
         return self._ssl_options
+
+    def _default_tls_session_cache_key(self):
+        # Several SNI endpoints share a proxy address and port, but each one
+        # presents a different server_name and therefore a different TLS peer.
+        return (self.address, self.port, self._server_name)
 
     def resolve(self):
         try:
@@ -464,6 +491,11 @@ class ClientRoutesEndPoint(EndPoint):
     @property
     def host_id(self) -> uuid.UUID:
         return self._host_id
+
+    def _default_tls_session_cache_key(self):
+        # The proxy address this endpoint resolves to may change between
+        # connections; the TLS peer is identified by the node behind it.
+        return (self._host_id, self._original_address, self._original_port)
 
     def resolve(self) -> Tuple[str, int]:
         """
@@ -793,6 +825,179 @@ class ShardAwarePortGenerator:
 DefaultShardAwarePortGenerator = ShardAwarePortGenerator(DEFAULT_LOCAL_PORT_LOW, DEFAULT_LOCAL_PORT_HIGH)
 
 
+class SSLSessionCache(object):
+    """
+    A thread-safe, bounded cache of TLS sessions, keyed by TLS peer identity.
+
+    TLS clients can skip the expensive part of a handshake by replaying a
+    session established earlier with the same peer (RFC 5077 session tickets
+    for TLS 1.2, RFC 8446 pre-shared keys for TLS 1.3).  OpenSSL never does
+    this on its own -- the client has to hold on to the session and offer it
+    on the next connection -- so the driver keeps one of these caches per
+    :class:`~.Cluster` and reuses sessions across every connection it opens,
+    most importantly the burst of per-shard connections opened to a node at
+    once.
+
+    A cached session is not consumed by being used: the same session can be
+    replayed by any number of concurrent connections, and each successful
+    handshake stores a fresh session back, so the entry keeps rolling
+    forward.  An entry whose lifetime has run out is never handed out again, and
+    is dropped when it is looked up or when room is needed; entries otherwise
+    go only by being replaced or, once the cache is full, by having been used
+    least recently.  A session the server declines for any other reason simply
+    results in a full handshake, which is what would have happened anyway.
+
+    Instances may be shared between clusters, and are safe to use from
+    multiple threads.
+    """
+
+    def __init__(self, max_size=1024):
+        """
+        :param max_size: maximum number of peers to keep sessions for.  When
+            exceeded, the least recently used entry is evicted.
+        """
+        # Anything but a positive integer is rejected outright rather than
+        # compared against: a float such as nan or inf would pass a `< 1` check
+        # and then leave the cache growing without bound, while True is an int
+        # that passes it and would quietly cap the cache at one entry.
+        if (not isinstance(max_size, int) or isinstance(max_size, bool)
+                or max_size < 1):
+            raise ValueError(
+                "max_size must be a positive integer, got %r" % (max_size,))
+        self._max_size = max_size
+        self._sessions = OrderedDict()
+        # SSLContext -> how many clusters are still using it.  See
+        # acquire_context.
+        self._context_owners = {}
+        self._lock = Lock()
+
+    @property
+    def max_size(self):
+        """The maximum number of peers this cache keeps sessions for."""
+        return self._max_size
+
+    def get(self, key):
+        """
+        Return the cached session for *key*, or :const:`None` if there is none
+        or its lifetime has run out.  A session that is still live stays in the
+        cache; an expired one is dropped.
+        """
+        with self._lock:
+            entry = self._sessions.get(key)
+            if entry is None:
+                return None
+            session, expires_at = entry
+            if expires_at is not None and time.monotonic() >= expires_at:
+                del self._sessions[key]
+                return None
+            self._sessions.move_to_end(key)
+            return session
+
+    def set(self, key, session, lifetime=None):
+        """
+        Store *session* as the session to offer for *key*, replacing any
+        previous one.  A :const:`None` session is ignored.
+
+        :param lifetime: how much longer, in seconds, the session may be
+            offered.  Once it has passed, the entry is dropped rather than
+            returned.  :const:`None` means no limit, which callers should
+            reserve for sessions that carry no lifetime of their own.
+        """
+        if session is None:
+            return
+        expires_at = None if lifetime is None else time.monotonic() + lifetime
+        with self._lock:
+            self._sessions[key] = (session, expires_at)
+            self._sessions.move_to_end(key)
+            if len(self._sessions) > self._max_size:
+                # Whose lifetime has run out and which was used least recently
+                # are independent once peers announce different lifetimes, so
+                # evicting purely by recency can drop a live entry and keep a
+                # dead one.  Take the dead ones first.
+                self._drop_expired_unlocked()
+            while len(self._sessions) > self._max_size:
+                self._sessions.popitem(last=False)
+
+    def _drop_expired_unlocked(self):
+        now = time.monotonic()
+        for key in [key for key, (_, expires_at) in self._sessions.items()
+                    if expires_at is not None and now >= expires_at]:
+            del self._sessions[key]
+
+    def discard(self, key, session=None):
+        """
+        Drop the session cached for *key*, if any.
+
+        Give *session* to drop it only while that is still the cached one.  A
+        caller acting on a session it read earlier needs this: by the time it
+        decides to drop it, another connection may have stored a fresh session
+        under the same key, and that one is not the caller's to remove.
+        """
+        with self._lock:
+            entry = self._sessions.get(key)
+            if entry is None:
+                return
+            if session is not None and entry[0] is not session:
+                return
+            del self._sessions[key]
+
+    def acquire_context(self, ssl_context):
+        """
+        Register a user of *ssl_context*, whose sessions are to be kept until
+        every user has released it again.
+
+        A cached session holds a strong reference to the ``SSLContext`` it was
+        established with, so an entry keeps that context -- and the certificate
+        chain, trust store and OpenSSL state reachable from it -- alive, which
+        is why a cache outliving its clusters cannot simply keep everything.
+        But sessions can only be replayed onto the context they came from, so
+        clusters sharing this cache to share sessions are also sharing one
+        context: dropping a context's sessions as soon as any one of them shuts
+        down would take sessions the others are still using.  Counting the
+        users is what tells those two cases apart.
+        """
+        with self._lock:
+            self._context_owners[ssl_context] = \
+                self._context_owners.get(ssl_context, 0) + 1
+
+    def release_context(self, ssl_context):
+        """
+        Give up one registration made by :meth:`acquire_context`, dropping
+        every session established with *ssl_context* once the last one goes.
+
+        Does nothing for a context that was never registered.  Entries keyed
+        the way :meth:`.Connection._tls_session_cache_key` builds them -- a
+        tuple naming its context first -- are the only ones that can belong to
+        a context, so anything else a caller has put in the cache is left
+        alone.
+        """
+        with self._lock:
+            owners = self._context_owners.get(ssl_context)
+            if owners is None:
+                return
+            if owners > 1:
+                self._context_owners[ssl_context] = owners - 1
+                return
+
+            del self._context_owners[ssl_context]
+            for key in [k for k in self._sessions
+                        if isinstance(k, tuple) and k and k[0] is ssl_context]:
+                del self._sessions[key]
+
+    def clear(self):
+        """Drop all cached sessions."""
+        with self._lock:
+            self._sessions.clear()
+
+    def __len__(self):
+        with self._lock:
+            return len(self._sessions)
+
+    def __repr__(self):
+        return "<%s max_size=%d size=%d>" % (
+            self.__class__.__name__, self._max_size, len(self))
+
+
 class Connection(object):
 
     CALLBACK_ERR_THREAD_THRESHOLD = 100
@@ -814,6 +1019,22 @@ class Connection(object):
     ssl_options = None
     ssl_context = None
     last_error = None
+
+    # Whether this connection implementation can restore a cached TLS session
+    # before the handshake.  True here because the accessors below speak the
+    # stdlib ssl API, which is what the asyncore and libev reactors use.  A
+    # reactor that establishes TLS some other way sets this to False until it
+    # overrides those accessors -- asyncio hands the handshake to
+    # loop.create_connection(), which offers no point to restore a session at
+    # all.
+    supports_tls_session_resumption = True
+
+    _ssl_session_cache = None
+    _tls_session_offered = None
+
+    # RFC 8446 section 4.6.1: "Clients MUST NOT cache tickets for longer than
+    # 7 days, regardless of the ticket_lifetime".
+    _MAX_TLS_SESSION_LIFETIME = 7 * 24 * 60 * 60
 
     # The current number of operations that are in flight. More precisely,
     # the number of request IDs that are currently in use.
@@ -901,13 +1122,22 @@ class Connection(object):
                  user_type_map=None, connect_timeout=None, allow_beta_protocol_version=False, no_compact=False,
                  ssl_context=None, owning_pool=None, shard_id=None, total_shards=None,
                  on_orphaned_stream_released=None, application_info: Optional[ApplicationInfoBase] = None,
-                 session_id=None, driver_config_reporter: Optional[DriverConfigReporter] = None):
+                 session_id=None, driver_config_reporter: Optional[DriverConfigReporter] = None,
+                 ssl_session_cache=None):
         # TODO next major rename host to endpoint and remove port kwarg.
         self.endpoint = host if isinstance(host, EndPoint) else DefaultEndPoint(host, port)
 
         self.authenticator = authenticator
         self.ssl_options = ssl_options.copy() if ssl_options else {}
         self.ssl_context = ssl_context
+        # A TLS session can only be replayed onto the SSLContext it was
+        # established with -- the stdlib ssl module rejects anything else with
+        # "Session refers to a different SSLContext".  Connections that derive
+        # their own context from ssl_options below therefore have nothing to
+        # gain from the cache, and would only fill it with sessions no one can
+        # use, so resumption is limited to a caller-supplied context.
+        if ssl_context is not None and self.supports_tls_session_resumption:
+            self._ssl_session_cache = ssl_session_cache
         self.sockopts = sockopts
         self.compression = compression
         self.cql_version = cql_version
@@ -1045,17 +1275,16 @@ class Connection(object):
 
         # Extract a subset of names from self.ssl_options which apply to SSLContext.wrap_socket (or at least the parts
         # of it that don't involve building an SSLContext under the covers)
-        wrap_socket_opt_names = ['server_side', 'do_handshake_on_connect', 'suppress_ragged_eofs', 'server_hostname']
+        wrap_socket_opt_names = ['server_side', 'do_handshake_on_connect', 'suppress_ragged_eofs']
         opts = {k:self.ssl_options.get(k, None) for k in wrap_socket_opt_names if k in self.ssl_options}
 
-        # PYTHON-1186: set the server_hostname only if the SSLContext has
-        # check_hostname enabled and it is not already provided by the EndPoint ssl options
-        #opts['server_hostname'] = self.endpoint.address
-        if (self.ssl_context.check_hostname and 'server_hostname' not in opts):
-            server_hostname = self.endpoint.address
+        server_hostname = self._tls_server_hostname()
+        if server_hostname is not None:
             opts['server_hostname'] = server_hostname
 
-        return self.ssl_context.wrap_socket(self._socket, **opts)
+        ssl_sock = self.ssl_context.wrap_socket(self._socket, **opts)
+        self._restore_tls_session(ssl_sock)
+        return ssl_sock
 
     def _initiate_connection(self, sockaddr):
         if self.features.shard_id is not None:
@@ -1068,6 +1297,186 @@ class Connection(object):
             log.debug('connection (%r) port=%d should be shard_id=%d', id(self), port, port % self.total_shards)
 
         self._socket.connect(sockaddr)
+
+    # TLS session resumption.  Reactors that do not use the stdlib ssl module
+    # override the two accessors (_set_tls_session and
+    # _get_resumable_tls_session); the policy around them is shared.
+
+    def _tls_server_hostname(self):
+        """
+        The name ``wrap_socket`` is given, which is the name the peer
+        certificate is verified against when the context checks hostnames.
+
+        PYTHON-1186: the endpoint's ssl_options may provide it (an SNI proxy
+        needs it for routing); otherwise it is the endpoint address, and only
+        when the context actually checks hostnames.
+        """
+        if 'server_hostname' in self.ssl_options:
+            return self.ssl_options['server_hostname']
+        if getattr(self.ssl_context, 'check_hostname', False):
+            return self.endpoint.address
+        return None
+
+    def _tls_session_cache_key(self):
+        # The SSLContext is part of the key because a session cannot be
+        # replayed onto a different one, and a cache may be shared by several
+        # clusters.  It is held strongly and named first in the key: a cached
+        # session already keeps its context alive on its own -- CPython's
+        # SSLSession holds a reference to the context it was established with --
+        # so holding it weakly here would buy nothing, and naming it first lets
+        # SSLSessionCache.release_context release a departing cluster's entries
+        # without touching anyone else's.
+        # The verified name is part of it because a resumed handshake carries no
+        # Certificate, so that name is never checked again: offering a session
+        # to a connection expecting a different name would silently skip
+        # hostname verification for it.  Deriving the name from the same place
+        # _wrap_socket_from_context does is what keeps the two from drifting.
+        return (self.ssl_context, self.endpoint.tls_session_cache_key,
+                self._tls_server_hostname())
+
+    def _restore_tls_session(self, sock):
+        """
+        Offer the session cached for this endpoint, if any, on *sock*, which
+        must not have begun its handshake yet.  Not offering one only costs a
+        full handshake, so failures here are logged and ignored.
+        """
+        # Set below only if a session is actually offered, so that this always
+        # describes the attempt in flight: _connect_socket may come back here
+        # for another address, and an earlier attempt's session is not this
+        # one's to retract.
+        self._tls_session_offered = None
+        if self._ssl_session_cache is None:
+            return
+
+        try:
+            session = self._ssl_session_cache.get(self._tls_session_cache_key())
+            if session is not None:
+                self._set_tls_session(sock, session)
+                self._tls_session_offered = session
+                log.debug("Offering a cached TLS session to %s", self.endpoint)
+        except Exception as exc:
+            log.debug("Could not offer a cached TLS session to %s: %s", self.endpoint, exc)
+
+    def _discard_tls_session(self):
+        """
+        Drop the session offered on this connection, after a handshake it took
+        part in failed.
+
+        A cached session should never be able to fail a handshake -- RFC 5077
+        section 3.2 and RFC 8446 section 4.6.1 both have the server fall back to
+        a full one when it will not resume -- but nothing stores a fresh session
+        for a connection that never came up, so an entry that does provoke a
+        failure would otherwise be offered again by every later connection until
+        its lifetime ran out.
+
+        Only the session this connection offered is dropped: another connection
+        may have stored a fresh one under the same key in the meantime, and
+        removing that would cost every later connection a full handshake for a
+        session that never failed anything.
+        """
+        offered, self._tls_session_offered = self._tls_session_offered, None
+        if offered is None or self._ssl_session_cache is None:
+            # Nothing was offered on this connection -- there was nothing
+            # cached, or setting it on the socket was refused -- so there is
+            # nothing of ours to retract.  Going on would hand discard() no
+            # session to compare against, which tells it to drop whatever is
+            # there, including one a sibling connection stored in the meantime.
+            return
+
+        try:
+            self._ssl_session_cache.discard(self._tls_session_cache_key(), offered)
+            log.debug("Dropped the cached TLS session offered to %s", self.endpoint)
+        except Exception as exc:
+            log.debug("Could not drop the cached TLS session of %s: %s", self.endpoint, exc)
+
+    def _store_tls_session(self):
+        """
+        Cache this connection's TLS session so that later connections to the
+        same peer can resume it.  Called once the CQL handshake has completed,
+        which is late enough to have read a TLS 1.3 session ticket from a
+        server that sends one with the handshake, Scylla among them.
+        """
+        if self._ssl_session_cache is None:
+            return
+
+        try:
+            session = self._get_resumable_tls_session()
+            if session is None:
+                # Every connection samples at this same point in the CQL
+                # handshake, so reaching here is not something the next one
+                # retries: a peer that has not produced a ticket by now will
+                # not have for the next connection either, and nothing is ever
+                # cached for it.  Scylla produces one well before this -- the
+                # TLS handshake plus the OPTIONS exchange -- so a peer that
+                # deferred its ticket past this point is what would call for a
+                # later hook than this one.
+                return
+            lifetime = self._tls_session_lifetime(session)
+            if lifetime is None:
+                return
+            self._ssl_session_cache.set(
+                self._tls_session_cache_key(), session, lifetime)
+            log.debug("Cached the TLS session of %s for resumption, for %ss",
+                      self.endpoint, int(lifetime))
+        except Exception as exc:
+            log.debug("Could not cache the TLS session of %s: %s", self.endpoint, exc)
+
+    def _tls_session_lifetime(self, session):
+        """
+        How much longer, in seconds, *session* may be offered, or ``None`` if
+        it must not be cached at all.
+
+        A ticket's lifetime is the one the server announced;
+        ``SSLSession.timeout`` is the local context's default and says nothing
+        about what the peer will still accept, so it is only used where the
+        server announced nothing.  RFC 8446 section 4.6.1 also caps a client at
+        seven days however long a lifetime the server asked for.
+
+        A zero lifetime means opposite things in the two RFCs that define
+        tickets, so the negotiated version has to decide: RFC 8446 section 4.6.1
+        (TLS 1.3) says discard the ticket immediately, while RFC 5077 section 3.3
+        (TLS 1.2) reserves zero for "lifetime unspecified" and leaves retention
+        to local policy -- for which the local timeout is the only figure
+        available.
+
+        The announced lifetime is taken whole rather than reduced by the
+        session's age.  This connection established the session itself moments
+        ago, so that age is the length of a CQL handshake against a lifetime of
+        hours; and ``SSLSession.time`` is a wall-clock stamp, so subtracting it
+        from ``time.time()`` would let a clock step landing between the
+        handshake and here decide the answer -- a step forward large enough
+        makes the remainder zero and caches nothing at all, a step backward
+        hides whatever age there was.  The deadline the cache keeps is
+        monotonic, so nothing after this point can skew it either.
+        """
+        if session.has_ticket:
+            lifetime = session.ticket_lifetime_hint
+            if not lifetime:
+                if self._socket.version() == 'TLSv1.3':
+                    return None
+                lifetime = session.timeout
+        else:
+            lifetime = session.timeout
+
+        lifetime = min(lifetime, self._MAX_TLS_SESSION_LIFETIME)
+        return lifetime if lifetime > 0 else None
+
+    def _set_tls_session(self, sock, session):
+        sock.session = session
+
+    def _get_resumable_tls_session(self):
+        session = getattr(self._socket, 'session', None)
+        if session is None:
+            return None
+        # There has to be something to offer on the next connection: a ticket
+        # (RFC 5077 for TLS 1.2, RFC 8446 for TLS 1.3) or, below TLS 1.3, a
+        # session id.  A TLS 1.3 server sends its NewSessionTicket after the
+        # handshake as a separate message, and until that has been read the
+        # session carries neither, so this is also what defers the store on
+        # TLS 1.3 without having to recognise a protocol version by name.
+        if not (session.has_ticket or session.id):
+            return None
+        return session
 
     # PYTHON-1331
     #
@@ -1110,12 +1519,22 @@ class Connection(object):
                 # run that here.
                 if self._check_hostname:
                     self._validate_hostname()
+                # The handshake stood, so there is nothing left to retract and
+                # no reason to keep hold of what was offered for the life of
+                # the connection.
+                self._tls_session_offered = None
                 sockerr = None
                 break
             except socket.error as err:
                 if self._socket:
                     self._socket.close()
                     self._socket = None
+                # Only for a TLS failure: a connection refused or reset says
+                # nothing about the session, and dropping it would cost a later
+                # connection a full handshake for no reason.  Whether anything
+                # was offered to retract is _discard_tls_session's own business.
+                if isinstance(err, ssl.SSLError):
+                    self._discard_tls_session()
                 sockerr = err
 
         if sockerr:
@@ -1650,6 +2069,7 @@ class Connection(object):
             if ProtocolVersion.has_checksumming_support(self.protocol_version):
                 self._enable_checksumming()
 
+            self._store_tls_session()
             self.connected_event.set()
         elif isinstance(startup_response, AuthenticateMessage):
             log.debug("Got AuthenticateMessage on new connection (%s) from %s: %s",
@@ -1706,6 +2126,7 @@ class Connection(object):
             self.authenticator.on_authentication_success(auth_response.token)
             if self._compressor:
                 self.compressor = self._compressor
+            self._store_tls_session()
             self.connected_event.set()
         elif isinstance(auth_response, AuthChallengeMessage):
             response = self.authenticator.evaluate_challenge(auth_response.challenge)
