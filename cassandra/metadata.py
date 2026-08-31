@@ -1852,6 +1852,12 @@ class TokenMap(object):
                     if ks_meta:
                         replica_map = self.replica_map_for_keyspace(self._metadata.keyspaces[keyspace])
                         self.tokens_to_hosts_by_ks[keyspace] = replica_map
+                    elif build_if_absent:
+                        # No keyspace metadata (e.g. schema_metadata_enabled=False):
+                        # cache the empty result so token-aware routing cleanly
+                        # falls back to the child load-balancing policy instead
+                        # of retrying this lookup on every query.
+                        self.tokens_to_hosts_by_ks[keyspace] = {}
             except Exception:
                 # should not happen normally, but we don't want to blow up queries because of unexpected meta state
                 # bypass until new map is generated
