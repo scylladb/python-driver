@@ -1504,7 +1504,7 @@ class Cluster(object):
         self.executor = self._create_thread_pool_executor(max_workers=executor_threads)
         self.scheduler = _Scheduler(self.executor)
 
-        self._lock = RLock()
+        self._lock = Lock()
 
         if self.metrics_enabled:
             from cassandra.metrics import Metrics
@@ -1741,6 +1741,7 @@ class Cluster(object):
         established or attempted. Default is `False`, which means it will return when the first
         successful connection is established. Remaining pools are added asynchronously.
         """
+        connect_exc = None
         with self._lock:
             if self.is_shutdown:
                 raise DriverException("Cluster is already shut down")
@@ -1756,21 +1757,27 @@ class Cluster(object):
                     self._populate_hosts()
 
                     log.debug("Control connection created")
-                except Exception:
+                except Exception as exc:
                     log.exception("Control connection failed to connect, "
                                   "shutting down Cluster:")
-                    self.shutdown()
-                    raise
+                    connect_exc = exc
 
-                self.profile_manager.check_supported()  # todo: rename this method
+                if connect_exc is None:
+                    self.profile_manager.check_supported()  # todo: rename this method
 
-                if self.idle_heartbeat_interval:
-                    self._idle_heartbeat = ConnectionHeartbeat(
-                        self.idle_heartbeat_interval,
-                        self.get_connection_holders,
-                        timeout=self.idle_heartbeat_timeout
-                    )
-                self._is_setup = True
+                    if self.idle_heartbeat_interval:
+                        self._idle_heartbeat = ConnectionHeartbeat(
+                            self.idle_heartbeat_interval,
+                            self.get_connection_holders,
+                            timeout=self.idle_heartbeat_timeout
+                        )
+                    self._is_setup = True
+
+        if connect_exc is not None:
+            # shutdown() acquires self._lock, so must be called after
+            # releasing it above to avoid deadlock.
+            self.shutdown()
+            raise connect_exc
 
         session = self._new_session(keyspace)
         if wait_for_all_pools:
@@ -3814,11 +3821,11 @@ class ControlConnection(object):
         self._token_meta_enabled = token_meta_enabled
         self._schema_meta_page_size = schema_meta_page_size
 
-        self._lock = RLock()
+        self._lock = Lock()
         self._schema_agreement_lock = Lock()
 
         self._reconnection_handler = None
-        self._reconnection_lock = RLock()
+        self._reconnection_lock = Lock()
 
         self._event_schedule_times = {}
 
@@ -4814,13 +4821,37 @@ class ResponseFuture(object):
 
         conn_in_flight = None
         if self._connection is not None:
-            try:
-                self._connection._requests.pop(self._req_id)
-            # PYTHON-1044
-            # This request might have been removed from the connection after the latter was defunct by heartbeat.
-            # We should still raise OperationTimedOut to reject the future so that the main event thread will not
-            # wait for it endlessly
-            except KeyError:
+            pool = self.session._pools.get(self._current_host)
+            # Do not return the stream ID to the pool yet. We cannot reuse it
+            # because the node might still be processing the query and will
+            # return a late response to that query - if we used such stream
+            # before the response to the previous query has arrived, the new
+            # query could get a response from the old query
+            mark_orphaned = bool(pool and not pool.is_shutdown) or self._connection.is_control_connection
+
+            # Pop the request and, if applicable, mark the stream orphaned
+            # atomically under the same lock acquisition. Otherwise
+            # process_msg() could observe the popped-but-not-yet-orphaned
+            # state (a KeyError on _requests.pop with stream_id not yet in
+            # orphaned_request_ids) and drop the bookkeeping for this stream
+            # permanently, leaking in_flight and the orphan entry.
+            with self._connection.lock:
+                try:
+                    self._connection._requests.pop(self._req_id)
+                # PYTHON-1044
+                # This request might have been removed from the connection after the latter was defunct by heartbeat.
+                # We should still raise OperationTimedOut to reject the future so that the main event thread will not
+                # wait for it endlessly
+                except KeyError:
+                    popped = False
+                else:
+                    popped = True
+                    if mark_orphaned:
+                        self._connection.orphaned_request_ids.add(self._req_id)
+                        if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
+                            self._connection.orphaned_threshold_reached = True
+
+            if not popped:
                 key = "Connection defunct by heartbeat"
                 errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
                 self._set_final_exception(OperationTimedOut(errors, self._current_host,
@@ -4831,24 +4862,8 @@ class ResponseFuture(object):
             # Capture connection stats before pool.return_connection() can alter state
             conn_in_flight = self._connection.in_flight
 
-            pool = self.session._pools.get(self._current_host)
             if pool and not pool.is_shutdown:
-                # Do not return the stream ID to the pool yet. We cannot reuse it
-                # because the node might still be processing the query and will
-                # return a late response to that query - if we used such stream
-                # before the response to the previous query has arrived, the new
-                # query could get a response from the old query
-                with self._connection.lock:
-                    self._connection.orphaned_request_ids.add(self._req_id)
-                    if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
-                        self._connection.orphaned_threshold_reached = True
-
                 pool.return_connection(self._connection, stream_was_orphaned=True)
-            elif self._connection.is_control_connection:
-                with self._connection.lock:
-                    self._connection.orphaned_request_ids.add(self._req_id)
-                    if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
-                        self._connection.orphaned_threshold_reached = True
 
         errors = self._errors
         if not errors:

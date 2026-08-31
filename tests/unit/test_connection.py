@@ -414,6 +414,82 @@ class ConnectionTest(unittest.TestCase):
         assert "Bad file descriptor" in error_message
 
 
+class ProcessMsgStreamIdRecycleTest(unittest.TestCase):
+    """Regression tests for process_msg's KeyError/orphan handling.
+
+    A stream_id must never be handed back to request_ids more than once for
+    a single logical request: doing so lets two concurrent requests be
+    assigned the same stream_id and get each other's responses.
+    """
+
+    def make_connection(self, **kwargs):
+        c = Connection(DefaultEndPoint('1.2.3.4'), **kwargs)
+        c._socket = Mock()
+        c._socket.send.side_effect = lambda x: len(x)
+        return c
+
+    def make_frame(self, stream_id):
+        return _Frame(version=4, flags=0, stream=stream_id,
+                      opcode=SupportedMessage.opcode, body_offset=0, end_pos=0)
+
+    def test_keyerror_not_orphaned_does_not_append_stream_id(self):
+        """A stray/duplicate frame for a stream_id that isn't a tracked
+        orphan must not be recycled back into request_ids."""
+        c = self.make_connection()
+        c._requests = {}  # pop(stream_id) will raise KeyError
+        c.orphaned_request_ids = set()
+        c.request_ids = []
+        c.in_flight = 0
+
+        c.process_msg(self.make_frame(7), b"")
+
+        self.assertEqual(c.request_ids, [])
+        self.assertEqual(c.in_flight, 0)
+
+    def test_keyerror_orphaned_appends_exactly_once(self):
+        """A frame for a tracked orphan recycles the stream_id exactly once
+        and performs the associated bookkeeping."""
+        c = self.make_connection()
+        c._requests = {}
+        c.orphaned_request_ids = {7}
+        c.request_ids = []
+        c.in_flight = 1
+        released = Mock()
+        c._on_orphaned_stream_released = released
+
+        c.process_msg(self.make_frame(7), b"")
+
+        self.assertEqual(c.request_ids, [7])
+        self.assertEqual(c.in_flight, 0)
+        self.assertNotIn(7, c.orphaned_request_ids)
+        released.assert_called_once()
+
+    def test_duplicate_frame_after_normal_completion_does_not_double_append(self):
+        """Simulates the exact regression: a request completes normally
+        (recycling its stream_id once), then a late/duplicate frame for the
+        same stream_id arrives. Since the stream_id is not an orphan, it
+        must not be appended a second time -- otherwise two concurrent
+        requests could be handed the same stream_id."""
+        c = self.make_connection()
+        decoder = Mock(return_value=Mock(spec=[]))  # not a ProtocolException
+        callback = Mock()
+        c._requests = {7: (callback, decoder, None)}
+        c.orphaned_request_ids = set()
+        c.request_ids = []
+
+        # Normal completion: pops _requests[7] and appends 7 once.
+        c.process_msg(self.make_frame(7), b"")
+        self.assertEqual(c.request_ids, [7])
+
+        # Late/duplicate frame for the same, already-completed stream_id.
+        # _requests.pop(7) now raises KeyError, and 7 is not an orphan.
+        c.process_msg(self.make_frame(7), b"")
+
+        # The buggy unconditional append would make this [7, 7], allowing
+        # the duplicated id to be handed out to two concurrent requests.
+        self.assertEqual(c.request_ids, [7])
+
+
 class StartupOptionsTest(unittest.TestCase):
     """
     Covers the options the driver puts in the STARTUP frame, by driving a
