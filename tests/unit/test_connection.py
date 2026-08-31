@@ -25,7 +25,7 @@ from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, HeartbeatFuture, _Frame, Timer, TimerManager,
                                   ConnectionException, ConnectionShutdown, DefaultEndPoint, ShardAwarePortGenerator,
-                                  DRIVER_NAME, DRIVER_VERSION)
+                                  DRIVER_NAME, DRIVER_VERSION, _ConnectionIOBuffer)
 from cassandra.driver_config import (DriverConfigReporter, DRIVER_CONFIG_OPTION,
                                      DRIVER_CONFIG_SCHEMA_VERSION, SESSION_ID_OPTION)
 from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
@@ -627,6 +627,112 @@ class StartupOptionsTest(unittest.TestCase):
         assert options[SESSION_ID_OPTION] == str(self.SESSION_ID)
 
 
+class PipelinedFramesTest(unittest.TestCase):
+    """
+    Regression tests for a potential frame-parsing stall raised in review:
+    ``_read_frame_header``/``process_io_buffer`` compute ``pos`` from
+    ``cql_frame_buffer.tell()`` (the BytesIO cursor position) rather than
+    ``len(cql_frame_buffer.getvalue())`` (the true buffered length). Those
+    two values are only equivalent if the cursor always sits at the true end
+    of the buffer whenever ``pos`` is read.
+
+    These tests exercise the scenario the concern describes: multiple CQL
+    frames arriving together (pipelined) in a single socket read, including
+    a case where the second frame's data initially arrives incomplete. If
+    the cursor were ever left short of the true buffered length at the point
+    ``pos`` is computed, the second (pipelined) frame would not be
+    recognized as complete until further, possibly-never-arriving, data
+    showed up on the wire -- i.e. a silent stall.
+    """
+
+    def make_connection(self, **kwargs):
+        c = Connection(DefaultEndPoint('1.2.3.4'), **kwargs)
+        c._socket = Mock()
+        c._socket.send.side_effect = lambda x: len(x)
+        return c
+
+    def make_header_prefix(self, message_class, version=Connection.protocol_version, stream_id=0):
+        return bytes().join(map(uint8_pack, [
+            0xff & (HEADER_DIRECTION_TO_CLIENT | version),
+            0,  # flags (compression)
+            0,  # MSB for v3+ stream
+            stream_id,
+            message_class.opcode
+        ]))
+
+    def make_options_body(self):
+        options_buf = BytesIO()
+        write_stringmultimap(options_buf, {
+            'CQL_VERSION': ['3.0.1'],
+            'COMPRESSION': []
+        })
+        return options_buf.getvalue()
+
+    def make_msg(self, header, body=b""):
+        return header + uint32_pack(len(body)) + body
+
+    def _two_frames(self):
+        options = self.make_options_body()
+        frame0 = self.make_msg(self.make_header_prefix(SupportedMessage, stream_id=0), options)
+        frame1 = self.make_msg(self.make_header_prefix(SupportedMessage, stream_id=1), options)
+        return frame0, frame1
+
+    def test_two_complete_frames_in_one_read_both_processed(self):
+        """
+        Two complete frames delivered together in a single ``recv()`` (i.e.
+        a single ``.write()`` to the io buffer) must both be parsed out of
+        one ``process_io_buffer()`` call -- the second frame's completeness
+        must not depend on any additional data arriving.
+        """
+        c = self.make_connection()
+        callback0, callback1 = Mock(), Mock()
+        mock_decoder = Mock(side_effect=lambda *a, **k: Mock())
+        c._requests = {
+            0: (callback0, mock_decoder, []),
+            1: (callback1, mock_decoder, []),
+        }
+
+        frame0, frame1 = self._two_frames()
+        c._iobuf.write(frame0 + frame1)
+        c.process_io_buffer()
+
+        callback0.assert_called_once()
+        callback1.assert_called_once()
+        # The buffer should be fully drained, not stalled with leftover data.
+        self.assertEqual(c._io_buffer.cql_frame_buffer.tell(), 0)
+
+    def test_second_pipelined_frame_completes_after_more_data_arrives(self):
+        """
+        If the second frame arrives only partially (header only) alongside
+        the first frame, it must not be processed yet -- but once the rest
+        of its bytes arrive in a later read, it must be recognized and
+        processed without any further stall.
+        """
+        c = self.make_connection()
+        callback0, callback1 = Mock(), Mock()
+        mock_decoder = Mock(side_effect=lambda *a, **k: Mock())
+        c._requests = {
+            0: (callback0, mock_decoder, []),
+            1: (callback1, mock_decoder, []),
+        }
+
+        frame0, frame1 = self._two_frames()
+
+        # First read: complete frame0, plus only the 9-byte header of frame1.
+        c._iobuf.write(frame0 + frame1[:9])
+        c.process_io_buffer()
+
+        callback0.assert_called_once()
+        callback1.assert_not_called()
+
+        # Second read: the remainder of frame1 arrives later.
+        c._iobuf.write(frame1[9:])
+        c.process_io_buffer()
+
+        callback1.assert_called_once()
+        self.assertIsNone(c._current_frame)
+
+
 @patch('cassandra.connection.ConnectionHeartbeat._raise_if_stopped')
 class ConnectionHeartbeatTest(unittest.TestCase):
 
@@ -896,3 +1002,58 @@ class TestShardawarePortGenerator(unittest.TestCase):
         second_run = list(itertools.islice(gen.generate(0, 2), 5))
 
         assert first_run == second_run
+
+
+class ResetBufferTest(unittest.TestCase):
+    """Tests for _ConnectionIOBuffer._reset_buffer static method."""
+
+    def test_preserves_remaining_data(self):
+        buf = BytesIO()
+        buf.write(b"already_consumed_new_data")
+        buf.seek(17)  # position after "already_consumed_"
+        result = _ConnectionIOBuffer._reset_buffer(buf)
+        self.assertEqual(result.getvalue(), b"new_data")
+        # Cursor is at SEEK_END, ready for further writes
+        self.assertEqual(result.tell(), len(b"new_data"))
+
+    def test_empty_remaining(self):
+        buf = BytesIO()
+        buf.write(b"all_consumed")
+        buf.seek(12)
+        result = _ConnectionIOBuffer._reset_buffer(buf)
+        self.assertEqual(result.getvalue(), b"")
+        self.assertEqual(result.tell(), 0)
+
+    def test_nothing_consumed(self):
+        buf = BytesIO()
+        buf.write(b"all_remaining")
+        buf.seek(0)
+        result = _ConnectionIOBuffer._reset_buffer(buf)
+        self.assertEqual(result.getvalue(), b"all_remaining")
+        # Cursor is at SEEK_END, ready for further writes
+        self.assertEqual(result.tell(), len(b"all_remaining"))
+
+    def test_new_buffer_is_writable(self):
+        buf = BytesIO()
+        buf.write(b"head_tail")
+        buf.seek(5)
+        result = _ConnectionIOBuffer._reset_buffer(buf)
+        result.seek(0, 2)  # seek to end
+        result.write(b"_more")
+        self.assertEqual(result.getvalue(), b"tail_more")
+
+    def test_does_not_leak_buffer_export_on_original(self):
+        """
+        _reset_buffer's ``getbuffer()`` memoryview must be released (not just
+        the returned new buffer being fine to use) so that the *original*
+        buffer object can still be safely resized/closed afterwards. If the
+        export leaked, mutating the original buffer would raise:
+        BufferError: Existing exports of data: object cannot be re-sized.
+        """
+        buf = BytesIO()
+        buf.write(b"head_tail")
+        buf.seek(5)
+        _ConnectionIOBuffer._reset_buffer(buf)
+        # Should not raise BufferError -- the memoryview export taken
+        # internally by _reset_buffer must already be released by now.
+        buf.truncate(0)
