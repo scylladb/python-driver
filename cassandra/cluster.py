@@ -95,10 +95,7 @@ from cassandra.datastax import cloud as dscloud
 from cassandra.application_info import ApplicationInfoBase
 from cassandra.driver_config import DriverConfigReporter
 
-try:
-    from weakref import WeakSet
-except ImportError:
-    from cassandra.util import WeakSet  # NOQA
+from weakref import WeakSet
 
 def _try_libev_import():
     try:
@@ -133,12 +130,6 @@ conn_fns = (_try_libev_import, _try_asyncore_import, _try_asyncio_import)
 if not conn_class:
     raise DependencyException("Exception loading connection class dependencies", excs)
 DefaultConnection = conn_class
-
-# Forces load of utf8 encoding module to avoid deadlock that occurs
-# if code that is being imported tries to import the module in a seperate
-# thread.
-# See http://bugs.python.org/issue10923
-"".encode('utf8')
 
 log = logging.getLogger(__name__)
 
@@ -5319,7 +5310,7 @@ class ResponseFuture(object):
                     except KeyError:
                         if not self.prepared_statement:
                             log.error("Tried to execute unknown prepared statement: id=%s",
-                                      query_id.encode('hex'))
+                                      query_id.hex())
                             self._set_final_exception(response)
                             return
                         else:
@@ -5908,10 +5899,8 @@ class ResultSet(object):
         self._enter_list_mode("index operator")
         return self._current_rows[i]
 
-    def __nonzero__(self):
+    def __bool__(self):
         return bool(self._current_rows)
-
-    __bool__ = __nonzero__
 
     def get_query_trace(self, max_wait_sec=None):
         """
