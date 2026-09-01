@@ -1,0 +1,60 @@
+# Scylla Python Driver
+
+> Scylla Python Driver 3.21.0 documentation
+
+
+ScyllaDB 2021 and © DataStax 2013-2017
+
+## Pages
+
+- [Python Driver for Scylla and Apache Cassandra®](https://python-driver.docs.scylladb.com/master/index.md): A Python client driver for [Scylla](https://docs.scylladb.com).
+- [API Documentation](https://python-driver.docs.scylladb.com/master/api/index.md): * [cassandra](https://python-driver.docs.scylladb.com/master/api/cassandra.md)
+- [CHANGELOG](https://python-driver.docs.scylladb.com/master/CHANGELOG.md): * Report the driver’s identity and configuration in the `STARTUP` options, where
+- [cassandra.io.asyncioreactor](https://python-driver.docs.scylladb.com/master/api/cassandra/io/asyncioreactor.md): `asyncio` Event Loop
+- [cassandra.io.asyncorereactor](https://python-driver.docs.scylladb.com/master/api/cassandra/io/asyncorereactor.md): `asyncore` Event Loop
+- [cassandra.auth](https://python-driver.docs.scylladb.com/master/api/cassandra/auth.md): Authentication
+- [Batch Queries](https://python-driver.docs.scylladb.com/master/cqlengine/batches.md): cqlengine supports batch queries using the BatchQuery class. Batch queries can be started and stoppe...
+- [cassandra](https://python-driver.docs.scylladb.com/master/api/cassandra.md): Exceptions and Enums
+- [cassandra.cluster](https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.md): Clusters and Sessions
+- [cassandra.cqlengine.columns](https://python-driver.docs.scylladb.com/master/api/cassandra/cqlengine/columns.md): Column types for object mapping models
+- [cassandra.concurrent](https://python-driver.docs.scylladb.com/master/api/cassandra/concurrent.md): Utilities for Concurrent Statement Execution
+- [cassandra.connection](https://python-driver.docs.scylladb.com/master/api/cassandra/connection.md): Low Level Connection Info
+- [cassandra.cqlengine.connection](https://python-driver.docs.scylladb.com/master/api/cassandra/cqlengine/connection.md): Connection management for cqlengine
+- [Connections](https://python-driver.docs.scylladb.com/master/cqlengine/connections.md): Connections aim to ease the use of multiple sessions with cqlengine. Connections can be set on a mod...
+- [Working with Dates and Times](https://python-driver.docs.scylladb.com/master/dates-and-times.md): This document is meant to provide on overview of the assumptions and limitations of the driver time ...
+- [cassandra.decoder](https://python-driver.docs.scylladb.com/master/api/cassandra/decoder.md): Data Return Formats
+- [cassandra.encoder](https://python-driver.docs.scylladb.com/master/api/cassandra/encoder.md): Encoders for non-prepared Statements
+- [Execution Profiles](https://python-driver.docs.scylladb.com/master/execution-profiles.md): Execution profiles aim at making it easier to execute requests in different ways within
+- [Frequently Asked Questions](https://python-driver.docs.scylladb.com/master/faq.md): See also [cqlengine FAQ](https://python-driver.docs.scylladb.com/master/cqlengine/faq.md)
+- [Frequently Asked Questions](https://python-driver.docs.scylladb.com/master/cqlengine/faq.md): The recommended way to create new rows is with the models .create method. The values passed into a m...
+- [Getting Started](https://python-driver.docs.scylladb.com/master/getting-started.md): First, make sure you have the driver properly [installed](https://python-driver.docs.scylladb.com/ma...
+- [Installation](https://python-driver.docs.scylladb.com/master/installation.md): Python versions 3.10-3.14 are supported. Both CPython (the standard Python
+- [cassandra.io.libevreactor](https://python-driver.docs.scylladb.com/master/api/cassandra/io/libevreactor.md): `libev` Event Loop
+- [Lightweight Transactions (Compare-and-set)](https://python-driver.docs.scylladb.com/master/lwt.md): Lightweight Transactions (LWTs) are mostly pass-through CQL for the driver. However,
+- [cassandra.cqlengine.management](https://python-driver.docs.scylladb.com/master/api/cassandra/cqlengine/management.md): Schema management for cqlengine
+- [cassandra.metadata](https://python-driver.docs.scylladb.com/master/api/cassandra/metadata.md): Schema and Ring Topology
+- [cassandra.metrics](https://python-driver.docs.scylladb.com/master/api/cassandra/metrics.md): Performance Metrics
+- [Models](https://python-driver.docs.scylladb.com/master/cqlengine/models.md): A model is a python class representing a CQL table. Models derive from `Model`, and
+- [cassandra.cqlengine.models](https://python-driver.docs.scylladb.com/master/api/cassandra/cqlengine/models.md): Table models for object mapping
+- [Object Mapper](https://python-driver.docs.scylladb.com/master/object-mapper.md): cqlengine is the Cassandra CQL 3 Object Mapper packaged with this driver
+- [Performance Notes](https://python-driver.docs.scylladb.com/master/performance.md): The Python driver for Cassandra offers several methods for executing queries.
+- [cassandra.policies](https://python-driver.docs.scylladb.com/master/api/cassandra/policies.md): Load balancing and Failure Handling Policies
+- [cassandra.pool](https://python-driver.docs.scylladb.com/master/api/cassandra/pool.md): Hosts and Connection Pools
+- [cassandra.protocol](https://python-driver.docs.scylladb.com/master/api/cassandra/protocol.md): Protocol Features
+- [Paging Large Queries](https://python-driver.docs.scylladb.com/master/query-paging.md): Cassandra 2.0+ offers support for automatic query paging.  Starting with
+- [cassandra.query](https://python-driver.docs.scylladb.com/master/api/cassandra/query.md): Prepared Statements, Batch Statements, Tracing, and Row Factories
+- [cassandra.cqlengine.query](https://python-driver.docs.scylladb.com/master/api/cassandra/cqlengine/query.md): Query and filter model objects
+- [Making Queries](https://python-driver.docs.scylladb.com/master/cqlengine/queryset.md): Once you’ve populated Cassandra with data, you’ll probably want to retrieve some of it. This is acco...
+- [ScyllaDB Cloud](https://python-driver.docs.scylladb.com/master/scylla-cloud.md): To connect to a [ScyllaDB Cloud](https://www.scylladb.com/product/scylla-cloud/) cluster, go to the ...
+- [Scylla Specific Features](https://python-driver.docs.scylladb.com/master/scylla-specific.md): **scylla-driver** is shard aware and contains extensions that work with the TokenAwarePolicy support...
+- [Security](https://python-driver.docs.scylladb.com/master/security.md): The two main security components you will use with the
+- [Third party integrations](https://python-driver.docs.scylladb.com/master/cqlengine/third-party.md): Here’s how, in substance, CQLengine can be plugged to [Celery](http://celery.readthedocs.org/):
+- [cassandra.timestamps](https://python-driver.docs.scylladb.com/master/api/cassandra/timestamps.md): Timestamp Generation
+- [Upgrade Guide](https://python-driver.docs.scylladb.com/master/cqlengine/upgrade-guide.md): This is an overview of things that changed as the cqlengine project was merged into
+- [User Defined Types](https://python-driver.docs.scylladb.com/master/user-defined-types.md): Cassandra 2.1 introduced user-defined types (UDTs).  You can create a
+- [cassandra.cqlengine.usertype](https://python-driver.docs.scylladb.com/master/api/cassandra/cqlengine/usertype.md): Model classes for User Defined Types
+- [cassandra.util](https://python-driver.docs.scylladb.com/master/api/cassandra/util.md): Creates a timezone-agnostic datetime from timestamp (in seconds) in a consistent manner.
+
+---
+
+For more comprehensive documentation, see [llms-full.txt](https://python-driver.docs.scylladb.com/master/llms-full.txt)
