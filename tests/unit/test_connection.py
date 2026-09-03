@@ -412,6 +412,18 @@ class ConnectionTest(unittest.TestCase):
         assert "already closed" in error_message
         assert "Bad file descriptor" in error_message
 
+    def test_continuous_paging_cancel_releases_request_id_when_send_fails(self):
+        c = self.make_connection()
+        c.push = Mock(side_effect=ConnectionException("write failed"))
+        state = Mock(max_queue_size=100, num_pages_requested=0, num_pages_received=0)
+        session = c.new_continuous_paging_session(1, Mock(), Mock(), state)
+        initial_request_ids = len(c.request_ids)
+
+        with pytest.raises(ConnectionException):
+            session.cancel()
+
+        assert len(c.request_ids) == initial_request_ids
+        assert not c._requests
 
 class DerivedConnectionLimitsTest(unittest.TestCase):
     """
