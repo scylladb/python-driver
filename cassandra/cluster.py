@@ -2981,9 +2981,13 @@ class Session(object):
         else:
             timestamp = None
 
-        # Snapshot passed to the ResponseFuture for decoding skip_meta responses; only
-        # bound statements carry cached result metadata (set in the BoundStatement branch).
+        # Snapshot passed to the ResponseFuture for decoding skip_meta responses, and
+        # the column names/types derived from that same metadata (see
+        # PreparedStatement.result_metadata_snapshot); only bound statements carry
+        # cached result metadata (set in the BoundStatement branch).
         bound_result_metadata = _NOT_SET
+        bound_col_names = None
+        bound_col_types = None
 
         # Compute the ring token once, here on the request path, and pass it
         # explicitly to the two consumers that run while sending: the
@@ -3017,11 +3021,13 @@ class Session(object):
                 continuous_paging_options, statement_keyspace)
         elif isinstance(query, BoundStatement):
             prepared_statement = query.prepared_statement
-            # Snapshot metadata and its id as one atomic pair so the message never
-            # carries the id of one schema version alongside a skip_meta decision
-            # made for another. skip_meta is requested only when there is both an
-            # id to validate it with and cached metadata to decode against: while
-            # a statement has no cached metadata there is nothing to decode a
+            # Snapshot metadata, its id, and the column names/types derived from
+            # that metadata all together in one atomic read (result_metadata_snapshot)
+            # so the message never carries the id of one schema version alongside a
+            # skip_meta decision, or a later column-name/type lookup, made for
+            # another. skip_meta is requested only when there is both an id to
+            # validate it with and cached metadata to decode against: while a
+            # statement has no cached metadata there is nothing to decode a
             # metadata-less response with, so the server must send it.
             # Whether skip_meta and the id actually reach the wire is decided per
             # connection at serialization time (see ExecuteMessage.send_body).
@@ -3029,7 +3035,8 @@ class Session(object):
             # result_metadata=None for every page after the first (it isn't threaded
             # through the paging session), so a skip_meta response has nothing to
             # decode page 2+ against.
-            result_metadata, result_metadata_id = prepared_statement.result_metadata_and_id
+            result_metadata, result_metadata_id, bound_col_names, bound_col_types = \
+                prepared_statement.result_metadata_snapshot
             bound_result_metadata = result_metadata
 
             # The tablet_version_block value is connection-independent, so compute
@@ -3071,7 +3078,7 @@ class Session(object):
             prepared_statement=prepared_statement, retry_policy=retry_policy, row_factory=row_factory,
             load_balancer=load_balancing_policy, start_time=start_time, speculative_execution_plan=spec_exec_plan,
             continuous_paging_state=None, host=host, bound_result_metadata=bound_result_metadata,
-            routing_token=routing_token)
+            routing_token=routing_token, bound_col_names=bound_col_names, bound_col_types=bound_col_types)
 
     def _compute_tablet_version_block(self, query, routing_key: Optional[bytes],
                                       routing_token: Optional[Token]) -> int:
@@ -4748,13 +4755,15 @@ class ResponseFuture(object):
     _TABLET_ROUTING_CTYPE = None
     _TABLET_ROUTING_V2_CTYPE = None
     _bound_result_metadata = None
+    _bound_col_names = None
+    _bound_col_types = None
 
     _warned_timeout = False
 
     def __init__(self, session, message, query, timeout, metrics=None, prepared_statement=None,
                  retry_policy=RetryPolicy(), row_factory=None, load_balancer=None, start_time=None,
                  speculative_execution_plan=None, continuous_paging_state=None, host=None,
-                 bound_result_metadata=_NOT_SET, routing_token=None):
+                 bound_result_metadata=_NOT_SET, routing_token=None, bound_col_names=None, bound_col_types=None):
         self.session = session
         # TODO: normalize handling of retry policy and row factory
         self.row_factory = row_factory or session.row_factory
@@ -4771,6 +4780,15 @@ class ResponseFuture(object):
         # even if a concurrent METADATA_CHANGED replaces the prepared statement's cache in
         # between. Defaults to [] for unprepared statements (no cached metadata).
         self._bound_result_metadata = [] if bound_result_metadata is _NOT_SET else bound_result_metadata
+        # Column names/types derived from that same result_metadata snapshot (see
+        # PreparedStatement.result_metadata_snapshot), captured together with it in
+        # one atomic read. _set_result() uses these -- rather than a fresh read of
+        # prepared_statement's live cache -- so a response decoded against this
+        # snapshot can never be paired with column names/types cached for a
+        # different schema version by a concurrent in-flight response for the same
+        # prepared statement.
+        self._bound_col_names = bound_col_names
+        self._bound_col_types = bound_col_types
         self._callback_lock = Lock()
         self._start_time = start_time or time.time()
         self._host = host
@@ -5188,60 +5206,44 @@ class ResponseFuture(object):
             if pool and not pool.is_shutdown:
                 pool.return_connection(connection)
 
-            trace_id = getattr(response, 'trace_id', None)
-            if trace_id:
-                if not self._query_traces:
-                    self._query_traces = []
-                self._query_traces.append(QueryTrace(trace_id, self.session))
-
-            self._warnings = getattr(response, 'warnings', None)
-            self._custom_payload = getattr(response, 'custom_payload', None)
-
-            if self._custom_payload and connection is not None:
-                # Parse the routing payload according to what the connection that
-                # *served this request* negotiated, not the control connection:
-                # different nodes may negotiate different extensions, and each
-                # payload key matches the extension its own connection negotiated.
-                if connection.features.tablets_routing_v2 and 'tablets-routing-v2' in self._custom_payload:
-                    ctype = ResponseFuture._TABLET_ROUTING_V2_CTYPE
-                    if ctype is None:
-                        ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)), LongType)')
-                        ResponseFuture._TABLET_ROUTING_V2_CTYPE = ctype
-                    self._cache_tablet_from_payload('tablets-routing-v2', ctype)
-                elif connection.features.tablets_routing_v1 and 'tablets-routing-v1' in self._custom_payload:
-                    ctype = ResponseFuture._TABLET_ROUTING_CTYPE
-                    if ctype is None:
-                        ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
-                        ResponseFuture._TABLET_ROUTING_CTYPE = ctype
-                    self._cache_tablet_from_payload('tablets-routing-v1', ctype)
-
             if isinstance(response, ResultMessage):
-                if response.kind == RESULT_KIND_SET_KEYSPACE:
-                    session = getattr(self, 'session', None)
-                    if connection is not None:
-                        connection.keyspace = response.new_keyspace
-                    # since we're running on the event loop thread, we need to
-                    # use a non-blocking method for setting the keyspace on
-                    # all connections in this session, otherwise the event
-                    # loop thread will deadlock waiting for keyspaces to be
-                    # set.  This uses a callback chain which ends with
-                    # self._set_keyspace_completed() being called in the
-                    # event loop thread.
-                    if session:
-                        session._set_keyspace_for_all_pools(
-                            response.new_keyspace, self._set_keyspace_completed)
-                elif response.kind == RESULT_KIND_SCHEMA_CHANGE:
-                    # refresh the schema before responding, but do it in another
-                    # thread instead of the event loop thread
-                    self.is_schema_agreed = False
-                    self.session.submit(
-                        refresh_schema_and_set_result,
-                        self.session.cluster.control_connection,
-                        self, connection, **response.schema_change_event)
-                elif response.kind == RESULT_KIND_ROWS:
+                # Hot path: ResultMessage has trace_id, warnings, and
+                # custom_payload in __slots__, always initialised in __init__,
+                # so direct attribute access is safe and faster than getattr().
+                trace_id = response.trace_id
+                session = self.session
+                if trace_id:
+                    if not self._query_traces:
+                        self._query_traces = []
+                    self._query_traces.append(QueryTrace(trace_id, session))
+
+                self._warnings = response.warnings
+                custom_payload = response.custom_payload
+                self._custom_payload = custom_payload
+
+# Cache session.cluster to avoid repeated double-lookup in the
+                # tablet routing block (3 accesses) and schema-change path.
+                cluster = session.cluster
+                if custom_payload and connection is not None:
+                    # Parse the routing payload according to what the connection that
+                    # *served this request* negotiated, not the control connection:
+                    # different nodes may negotiate different extensions, and each
+                    # payload key matches the extension its own connection negotiated.
+                    if connection.features.tablets_routing_v2 and 'tablets-routing-v2' in custom_payload:
+                        ctype = ResponseFuture._TABLET_ROUTING_V2_CTYPE
+                        if ctype is None:
+                            ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)), LongType)')
+                            ResponseFuture._TABLET_ROUTING_V2_CTYPE = ctype
+                        self._cache_tablet_from_payload('tablets-routing-v2', ctype)
+                    elif connection.features.tablets_routing_v1 and 'tablets-routing-v1' in custom_payload:
+                        ctype = ResponseFuture._TABLET_ROUTING_CTYPE
+                        if ctype is None:
+                            ctype = types.lookup_casstype('TupleType(LongType, LongType, ListType(TupleType(UUIDType, Int32Type)))')
+                            ResponseFuture._TABLET_ROUTING_CTYPE = ctype
+                        self._cache_tablet_from_payload('tablets-routing-v1', ctype)
+
+                if response.kind == RESULT_KIND_ROWS:
                     self._paging_state = response.paging_state
-                    self._col_names = response.column_names
-                    self._col_types = response.column_types
                     new_result_metadata_id = getattr(response, 'result_metadata_id', None)
                     if self.prepared_statement and new_result_metadata_id is not None:
                         if response.column_metadata:
@@ -5250,7 +5252,9 @@ class ResponseFuture(object):
                             # new id with the old metadata (the server would then
                             # skip sending metadata and rows would be decoded
                             # against stale columns, with no recovery).
-                            # (this also re-arms the anomaly warning below)
+                            # (this also re-arms the anomaly warning below, and
+                            # refreshes the cached column names/types together
+                            # with the metadata they were derived from)
                             self.prepared_statement.update_result_metadata(
                                 response.column_metadata, new_result_metadata_id)
                         elif not self.prepared_statement._warned_missing_column_metadata:
@@ -5269,15 +5273,89 @@ class ResponseFuture(object):
                                 "and id are left unchanged.",
                                 getattr(self.prepared_statement, 'query_id', None)
                             )
-                    if getattr(self.message, 'continuous_paging_options', None):
+                    # A response that carries its own column_metadata (set only
+                    # when the server actually sent metadata on the wire -- see
+                    # ResultMessage.recv_results_metadata's _NO_METADATA_FLAG
+                    # check) was decoded against THAT metadata, not against
+                    # whatever this ResponseFuture had bound at construction
+                    # time: this is either the METADATA_CHANGED case (the
+                    # schema changed since the statement was prepared, and the
+                    # response's rows may have a different column count/types
+                    # than the old snapshot) or the very first response for a
+                    # statement with no cached metadata yet. response.column_names/
+                    # column_types are derived from that same response metadata
+                    # (see recv_results_rows), so they always match
+                    # response.parsed_rows and must be preferred here.
+                    #
+                    # Only when the response is metadata-less (the common,
+                    # schema-unchanged skip_meta case) do we use the column
+                    # names/types snapshotted on this ResponseFuture at
+                    # construction time (see Session._create_response_future),
+                    # to avoid rebuilding lists from metadata. Those come from
+                    # the same atomic read as _bound_result_metadata, which is
+                    # what a metadata-less response was actually decoded
+                    # against; a fresh read of prepared_statement's live cache
+                    # here could instead observe a different schema version if
+                    # a concurrent in-flight response for the same prepared
+                    # statement updated it (via update_result_metadata) between
+                    # decode and this callback.
+                    if not response.column_metadata and self._bound_col_names is not None:
+                        col_names = self._bound_col_names
+                        col_types = self._bound_col_types
+                    else:
+                        col_names = response.column_names
+                        col_types = response.column_types
+                    self._col_names = col_names
+                    self._col_types = col_types
+                    if self.message.continuous_paging_options:
                         self._handle_continuous_paging_first_response(connection, response)
                     else:
-                        self._set_final_result(self.row_factory(response.column_names, response.parsed_rows))
+                        self._set_final_result(self.row_factory(col_names, response.parsed_rows))
                 elif response.kind == RESULT_KIND_VOID:
                     self._set_final_result(None)
+                elif response.kind == RESULT_KIND_SET_KEYSPACE:
+                    # Update this response's own connection directly and
+                    # immediately. This matters most when pool is None (the
+                    # control-connection fallback case): _set_keyspace_for_all_pools
+                    # below only updates session.keyspace and pooled connections, so
+                    # without this the control connection's fallback connection would
+                    # keep its old keyspace and subsequent fallback queries would run
+                    # against the wrong keyspace.
+                    if connection is not None:
+                        connection.keyspace = response.new_keyspace
+                    # since we're running on the event loop thread, we need to
+                    # use a non-blocking method for setting the keyspace on
+                    # all connections in this session, otherwise the event
+                    # loop thread will deadlock waiting for keyspaces to be
+                    # set.  This uses a callback chain which ends with
+                    # self._set_keyspace_completed() being called in the
+                    # event loop thread.
+                    if session:
+                        session._set_keyspace_for_all_pools(
+                            response.new_keyspace, self._set_keyspace_completed)
+                elif response.kind == RESULT_KIND_SCHEMA_CHANGE:
+                    # refresh the schema before responding, but do it in another
+                    # thread instead of the event loop thread
+                    self.is_schema_agreed = False
+                    session.submit(
+                        refresh_schema_and_set_result,
+                        cluster.control_connection,
+                        self, connection, **response.schema_change_event)
                 else:
                     self._set_final_result(response)
             elif isinstance(response, ErrorMessage):
+                # Cold path: ErrorMessage inherits from _MessageType which
+                # defines warnings/custom_payload as class-level defaults but
+                # does NOT have trace_id -- getattr is required here.
+                trace_id = getattr(response, 'trace_id', None)
+                if trace_id:
+                    if not self._query_traces:
+                        self._query_traces = []
+                    self._query_traces.append(QueryTrace(trace_id, self.session))
+
+                self._warnings = getattr(response, 'warnings', None)
+                self._custom_payload = getattr(response, 'custom_payload', None)
+
                 retry_policy = self._retry_policy
 
                 if isinstance(response, ReadTimeoutErrorMessage):
@@ -5356,6 +5434,10 @@ class ResponseFuture(object):
 
                 self._handle_retry_decision(retry, response, host)
             elif isinstance(response, ConnectionException):
+                # ConnectionException has no trace_id/warnings/custom_payload;
+                # clear any stale values from a previous retry attempt.
+                self._warnings = None
+                self._custom_payload = None
                 if self._metrics is not None:
                     self._metrics.on_connection_error()
                 if not isinstance(response, ConnectionShutdown):
@@ -5365,6 +5447,8 @@ class ResponseFuture(object):
                     self.query, cl, error=response, retry_num=self._query_retries)
                 self._handle_retry_decision(retry, response, host)
             elif isinstance(response, Exception):
+                self._warnings = None
+                self._custom_payload = None
                 if hasattr(response, 'to_exception'):
                     self._set_final_exception(response.to_exception())
                 else:
@@ -5427,7 +5511,9 @@ class ResponseFuture(object):
                     # between the two PREPAREs) - a stale-but-plausible id a later
                     # id-aware execute could send without the server detecting the
                     # mismatch. Dropping it instead triggers the same self-healing
-                    # b'' sentinel path a never-prepared id would.
+                    # b'' sentinel path a never-prepared id would. This also
+                    # refreshes the cached column names/types together with the
+                    # metadata they were derived from.
                     self.prepared_statement.update_result_metadata(
                         response.column_metadata, response.result_metadata_id)
                 
@@ -5595,9 +5681,12 @@ class ResponseFuture(object):
             ...     log.exception("Operation failed:")
 
         """
+        return ResultSet(self, self._wait_for_result())
+
+    def _wait_for_result(self):
         self._event.wait()
         if self._final_result is not _NOT_SET:
-            return ResultSet(self, self._final_result)
+            return self._final_result
         else:
             raise self._final_exception
 
@@ -5868,8 +5957,7 @@ class ResultSet(object):
         """
         if self.response_future.has_more_pages:
             self.response_future.start_fetching_next_page()
-            result = self.response_future.result()
-            self._current_rows = result._current_rows  # ResultSet has already _set_current_rows to the appropriate form
+            self._set_current_rows(self.response_future._wait_for_result())
         else:
             self._current_rows = []
 
