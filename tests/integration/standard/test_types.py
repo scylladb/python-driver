@@ -106,6 +106,10 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
 
             original = cassandra.deserializers.DesBytesType
             cassandra.deserializers.DesBytesType = cassandra.deserializers.DesBytesTypeByteArray
+            # clear_deserializer_caches() may be absent if the Cython
+            # extension was built before this cache API was added; guard
+            # so the override still works (uncached) in that case.
+            getattr(cassandra.deserializers, "clear_deserializer_caches", lambda: None)()
             s = self.session
 
             s.execute("CREATE TABLE blobbytes2 (a ascii PRIMARY KEY, b blob)")
@@ -119,6 +123,7 @@ class TypeTests(BasicSharedKeyspaceUnitTestCase):
         finally:
             if original is not None:
                 cassandra.deserializers.DesBytesType=original
+                getattr(cassandra.deserializers, "clear_deserializer_caches", lambda: None)()
 
     def test_can_insert_primitive_datatypes(self):
         """
