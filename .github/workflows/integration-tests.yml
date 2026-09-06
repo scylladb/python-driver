@@ -43,7 +43,7 @@ jobs:
       fail-fast: false
       matrix:
         java-version: [8]
-        python-version: ["3.11", "3.12", "3.13", "3.14", "3.14t"]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.14t", "3.15", "3.15t"]
         event_loop_manager: ["libev", "asyncio", "asyncore"]
         exclude:
           - python-version: "3.12"
@@ -53,6 +53,10 @@ jobs:
           - python-version: "3.14"
             event_loop_manager: "asyncore"
           - python-version: "3.14t"
+            event_loop_manager: "asyncore"
+          - python-version: "3.15"
+            event_loop_manager: "asyncore"
+          - python-version: "3.15t"
             event_loop_manager: "asyncore"
 
     steps:
