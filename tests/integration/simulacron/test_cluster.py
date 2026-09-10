@@ -89,12 +89,23 @@ class DuplicateRpcTest(SimulacronCluster):
         with MockLoggingHandler().set_module_name(cassandra.cluster.__name__) as mock_handler:
             address_column = "rpc_address"
             rows = [
-                {"peer": "127.0.0.1", "data_center": "dc", "host_id": "dontcare1", "rack": "rack1",
-                "release_version": "3.11.4", address_column: "127.0.0.1", "schema_version": "dontcare", "tokens": "1"},
-                {"peer": "127.0.0.2", "data_center": "dc", "host_id": "dontcare2", "rack": "rack1",
-                "release_version": "3.11.4", address_column: "127.0.0.2", "schema_version": "dontcare", "tokens": "2"},
+                {"peer": "127.0.0.1", "data_center": "dc", "host_id": "00000000-0000-0000-0000-000000000001", "rack": "rack1",
+                "release_version": "3.11.4", address_column: "127.0.0.1", "schema_version": "00000000-0000-0000-0000-000000000011", "tokens": ["1"]},
+                {"peer": "127.0.0.2", "data_center": "dc", "host_id": "00000000-0000-0000-0000-000000000002", "rack": "rack1",
+                "release_version": "3.11.4", address_column: "127.0.0.2", "schema_version": "00000000-0000-0000-0000-000000000012", "tokens": ["2"]},
             ]
-            prime_query(ControlConnection._SELECT_PEERS, rows=rows)
+            prime_query(
+                ControlConnection._SELECT_PEERS, rows=rows,
+                column_types={
+                    "peer": "inet",
+                    "data_center": "varchar",
+                    "host_id": "uuid",
+                    "rack": "varchar",
+                    "release_version": "varchar",
+                    address_column: "inet",
+                    "schema_version": "uuid",
+                    "tokens": "set<varchar>",
+                })
 
             cluster = Cluster(protocol_version=PROTOCOL_VERSION, compression=False)
             session = cluster.connect(wait_for_all_pools=True)

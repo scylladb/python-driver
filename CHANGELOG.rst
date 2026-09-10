@@ -31,6 +31,11 @@ Features
 
 Others
 ------
+* ``Host.host_id`` is now the immutable identity of a node. Constructing a
+  ``Host`` requires a non-nil ``uuid.UUID``; equality, hashing, and ordering use
+  only that ID, and comparing a ``Host`` with an address no longer reports them
+  as equal. Because hashing is stable, existing Host-keyed session pool
+  lookups and removals remain valid across endpoint changes (issue #867).
 * ``DCAwareRoundRobinPolicy.local_dc`` is now read-only. It is set by the constructor,
   and filled in by the policy itself when the constructor was given none, from the first
   host to come up. Assigning it afterwards was indistinguishable from that inference,

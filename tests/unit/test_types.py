@@ -1018,11 +1018,15 @@ class TestOrdering(unittest.TestCase):
 
         @test_category data_types
         """
-        hosts = [Host(addr, SimpleConvictionPolicy, host_id=uuid.uuid4()) for addr in
-                 ("127.0.0.1", "127.0.0.2", "127.0.0.3", "127.0.0.4")]
-        hosts_equal = [Host(addr, SimpleConvictionPolicy, host_id=uuid.uuid4()) for addr in
-                       ("127.0.0.1", "127.0.0.1")]
-        hosts_equal_conviction = [Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4()), Host("127.0.0.1", ConvictionPolicy, host_id=uuid.uuid4())]
+        hosts = [Host(addr, SimpleConvictionPolicy, host_id=uuid.UUID(int=index))
+                 for index, addr in enumerate(
+                     ("127.0.0.4", "127.0.0.3", "127.0.0.2", "127.0.0.1"),
+                     start=1)]
+        shared_id = uuid.uuid4()
+        hosts_equal = [Host(addr, SimpleConvictionPolicy, host_id=shared_id) for addr in
+                       ("127.0.0.1", "127.0.0.2")]
+        hosts_equal_conviction = [Host("127.0.0.1", SimpleConvictionPolicy, host_id=shared_id),
+                                  Host("127.0.0.2", ConvictionPolicy, host_id=shared_id)]
         check_sequence_consistency(hosts)
         check_sequence_consistency(hosts_equal, equal=True)
         check_sequence_consistency(hosts_equal_conviction, equal=True)
