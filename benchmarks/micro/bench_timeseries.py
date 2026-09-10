@@ -243,6 +243,11 @@ ps.consistency_level = None
 ps.fetch_size = None
 ps.custom_payload = None
 ps.is_idempotent = False
+try:
+    from cassandra.serializers import make_serializers
+    ps._serializers = make_serializers(ct for ct in col_types)
+except ImportError:
+    ps._serializers = None
 
 dt = datetime.datetime(2025, 4, 5, 12, 0, 0, 123456)
 row = [dt, 42, 3.14159, 0.95, 'sensor-alpha-001']
