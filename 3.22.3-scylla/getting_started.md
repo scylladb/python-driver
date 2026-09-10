@@ -1,0 +1,437 @@
+# Getting Started
+
+First, make sure you have the driver properly [installed](installation.md).
+
+## Connecting to Cassandra
+
+Before we can start executing any queries against a Cassandra cluster we need to setup
+an instance of `Cluster`. As the name suggests, you will typically have one
+instance of `Cluster` for each Cassandra cluster you want to interact
+with.
+
+The simplest way to create a `Cluster` is like this:
+First, make sure you have the Cassandra driver properly [installed](installation.md).
+
+```python
+from cassandra.cluster import Cluster
+
+cluster = Cluster()
+```
+
+This will attempt to connection to a Cassandra instance on your
+local machine (127.0.0.1).  You can also specify a list of IP
+addresses for nodes in your cluster:
+
+```python
+from cassandra.cluster import Cluster
+
+cluster = Cluster(['192.168.0.1', '192.168.0.2'])
+```
+
+The set of IP addresses we pass to the `Cluster` is simply
+an initial set of contact points.  After the driver connects to one
+of these nodes it will *automatically discover* the rest of the
+nodes in the cluster and connect to them, so you don’t need to list
+every node in your cluster.
+
+If you need to use a non-standard port, use SSL, or customize the driver’s
+behavior in some other way, this is the place to do it:
+
+```python
+from cassandra.cluster import Cluster
+cluster = Cluster(['192.168.0.1', '192.168.0.2'], port=..., ssl_context=...)
+```
+
+Instantiating a `Cluster` does not actually connect us to any nodes.
+To establish connections and begin executing queries we need a
+`Session`, which is created by calling `Cluster.connect()`:
+
+```python
+cluster = Cluster()
+session = cluster.connect()
+```
+
+The `connect()` method takes an optional `keyspace` argument
+which sets the default keyspace for all queries made through that `Session`:
+
+```python
+cluster = Cluster()
+session = cluster.connect('mykeyspace')
+```
+
+You can always change a Session’s keyspace using `set_keyspace()` or
+by executing a `USE <keyspace>` query:
+
+```python
+session.set_keyspace('users')
+# or you can do this instead
+session.execute('USE users')
+```
+
+Profiles are passed in by `execution_profiles` dict.
+
+In this case we can construct the base `ExecutionProfile` passing all attributes:
+
+```python
+from cassandra.cluster import Cluster, ExecutionProfile, EXEC_PROFILE_DEFAULT
+from cassandra.policies import WhiteListRoundRobinPolicy, DowngradingConsistencyRetryPolicy
+from cassandra.query import tuple_factory
+
+profile = ExecutionProfile(
+    load_balancing_policy=WhiteListRoundRobinPolicy(['127.0.0.1']),
+    retry_policy=DowngradingConsistencyRetryPolicy(),
+    consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+    serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+    request_timeout=15,
+    row_factory=tuple_factory
+)
+cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile})
+session = cluster.connect()
+
+print(session.execute("SELECT release_version FROM system.local").one())
+```
+
+Users are free to setup additional profiles to be used by name:
+
+```python
+profile_long = ExecutionProfile(request_timeout=30)
+cluster = Cluster(execution_profiles={'long': profile_long})
+session = cluster.connect()
+session.execute(statement, execution_profile='long')
+```
+
+Also, parameters passed to `Session.execute` or attached to `Statement`s are still honored as before.
+
+## Executing Queries
+
+Now that we have a `Session` we can begin to execute queries. The simplest
+way to execute a query is to use `execute()`:
+
+```python
+rows = session.execute('SELECT name, age, email FROM users')
+for user_row in rows:
+    print user_row.name, user_row.age, user_row.email
+```
+
+This will transparently pick a Cassandra node to execute the query against
+and handle any retries that are necessary if the operation fails.
+
+By default, each row in the result set will be a
+[namedtuple](http://docs.python.org/2/library/collections.html#collections.namedtuple).
+Each row will have a matching attribute for each column defined in the schema,
+such as `name`, `age`, and so on.  You can also treat them as normal tuples
+by unpacking them or accessing fields by position.  The following three
+examples are equivalent:
+
+```python
+rows = session.execute('SELECT name, age, email FROM users')
+for row in rows:
+    print row.name, row.age, row.email
+```
+
+```python
+rows = session.execute('SELECT name, age, email FROM users')
+for (name, age, email) in rows:
+    print name, age, email
+```
+
+```python
+rows = session.execute('SELECT name, age, email FROM users')
+for row in rows:
+    print row[0], row[1], row[2]
+```
+
+If you prefer another result format, such as a `dict` per row, you
+can change the `row_factory` attribute.
+
+As mentioned in our [Drivers Best Practices Guide](https://docs.datastax.com/en/devapp/doc/devapp/driversBestPractices.html#driversBestPractices__usePreparedStatements),
+it is highly recommended to use [Prepared statements](#prepared-statement) for your
+frequently run queries.
+
+<a id="prepared-statement"></a>
+
+## Prepared Statements
+
+Prepared statements are queries that are parsed by Cassandra and then saved
+for later use.  When the driver uses a prepared statement, it only needs to
+send the values of parameters to bind.  This lowers network traffic
+and CPU utilization within Cassandra because Cassandra does not have to
+re-parse the query each time.
+
+To prepare a query, use `Session.prepare()`:
+
+```python
+user_lookup_stmt = session.prepare("SELECT * FROM users WHERE user_id=?")
+
+users = []
+for user_id in user_ids_to_query:
+    user = session.execute(user_lookup_stmt, [user_id])
+    users.append(user)
+```
+
+`prepare()` returns a `PreparedStatement` instance
+which can be used in place of `SimpleStatement` instances or literal
+string queries.  It is automatically prepared against all nodes, and the driver
+handles re-preparing against new nodes and restarted nodes when necessary.
+
+Note that the placeholders for prepared statements are `?` characters.  This
+is different than for simple, non-prepared statements (although future versions
+of the driver may use the same placeholders for both).
+
+### Passing Parameters to CQL Queries
+
+Althought it is not recommended, you can also pass parameters to non-prepared
+statements. The driver supports two forms of parameter place-holders: positional
+and named.
+
+Positional parameters are used with a `%s` placeholder.  For example,
+when you execute:
+
+```python
+session.execute(
+    """
+    INSERT INTO users (name, credits, user_id)
+    VALUES (%s, %s, %s)
+    """,
+    ("John O'Reilly", 42, uuid.uuid1())
+)
+```
+
+It is translated to the following CQL query:
+
+```default
+INSERT INTO users (name, credits, user_id)
+VALUES ('John O''Reilly', 42, 2644bada-852c-11e3-89fb-e0b9a54a6d93)
+```
+
+Note that you should use `%s` for all types of arguments, not just strings.
+For example, this would be **wrong**:
+
+```python
+session.execute("INSERT INTO USERS (name, age) VALUES (%s, %d)", ("bob", 42))  # wrong
+```
+
+Instead, use `%s` for the age placeholder.
+
+If you need to use a literal `%` character, use `%%`.
+
+**Note**: you must always use a sequence for the second argument, even if you are
+only passing in a single variable:
+
+```python
+session.execute("INSERT INTO foo (bar) VALUES (%s)", "blah")  # wrong
+session.execute("INSERT INTO foo (bar) VALUES (%s)", ("blah"))  # wrong
+session.execute("INSERT INTO foo (bar) VALUES (%s)", ("blah", ))  # right
+session.execute("INSERT INTO foo (bar) VALUES (%s)", ["blah"])  # right
+```
+
+Note that the second line is incorrect because in Python, single-element tuples
+require a comma.
+
+Named place-holders use the `%(name)s` form:
+
+```python
+session.execute(
+    """
+    INSERT INTO users (name, credits, user_id, username)
+    VALUES (%(name)s, %(credits)s, %(user_id)s, %(name)s)
+    """,
+    {'name': "John O'Reilly", 'credits': 42, 'user_id': uuid.uuid1()}
+)
+```
+
+Note that you can repeat placeholders with the same name, such as `%(name)s`
+in the above example.
+
+Only data values should be supplied this way.  Other items, such as keyspaces,
+table names, and column names should be set ahead of time (typically using
+normal string formatting).
+
+<a id="type-conversions"></a>
+
+### Type Conversions
+
+For non-prepared statements, Python types are cast to CQL literals in the
+following way:
+
+| Python Type                                                    | CQL Literal Type                                                                                                                       |
+|----------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| `None`                                                         | `NULL`                                                                                                                                 |
+| `bool`                                                         | `boolean`                                                                                                                              |
+| `float`                                                        | `float`<br/><br/><br/>`double`<br/><br/>                                                                                               |
+| `int`<br/><br/><br/>`long`<br/><br/>                           | `int`<br/><br/><br/>`bigint`<br/><br/><br/>`varint`<br/><br/><br/>`smallint`<br/><br/><br/>`tinyint`<br/><br/><br/>`counter`<br/><br/> |
+| `decimal.Decimal`                                              | `decimal`                                                                                                                              |
+| `str`<br/><br/><br/>`unicode`<br/><br/>                        | `ascii`<br/><br/><br/>`varchar`<br/><br/><br/>`text`<br/><br/>                                                                         |
+| `buffer`<br/><br/><br/>`bytearray`<br/><br/>                   | `blob`                                                                                                                                 |
+| `date`                                                         | `date`                                                                                                                                 |
+| `datetime`                                                     | `timestamp`                                                                                                                            |
+| `time`                                                         | `time`                                                                                                                                 |
+| `list`<br/><br/><br/>`tuple`<br/><br/><br/>generator<br/><br/> | `list`                                                                                                                                 |
+| `set`<br/><br/><br/>`frozenset`<br/><br/>                      | `set`                                                                                                                                  |
+| `dict`<br/><br/><br/>`OrderedDict`<br/><br/>                   | `map`                                                                                                                                  |
+| `uuid.UUID`                                                    | `timeuuid`<br/><br/><br/>`uuid`<br/><br/>                                                                                              |
+
+### Asynchronous Queries
+
+The driver supports asynchronous query execution through
+`execute_async()`.  Instead of waiting for the query to
+complete and returning rows directly, this method almost immediately
+returns a `ResponseFuture` object.  There are two ways of
+getting the final result from this object.
+
+The first is by calling `result()` on it. If
+the query has not yet completed, this will block until it has and
+then return the result or raise an Exception if an error occurred.
+For example:
+
+```python
+from cassandra import ReadTimeout
+
+query = "SELECT * FROM users WHERE user_id=%s"
+future = session.execute_async(query, [user_id])
+
+# ... do some other work
+
+try:
+    rows = future.result()
+    user = rows[0]
+    print user.name, user.age
+except ReadTimeout:
+    log.exception("Query timed out:")
+```
+
+This works well for executing many queries concurrently:
+
+```python
+# build a list of futures
+futures = []
+query = "SELECT * FROM users WHERE user_id=%s"
+for user_id in ids_to_fetch:
+    futures.append(session.execute_async(query, [user_id])
+
+# wait for them to complete and use the results
+for future in futures:
+    rows = future.result()
+    print rows[0].name
+```
+
+Alternatively, instead of calling `result()`,
+you can attach callback and errback functions through the
+`add_callback()`,
+`add_errback()`, and
+`add_callbacks()`, methods.  If you have used
+Twisted Python before, this is designed to be a lightweight version of
+that:
+
+```python
+def handle_success(rows):
+    user = rows[0]
+    try:
+        process_user(user.name, user.age, user.id)
+    except Exception:
+        log.error("Failed to process user %s", user.id)
+        # don't re-raise errors in the callback
+
+def handle_error(exception):
+    log.error("Failed to fetch user info: %s", exception)
+
+
+future = session.execute_async(query)
+future.add_callbacks(handle_success, handle_error)
+```
+
+There are a few important things to remember when working with callbacks:
+: * **Exceptions that are raised inside the callback functions will be logged and then ignored.**
+  * Your callback will be run on the event loop thread, so any long-running
+    operations will prevent other requests from being handled
+
+## Setting a Consistency Level
+
+The consistency level used for a query determines how many of the
+replicas of the data you are interacting with need to respond for
+the query to be considered a success.
+
+By default, [`ConsistencyLevel.LOCAL_ONE`](api/cassandra.md#cassandra.ConsistencyLevel.LOCAL_ONE) will be used for all queries.
+You can specify a different default by setting the `ExecutionProfile.consistency_level`
+for the execution profile with key `EXEC_PROFILE_DEFAULT`.
+To specify a different consistency level per request, wrap queries
+in a `SimpleStatement`:
+
+```python
+from cassandra import ConsistencyLevel
+from cassandra.query import SimpleStatement
+
+query = SimpleStatement(
+    "INSERT INTO users (name, age) VALUES (%s, %s)",
+    consistency_level=ConsistencyLevel.QUORUM)
+session.execute(query, ('John', 42))
+```
+
+### Setting a Consistency Level with Prepared Statements
+
+To specify a consistency level for prepared statements, you have two options.
+
+The first is to set a default consistency level for every execution of the
+prepared statement:
+
+```python
+from cassandra import ConsistencyLevel
+
+cluster = Cluster()
+session = cluster.connect("mykeyspace")
+user_lookup_stmt = session.prepare("SELECT * FROM users WHERE user_id=?")
+user_lookup_stmt.consistency_level = ConsistencyLevel.QUORUM
+
+# these will both use QUORUM
+user1 = session.execute(user_lookup_stmt, [user_id1])[0]
+user2 = session.execute(user_lookup_stmt, [user_id2])[0]
+```
+
+The second option is to create a `BoundStatement` from the
+`PreparedStatement` and binding parameters and set a consistency
+level on that:
+
+```python
+# override the QUORUM default
+user3_lookup = user_lookup_stmt.bind([user_id3])
+user3_lookup.consistency_level = ConsistencyLevel.ALL
+user3 = session.execute(user3_lookup)
+```
+
+### Speculative Execution
+
+Speculative execution is a way to minimize latency by preemptively executing several
+instances of the same query against different nodes. For more details about this
+technique, see [Speculative Execution with DataStax Drivers](https://docs.datastax.com/en/devapp/doc/devapp/driversSpeculativeRetry.html).
+
+To enable speculative execution:
+
+* Configure a [`SpeculativeExecutionPolicy`](api/cassandra/policies.md#cassandra.policies.SpeculativeExecutionPolicy) with the ExecutionProfile
+* Mark your query as idempotent, which mean it can be applied multiple
+  times without changing the result of the initial application.
+  See [Query Idempotence](https://docs.datastax.com/en/devapp/doc/devapp/driversQueryIdempotence.html) for more details.
+
+Example:
+
+```python
+from cassandra.cluster import Cluster, ExecutionProfile, EXEC_PROFILE_DEFAULT
+from cassandra.policies import ConstantSpeculativeExecutionPolicy
+from cassandra.query import SimpleStatement
+
+# Configure the speculative execution policy
+ep = ExecutionProfile(
+    speculative_execution_policy=ConstantSpeculativeExecutionPolicy(delay=.5, max_attempts=10)
+)
+cluster = Cluster(..., execution_profiles={EXEC_PROFILE_DEFAULT: ep})
+session = cluster.connect()
+
+# Mark the query idempotent
+query = SimpleStatement(
+    "UPDATE my_table SET list_col = [1] WHERE pk = 1",
+    is_idempotent=True
+)
+
+# Execute. A new query will be sent to the server every 0.5 second
+# until we receive a response, for a max number attempts of 10.
+session.execute(query)
+```
