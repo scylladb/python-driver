@@ -140,7 +140,10 @@ class Metadata(object):
     def refresh(self, connection, timeout, target_type=None, change_type=None, fetch_size=None,
                 metadata_request_timeout=None, **kwargs):
 
-        host = self.get_host(connection.original_endpoint)
+        host_id = getattr(connection, '_control_connection_host_id', None)
+        host = self.get_host_by_host_id(host_id) if host_id is not None else None
+        if host is None:
+            host = self.get_host(connection.original_endpoint)
         server_version = host.release_version if host else None
         dse_version = host.dse_version if host else None
         parser = get_schema_parser(connection, server_version, dse_version, timeout, metadata_request_timeout, fetch_size)

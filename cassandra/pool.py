@@ -29,7 +29,8 @@ except ImportError:
     from cassandra.util import WeakSet  # NOQA
 
 from cassandra import AuthenticationFailed
-from cassandra.connection import ConnectionException, EndPoint, DefaultEndPoint
+from cassandra.connection import (ConnectionException, EndPoint,
+                                  DefaultEndPoint, UnixSocketEndPoint)
 from cassandra.policies import HostDistance
 
 log = logging.getLogger(__name__)
@@ -241,6 +242,12 @@ class Host(object):
         return hash(self.endpoint)
 
     def __lt__(self, other):
+        self_is_unix = isinstance(self.endpoint, UnixSocketEndPoint)
+        other_is_unix = isinstance(other.endpoint, UnixSocketEndPoint)
+        if self_is_unix != other_is_unix:
+            # Endpoint comparators assume same-kind operands, so partition
+            # Unix and network Hosts before delegating their ordering.
+            return self_is_unix
         return self.endpoint < other.endpoint
 
     def __str__(self):
@@ -694,7 +701,11 @@ class HostConnection(object):
         shard_aware_port_ssl; if it is absent, return None so the pool opens a
         regular SSL connection instead of falling back to the plaintext port.
         Explicit ssl_options={}, like ssl_context, marks the cluster SSL-enabled.
+        Unix sockets bypass advertised TCP ports and source-port shard targeting.
         """
+        if isinstance(self.host.endpoint, UnixSocketEndPoint):
+            return None
+
         if (self.advanced_shardaware_block_until and self.advanced_shardaware_block_until > time.time()) or \
            self._session.cluster.shard_aware_options.disable_shardaware_port:
             return None

@@ -15,11 +15,12 @@ import unittest
 
 from binascii import unhexlify
 import logging
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import os
 import uuid
 
 import cassandra
+from cassandra.connection import DefaultEndPoint, UnixSocketEndPoint
 from cassandra.cqltypes import strip_frozen
 from cassandra.marshal import uint16_unpack, uint16_pack
 from cassandra.metadata import (Murmur3Token, MD5Token,
@@ -828,6 +829,30 @@ class IndexTest(unittest.TestCase):
 
 
 class SchemaParserLookupTests(unittest.TestCase):
+
+    def test_refresh_uses_control_connection_host_id_for_versions(self):
+        metadata = Metadata()
+        host_id = uuid.uuid4()
+        host = Host(
+            UnixSocketEndPoint('/tmp/maintenance.sock'),
+            SimpleConvictionPolicy,
+            host_id=host_id)
+        host.release_version = '3.11.0'
+        metadata.add_or_return_host(host)
+
+        connection = Mock()
+        connection.endpoint = DefaultEndPoint('192.168.1.0')
+        connection.original_endpoint = connection.endpoint
+        connection._control_connection_host_id = host_id
+        parser = Mock()
+        parser.get_all_keyspaces.return_value = ()
+
+        with patch('cassandra.metadata.get_schema_parser',
+                   return_value=parser) as get_parser:
+            metadata.refresh(connection, 0.1)
+
+        get_parser.assert_called_once_with(
+            connection, '3.11.0', None, 0.1, None, None)
 
     def test_reads_versions_from_system_local_when_missing(self):
         connection = Mock()
