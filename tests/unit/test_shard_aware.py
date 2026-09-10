@@ -21,7 +21,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from cassandra.cluster import ShardAwareOptions
 from cassandra.pool import HostConnection, HostDistance
-from cassandra.connection import ShardingInfo, DefaultEndPoint
+from cassandra.connection import (ShardingInfo, DefaultEndPoint,
+                                  UnixSocketEndPoint)
 from cassandra.metadata import Murmur3Token
 from cassandra.protocol_features import ProtocolFeatures
 from cassandra.shard_info import _ShardingInfo
@@ -166,6 +167,40 @@ class TestShardAware(unittest.TestCase):
                         assert connection.endpoint == DefaultEndPoint("1.2.3.4", port=port)
             finally:
                 session.cluster.executor.shutdown(wait=True)
+
+    def test_unix_socket_bypasses_advanced_shard_aware_port(self):
+        endpoint = UnixSocketEndPoint('/tmp/maintenance.sock')
+        host = MagicMock()
+        host.endpoint = endpoint
+        session = MockSession()
+        pending = []
+
+        def submit(fn, *args, **kwargs):
+            pending.append((fn, args, kwargs))
+
+        session.submit = submit
+        connection_factory = MagicMock(
+            side_effect=session.mock_connection_factory)
+        session.cluster.connection_factory = connection_factory
+
+        try:
+            pool = HostConnection(
+                host=host, host_distance=HostDistance.REMOTE,
+                session=session)
+            while pending:
+                fn, args, kwargs = pending.pop(0)
+                fn(*args, **kwargs)
+
+            assert pool._get_shard_aware_endpoint() is None
+            assert set(pool._connections) == {0, 1, 2, 3}
+            assert connection_factory.call_count == 4
+            for factory_call in connection_factory.call_args_list:
+                args, kwargs = factory_call
+                assert args[0] is endpoint
+                assert 'shard_id' not in kwargs
+                assert 'total_shards' not in kwargs
+        finally:
+            session.cluster.executor.shutdown(wait=True)
 
     def test_ssl_advanced_shard_aware_port_requires_ssl_port(self):
         """

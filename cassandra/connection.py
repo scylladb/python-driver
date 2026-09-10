@@ -899,6 +899,8 @@ class Connection(object):
     is_unsupported_proto_version = False
 
     is_control_connection = False
+    # Stable identity learned from system.local for control connections.
+    _control_connection_host_id = None
     signaled_error = False  # used for flagging at the pool level
 
     allow_beta_protocol_version = False

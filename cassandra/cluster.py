@@ -51,7 +51,8 @@ from cassandra.client_routes import ClientRoutesChangeType, ClientRoutesConfig, 
 from cassandra.connection import (ClientRoutesEndPointFactory, ConnectionException, ConnectionShutdown,
                                   ConnectionHeartbeat, ProtocolVersionUnsupported,
                                   EndPoint, DefaultEndPoint, DefaultEndPointFactory,
-                                  SniEndPointFactory, ConnectionBusy, locally_supported_compressions)
+                                  SniEndPointFactory, UnixSocketEndPoint,
+                                  ConnectionBusy, locally_supported_compressions)
 from cassandra.cqltypes import UserType
 import cassandra.cqltypes as types
 from cassandra.encoder import Encoder
@@ -2225,8 +2226,7 @@ class Cluster(object):
         Returns the control connection host metadata.
         """
         connection = self.control_connection._connection
-        endpoint = connection.endpoint if connection else None
-        return self.metadata.get_host(endpoint) if endpoint else None
+        return self.control_connection._get_host_for_connection(connection)
 
     def refresh_schema_metadata(self, max_schema_agreement_wait=None):
         """
@@ -4131,6 +4131,7 @@ class ControlConnection(object):
         found_host_ids = set()
         found_endpoints = set()
 
+        local_row = None
         if local_result.parsed_rows:
             local_rows = dict_factory(local_result.column_names, local_result.parsed_rows)
             local_row = local_rows[0]
@@ -4150,11 +4151,13 @@ class ControlConnection(object):
             if not self._is_valid_peer(row):
                 continue
 
-            endpoint = self._cluster.endpoint_factory.create(row)
+            factory_endpoint = self._cluster.endpoint_factory.create(row)
             host_id = row.get("host_id")
 
-            if endpoint in found_endpoints:
-                log.warning("Found multiple hosts with the same endpoint(%s). Excluding peer %s - %s", endpoint, row.get("peer"), host_id)
+            # Use the factory endpoint for duplicate detection even when a Unix
+            # socket is retained as the route to the local host.
+            if factory_endpoint in found_endpoints:
+                log.warning("Found multiple hosts with the same endpoint(%s). Excluding peer %s - %s", factory_endpoint, row.get("peer"), host_id)
                 continue
 
             if host_id in found_host_ids:
@@ -4162,13 +4165,28 @@ class ControlConnection(object):
                 continue
 
             found_host_ids.add(host_id)
-            found_endpoints.add(endpoint)
+            found_endpoints.add(factory_endpoint)
+            existing_host = self._cluster.metadata.get_host_by_host_id(host_id)
+
+            # Host hashes depend on their endpoint, so never replace the route
+            # of an existing Host with or from a Unix socket. A newly discovered
+            # local Host keeps the socket which actually reached the node.
+            if (existing_host is not None and
+                    isinstance(existing_host.endpoint, UnixSocketEndPoint)):
+                endpoint = existing_host.endpoint
+            elif (existing_host is None and row is local_row and
+                    isinstance(connection.original_endpoint,
+                               UnixSocketEndPoint)):
+                endpoint = connection.original_endpoint
+            else:
+                endpoint = factory_endpoint
+
             host = self._cluster.metadata.get_host(endpoint)
             datacenter = row.get("data_center")
             rack = row.get("rack")
 
             if host is None:
-                host = self._cluster.metadata.get_host_by_host_id(host_id)
+                host = existing_host
                 if host and host.endpoint != endpoint:
                     log.debug("[control connection] Updating host ip from %s to %s for (%s)", host.endpoint, endpoint, host_id)
                     reconnector = host.get_and_set_reconnection_handler(None)
@@ -4197,6 +4215,9 @@ class ControlConnection(object):
             host.dse_version = row.get("dse_version")
             host.dse_workload = row.get("workload")
             host.dse_workloads = row.get("workloads")
+
+            if row is local_row:
+                connection._control_connection_host_id = host_id
 
             tokens = row.get("tokens", None)
             if partitioner and tokens and self._token_meta_enabled:
@@ -4465,14 +4486,49 @@ class ControlConnection(object):
                 continue
             endpoint = self._cluster.endpoint_factory.create(row)
             peer = self._cluster.metadata.get_host(endpoint)
+            if peer is None:
+                peer_by_host_id = self._cluster.metadata.get_host_by_host_id(
+                    row.get('host_id'))
+                if (peer_by_host_id is not None and
+                        isinstance(peer_by_host_id.endpoint,
+                                   UnixSocketEndPoint)):
+                    peer = peer_by_host_id
             if peer and peer.is_up is not False:
-                versions[schema_ver].add(endpoint)
+                versions[schema_ver].add(peer.endpoint)
 
         if len(versions) == 1:
             log.debug("[control connection] Schemas match")
             return None
 
         return dict((version, list(nodes)) for version, nodes in versions.items())
+
+    def _get_host_for_connection(self, connection):
+        if connection is None:
+            return None
+
+        host_id = getattr(connection, '_control_connection_host_id', None)
+        if host_id is not None:
+            host = self._cluster.metadata.get_host_by_host_id(host_id)
+            if host is not None:
+                return host
+
+        original_endpoint = getattr(connection, 'original_endpoint', None)
+        if original_endpoint is not None:
+            host = self._cluster.metadata.get_host(original_endpoint)
+            if host is not None:
+                return host
+
+        return self._cluster.metadata.get_host(connection.endpoint)
+
+    def _connection_matches_host(self, connection, host):
+        if connection is None:
+            return False
+
+        host_id = getattr(connection, '_control_connection_host_id', None)
+        if host_id is not None and host_id == host.host_id:
+            return True
+
+        return self._get_host_for_connection(connection) is host
 
     def _get_peers_query(self, peers_query_type, connection=None):
         """
@@ -4504,9 +4560,10 @@ class ControlConnection(object):
                 query_template = (self._SELECT_SCHEMA_PEERS_TEMPLATE
                                   if peers_query_type == self.PeersQueryType.PEERS_SCHEMA
                                   else self._SELECT_PEERS_NO_TOKENS_TEMPLATE)
-                original_endpoint_host = self._cluster.metadata.get_host(connection.original_endpoint)
-                host_release_version = None if original_endpoint_host is None else original_endpoint_host.release_version
-                host_dse_version = None if original_endpoint_host is None else original_endpoint_host.dse_version
+                connection_host = self._get_host_for_connection(
+                    connection)
+                host_release_version = None if connection_host is None else connection_host.release_version
+                host_dse_version = None if connection_host is None else connection_host.dse_version
                 uses_native_address_query = (
                     host_dse_version and Version(host_dse_version) >= self._MINIMUM_NATIVE_ADDRESS_DSE_VERSION)
 
@@ -4527,13 +4584,45 @@ class ControlConnection(object):
             # try just signaling the cluster, as this will trigger a reconnect
             # as part of marking the host down
             if self._connection and self._connection.is_defunct:
-                host = self._cluster.metadata.get_host(self._connection.endpoint)
+                connection = self._connection
+                host = self._get_host_for_connection(connection)
                 # host may be None if it's already been removed, but that indicates
                 # that errors have already been reported, so we're fine
                 if host:
-                    self._cluster.signal_connection_failure(
-                        host, self._connection.last_error, is_host_addition=False)
-                    return
+                    original_endpoint = getattr(
+                        connection, 'original_endpoint', None)
+                    unix_backed = (
+                        isinstance(host.endpoint, UnixSocketEndPoint) or
+                        isinstance(connection.endpoint, UnixSocketEndPoint) or
+                        isinstance(original_endpoint, UnixSocketEndPoint))
+                    route_mismatch = connection.endpoint != host.endpoint
+                    # Keep ordinary endpoint-equal TCP connections on the
+                    # legacy signal-only path. General suppressed-DOWN recovery
+                    # and its reconnection cadence are outside this change.
+                    if not unix_backed and not route_mismatch:
+                        self._cluster.signal_connection_failure(
+                            host, connection.last_error,
+                            is_host_addition=False)
+                        return
+
+                    # A newly resolvable Unix Host or alternate connection
+                    # route still needs the direct reconnect fallback when
+                    # host-state handling suppresses its DOWN notification. A
+                    # fresh DOWN transition guarantees that on_down() will
+                    # enqueue the reconnect instead.
+                    with host.lock:
+                        host_was_up = host.is_up is True
+                        host_was_reconnecting = (
+                            host.is_currently_reconnecting())
+                        self._cluster.signal_connection_failure(
+                            host, connection.last_error,
+                            is_host_addition=False)
+                        down_notification_queued = (
+                            host_was_up and not host_was_reconnecting and
+                            host.is_up is False)
+
+                    if down_notification_queued:
+                        return
 
         # if the connection is not defunct or the host already left, reconnect
         # manually
@@ -4545,7 +4634,7 @@ class ControlConnection(object):
     def on_down(self, host):
 
         conn = self._connection
-        if conn and conn.endpoint == host.endpoint and \
+        if self._connection_matches_host(conn, host) and \
                 self._reconnection_handler is None:
             log.debug("[control connection] Control connection host (%s) is "
                       "considered down, starting reconnection", host)
@@ -4558,7 +4647,7 @@ class ControlConnection(object):
 
     def on_remove(self, host):
         c = self._connection
-        if c and c.endpoint == host.endpoint:
+        if self._connection_matches_host(c, host):
             log.debug("[control connection] Control connection host (%s) is being removed. Reconnecting", host)
             # refresh will be done on reconnect
             self.reconnect()
