@@ -93,9 +93,33 @@ jobs:
     - name: Test with pytest
       env:
         EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
+        INTEGRATION_LOG_ARTIFACT_DIR: integration-test-logs
         PROTOCOL_VERSION: 4
       run: |
         if [[ "${{ matrix.python-version }}" =~ t$ ]]; then
           export PYTHON_GIL=0
         fi
         uv run pytest -v tests/integration/standard/ tests/integration/cqlengine/
+
+    - name: Upload ccm logs on failure
+      if: failure()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: integration-logs-${{ matrix.event_loop_manager }}-${{ matrix.python-version }}
+        path: |
+          integration-test-logs/**
+          tests/integration/ccm/**/*.conf
+          tests/integration/ccm/**/*.log
+          tests/integration/ccm/**/*.yaml
+          tests/integration/ccm/**/*.yml
+          tests/integration/ccm/**/conf/**
+          tests/integration/ccm/**/logs/**
+          /home/runner/.ccm/**/*.conf
+          /home/runner/.ccm/**/*.log
+          /home/runner/.ccm/**/*.yaml
+          /home/runner/.ccm/**/*.yml
+          /home/runner/.ccm/**/conf/**
+          /home/runner/.ccm/**/logs/**
+        if-no-files-found: warn
+        include-hidden-files: true
+        retention-days: 14
