@@ -53,6 +53,7 @@ from cassandra.connection import (ClientRoutesEndPointFactory, ConnectionExcepti
                                   EndPoint, DefaultEndPoint, DefaultEndPointFactory,
                                   SniEndPointFactory, UnixSocketEndPoint,
                                   ConnectionBusy, locally_supported_compressions)
+from cassandra.ssl_session_cache import SSLSessionCache
 from cassandra.cqltypes import UserType
 import cassandra.cqltypes as types
 from cassandra.encoder import Encoder
@@ -867,6 +868,8 @@ class Cluster(object):
     .. versionadded:: 3.17.0
     """
 
+    # ssl_session_cache is a property, defined with the rest of the TLS
+    # session resumption code below.
     sockopts = None
     """
     An optional list of tuples which will be used as arguments to
@@ -1167,6 +1170,8 @@ class Cluster(object):
     _prepared_statements = None
     _prepared_statement_lock = None
     _idle_heartbeat = None
+    _ssl_session_cache = _NOT_SET
+    _ssl_session_cache_created = None
     _protocol_version_explicit = False
     _discount_down_events = True
 
@@ -1222,7 +1227,8 @@ class Cluster(object):
                  application_info:Optional[ApplicationInfoBase]=None,
                  client_routes_config:Optional[ClientRoutesConfig]=None,
                  allow_control_connection_query_fallback:Optional[ControlConnectionQueryFallback]=ControlConnectionQueryFallback.Disabled,
-                 driver_config_reporting_enabled=True
+                 driver_config_reporting_enabled=True,
+                 ssl_session_cache=_NOT_SET
                  ):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
@@ -1469,6 +1475,9 @@ class Cluster(object):
 
         self.ssl_options = ssl_options
         self.ssl_context = ssl_context
+
+        self._ssl_session_cache = ssl_session_cache
+
         # Materialized once: these are applied to every socket the cluster opens
         # and are read again to build the configuration report, so a one-shot
         # iterable would leave whichever consumer ran second with nothing at all.
@@ -1681,6 +1690,120 @@ class Cluster(object):
             raise OperationTimedOut("Failed to create all new connection pools in the %ss timeout." % pool_wait_timeout,
                                     timeout=pool_wait_timeout)
 
+    @property
+    def ssl_session_cache(self):
+        """
+        A :class:`~cassandra.ssl_session_cache.SSLSessionCache` shared by every
+        connection this cluster opens, letting them resume TLS sessions instead of
+        performing a full handshake each time.  This matters most for the group of
+        per-shard connections opened to a node at once, and for reconnections.
+
+        One is created on first use when :attr:`~Cluster.ssl_context` is set.
+        Nothing is settled before then: this answers against whatever
+        :attr:`~Cluster.ssl_context` and :attr:`~Cluster.connection_class` are in
+        force when it is read, so configuring TLS at any point still gets a cache,
+        and swapping in a connection class that cannot resume turns resumption off
+        rather than handing that class a keyword it does not take.
+
+        A cache created here is reachable only through this attribute, so it and
+        the sessions in it go when the cluster does.  A cache passed in stays the
+        caller's: :meth:`~.Cluster.shutdown` leaves its entries alone, so several
+        clusters -- at the same time or one after another -- can share the
+        sessions in it.  Its entries hold the ``SSLContext`` they were established
+        with, bounded by the cache's
+        :attr:`~cassandra.ssl_session_cache.SSLSessionCache.max_size`; call
+        :meth:`~cassandra.ssl_session_cache.SSLSessionCache.clear` to release
+        them.
+
+        Assigning it is honoured whenever: a cache that cannot be used reads back
+        as :const:`None` rather than being left to fill with nothing, and
+        :meth:`~.Cluster.connect` logs the reason for one the caller asked for.
+
+        Pass ``ssl_session_cache=None`` to :class:`.Cluster` to turn resumption
+        off, or pass your own instance to size it or to share it between
+        clusters::
+
+            from cassandra.ssl_session_cache import SSLSessionCache
+
+            cluster = Cluster(ssl_context=ssl_context,
+                              ssl_session_cache=SSLSessionCache(max_size=64))
+
+        Resumption is available when TLS is configured through
+        :attr:`~Cluster.ssl_context` and the reactor establishes TLS with the
+        standard library's ``ssl`` module: the ``libev`` reactor, and ``asyncore``
+        on the Python versions that still ship it, which is up to 3.11.  Which of
+        them is the default depends on what can be imported -- libev first, then
+        asyncore, then asyncio -- so on Python 3.12 and newer without the libev
+        extension the default is the ``asyncio`` reactor, and resumption is off.
+
+        It is not available with the deprecated :attr:`~Cluster.ssl_options`-only
+        configuration, because each connection builds its own ``SSLContext`` and a
+        session cannot be replayed onto a different one; nor on the ``asyncio``
+        reactor, which performs the handshake inside
+        ``loop.create_connection()``, leaving no point at which to restore a
+        session.  In those cases no cache is created and connections handshake in
+        full.
+
+        It equally requires the server to hand out something it will honour later.
+        Scylla issues session tickets only when ``enable_session_tickets`` is set
+        in its ``client_encryption_options``, which is off by default; without it
+        nothing resumes and every connection performs a full handshake, as it would
+        have anyway.  Over TLS 1.3 the cache then stays empty, while over TLS 1.2
+        such a server still assigns a session id, so the cache may hold an entry it
+        will not honour -- offering that costs nothing and the handshake simply
+        completes in full."""
+        if not self._tls_session_resumption_available():
+            return None
+        if self._ssl_session_cache is not _NOT_SET:
+            return self._ssl_session_cache
+        if self._ssl_session_cache_created is None:
+            self._ssl_session_cache_created = SSLSessionCache()
+        return self._ssl_session_cache_created
+
+    @ssl_session_cache.setter
+    def ssl_session_cache(self, cache):
+        self._ssl_session_cache = cache
+
+    def _tls_session_resumption_available(self):
+        """
+        Whether a session could be resumed at all: it has to be replayable onto
+        the same ``SSLContext``, and the reactor has to give the driver a chance
+        to offer it before the handshake.  connection_class is not required to
+        derive from Connection, so one that does not report the capability is
+        treated as lacking it rather than raising.
+        """
+        return (self.ssl_context is not None and
+                getattr(self.connection_class,
+                        'supports_tls_session_resumption', False))
+
+    def _warn_if_tls_session_cache_unusable(self):
+        """
+        Say so when the caller asked for a cache this cluster cannot use.
+
+        Asking for resumption and silently getting none is worse than not
+        having it: the attribute reads as None and nothing is ever cached,
+        which is also what a server that issues no tickets looks like.  Only
+        what the caller set is worth saying anything about -- a cache made for
+        a cluster is only ever made where it can be used.
+        """
+        if (self._ssl_session_cache is _NOT_SET
+                or self._ssl_session_cache is None):
+            return
+        if self._tls_session_resumption_available():
+            return
+
+        if self.ssl_context is None:
+            reason = ('no ssl_context is configured, and a session cannot be '
+                      'replayed onto the fresh context each connection builds '
+                      'from ssl_options')
+        else:
+            reason = ('%s cannot restore a session before the handshake' %
+                      getattr(self.connection_class, '__name__',
+                              self.connection_class))
+        log.warning('ssl_session_cache is set but TLS session resumption is '
+                    'unavailable here, so no sessions will be cached: %s.',
+                    reason)
+
     def connection_factory(self, endpoint, host_conn = None, *args, **kwargs):
         """
         Called to create a new connection with proper configuration.
@@ -1702,6 +1825,12 @@ class Cluster(object):
         kwargs_dict.setdefault('sockopts', self.sockopts)
         kwargs_dict.setdefault('ssl_options', self.ssl_options)
         kwargs_dict.setdefault('ssl_context', self.ssl_context)
+        if self.ssl_session_cache is not None:
+            # Set only where resumption is possible, so this is also the test
+            # for that: a connection class that does not accept the keyword
+            # should not have to grow one for a cluster that will never cache a
+            # session.
+            kwargs_dict.setdefault('ssl_session_cache', self.ssl_session_cache)
         kwargs_dict.setdefault('cql_version', self.cql_version)
         kwargs_dict.setdefault('protocol_version', self.protocol_version)
         kwargs_dict.setdefault('user_type_map', self._user_types)
@@ -1761,6 +1890,7 @@ class Cluster(object):
                           self.contact_points, self.protocol_version)
                 self.connection_class.initialize_reactor()
                 _register_cluster_shutdown(self)
+                self._warn_if_tls_session_cache_unusable()
 
                 try:
                     self.control_connection.connect()
@@ -1850,6 +1980,11 @@ class Cluster(object):
         if self.metrics_enabled and self.metrics:
             self.metrics.shutdown()
 
+        # Nothing to do here for ssl_session_cache: a cache created for this
+        # cluster is reachable only through it and goes when it does, and a
+        # cache the caller supplied is the caller's to empty -- deleting rows
+        # in it here would defeat sharing one so that sessions outlive a
+        # cluster.  See the attribute's documentation.
         _discard_cluster_shutdown(self)
 
     def __enter__(self):
