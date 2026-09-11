@@ -359,7 +359,7 @@ class ControlConnectionTest(unittest.TestCase):
 
         self.control_connection.refresh_node_list_and_token_map()
 
-        local_host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        local_host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
         assert local_host.endpoint == DefaultEndPoint('192.168.1.4')
         assert local_host.listen_address == '192.168.1.0'
 
@@ -380,7 +380,7 @@ class ControlConnectionTest(unittest.TestCase):
         assert 'listen_address' in local_projection
         assert 'broadcast_address' in local_projection
         assert 'tokens' not in local_projection
-        local_host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        local_host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
         assert local_host.listen_address == '192.168.1.0'
         assert local_host.broadcast_address == '10.0.0.1'
 
