@@ -98,9 +98,8 @@ class Host(object):
 
     'system.local.listen_address'
 
-    This is only available in the ``system.local`` table for newer versions of Cassandra. It is also not
-    queried if :attr:`~.Cluster.token_metadata_enabled` is ``False``. Usually the same as ``broadcast_address``
-    unless configured differently in cassandra.yaml.
+    This is only available in the ``system.local`` table for newer versions of Cassandra. Usually the
+    same as ``broadcast_address`` unless configured differently in cassandra.yaml.
     """
 
     listen_port = None

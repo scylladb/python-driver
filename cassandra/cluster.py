@@ -3768,7 +3768,7 @@ class ControlConnection(object):
     _SELECT_PEERS = "SELECT peer, data_center, host_id, rack, release_version, rpc_address, schema_version, tokens FROM system.peers"
     _SELECT_PEERS_NO_TOKENS_TEMPLATE = "SELECT host_id, peer, data_center, rack, rpc_address, {nt_col_name}, release_version, schema_version FROM system.peers"
     _SELECT_LOCAL = "SELECT broadcast_address, cluster_name, data_center, host_id, listen_address, partitioner, rack, release_version, rpc_address, schema_version, tokens FROM system.local WHERE key='local'"
-    _SELECT_LOCAL_NO_TOKENS = "SELECT host_id, cluster_name, data_center, rack, partitioner, release_version, schema_version, rpc_address FROM system.local WHERE key='local'"
+    _SELECT_LOCAL_NO_TOKENS = "SELECT broadcast_address, cluster_name, data_center, host_id, listen_address, partitioner, rack, release_version, rpc_address, schema_version FROM system.local WHERE key='local'"
     # Used only when token_metadata_enabled is set to False
     _SELECT_LOCAL_NO_TOKENS_RPC_ADDRESS = "SELECT rpc_address FROM system.local WHERE key='local'"
 
@@ -4217,6 +4217,8 @@ class ControlConnection(object):
             host.dse_workloads = row.get("workloads")
 
             if row is local_row:
+                if "listen_address" in row:
+                    host.listen_address = row["listen_address"]
                 connection._control_connection_host_id = host_id
 
             tokens = row.get("tokens", None)

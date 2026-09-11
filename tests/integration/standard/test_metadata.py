@@ -73,17 +73,15 @@ class HostMetaDataTests(BasicExistingKeyspaceUnitTestCase):
                 assert host.broadcast_rpc_port is not None
 
         con = self.cluster.control_connection.get_connections()[0]
-        local_host = con.host
+        local_host = self.cluster.control_connection._get_host_for_connection(con)
 
         # The control connection node should have the listen address set.
-        # Note: Scylla does not populate listen_address in system.local
-        if SCYLLA_VERSION is None:
-            listen_addrs = [host.listen_address for host in self.cluster.metadata.all_hosts()]
-            assert local_host in listen_addrs
+        assert local_host is not None
+        assert local_host.listen_address is not None
 
         # The control connection node should have the broadcast_rpc_address set.
         rpc_addrs = [host.broadcast_rpc_address for host in self.cluster.metadata.all_hosts()]
-        assert local_host in rpc_addrs
+        assert con.host in rpc_addrs
 
     @unittest.skipUnless(
         os.getenv('MAPPED_CASSANDRA_VERSION', None) is not None,
