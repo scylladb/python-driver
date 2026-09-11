@@ -27,7 +27,7 @@ from cassandra.cqltypes import (
     cql_typename, int8_pack, int64_pack, int64_unpack, lookup_casstype,
     lookup_casstype_simple, parse_casstype_args,
     int32_pack, Int32Type, ListType, MapType, VectorType,
-    FloatType
+    FloatType, int16_pack
 )
 from cassandra.encoder import cql_quote
 from cassandra.pool import Host
@@ -524,6 +524,247 @@ class VectorTests(unittest.TestCase):
         ctype_four = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.IntegerType, 4)")
         with pytest.raises(ValueError, match="Additional bytes remaining after vector deserialization completed"):
             ctype_four.deserialize(ctype_five_bytes, 0)
+
+    def test_vector_cython_deserializer(self):
+        """
+        Test that VectorType uses the Cython DesVectorType deserializer
+        and correctly deserializes vectors of supported numeric types.
+
+        This exercises DesVectorType.deserialize_bytes() directly (the
+        actual Cython fast-path code this test is meant to validate)
+        rather than VectorType.deserialize(), which is the pure-Python
+        fallback implementation in cqltypes.py and never touches the
+        Cython deserializer at all -- calling it here would let a bug in
+        DesVectorType.deserialize_bytes go completely undetected even
+        though find_deserializer() correctly *selected* DesVectorType.
+
+        @since 3.x
+        @expected_result Cython deserializer exists and correctly deserializes vector data
+
+        @test_category data_types:vector
+        """
+        import struct
+        try:
+            from cassandra.deserializers import find_deserializer
+        except ImportError:
+            self.skipTest("Cython deserializers not available")
+
+        # Test float vector
+        vt_float = VectorType.apply_parameters(['FloatType', 4], {})
+        des_float = find_deserializer(vt_float)
+        self.assertEqual(des_float.__class__.__name__, 'DesVectorType')
+
+        data_float = struct.pack('>4f', 1.0, 2.0, 3.0, 4.0)
+        result_float = des_float.deserialize_bytes(data_float, 5)
+        self.assertEqual(result_float, [1.0, 2.0, 3.0, 4.0])
+
+        # Test double vector
+        vt_double = VectorType.apply_parameters(['DoubleType', 3], {})
+        des_double = find_deserializer(vt_double)
+        self.assertEqual(des_double.__class__.__name__, 'DesVectorType')
+
+        data_double = struct.pack('>3d', 1.5, 2.5, 3.5)
+        result_double = des_double.deserialize_bytes(data_double, 5)
+        self.assertEqual(result_double, [1.5, 2.5, 3.5])
+
+        # Test int32 vector
+        vt_int32 = VectorType.apply_parameters(['Int32Type', 4], {})
+        des_int32 = find_deserializer(vt_int32)
+        self.assertEqual(des_int32.__class__.__name__, 'DesVectorType')
+
+        data_int32 = struct.pack('>4i', 1, 2, 3, 4)
+        result_int32 = des_int32.deserialize_bytes(data_int32, 5)
+        self.assertEqual(result_int32, [1, 2, 3, 4])
+
+        # Test int64/long vector
+        vt_int64 = VectorType.apply_parameters(['LongType', 2], {})
+        des_int64 = find_deserializer(vt_int64)
+        self.assertEqual(des_int64.__class__.__name__, 'DesVectorType')
+
+        data_int64 = struct.pack('>2q', 100, 200)
+        result_int64 = des_int64.deserialize_bytes(data_int64, 5)
+        self.assertEqual(result_int64, [100, 200])
+
+        # Test error handling: wrong buffer size
+        with self.assertRaises(ValueError) as cm:
+            des_float.deserialize_bytes(struct.pack('>3f', 1.0, 2.0, 3.0), 5)  # 3 floats instead of 4
+        self.assertIn('Expected vector', str(cm.exception))
+        self.assertIn('serialized size', str(cm.exception))
+
+    def test_vector_cython_deserializer_numpy_branch(self):
+        """
+        DesVectorType.deserialize switches to a NumPy-accelerated branch
+        (_deserialize_numpy_vector) for vectors whose declared dimension is
+        >= 32 (see the `use_numpy` threshold check). That branch has
+        genuinely different logic from the small-vector, pure struct-based
+        path -- different buffer interpretation (np.frombuffer with an
+        explicit big-endian dtype instead of manual byte-swapping) and a
+        different list-conversion step (ndarray.tolist()) -- but it was not
+        exercised by any test, since every vector elsewhere in this file is
+        well under the threshold.
+
+        This test builds vectors right at the threshold for both a
+        floating-point (float32) and an integer (int32) subtype, verifies
+        the deserialized values are correct (checked against independently
+        computed expected values, not against the non-numpy code path, so a
+        bug shared by both would not be masked), and spies on
+        numpy.frombuffer to confirm the numpy branch is actually taken
+        (rather than silently falling back) and that it is handed a
+        zero-copy memoryview rather than a materialized bytes copy.
+
+        @jira_ticket PYTHON-1481 (VectorType Cython deserializer)
+        """
+        import struct
+        from unittest import mock
+        try:
+            from cassandra.deserializers import find_deserializer, HAVE_NUMPY
+        except ImportError:
+            self.skipTest("Cython deserializers not available")
+        if not HAVE_NUMPY:
+            self.skipTest("NumPy not available")
+
+        import numpy as np
+
+        vector_size = 32  # matches DesVectorType's use_numpy threshold
+
+        # --- float32 subtype ---
+        vt_float = VectorType.apply_parameters(['FloatType', vector_size], {})
+        des_float = find_deserializer(vt_float)
+        self.assertEqual(des_float.__class__.__name__, 'DesVectorType')
+
+        expected_float = [i + 0.5 for i in range(vector_size)]
+        data_float = struct.pack('>%df' % vector_size, *expected_float)
+
+        with mock.patch('cassandra.deserializers.np.frombuffer', wraps=np.frombuffer) as spy:
+            result_float = des_float.deserialize_bytes(data_float, 5)
+        self.assertTrue(spy.called, "numpy branch was not taken for a float vector at the size threshold")
+        buf_arg = spy.call_args[0][0]
+        self.assertIsInstance(buf_arg, memoryview,
+                               "numpy fast path should receive a zero-copy memoryview, not a materialized bytes copy")
+        self.assertEqual(result_float, expected_float)
+
+        # --- int32 subtype ---
+        vt_int32 = VectorType.apply_parameters(['Int32Type', vector_size], {})
+        des_int32 = find_deserializer(vt_int32)
+        self.assertEqual(des_int32.__class__.__name__, 'DesVectorType')
+
+        expected_int32 = list(range(-(vector_size // 2), vector_size - vector_size // 2))
+        data_int32 = struct.pack('>%di' % vector_size, *expected_int32)
+
+        with mock.patch('cassandra.deserializers.np.frombuffer', wraps=np.frombuffer) as spy:
+            result_int32 = des_int32.deserialize_bytes(data_int32, 5)
+        self.assertTrue(spy.called, "numpy branch was not taken for an int32 vector at the size threshold")
+        buf_arg = spy.call_args[0][0]
+        self.assertIsInstance(buf_arg, memoryview,
+                               "numpy fast path should receive a zero-copy memoryview, not a materialized bytes copy")
+        self.assertEqual(result_int32, expected_int32)
+
+    def test_scalar_float_double_cython_deserializer_byteswap(self):
+        """
+        DesFloatType/DesDoubleType (scalar, non-vector FloatType/DoubleType)
+        are only reachable through the C-level row-parser entry point
+        (TupleRowParser.unpack_row -> from_binary -> Deserializer.deserialize);
+        there is no Python-callable wrapper like DesVectorType's
+        deserialize_bytes(). Calling FloatType.deserialize()/
+        DoubleType.deserialize() directly, as elsewhere in this file, only
+        exercises the pure-Python fallback and never touches
+        unpack_num[float] in cassandra/cython_marshal.pyx.
+
+        Exercise the real production call path directly to confirm the
+        memcpy-based bit-cast fix for the float byte-swap branch (replacing
+        a strict-aliasing-violating pointer-cast) produces correct,
+        bit-identical results on this (little-endian) platform, where the
+        big-endian-to-native byte swap is actually performed.
+
+        @jira_ticket PYTHON-1481 (VectorType Cython deserializer)
+        """
+        import struct
+        try:
+            from cassandra.obj_parser import TupleRowParser
+            from cassandra.parsing import ParseDesc
+            from cassandra.deserializers import make_deserializers
+            from cassandra.bytesio import BytesIOReader
+        except ImportError:
+            self.skipTest("Cython deserializers not available")
+
+        from cassandra.cqltypes import DoubleType
+        from cassandra.policies import ColDesc
+
+        coltypes = [FloatType, DoubleType]
+        colnames = ['f', 'd']
+        coldescs = [ColDesc('ks', 'table', name) for name in colnames]
+        desc = ParseDesc(colnames, coltypes, None, coldescs,
+                          make_deserializers(coltypes), 5)
+
+        float_value = -1234.5  # exactly representable in IEEE-754 binary32
+        double_value = 9.87654321e10
+
+        payload = (
+            struct.pack('>i', 4) + struct.pack('>f', float_value) +
+            struct.pack('>i', 8) + struct.pack('>d', double_value)
+        )
+
+        reader = BytesIOReader(payload)
+        row = TupleRowParser().unpack_row(reader, desc)
+
+        self.assertEqual(row[0], struct.unpack('>f', struct.pack('>f', float_value))[0])
+        self.assertEqual(row[1], double_value)
+
+    def test_vector_short_uses_generic_deserializer(self):
+        """
+        smallint (ShortType) vector elements are encoded on the wire as
+        vint-prefixed (variable-length) values, not as a fixed 2-byte
+        big-endian short, even though ShortType.deserialize() itself
+        consumes exactly 2 bytes. VectorType<smallint> must therefore NOT
+        be routed to the fixed-width Cython fast path (DesVectorType's
+        struct/numpy branches) -- it must fall back to a deserializer that
+        delegates to the pure-Python VectorType.deserialize(), which reads
+        each element's vint-encoded length before decoding it.
+
+        @jira_ticket PYTHON-1481 (VectorType Cython deserializer)
+        """
+        from cassandra.marshal import uvint_pack
+        try:
+            from cassandra.deserializers import find_deserializer
+        except ImportError:
+            self.skipTest("Cython deserializers not available")
+
+        vt_int16 = VectorType.apply_parameters(['ShortType', 3], {})
+        des_int16 = find_deserializer(vt_int16)
+        # Must NOT be the fixed-width fast-path deserializer: smallint is
+        # variable-length (vint-prefixed) on the wire for vectors.
+        self.assertNotEqual(des_int16.__class__.__name__, 'DesVectorType')
+
+        values = [10, 20, 30]
+        data_int16 = b"".join(
+            uvint_pack(len(int16_pack(v))) + int16_pack(v) for v in values
+        )
+        result_int16 = vt_int16.deserialize(data_int16, 5)
+        self.assertEqual(result_int16, values)
+
+    def test_vector_variable_length_subtype_does_not_raise(self):
+        """
+        find_deserializer() must be subtype-aware for VectorType: only
+        genuinely fixed-width subtypes (float/double/int/bigint) may be
+        routed to the Cython fast-path deserializer. Any other subtype --
+        in particular variable-length/vint-prefixed ones like text and
+        varint -- must fall back to a generic deserializer that correctly
+        parses the vector instead of raising during row parsing.
+
+        @jira_ticket PYTHON-1481 (VectorType Cython deserializer)
+        """
+        try:
+            from cassandra.deserializers import find_deserializer
+        except ImportError:
+            self.skipTest("Cython deserializers not available")
+
+        vt_text = VectorType.apply_parameters(['UTF8Type', 2], {})
+        des_text = find_deserializer(vt_text)
+        self.assertNotEqual(des_text.__class__.__name__, 'DesVectorType')
+
+        data_text = vt_text.serialize(['ab', 'cde'], 5)
+        result_text = vt_text.deserialize(data_text, 5)
+        self.assertEqual(result_text, ['ab', 'cde'])
 
 
 ZERO = datetime.timedelta(0)
