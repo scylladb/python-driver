@@ -22,6 +22,7 @@ from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 import re
 import struct
+import threading
 import time
 import warnings
 
@@ -117,6 +118,34 @@ def pseudo_namedtuple_factory(colnames, rows):
             for od in ordered_dict_factory(colnames, rows)]
 
 
+# Cache namedtuple Row classes to avoid repeated exec() calls in namedtuple()
+# for the same column schema. Keyed on the exact, ordered tuple of raw column
+# names, so two schemas only share a cached class if their column names match
+# exactly (same names, same case, same order); cleaning/sanitizing is a pure
+# function of that key, so the derived Row class is always correct for it.
+#
+# For typical usage (a bounded set of prepared statements) this cache is
+# naturally bounded by the number of distinct queries. Applications that
+# build many ad hoc queries against highly variable/generated schemas could
+# otherwise grow this without bound, so it is capped and evicted FIFO
+# (oldest entry first, relying on dict insertion order) once full.
+_named_tuple_cache = {}
+_NAMED_TUPLE_CACHE_MAX_SIZE = 10000
+
+# Guards the check-evict-insert sequence on the cache-miss path in
+# named_tuple_factory() below. This driver supports free-threaded Python, so
+# without synchronization, one thread iterating _named_tuple_cache to pick an
+# eviction victim (`next(iter(...))`) can race with another thread mutating
+# the same dict, raising `RuntimeError: dictionary changed size during
+# iteration`; separately, two threads that both observe the cache under its
+# size bound before either inserts can together push it past that bound. The
+# cache-HIT path (the plain `_named_tuple_cache[key]` lookup above) does NOT
+# take this lock -- concurrent reads of a dict are safe, and this cache is on
+# a hot path where the whole point is to avoid paying synchronization cost on
+# every call.
+_named_tuple_cache_lock = threading.Lock()
+
+
 def named_tuple_factory(colnames, rows):
     """
     Returns each row as a `namedtuple <https://docs.python.org/2/library/collections.html#collections.namedtuple>`_.
@@ -146,32 +175,55 @@ def named_tuple_factory(colnames, rows):
     .. versionchanged:: 2.0.0
         moved from ``cassandra.decoder`` to ``cassandra.query``
     """
-    clean_column_names = map(_clean_column_name, colnames)
+    key = tuple(colnames)
     try:
-        Row = namedtuple('Row', clean_column_names)
-    except SyntaxError:
-        warnings.warn(
-            "Failed creating namedtuple for a result because there were too "
-            "many columns. This is due to a Python limitation that affects "
-            "namedtuple in Python 3.0-3.6 (see issue18896). The row will be "
-            "created with {substitute_factory_name}, which lacks some namedtuple "
-            "features and is slower. To avoid slower performance accessing "
-            "values on row objects, Upgrade to Python 3.7, or use a different "
-            "row factory. (column names: {colnames})".format(
-                substitute_factory_name=pseudo_namedtuple_factory.__name__,
-                colnames=colnames
-            )
-        )
-        return pseudo_namedtuple_factory(colnames, rows)
-    except Exception:
-        clean_column_names = list(map(_clean_column_name, colnames))  # create list because py3 map object will be consumed by first attempt
-        log.warning("Failed creating named tuple for results with column names %s (cleaned: %s) "
-                    "(see Python 'namedtuple' documentation for details on name rules). "
-                    "Results will be returned with positional names. "
-                    "Avoid this by choosing different names, using SELECT \"<col name>\" AS aliases, "
-                    "or specifying a different row_factory on your Session" %
-                    (colnames, clean_column_names))
-        Row = namedtuple('Row', _sanitize_identifiers(clean_column_names))
+        Row = _named_tuple_cache[key]
+    except KeyError:
+        # Miss path: synchronize the whole check-evict-insert sequence.
+        # Re-check the cache once we hold the lock in case another thread
+        # already populated `key` while we were waiting for it (the
+        # double-checked-locking pattern), so we don't do redundant work or
+        # clobber a class other callers may already hold a reference to.
+        with _named_tuple_cache_lock:
+            try:
+                Row = _named_tuple_cache[key]
+            except KeyError:
+                clean_column_names = map(_clean_column_name, colnames)
+                try:
+                    Row = namedtuple('Row', clean_column_names)
+                except SyntaxError:
+                    warnings.warn(
+                        "Failed creating namedtuple for a result because there were too "
+                        "many columns. This is due to a Python limitation that affects "
+                        "namedtuple in Python 3.0-3.6 (see issue18896). The row will be "
+                        "created with {substitute_factory_name}, which lacks some namedtuple "
+                        "features and is slower. To avoid slower performance accessing "
+                        "values on row objects, Upgrade to Python 3.7, or use a different "
+                        "row factory. (column names: {colnames})".format(
+                            substitute_factory_name=pseudo_namedtuple_factory.__name__,
+                            colnames=colnames
+                        )
+                    )
+                    return pseudo_namedtuple_factory(colnames, rows)
+                except Exception:
+                    clean_column_names = list(map(_clean_column_name, colnames))  # create list because py3 map object will be consumed by first attempt
+                    log.warning("Failed creating named tuple for results with column names %s (cleaned: %s) "
+                                "(see Python 'namedtuple' documentation for details on name rules). "
+                                "Results will be returned with positional names. "
+                                "Avoid this by choosing different names, using SELECT \"<col name>\" AS aliases, "
+                                "or specifying a different row_factory on your Session" %
+                                (colnames, clean_column_names))
+                    Row = namedtuple('Row', _sanitize_identifiers(clean_column_names))
+                if len(_named_tuple_cache) >= _NAMED_TUPLE_CACHE_MAX_SIZE:
+                    # Evict the oldest entry (dicts preserve insertion order) to
+                    # keep memory bounded when many distinct column-name schemas
+                    # are seen. Safe under the lock: no other thread can be
+                    # iterating or mutating _named_tuple_cache concurrently.
+                    try:
+                        _named_tuple_cache.pop(next(iter(_named_tuple_cache)))
+                    except (StopIteration, KeyError):
+                        pass
+                _named_tuple_cache[key] = Row
 
     return [Row(*row) for row in rows]
 
