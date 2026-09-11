@@ -154,8 +154,8 @@ class MockConnection(object):
         self.endpoint = DefaultEndPoint("192.168.1.0")
         self.original_endpoint = self.endpoint
         self.local_results = [
-            ["rpc_address", "schema_version", "cluster_name", "data_center", "rack", "partitioner", "release_version", "tokens", "host_id"],
-            [["192.168.1.0", "a", "foocluster", "dc1", "rack1", "Murmur3Partitioner", "2.2.0", ["0", "100", "200"], "uuid1"]]
+            ["rpc_address", "schema_version", "cluster_name", "data_center", "rack", "partitioner", "release_version", "tokens", "host_id", "listen_address"],
+            [["192.168.1.0", "a", "foocluster", "dc1", "rack1", "Murmur3Partitioner", "2.2.0", ["0", "100", "200"], "uuid1", "192.168.1.0"]]
         ]
 
         self.peer_results = [
@@ -187,15 +187,15 @@ class FakeTime(object):
 class ControlConnectionTest(unittest.TestCase):
 
     _matching_schema_preloaded_results = _node_meta_results(
-        local_results=(["rpc_address", "schema_version", "cluster_name", "data_center", "rack", "partitioner", "release_version", "tokens", "host_id"],
-                       [["192.168.1.0", "a", "foocluster", "dc1", "rack1", "Murmur3Partitioner", "2.2.0", ["0", "100", "200"], "uuid1"]]),
+        local_results=(["rpc_address", "schema_version", "cluster_name", "data_center", "rack", "partitioner", "release_version", "tokens", "host_id", "listen_address"],
+                       [["192.168.1.0", "a", "foocluster", "dc1", "rack1", "Murmur3Partitioner", "2.2.0", ["0", "100", "200"], "uuid1", "192.168.1.0"]]),
         peer_results=(["rpc_address", "peer", "schema_version", "data_center", "rack", "tokens", "host_id"],
                       [["192.168.1.1", "10.0.0.1", "a", "dc1", "rack1", ["1", "101", "201"], "uuid2"],
                        ["192.168.1.2", "10.0.0.2", "a", "dc1", "rack1", ["2", "102", "202"], "uuid3"]]))
 
     _nonmatching_schema_preloaded_results = _node_meta_results(
-        local_results=(["rpc_address", "schema_version", "cluster_name", "data_center", "rack", "partitioner", "release_version", "tokens", "host_id"],
-                       [["192.168.1.0", "a", "foocluster", "dc1", "rack1", "Murmur3Partitioner", "2.2.0", ["0", "100", "200"], "uuid1"]]),
+        local_results=(["rpc_address", "schema_version", "cluster_name", "data_center", "rack", "partitioner", "release_version", "tokens", "host_id", "listen_address"],
+                       [["192.168.1.0", "a", "foocluster", "dc1", "rack1", "Murmur3Partitioner", "2.2.0", ["0", "100", "200"], "uuid1", "192.168.1.0"]]),
         peer_results=(["rpc_address", "peer", "schema_version", "data_center", "rack", "tokens", "host_id"],
                       [["192.168.1.1", "10.0.0.1", "a", "dc1", "rack1", ["1", "101", "201"], "uuid2"],
                        ["192.168.1.2", "10.0.0.2", "b", "dc1", "rack1", ["2", "102", "202"], "uuid3"]]))
@@ -354,6 +354,36 @@ class ControlConnectionTest(unittest.TestCase):
 
         assert self.connection.wait_for_responses.call_count == 1
 
+    def test_refresh_sets_local_listen_address_when_rpc_address_changes(self):
+        self.connection.local_results[1][0][0] = '192.168.1.4'
+
+        self.control_connection.refresh_node_list_and_token_map()
+
+        local_host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        assert local_host.endpoint == DefaultEndPoint('192.168.1.4')
+        assert local_host.listen_address == '192.168.1.0'
+
+    def test_refresh_sets_local_addresses_without_token_metadata(self):
+        self.control_connection._token_meta_enabled = False
+        self.connection.local_results[0].append('broadcast_address')
+        self.connection.local_results[1][0].append('10.0.0.1')
+
+        for results in (self.connection.local_results, self.connection.peer_results):
+            tokens_index = results[0].index('tokens')
+            results[0].pop(tokens_index)
+            for row in results[1]:
+                row.pop(tokens_index)
+        self.control_connection.refresh_node_list_and_token_map()
+
+        local_query = self.connection.wait_for_responses.call_args[0][1]
+        local_projection = local_query.query.split(" FROM system.local", 1)[0]
+        assert 'listen_address' in local_projection
+        assert 'broadcast_address' in local_projection
+        assert 'tokens' not in local_projection
+        local_host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        assert local_host.listen_address == '192.168.1.0'
+        assert local_host.broadcast_address == '10.0.0.1'
+
     def test_refresh_uses_control_endpoint_for_local_unix_host(self):
         maintenance_endpoint = UnixSocketEndPoint('/tmp/maintenance.sock')
         self._forget_local_host()
@@ -394,7 +424,7 @@ class ControlConnectionTest(unittest.TestCase):
             self.connection.local_results[0],
             [['192.168.1.1', 'a', 'foocluster', 'dc1', 'rack1',
               'Murmur3Partitioner', '2.2.0', ['1', '101', '201'],
-              'uuid2']])
+              'uuid2', '192.168.1.1']])
         peer_results = (
             self.connection.peer_results[0],
             [['192.168.1.0', '10.0.0.1', 'a', 'dc1', 'rack1',
