@@ -684,6 +684,23 @@ class BoundStatement(Statement):
 
         self.raw_values = values
         self.values = []
+
+        # The policy existence check happens once here (not per-value below)
+        # to select how column bytes get serialized; the per-value loop
+        # itself stays identical for both branches.
+        if ce_policy:
+            def _serialize(value, col_spec):
+                col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
+                if ce_policy.contains_column(col_desc):
+                    col_type = ce_policy.column_type(col_desc)
+                    col_bytes = col_type.serialize(value, proto_version)
+                    return ce_policy.encrypt(col_desc, col_bytes)
+                else:
+                    return col_spec.type.serialize(value, proto_version)
+        else:
+            def _serialize(value, col_spec):
+                return col_spec.type.serialize(value, proto_version)
+
         for value, col_spec in zip(values, col_meta):
             if value is None:
                 self.values.append(None)
@@ -694,13 +711,7 @@ class BoundStatement(Statement):
                     raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
             else:
                 try:
-                    col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
-                    uses_ce = ce_policy and ce_policy.contains_column(col_desc)
-                    col_type = ce_policy.column_type(col_desc) if uses_ce else col_spec.type
-                    col_bytes = col_type.serialize(value, proto_version)
-                    if uses_ce:
-                        col_bytes = ce_policy.encrypt(col_desc, col_bytes)
-                    self.values.append(col_bytes)
+                    self.values.append(_serialize(value, col_spec))
                 except (TypeError, struct.error) as exc:
                     actual_type = type(value)
                     message = ('Received an argument of invalid type for column "%s". '
