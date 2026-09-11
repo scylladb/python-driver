@@ -129,6 +129,7 @@ class LibevLoop(object):
                     break
 
     def _cleanup(self):
+        # TODO: unguarded write; self._notify() below wakes _run_loop to re-check.
         self._shutdown = True
         if not self._thread:
             return
@@ -137,6 +138,8 @@ class LibevLoop(object):
         if self._preparer:
             self._preparer.stop()
 
+        # TODO: unguarded read; sets are copy-on-write, so at most a stale
+        # snapshot (redundant idempotent close), never a torn read.
         for conn in self._live_conns | self._new_conns | self._closed_conns:
             conn.close()
             for watcher in (conn._write_watcher, conn._read_watcher):
@@ -204,6 +207,7 @@ class LibevLoop(object):
 
     def _loop_will_run(self, prepare):
         changed = False
+        # TODO: unguarded read; copy-on-write set, self-heals next tick.
         for conn in self._live_conns:
             if not conn.deque and conn._write_watcher_is_active:
                 if conn._write_watcher:
