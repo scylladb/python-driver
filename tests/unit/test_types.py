@@ -26,7 +26,7 @@ from cassandra.cqltypes import (
     EmptyValue, LongType, SetType, UTF8Type,
     cql_typename, int8_pack, int64_pack, int64_unpack, lookup_casstype,
     lookup_casstype_simple, parse_casstype_args,
-    int32_pack, Int32Type, ListType, MapType, VectorType,
+    int32_pack, Int32Type, ListType, MapType, TupleType, UserType, VectorType,
     FloatType
 )
 from cassandra.encoder import cql_quote
@@ -1117,3 +1117,72 @@ class TestOrdering(unittest.TestCase):
         tokens_equal = [Token(1), Token(1)]
         check_sequence_consistency(tokens)
         check_sequence_consistency(tokens_equal, equal=True)
+
+
+class CollectionNullSentinelTests(unittest.TestCase):
+    """
+    Tests that collection types correctly round-trip None/null elements
+    using the pre-allocated _INT32_NULL sentinel.
+    """
+
+    def test_list_with_none_roundtrip(self):
+        proto = 4
+        parameterized = ListType.apply_parameters([Int32Type])
+        original = [1, None, 3]
+        serialized = parameterized.serialize(original, proto)
+        deserialized = parameterized.deserialize(serialized, proto)
+        self.assertEqual(deserialized, original)
+
+    def test_set_with_none_roundtrip(self):
+        proto = 4
+        parameterized = SetType.apply_parameters([Int32Type])
+        original = [1, None, 3]
+        serialized = parameterized.serialize(original, proto)
+        deserialized = parameterized.deserialize(serialized, proto)
+        self.assertEqual(set(deserialized), set(original))
+
+    def test_map_with_none_values_roundtrip(self):
+        proto = 4
+        parameterized = MapType.apply_parameters([Int32Type, Int32Type])
+        original = {1: None, 2: 10}
+        serialized = parameterized.serialize(original, proto)
+        deserialized = parameterized.deserialize(serialized, proto)
+        self.assertEqual(dict(deserialized.items()), original)
+
+    def test_map_with_none_key_roundtrip(self):
+        # Exercises the null-key sentinel write in MapType.serialize_safe,
+        # independent of the null-value sentinel covered above.
+        #
+        # OrderedMapSerializedKey (the type returned by MapType.deserialize)
+        # re-serializes each key on __getitem__ -- and therefore on .items()
+        # and .values(), which are built on top of it -- to look up its
+        # position. That re-serialization can't handle a None key (a
+        # pre-existing limitation unrelated to this change), so this test
+        # asserts against the raw ._items list instead, matching the
+        # pattern used by test_collection_null_support above.
+        proto = 4
+        parameterized = MapType.apply_parameters([Int32Type, Int32Type])
+        original = {None: 10, 2: None}
+        serialized = parameterized.serialize(original, proto)
+        deserialized = parameterized.deserialize(serialized, proto)
+        self.assertEqual(deserialized._items, list(original.items()))
+
+    def test_tuple_with_none_roundtrip(self):
+        proto = 4
+        parameterized = TupleType.apply_parameters([Int32Type, UTF8Type, Int32Type])
+        original = (1, None, 3)
+        serialized = parameterized.serialize(original, proto)
+        deserialized = parameterized.deserialize(serialized, proto)
+        self.assertEqual(deserialized, original)
+
+    def test_usertype_with_none_roundtrip(self):
+        proto = 4
+        udt_class = UserType.make_udt_class(
+            'test_ks', 'test_udt',
+            ('field_a', 'field_b', 'field_c'),
+            (Int32Type, UTF8Type, Int32Type)
+        )
+        original = (1, None, 3)
+        serialized = udt_class.serialize(original, proto)
+        deserialized = udt_class.deserialize(serialized, proto)
+        self.assertEqual(deserialized, original)
