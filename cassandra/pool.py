@@ -62,8 +62,7 @@ class Host(object):
     'system.local.broadcast_address' or 'system.peers.peer' (Cassandra 2-3)
     'system.local.broadcast_address' or 'system.peers_v2.peer' (Cassandra 4)
 
-    This is not present in the ``system.local`` table for older versions of Cassandra. It
-    is also not queried if :attr:`~.Cluster.token_metadata_enabled` is ``False``.
+    This is not present in the ``system.local`` table for older versions of Cassandra.
     """
 
     broadcast_port = None
@@ -98,9 +97,8 @@ class Host(object):
 
     'system.local.listen_address'
 
-    This is only available in the ``system.local`` table for newer versions of Cassandra. It is also not
-    queried if :attr:`~.Cluster.token_metadata_enabled` is ``False``. Usually the same as ``broadcast_address``
-    unless configured differently in cassandra.yaml.
+    This is only available in the ``system.local`` table for newer versions of Cassandra. Usually the
+    same as ``broadcast_address`` unless configured differently in cassandra.yaml.
     """
 
     listen_port = None
