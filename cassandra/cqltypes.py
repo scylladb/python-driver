@@ -32,6 +32,7 @@ from binascii import unhexlify
 import calendar
 from collections import namedtuple
 from decimal import Decimal
+import functools
 import io
 from itertools import chain
 import logging
@@ -184,6 +185,20 @@ def strip_frozen(cql):
     return cql
 
 
+# Type strings passed to these two functions normally come from a small,
+# schema-bounded set (the distinct column/argument types declared across a
+# cluster's keyspaces). However the CUSTOM_TYPE branch in protocol.py, and
+# unrecognized "org.apache.cassandra.db.marshal.*" names in general, pass a
+# server-supplied class name straight through to lookup_casstype_simple()
+# without validation, so the cache is deliberately bounded (rather than
+# maxsize=None) to cap worst-case memory growth if a misbehaving or
+# malicious server sends many distinct/bogus type names. The bound is large
+# enough that realistic schemas (many tables/keyspaces, but far fewer
+# distinct type strings) won't thrash it in practice.
+_CASSTYPE_CACHE_MAXSIZE = 4096
+
+
+@functools.lru_cache(maxsize=_CASSTYPE_CACHE_MAXSIZE)
 def lookup_casstype_simple(casstype):
     """
     Given a Cassandra type name (either fully distinguished or not), hand
@@ -202,6 +217,7 @@ def lookup_casstype_simple(casstype):
     return typeclass
 
 
+@functools.lru_cache(maxsize=_CASSTYPE_CACHE_MAXSIZE)
 def parse_casstype_args(typestring):
     tokens, remainder = casstype_scanner.scan(typestring)
     if remainder:
@@ -214,7 +230,7 @@ def parse_casstype_args(typestring):
             args.append(([], []))
         elif tok == ')':
             types, names = args.pop()
-            prev_types, prev_names = args[-1]
+            prev_types, _ = args[-1]
             prev_types[-1] = prev_types[-1].apply_parameters(types, names)
         else:
             types, names = args[-1]
@@ -1000,6 +1016,13 @@ class UserType(TupleType):
             del cls._cache[(keyspace, udt_name)]
         except KeyError:
             pass
+        # parse_casstype_args() (used when resolving UDT columns from schema
+        # type strings) is LRU-cached and may already hold a memoized class
+        # built from the entry we just evicted. Clear it too, otherwise a
+        # later parse of the same type string would keep returning the
+        # stale, pre-eviction class instead of going through
+        # make_udt_class() again.
+        parse_casstype_args.cache_clear()
 
     @classmethod
     def apply_parameters(cls, subtypes, names):
