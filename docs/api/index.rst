@@ -19,6 +19,7 @@ Core Driver
    cassandra/decoder
    cassandra/concurrent
    cassandra/connection
+   cassandra/ssl-session-cache
    cassandra/util
    cassandra/timestamps
    cassandra/io/asyncioreactor
