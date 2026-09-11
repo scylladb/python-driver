@@ -22,7 +22,7 @@ from binascii import unhexlify
 import cassandra
 from cassandra import util
 from cassandra.cqltypes import (
-    CassandraType, DateRangeType, DateType, DecimalType,
+    AsciiType, CassandraType, DateRangeType, DateType, DecimalType,
     EmptyValue, LongType, SetType, UTF8Type,
     cql_typename, int8_pack, int64_pack, int64_unpack, lookup_casstype,
     lookup_casstype_simple, parse_casstype_args,
@@ -291,14 +291,14 @@ class TypeTests(unittest.TestCase):
 
     def test_write_read_string(self):
         with tempfile.TemporaryFile() as f:
-            value = u'test'
+            value = 'test'
             write_string(f, value)
             f.seek(0)
             assert read_string(f) == value
 
     def test_write_read_longstring(self):
         with tempfile.TemporaryFile() as f:
-            value = u'test'
+            value = 'test'
             write_longstring(f, value)
             f.seek(0)
             assert read_longstring(f) == value
@@ -324,7 +324,7 @@ class TypeTests(unittest.TestCase):
             assert read_inet(f) == value
 
     def test_cql_quote(self):
-        assert cql_quote(u'test') == "'test'"
+        assert cql_quote('test') == "'test'"
         assert cql_quote('test') == "'test'"
         assert cql_quote(0) == '0'
 
@@ -1117,3 +1117,23 @@ class TestOrdering(unittest.TestCase):
         tokens_equal = [Token(1), Token(1)]
         check_sequence_consistency(tokens)
         check_sequence_consistency(tokens_equal, equal=True)
+
+
+class TextSerializeTest(unittest.TestCase):
+    """
+    AsciiType/UTF8Type.serialize must pass bytes through unchanged and
+    encode str. On Python 3, bytes has no .encode(), so a bytes input must
+    be handled by an explicit type check, not by catching an exception.
+    """
+
+    def test_ascii_serialize_str(self):
+        assert AsciiType.serialize('abc', 0) == b'abc'
+
+    def test_ascii_serialize_bytes_passthrough(self):
+        assert AsciiType.serialize(b'abc', 0) == b'abc'
+
+    def test_utf8_serialize_str(self):
+        assert UTF8Type.serialize('abc', 0) == b'abc'
+
+    def test_utf8_serialize_bytes_passthrough(self):
+        assert UTF8Type.serialize(b'abc', 0) == b'abc'

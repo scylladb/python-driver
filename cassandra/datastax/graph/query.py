@@ -175,7 +175,7 @@ class GraphStatement(Statement):
         raise NotImplementedError()
 
     def __str__(self):
-        return u'<GraphStatement query="{0}">'.format(self.query)
+        return '<GraphStatement query="{0}">'.format(self.query)
     __repr__ = __str__
 
 
