@@ -173,6 +173,29 @@ class EndPoint(object):
         """
         return socket.AF_UNSPEC
 
+    _tls_session_cache_key_override = None
+
+    @property
+    def tls_session_cache_key(self):
+        """
+        A hashable value identifying the TLS peer this endpoint connects to,
+        used to look up cached TLS sessions (see
+        :class:`~cassandra.ssl_session_cache.SSLSessionCache`).  Two endpoints
+        may share a key only if a
+        TLS session established with one is valid for the other.
+
+        An endpoint built to reach a node that another one already describes --
+        an alternate listener of the same server -- carries that node's key
+        here, so both share one cached session.  Subclasses give their own
+        identity in :meth:`_default_tls_session_cache_key`.
+        """
+        if self._tls_session_cache_key_override is not None:
+            return self._tls_session_cache_key_override
+        return self._default_tls_session_cache_key()
+
+    def _default_tls_session_cache_key(self):
+        return (self.address, self.port)
+
     def resolve(self):
         """
         Resolve the endpoint to an address/port. This is called
@@ -286,6 +309,11 @@ class SniEndPoint(EndPoint):
     @property
     def ssl_options(self):
         return self._ssl_options
+
+    def _default_tls_session_cache_key(self):
+        # Several SNI endpoints share a proxy address and port, but each one
+        # presents a different server_name and therefore a different TLS peer.
+        return (self.address, self.port, self._server_name)
 
     def resolve(self):
         try:
@@ -464,6 +492,11 @@ class ClientRoutesEndPoint(EndPoint):
     @property
     def host_id(self) -> uuid.UUID:
         return self._host_id
+
+    def _default_tls_session_cache_key(self):
+        # The proxy address this endpoint resolves to may change between
+        # connections; the TLS peer is identified by the node behind it.
+        return (self._host_id, self._original_address, self._original_port)
 
     def resolve(self) -> Tuple[str, int]:
         """
