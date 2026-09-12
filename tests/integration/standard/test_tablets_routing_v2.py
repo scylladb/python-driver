@@ -276,7 +276,8 @@ class TestTabletsRoutingV2Integration:
 
     @staticmethod
     def _all_shard_connections(session):
-        for host, pool in session._pools.items():
+        for pool in session._pools.values():
+            host = pool.host
             for shard, conn in pool._connections.items():
                 yield host, shard, conn
 
@@ -287,9 +288,9 @@ class TestTabletsRoutingV2Integration:
         deadline = time.time() + timeout
         while time.time() < deadline:
             if all(
-                len(pool._connections) >= (min(host.sharding_info.shards_count, 2)
-                                           if host.sharding_info else 1)
-                for host, pool in session._pools.items()
+                len(pool._connections) >= (min(pool.host.sharding_info.shards_count, 2)
+                                           if pool.host.sharding_info else 1)
+                for pool in session._pools.values()
             ):
                 return
             time.sleep(0.05)
@@ -329,7 +330,8 @@ class TestTabletsRoutingV2Integration:
         (host, owner_shard, wrong_shard, conn) or None if no host has >=2 shards.
         """
         replica_shard = {host_id: shard for host_id, shard in tablet.replicas}
-        for host, pool in session._pools.items():
+        for pool in session._pools.values():
+            host = pool.host
             owner = replica_shard.get(host.host_id)
             if owner is None:
                 continue

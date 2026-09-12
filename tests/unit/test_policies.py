@@ -2174,9 +2174,9 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
         query_plan = hfp.make_query_plan("keyspace", mocked_query)
         # First the not filtered replica, and then the rest of the allowed hosts ordered
         query_plan = list(query_plan)
-        assert query_plan[0] == Host(DefaultEndPoint("127.0.0.2"), SimpleConvictionPolicy, host_id=uuid.uuid4())
-        assert set(query_plan[1:]) == {Host(DefaultEndPoint("127.0.0.3"), SimpleConvictionPolicy, host_id=uuid.uuid4()),
-                                              Host(DefaultEndPoint("127.0.0.5"), SimpleConvictionPolicy, host_id=uuid.uuid4())}
+        assert query_plan[0].endpoint == DefaultEndPoint("127.0.0.2")
+        assert {host.endpoint for host in query_plan[1:]} == {
+            DefaultEndPoint("127.0.0.3"), DefaultEndPoint("127.0.0.5")}
 
     def test_create_whitelist(self):
         cluster = Mock(spec=Cluster)
@@ -2198,5 +2198,5 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
         mocked_query = Mock()
         query_plan = hfp.make_query_plan("keyspace", mocked_query)
         # Only the filtered replicas should be allowed
-        assert set(query_plan) == {Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy, host_id=uuid.uuid4()),
-                                           Host(DefaultEndPoint("127.0.0.4"), SimpleConvictionPolicy, host_id=uuid.uuid4())}
+        assert {host.endpoint for host in query_plan} == {
+            DefaultEndPoint("127.0.0.1"), DefaultEndPoint("127.0.0.4")}

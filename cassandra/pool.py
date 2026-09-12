@@ -21,6 +21,7 @@ import logging
 import time
 import random
 import copy
+import uuid
 from threading import Lock, RLock, Condition
 import weakref
 try:
@@ -131,11 +132,6 @@ class Host(object):
     release_version as queried from the control connection system tables
     """
 
-    host_id = None
-    """
-    The unique identifier of the cassandra node
-    """
-
     dse_version = None
     """
     dse_version as queried from the control connection system tables. Only populated when connecting to
@@ -157,6 +153,7 @@ class Host(object):
     Not queried if :attr:`~.Cluster.token_metadata_enabled` is ``False``.
     """
 
+    _host_id = None
     _datacenter = None
     _rack = None
     _reconnection_handler = None
@@ -172,11 +169,15 @@ class Host(object):
         if conviction_policy_factory is None:
             raise ValueError("conviction_policy_factory may not be None")
 
+        if not isinstance(host_id, uuid.UUID):
+            raise TypeError("host_id must be a uuid.UUID")
+        if host_id.int == 0:
+            raise ValueError("host_id may not be the nil UUID")
+
         self.endpoint = endpoint if isinstance(endpoint, EndPoint) else DefaultEndPoint(endpoint)
+        self._host_id = host_id
+        self._is_removed = False
         self.conviction_policy = conviction_policy_factory(self)
-        if not host_id:
-            raise ValueError("host_id may not be None")
-        self.host_id = host_id
         self.set_location_info(datacenter, rack)
         self.lock = RLock()
 
@@ -187,6 +188,13 @@ class Host(object):
         """
         # backward compatibility
         return self.endpoint.address
+
+    @property
+    def host_id(self):
+        """
+        The immutable unique identifier of the Cassandra node.
+        """
+        return self._host_id
 
     @property
     def datacenter(self):
@@ -232,23 +240,25 @@ class Host(object):
             self._reconnection_handler = new_handler
             return old
 
+    def _clear_reconnection_handler(self, handler):
+        with self.lock:
+            if self._reconnection_handler is not handler:
+                return False
+            self._reconnection_handler = None
+            return not self._is_removed
+
     def __eq__(self, other):
-        if isinstance(other, Host):
-            return self.endpoint == other.endpoint
-        else:  # TODO Backward compatibility, remove next major
-            return self.endpoint.address == other
+        if not isinstance(other, Host):
+            return NotImplemented
+        return self.host_id == other.host_id
 
     def __hash__(self):
-        return hash(self.endpoint)
+        return hash(self.host_id)
 
     def __lt__(self, other):
-        self_is_unix = isinstance(self.endpoint, UnixSocketEndPoint)
-        other_is_unix = isinstance(other.endpoint, UnixSocketEndPoint)
-        if self_is_unix != other_is_unix:
-            # Endpoint comparators assume same-kind operands, so partition
-            # Unix and network Hosts before delegating their ordering.
-            return self_is_unix
-        return self.endpoint < other.endpoint
+        if not isinstance(other, Host):
+            return NotImplemented
+        return self.host_id < other.host_id
 
     def __str__(self):
         return str(self.endpoint)
@@ -265,6 +275,7 @@ class _ReconnectionHandler(object):
     """
 
     _cancelled = False
+    _clear_handler_before_reconnection = False
 
     def __init__(self, scheduler, schedule, callback, *callback_args, **callback_kwargs):
         self.scheduler = scheduler
@@ -305,14 +316,22 @@ class _ReconnectionHandler(object):
                     self.scheduler.schedule(next_delay, self.run)
         else:
             if not self._cancelled:
+                if (self._clear_handler_before_reconnection and
+                        not self._release_reconnection_handler()):
+                    return
                 self.on_reconnection(conn)
-                self.callback(*(self.callback_args), **(self.callback_kwargs))
+                if not self._clear_handler_before_reconnection:
+                    self._release_reconnection_handler()
         finally:
             if conn:
                 conn.close()
 
     def cancel(self):
         self._cancelled = True
+
+    def _release_reconnection_handler(self):
+        self.callback(*(self.callback_args), **(self.callback_kwargs))
+        return True
 
     def try_reconnect(self):
         """
@@ -349,6 +368,12 @@ class _ReconnectionHandler(object):
 
 class _HostReconnectionHandler(_ReconnectionHandler):
 
+    # Host reconnection callbacks can synchronously start another reconnector
+    # when rebuilding pools fails. Clear this handler first so that failure is
+    # not suppressed as already reconnecting and post-callback cleanup cannot
+    # clear the successor.
+    _clear_handler_before_reconnection = True
+
     def __init__(self, host, connection_factory, is_host_addition, on_add, on_up, *args, **kwargs):
         _ReconnectionHandler.__init__(self, *args, **kwargs)
         self.is_host_addition = is_host_addition
@@ -359,6 +384,9 @@ class _HostReconnectionHandler(_ReconnectionHandler):
 
     def try_reconnect(self):
         return self.connection_factory()
+
+    def _release_reconnection_handler(self):
+        return self.host._clear_reconnection_handler(self)
 
     def on_reconnection(self, connection):
         log.info("Successful reconnection to %s, marking node up if it isn't already", self.host)
