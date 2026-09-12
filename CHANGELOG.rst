@@ -75,6 +75,10 @@ Others
   ``protocol_features`` could silently omit fields a negotiated extension requires.
   This release emits no new bytes on the wire; the parameter is groundwork for
   upcoming protocol extensions (``SCYLLA_USE_METADATA_ID``, ``TABLETS_ROUTING_V2``).
+* Python 3.15 is now supported: wheels are published for it (cibuildwheel builds
+  ``cp315`` since 4.2.0, against a release candidate that is ABI compatible with the
+  final release) and the integration tests run on 3.15 and on free-threaded 3.15t.
+  As for 3.14, no free-threaded wheels are published; ``3.15t`` is tested only.
 
 3.29.11
 =======

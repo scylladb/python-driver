@@ -14,6 +14,7 @@ classifiers = [
     'Programming Language :: Python :: 3.12',
     'Programming Language :: Python :: 3.13',
     'Programming Language :: Python :: 3.14',
+    'Programming Language :: Python :: 3.15',
     'Programming Language :: Python :: Free Threading :: 2 - Beta',
     'Programming Language :: Python :: Implementation :: CPython',
     'Programming Language :: Python :: Implementation :: PyPy',
@@ -152,12 +153,8 @@ directory = "htmlcov"
 build-frontend = "build[uv]"
 environment = { CASS_DRIVER_BUILD_CONCURRENCY = "2", CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "yes", CFLAGS = "-g0 -O3" }
 skip = [
-    "cp38*",
-    "pp38*",
     "cp39*",
-    "pp39*",
     "cp3*t-*",
-    "pp3*t-*",
     "*i686",
     "*win32",
     "*musllinux*",

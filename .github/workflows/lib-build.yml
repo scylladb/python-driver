@@ -102,7 +102,7 @@ jobs:
 
       - name: Install cibuildwheel
         run: |
-          uv tool install 'cibuildwheel==3.2.1'
+          uv tool install 'cibuildwheel==4.2.1'
 
       - name: Install Conan
         if: runner.os == 'Windows'
