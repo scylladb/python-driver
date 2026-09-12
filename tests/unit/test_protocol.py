@@ -19,12 +19,12 @@ import unittest
 from typing import ClassVar
 from unittest.mock import Mock
 
-from cassandra import ConsistencyLevel, ProtocolVersion, UnsupportedOperation
+from cassandra import ConsistencyLevel, DriverException, ProtocolVersion, UnsupportedOperation, type_codes
 from cassandra.protocol import (
     PrepareMessage, QueryMessage, ExecuteMessage,
     BatchMessage, StartupMessage, OptionsMessage, RegisterMessage,
     AuthResponseMessage, ProtocolHandler, _MessageType,
-    ResultMessage, RESULT_KIND_ROWS
+    ResultMessage, RESULT_KIND_ROWS, write_int, write_short, write_string
 )
 from cassandra.protocol_features import ProtocolFeatures
 from cassandra.query import BatchType
@@ -32,6 +32,22 @@ import pytest
 
 
 class MessageTest(unittest.TestCase):
+
+    def test_result_message_wraps_inline_decode_errors(self):
+        body = io.BytesIO()
+        write_int(body, RESULT_KIND_ROWS)
+        write_int(body, 0)
+        write_int(body, 1)
+        write_string(body, "ks")
+        write_string(body, "tbl")
+        write_string(body, "v")
+        write_short(body, type_codes.DateType)
+        write_int(body, 1)
+        write_int(body, 1)
+        body.write(b"\x00")
+
+        with pytest.raises(DriverException, match='Failed decoding result column "v"'):
+            ResultMessage.recv_body(io.BytesIO(body.getvalue()), ProtocolVersion.V4, 0, {}, None, None)
 
     def test_prepare_message(self):
         """
