@@ -1117,3 +1117,472 @@ class TestOrdering(unittest.TestCase):
         tokens_equal = [Token(1), Token(1)]
         check_sequence_consistency(tokens)
         check_sequence_consistency(tokens_equal, equal=True)
+
+
+
+try:
+    import numpy as np
+
+    _HAVE_NUMPY = True
+except ImportError:
+    _HAVE_NUMPY = False
+
+
+@unittest.skipUnless(_HAVE_NUMPY, "NumPy not installed")
+class VectorNumpySerializeTests(unittest.TestCase):
+    """Tests for NumPy fast path in VectorType.serialize()."""
+
+    FLOAT_CTYPE = "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.FloatType, 4)"
+    DOUBLE_CTYPE = "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.DoubleType, 4)"
+    INT32_CTYPE = "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.Int32Type, 4)"
+    BIGINT_CTYPE = "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.LongType, 4)"
+
+    def _get_ctype(self, ctype_str):
+        return parse_casstype_args(ctype_str)
+
+    # -- NumPy dtype is cached in the parameterized subclass --
+
+    def test_numpy_dtype_cached_for_float(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        self.assertEqual(ctype._numpy_dtype, np.dtype(">f4"))
+
+    def test_numpy_dtype_cached_for_double(self):
+        ctype = self._get_ctype(self.DOUBLE_CTYPE)
+        self.assertEqual(ctype._numpy_dtype, np.dtype(">f8"))
+
+    def test_numpy_dtype_cached_for_int32(self):
+        ctype = self._get_ctype(self.INT32_CTYPE)
+        self.assertEqual(ctype._numpy_dtype, np.dtype(">i4"))
+
+    def test_numpy_dtype_cached_for_bigint(self):
+        ctype = self._get_ctype(self.BIGINT_CTYPE)
+        self.assertEqual(ctype._numpy_dtype, np.dtype(">i8"))
+
+    def test_numpy_dtype_none_for_variable_size_numeric_subtype(self):
+        """ShortType/ByteType have no fixed serial_size(), so numpy fast path is disabled."""
+        for ctype_str in [
+            "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.ShortType, 4)",
+            "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.ByteType, 4)",
+        ]:
+            ctype = self._get_ctype(ctype_str)
+            self.assertIsNone(ctype._numpy_dtype)
+
+    def test_numpy_dtype_none_for_unsupported_subtype(self):
+        """Subtypes without a fixed-size wire format (e.g. AsciiType) should have _numpy_dtype = None."""
+        ctype = self._get_ctype(
+            "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.AsciiType, 4)"
+        )
+        self.assertIsNone(ctype._numpy_dtype)
+
+    # -- NumPy fast path: correctness (result matches list path) --
+
+    def test_numpy_float32_matches_list_serialize(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        data = [1.0, 2.0, 3.0, 4.0]
+        list_result = ctype.serialize(data, 4)
+        arr = np.array(data, dtype=np.float32)
+        numpy_result = ctype.serialize(arr, 4)
+        self.assertEqual(list_result, numpy_result)
+
+    def test_numpy_float64_matches_list_serialize(self):
+        ctype = self._get_ctype(self.DOUBLE_CTYPE)
+        data = [1.5, 2.5, 3.5, 4.5]
+        list_result = ctype.serialize(data, 4)
+        arr = np.array(data, dtype=np.float64)
+        numpy_result = ctype.serialize(arr, 4)
+        self.assertEqual(list_result, numpy_result)
+
+    def test_numpy_int32_matches_list_serialize(self):
+        ctype = self._get_ctype(self.INT32_CTYPE)
+        data = [10, 20, 30, 40]
+        list_result = ctype.serialize(data, 4)
+        arr = np.array(data, dtype=np.int32)
+        numpy_result = ctype.serialize(arr, 4)
+        self.assertEqual(list_result, numpy_result)
+
+    def test_numpy_bigint_matches_list_serialize(self):
+        ctype = self._get_ctype(self.BIGINT_CTYPE)
+        data = [100, 200, 300, 400]
+        list_result = ctype.serialize(data, 4)
+        arr = np.array(data, dtype=np.int64)
+        numpy_result = ctype.serialize(arr, 4)
+        self.assertEqual(list_result, numpy_result)
+
+    # -- NumPy fast path: safe dtype widening (no precision loss) --
+
+    def test_numpy_widens_float32_to_float64(self):
+        """float32 -> float64 is a safe widening conversion, should work."""
+        ctype = self._get_ctype(self.DOUBLE_CTYPE)
+        data = [1.0, 2.0, 3.0, 4.0]
+        list_result = ctype.serialize(data, 4)
+        arr_f32 = np.array(data, dtype=np.float32)
+        numpy_result = ctype.serialize(arr_f32, 4)
+        self.assertEqual(list_result, numpy_result)
+
+    def test_numpy_widens_int32_to_int64(self):
+        """int32 -> int64 is a safe widening conversion, should work."""
+        ctype = self._get_ctype(self.BIGINT_CTYPE)
+        data = [10, 20, 30, 40]
+        list_result = ctype.serialize(data, 4)
+        arr_i32 = np.array(data, dtype=np.int32)
+        numpy_result = ctype.serialize(arr_i32, 4)
+        self.assertEqual(list_result, numpy_result)
+
+    # -- NumPy fast path: unsafe dtype falls back to element-by-element --
+
+    def test_numpy_falls_back_to_elementwise_for_float64(self):
+        """float64 -> float32 is unsafe, so serialize() falls back to the element-by-element path."""
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        arr_f64 = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64)
+        result = ctype.serialize(arr_f64, 4)
+        self.assertEqual(result, ctype.serialize([1.0, 2.0, 3.0, 4.0], 4))
+
+    def test_numpy_falls_back_to_elementwise_for_int64(self):
+        """int64 -> int32 is unsafe, so serialize() falls back to the element-by-element path."""
+        ctype = self._get_ctype(self.INT32_CTYPE)
+        arr_i64 = np.array([10, 20, 30, 40], dtype=np.int64)
+        result = ctype.serialize(arr_i64, 4)
+        self.assertEqual(result, ctype.serialize([10, 20, 30, 40], 4))
+
+    def test_numpy_falls_back_to_elementwise_for_object_dtype(self):
+        """Object-dtype arrays cannot be cast safely; fall back to the element-by-element path."""
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        arr_obj = np.array([1.0, 2.0, 3.0, 4.0], dtype=object)
+        result = ctype.serialize(arr_obj, 4)
+        self.assertEqual(result, ctype.serialize([1.0, 2.0, 3.0, 4.0], 4))
+
+    # -- NumPy fast path: round-trip (serialize -> deserialize) --
+
+    def test_numpy_round_trip_float(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        data = np.array([1.5, 2.5, 3.5, 4.5], dtype=np.float32)
+        serialized = ctype.serialize(data, 4)
+        deserialized = ctype.deserialize(serialized, 4)
+        np.testing.assert_allclose(deserialized, data, rtol=1e-5)
+
+    def test_numpy_round_trip_double(self):
+        ctype = self._get_ctype(self.DOUBLE_CTYPE)
+        data = np.array([1.5, 2.5, 3.5, 4.5], dtype=np.float64)
+        serialized = ctype.serialize(data, 4)
+        deserialized = ctype.deserialize(serialized, 4)
+        np.testing.assert_allclose(deserialized, data, rtol=1e-10)
+
+    # -- NumPy fast path: error cases --
+
+    def test_numpy_wrong_shape_raises(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)  # 3 elements, expected 4
+        with pytest.raises(ValueError, match="Expected ndarray of shape"):
+            ctype.serialize(arr, 4)
+
+    def test_numpy_2d_array_raises(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        arr = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)  # 2D
+        with pytest.raises(ValueError, match="Expected ndarray of shape"):
+            ctype.serialize(arr, 4)
+
+    def test_numpy_falls_back_to_list_for_unsupported_subtype(self):
+        """For subtypes without a NumPy dtype mapping, ndarray input should fall through to the list path."""
+        ctype = self._get_ctype(
+            "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.AsciiType, 3)"
+        )
+        arr = np.array(["abc", "def", "ghi"], dtype=object)
+        result = ctype.serialize(arr, 4)
+        list_result = ctype.serialize(["abc", "def", "ghi"], 4)
+        self.assertEqual(result, list_result)
+
+
+class VectorBytesPassthroughTests(unittest.TestCase):
+    """Tests for bytes/bytearray passthrough in VectorType.serialize()."""
+
+    FLOAT_CTYPE = "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.FloatType, 4)"
+
+    def _get_ctype(self, ctype_str):
+        return parse_casstype_args(ctype_str)
+
+    def test_bytes_passthrough_exact_size(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        original = ctype.serialize([1.0, 2.0, 3.0, 4.0], 4)
+        passthrough = ctype.serialize(original, 4)
+        self.assertEqual(original, passthrough)
+
+    def test_bytearray_passthrough(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        original = ctype.serialize([1.0, 2.0, 3.0, 4.0], 4)
+        ba = bytearray(original)
+        passthrough = ctype.serialize(ba, 4)
+        self.assertEqual(original, passthrough)
+        self.assertIsInstance(passthrough, bytes)
+
+    def test_bytes_wrong_size_raises(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        with pytest.raises(ValueError, match="Pre-serialized bytes"):
+            ctype.serialize(b"\x00" * 12, 4)  # 12 bytes, expected 16
+
+    @unittest.skipUnless(_HAVE_NUMPY, "NumPy not installed")
+    def test_bytes_passthrough_round_trip(self):
+        """Bytes from serialize_numpy_bulk flow through BoundStatement.bind() without double-serialization."""
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        arr = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+        bulk = ctype.serialize_numpy_bulk(arr)
+        re_serialized = ctype.serialize(bulk[0], 4)
+        self.assertEqual(bulk[0], re_serialized)
+        deserialized = ctype.deserialize(re_serialized, 4)
+        np.testing.assert_allclose(deserialized, [1.0, 2.0, 3.0, 4.0], rtol=1e-5)
+
+    def test_bytes_rejected_for_variable_size_subtype(self):
+        """Raw bytes for a variable-size subtype have no fixed length to validate; raise TypeError."""
+        ctype = self._get_ctype(
+            "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.AsciiType, 3)"
+        )
+        with pytest.raises(TypeError, match="Pre-serialized bytes"):
+            ctype.serialize(b"\x00" * 10, 4)
+
+
+class VectorBytesPassthroughWithoutNumpyTests(unittest.TestCase):
+    """Regression tests for bytes/bytearray passthrough in
+    ``VectorType.serialize()`` when NumPy is not available.
+
+    ``apply_parameters()`` only populates ``cls._numpy_dtype`` when
+    ``_HAVE_NUMPY`` is ``True`` (see cqltypes.py). Gating the
+    bytes/bytearray passthrough on ``cls._numpy_dtype`` therefore made it
+    silently unusable on installs without NumPy: correctly pre-serialized
+    bytes would fall into the element-by-element path and raise a
+    misleading "vector length" error instead of just passing through.
+
+    These tests run unconditionally - they do not require NumPy to be
+    installed - and simulate its absence by clearing the cached dtype on
+    the parameterized class after construction, i.e. exactly what
+    ``apply_parameters()`` would have produced had ``_HAVE_NUMPY`` been
+    ``False`` when the class was built.
+    """
+
+    FLOAT_CTYPE = "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.FloatType, 4)"
+
+    def _get_ctype_without_numpy_dtype(self, ctype_str):
+        ctype = parse_casstype_args(ctype_str)
+        ctype._numpy_dtype = None
+        return ctype
+
+    def test_bytes_passthrough_without_numpy_dtype(self):
+        ctype = self._get_ctype_without_numpy_dtype(self.FLOAT_CTYPE)
+        self.assertIsNone(ctype._numpy_dtype)
+        original = ctype.serialize([1.0, 2.0, 3.0, 4.0], 4)  # element-by-element path
+        passthrough = ctype.serialize(original, 4)
+        self.assertEqual(original, passthrough)
+
+    def test_bytearray_passthrough_without_numpy_dtype(self):
+        ctype = self._get_ctype_without_numpy_dtype(self.FLOAT_CTYPE)
+        original = ctype.serialize([1.0, 2.0, 3.0, 4.0], 4)
+        ba_passthrough = ctype.serialize(bytearray(original), 4)
+        self.assertEqual(original, ba_passthrough)
+        self.assertIsInstance(ba_passthrough, bytes)
+
+    def test_bytes_wrong_size_raises_without_numpy_dtype(self):
+        """Even without a NumPy dtype, wrong-length bytes should still hit
+        the passthrough's own length check. The misleading pre-fix
+        behavior was to instead fall through to the element-by-element
+        path and raise a confusing "sequence length" error."""
+        ctype = self._get_ctype_without_numpy_dtype(self.FLOAT_CTYPE)
+        with pytest.raises(ValueError, match="Pre-serialized bytes"):
+            ctype.serialize(b"\x00" * 12, 4)  # 12 bytes, expected 16
+
+
+@unittest.skipUnless(_HAVE_NUMPY, "NumPy not installed")
+class VectorSerializeNumpyBulkTests(unittest.TestCase):
+    """Tests for VectorType.serialize_numpy_bulk()."""
+
+    FLOAT_CTYPE = "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.FloatType, 4)"
+    DOUBLE_CTYPE = "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.DoubleType, 3)"
+    INT32_CTYPE = "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.Int32Type, 4)"
+
+    def _get_ctype(self, ctype_str):
+        return parse_casstype_args(ctype_str)
+
+    def test_bulk_float32_matches_individual(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        vectors = np.array(
+            [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0]],
+            dtype=np.float32,
+        )
+        bulk = ctype.serialize_numpy_bulk(vectors)
+        self.assertEqual(len(bulk), 3)
+        for i in range(3):
+            individual = ctype.serialize(vectors[i], 4)
+            self.assertEqual(bulk[i], individual)
+
+    def test_bulk_float64_matches_individual(self):
+        ctype = self._get_ctype(self.DOUBLE_CTYPE)
+        vectors = np.array([[1.5, 2.5, 3.5], [4.5, 5.5, 6.5]], dtype=np.float64)
+        bulk = ctype.serialize_numpy_bulk(vectors)
+        self.assertEqual(len(bulk), 2)
+        for i in range(2):
+            individual = ctype.serialize(vectors[i], 4)
+            self.assertEqual(bulk[i], individual)
+
+    def test_bulk_int32_matches_individual(self):
+        ctype = self._get_ctype(self.INT32_CTYPE)
+        vectors = np.array([[10, 20, 30, 40], [50, 60, 70, 80]], dtype=np.int32)
+        bulk = ctype.serialize_numpy_bulk(vectors)
+        self.assertEqual(len(bulk), 2)
+        for i in range(2):
+            individual = ctype.serialize(vectors[i], 4)
+            self.assertEqual(bulk[i], individual)
+
+    def test_bulk_widens_int32_to_int64(self):
+        """Widening int32 -> int64 should work in bulk path."""
+        ctype = self._get_ctype(
+            "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.LongType, 4)"
+        )
+        vectors = np.array([[10, 20, 30, 40]], dtype=np.int32)
+        bulk = ctype.serialize_numpy_bulk(vectors)
+        individual = ctype.serialize(np.array([10, 20, 30, 40], dtype=np.int32), 4)
+        self.assertEqual(bulk[0], individual)
+
+    def test_bulk_rejects_float64_to_float32(self):
+        """float64 -> float32 is unsafe narrowing, should raise TypeError."""
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        vectors = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float64)
+        with pytest.raises(TypeError, match="Unsafe dtype conversion"):
+            ctype.serialize_numpy_bulk(vectors)
+
+    def test_bulk_rejects_int64_to_int32(self):
+        """int64 -> int32 is unsafe narrowing, should raise TypeError."""
+        ctype = self._get_ctype(self.INT32_CTYPE)
+        vectors = np.array([[10, 20, 30, 40]], dtype=np.int64)
+        with pytest.raises(TypeError, match="Unsafe dtype conversion"):
+            ctype.serialize_numpy_bulk(vectors)
+
+    def test_bulk_round_trip(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        vectors = np.random.rand(100, 4).astype(np.float32)
+        bulk = ctype.serialize_numpy_bulk(vectors)
+        for i in range(100):
+            deserialized = ctype.deserialize(bulk[i], 4)
+            np.testing.assert_allclose(deserialized, vectors[i], rtol=1e-5)
+
+    def test_bulk_single_row(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        vectors = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+        bulk = ctype.serialize_numpy_bulk(vectors)
+        self.assertEqual(len(bulk), 1)
+
+    def test_bulk_empty_array(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        vectors = np.empty((0, 4), dtype=np.float32)
+        bulk = ctype.serialize_numpy_bulk(vectors)
+        self.assertEqual(len(bulk), 0)
+
+    def test_bulk_fortran_order_array(self):
+        """Column-major (Fortran) arrays should be handled correctly."""
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        vectors_c = np.array(
+            [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]], dtype=np.float32, order="C"
+        )
+        vectors_f = np.asfortranarray(vectors_c)
+        self.assertFalse(vectors_f.flags["C_CONTIGUOUS"])
+        bulk_c = ctype.serialize_numpy_bulk(vectors_c)
+        bulk_f = ctype.serialize_numpy_bulk(vectors_f)
+        self.assertEqual(bulk_c, bulk_f)
+
+    @staticmethod
+    def _old_serialize_numpy_bulk(ctype, vectors):
+        """Reference re-implementation of the pre-fix ``serialize_numpy_bulk()``
+        body: a single ``raw = arr.tobytes()`` allocation for the whole
+        batch, followed by per-row ``bytes`` slices cut out of it. Used only
+        to prove that the memory-optimized implementation in cqltypes.py
+        (which copies each row directly out of a C-contiguous array without
+        that intermediate ``raw`` buffer) is byte-for-byte equivalent."""
+        arr = np.asarray(vectors, dtype=ctype._numpy_dtype)
+        row_bytes = ctype._numpy_dtype.itemsize * ctype.vector_size
+        raw = arr.tobytes()
+        return [raw[i * row_bytes:(i + 1) * row_bytes] for i in range(arr.shape[0])]
+
+    def test_bulk_matches_old_full_buffer_implementation(self):
+        """serialize_numpy_bulk() was changed to avoid materializing one
+        large `raw = arr.tobytes()` buffer for the whole batch before
+        slicing per-row copies out of it, to reduce peak memory for large
+        batches. Confirm the new implementation still produces
+        byte-for-byte identical output to the original one, across dtypes,
+        batch sizes, and memory layouts (not just "doesn't crash")."""
+        rng = np.random.RandomState(42)
+        cases = [
+            (self.FLOAT_CTYPE, np.float32, (1, 4)),
+            (self.FLOAT_CTYPE, np.float32, (5, 4)),
+            (self.FLOAT_CTYPE, np.float32, (200, 4)),
+            (self.DOUBLE_CTYPE, np.float64, (7, 3)),
+            (self.INT32_CTYPE, np.int32, (11, 4)),
+        ]
+        for ctype_str, dtype, shape in cases:
+            ctype = self._get_ctype(ctype_str)
+            if np.issubdtype(dtype, np.integer):
+                vectors = rng.randint(-1000, 1000, size=shape).astype(dtype)
+            else:
+                vectors = rng.rand(*shape).astype(dtype)
+            expected = self._old_serialize_numpy_bulk(ctype, vectors)
+            actual = ctype.serialize_numpy_bulk(vectors)
+            self.assertEqual(
+                expected, actual,
+                "mismatch between old and new serialize_numpy_bulk() for "
+                "%s shape=%s" % (ctype_str, shape))
+
+        # Fortran-ordered (non-contiguous) input is the case most likely to
+        # reveal a divergence, since the fix explicitly forces C-contiguity
+        # before slicing rows out of the buffer.
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        vectors_c = rng.rand(6, 4).astype(np.float32)
+        vectors_f = np.asfortranarray(vectors_c)
+        self.assertFalse(vectors_f.flags['C_CONTIGUOUS'])
+        expected = self._old_serialize_numpy_bulk(ctype, vectors_f)
+        actual = ctype.serialize_numpy_bulk(vectors_f)
+        self.assertEqual(expected, actual)
+
+    def test_bulk_large_batch(self):
+        """Sanity check with a realistic (if modestly sized) embedding batch:
+        128-dim rows, 256 rows. Kept deliberately small - this test only
+        needs to confirm correctness across many rows, not exercise
+        large-batch-specific behavior, so a smaller size avoids the extra
+        CI runtime/memory of a 10K x 768 array while still meaningfully
+        validating the round trip for the first and last rows of a
+        multi-row batch."""
+        ctype = parse_casstype_args(
+            "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.FloatType, 128)"
+        )
+        vectors = np.random.rand(256, 128).astype(np.float32)
+        bulk = ctype.serialize_numpy_bulk(vectors)
+        self.assertEqual(len(bulk), 256)
+        self.assertEqual(len(bulk[0]), 128 * 4)
+        np.testing.assert_allclose(ctype.deserialize(bulk[0], 4), vectors[0], rtol=1e-5)
+        np.testing.assert_allclose(
+            ctype.deserialize(bulk[-1], 4), vectors[-1], rtol=1e-5
+        )
+
+    def test_bulk_wrong_dimension_raises(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        vectors = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
+        with pytest.raises(ValueError, match="Expected array with 4 columns"):
+            ctype.serialize_numpy_bulk(vectors)
+
+    def test_bulk_1d_array_raises(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        arr = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+        with pytest.raises(ValueError, match="Expected a 2-D NumPy array"):
+            ctype.serialize_numpy_bulk(arr)
+
+    def test_bulk_3d_array_raises(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        arr = np.ones((2, 4, 3), dtype=np.float32)
+        with pytest.raises(ValueError, match="Expected a 2-D NumPy array"):
+            ctype.serialize_numpy_bulk(arr)
+
+    def test_bulk_unsupported_subtype_raises(self):
+        ctype = self._get_ctype(
+            "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.AsciiType, 4)"
+        )
+        with pytest.raises(TypeError, match=r"serialize_numpy_bulk\(\).*is not supported"):
+            ctype.serialize_numpy_bulk(np.array([["a", "b", "c", "d"]], dtype=object))
+
+    def test_bulk_non_array_raises(self):
+        ctype = self._get_ctype(self.FLOAT_CTYPE)
+        with pytest.raises(TypeError, match="Expected a 2-D NumPy array"):
+            ctype.serialize_numpy_bulk([[1.0, 2.0, 3.0, 4.0]])
