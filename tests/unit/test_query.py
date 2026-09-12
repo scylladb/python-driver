@@ -16,7 +16,7 @@ import unittest
 
 import pytest
 
-from cassandra.query import BatchStatement, PreparedStatement, SimpleStatement
+from cassandra.query import BatchStatement, PreparedStatement, SimpleStatement, Statement
 
 
 class BatchStatementTest(unittest.TestCase):
@@ -117,6 +117,51 @@ class BatchStatementTest(unittest.TestCase):
         batch_with_simple = BatchStatement()
         batch_with_simple.add(LwtSimpleStatement())
         assert batch_with_simple.is_lwt() is True
+
+
+class KeyPartsPackedTest(unittest.TestCase):
+    """
+    _key_parts_packed() builds the packed segments used to assemble a
+    composite routing key. It must accept any buffer-protocol object
+    (bytes, bytearray, memoryview -- including non-contiguous slices) for
+    each key component, since routing key parts may come from encoders/
+    serializers that hand back something other than a plain bytes object
+    (e.g. a memoryview used to avoid a copy).
+    """
+
+    @staticmethod
+    def _pack(parts):
+        return list(Statement()._key_parts_packed(parts))
+
+    def test_bytes_parts_packed(self):
+        # Plain bytes is the common case; the packed format is
+        # [2-byte big-endian length][value][0x00] per part.
+        result = self._pack([b'abc', b'de'])
+        assert result == [b'\x00\x03abc\x00', b'\x00\x02de\x00']
+
+    def test_bytearray_part_packed_matches_bytes(self):
+        result = self._pack([bytearray(b'abc')])
+        assert result == [b'\x00\x03abc\x00']
+
+    def test_contiguous_memoryview_part_packed_matches_bytes(self):
+        result = self._pack([memoryview(b'abc')])
+        assert result == [b'\x00\x03abc\x00']
+
+    def test_non_contiguous_memoryview_part_does_not_raise(self):
+        # A strided (non-contiguous) memoryview is not directly usable with
+        # bytes concatenation (`b'' + memoryview` raises TypeError for
+        # non-contiguous views), so it must be normalized first.
+        mv = memoryview(b'abcdefgh')[::2]
+        assert not mv.contiguous
+        assert bytes(mv) == b'aceg'
+
+        result = self._pack([mv])
+        assert result == [b'\x00\x04aceg\x00']
+
+    def test_mixed_buffer_types_in_composite_key(self):
+        parts = [b'abc', bytearray(b'de'), memoryview(b'fghi')]
+        result = self._pack(parts)
+        assert result == [b'\x00\x03abc\x00', b'\x00\x02de\x00', b'\x00\x04fghi\x00']
 
 
 class PreparedStatementMetadataPairTest(unittest.TestCase):
