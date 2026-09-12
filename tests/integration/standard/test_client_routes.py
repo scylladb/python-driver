@@ -34,6 +34,7 @@ import unittest
 import uuid
 
 import json as _json
+import urllib.error
 import urllib.request
 
 from cassandra.cluster import Cluster
@@ -209,6 +210,11 @@ class NLBEmulator:
         with self._lock:
             return [p.target_host for p in self._node_proxies.values()]
 
+REST_TIMEOUT = 30  # bounds connect and each body read
+RETRY_DELAY = 1
+MAX_ATTEMPTS = 5
+
+
 def post_client_routes(contact_point, routes):
     """
     Post client routes to Scylla's REST API.
@@ -232,6 +238,9 @@ def post_client_routes(contact_point, routes):
     url = "http://%s:10000/v2/client-routes" % contact_point
     log.info("Posting %d routes to %s", len(payload), url)
     data = _json.dumps(payload).encode("utf-8")
+
+    # Right after a decommission the REST API can briefly answer 5xx. Retry
+    # those (logged); 4xx and connection errors always raise.
     req = urllib.request.Request(
         url,
         data=data,
@@ -241,8 +250,25 @@ def post_client_routes(contact_point, routes):
         },
         method="POST",
     )
-    response = urllib.request.urlopen(req)
-    log.info("Routes posted successfully (status %d)", response.status)
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=REST_TIMEOUT) as response:
+                log.info("Routes posted successfully (status %d)", response.status)
+                return
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8", "replace")
+            except Exception:
+                body = "<unreadable body>"
+            e.close()
+            if 500 <= e.code < 600 and attempt < MAX_ATTEMPTS:
+                log.warning(
+                    "POST %s -> HTTP %d (attempt %d/%d), retrying: %s",
+                    url, e.code, attempt, MAX_ATTEMPTS, body)
+                time.sleep(RETRY_DELAY)
+                continue
+            log.error("POST %s -> HTTP %d: %s", url, e.code, body)
+            raise
 
 
 def get_host_ids_from_cluster(session):
