@@ -33,6 +33,12 @@ from cassandra.policies import ColDesc
 from cassandra.protocol import _UNSET_VALUE
 from cassandra.util import OrderedDict, _sanitize_identifiers
 
+try:
+    from cassandra.serializers import make_serializers
+    HAVE_CYTHON_SERIALIZERS = True
+except ImportError:
+    HAVE_CYTHON_SERIALIZERS = False
+
 import logging
 log = logging.getLogger(__name__)
 
@@ -457,6 +463,8 @@ class PreparedStatement(object):
     _routing_key_index_set = None
     serial_consistency_level = None  # TODO never used?
     _is_lwt = False
+    # Serializer list for column_metadata, built once in __init__ (see below).
+    _serializers = None
     # Set once we've logged the "new metadata id without column metadata" anomaly
     # for this statement, to avoid logging it on every execute while a misbehaving
     # server keeps returning it. Re-armed whenever the metadata is updated.
@@ -475,6 +483,12 @@ class PreparedStatement(object):
         self.column_encryption_policy = column_encryption_policy
         self.is_idempotent = False
         self._is_lwt = is_lwt
+        # Built once per prepared statement (not per bind()) so the Cython
+        # fast-path serializers actually pay off across repeated binds.
+        self._serializers = (
+            make_serializers(c.type for c in column_metadata)
+            if HAVE_CYTHON_SERIALIZERS and column_metadata else None
+        )
 
     @property
     def result_metadata_and_id(self):
@@ -684,28 +698,67 @@ class BoundStatement(Statement):
 
         self.raw_values = values
         self.values = []
-        for value, col_spec in zip(values, col_meta):
-            if value is None:
-                self.values.append(None)
-            elif value is UNSET_VALUE:
-                if proto_version >= 4:
-                    self._append_unset_value()
+        if ce_policy:
+            # Column encryption enabled — need ColDesc per column
+            for value, col_spec in zip(values, col_meta):
+                if value is None:
+                    self.values.append(None)
+                elif value is UNSET_VALUE:
+                    if proto_version >= 4:
+                        self._append_unset_value()
+                    else:
+                        raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
                 else:
-                    raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
+                    try:
+                        col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
+                        uses_ce = ce_policy.contains_column(col_desc)
+                        col_type = ce_policy.column_type(col_desc) if uses_ce else col_spec.type
+                        col_bytes = col_type.serialize(value, proto_version)
+                        if uses_ce:
+                            col_bytes = ce_policy.encrypt(col_desc, col_bytes)
+                        self.values.append(col_bytes)
+                    except (TypeError, struct.error) as exc:
+                        actual_type = type(value)
+                        message = ('Received an argument of invalid type for column "%s". '
+                                   'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
+                        raise TypeError(message)
+        else:
+            # Fast path — no column encryption (common case)
+            serializers = self.prepared_statement._serializers
+            if serializers is not None:
+                for value, col_spec, serializer in zip(values, col_meta, serializers):
+                    if value is None:
+                        self.values.append(None)
+                    elif value is UNSET_VALUE:
+                        if proto_version >= 4:
+                            self._append_unset_value()
+                        else:
+                            raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
+                    else:
+                        try:
+                            self.values.append(serializer.serialize(value, proto_version))
+                        except (TypeError, struct.error) as exc:
+                            actual_type = type(value)
+                            message = ('Received an argument of invalid type for column "%s". '
+                                       'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
+                            raise TypeError(message)
             else:
-                try:
-                    col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
-                    uses_ce = ce_policy and ce_policy.contains_column(col_desc)
-                    col_type = ce_policy.column_type(col_desc) if uses_ce else col_spec.type
-                    col_bytes = col_type.serialize(value, proto_version)
-                    if uses_ce:
-                        col_bytes = ce_policy.encrypt(col_desc, col_bytes)
-                    self.values.append(col_bytes)
-                except (TypeError, struct.error) as exc:
-                    actual_type = type(value)
-                    message = ('Received an argument of invalid type for column "%s". '
-                               'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
-                    raise TypeError(message)
+                for value, col_spec in zip(values, col_meta):
+                    if value is None:
+                        self.values.append(None)
+                    elif value is UNSET_VALUE:
+                        if proto_version >= 4:
+                            self._append_unset_value()
+                        else:
+                            raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
+                    else:
+                        try:
+                            self.values.append(col_spec.type.serialize(value, proto_version))
+                        except (TypeError, struct.error) as exc:
+                            actual_type = type(value)
+                            message = ('Received an argument of invalid type for column "%s". '
+                                       'Expected: %s, Got: %s; (%s)' % (col_spec.name, col_spec.type, actual_type, exc))
+                            raise TypeError(message)
 
         if proto_version >= 4:
             diff = col_meta_len - len(self.values)

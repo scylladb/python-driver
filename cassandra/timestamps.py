@@ -23,10 +23,11 @@ from threading import Lock
 
 log = logging.getLogger(__name__)
 
+
 class MonotonicTimestampGenerator(object):
     """
-    An object that, when called, returns ``int(time.time() * 1e6)`` when
-    possible, but, if the value returned by ``time.time`` doesn't increase,
+    An object that, when called, returns ``time.time_ns() // 1000`` when
+    possible, but, if the value returned by ``time.time_ns`` doesn't increase,
     drifts into the future and logs warnings.
     Exposed configuration attributes can be configured with arguments to
     ``__init__`` or by changing attributes on an initialized object.
@@ -55,9 +56,8 @@ class MonotonicTimestampGenerator(object):
 
     def __init__(self, warn_on_drift=True, warning_threshold=1, warning_interval=1):
         self.lock = Lock()
-        with self.lock:
-            self.last = 0
-            self._last_warn = 0
+        self.last = 0
+        self._last_warn = 0
         self.warn_on_drift = warn_on_drift
         self.warning_threshold = warning_threshold
         self.warning_interval = warning_interval
@@ -88,22 +88,25 @@ class MonotonicTimestampGenerator(object):
         internally to _next_timestamp.
         """
         with self.lock:
-            return self._next_timestamp(now=int(time.time() * 1e6),
-                                        last=self.last)
+            return self._next_timestamp(now=time.time_ns() // 1000, last=self.last)
 
     def _maybe_warn(self, now):
         # should be called from inside the self.lock.
         diff = self.last - now
         since_last_warn = now - self._last_warn
 
-        warn = (self.warn_on_drift and
-                (diff >= self.warning_threshold * 1e6) and
-                (since_last_warn >= self.warning_interval * 1e6))
+        warn = (
+            self.warn_on_drift
+            and (diff >= self.warning_threshold * 1_000_000)
+            and (since_last_warn >= self.warning_interval * 1_000_000)
+        )
         if warn:
             log.warning(
                 "Clock skew detected: current tick ({now}) was {diff} "
                 "microseconds behind the last generated timestamp "
                 "({last}), returned timestamps will be artificially "
                 "incremented to guarantee monotonicity.".format(
-                    now=now, diff=diff, last=self.last))
+                    now=now, diff=diff, last=self.last
+                )
+            )
             self._last_warn = now
