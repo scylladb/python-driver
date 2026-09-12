@@ -83,7 +83,8 @@ class ResponseFutureTests(unittest.TestCase):
         return ResponseFuture(session, message, query, 1)
 
     def make_mock_response(self, col_names, rows):
-        return Mock(spec=ResultMessage, kind=RESULT_KIND_ROWS, column_names=col_names, parsed_rows=rows, paging_state=None, col_types=None)
+        return Mock(spec=ResultMessage, kind=RESULT_KIND_ROWS, column_names=col_names, parsed_rows=rows,
+                    paging_state=None, col_types=None, trace_id=None, warnings=None, custom_payload=None)
 
     def test_result_message(self):
         session = self.make_basic_session()
@@ -126,7 +127,8 @@ class ResponseFutureTests(unittest.TestCase):
 
         result = Mock(spec=ResultMessage,
                       kind=RESULT_KIND_SET_KEYSPACE,
-                      results="keyspace1")
+                      results="keyspace1",
+                      trace_id=None, warnings=None, custom_payload=None)
         rf._set_result(None, None, None, result)
         rf._set_keyspace_completed({})
         assert not rf.result()
@@ -140,7 +142,8 @@ class ResponseFutureTests(unittest.TestCase):
                        'keyspace': "keyspace1", "table": "table1"}
         result = Mock(spec=ResultMessage,
                       kind=RESULT_KIND_SCHEMA_CHANGE,
-                      schema_change_event=event_results)
+                      schema_change_event=event_results,
+                      trace_id=None, warnings=None, custom_payload=None)
         connection = Mock()
         # Skip tablet-payload parsing for this mocked response/connection pair.
         connection.features.tablets_routing_v2 = False
@@ -152,7 +155,8 @@ class ResponseFutureTests(unittest.TestCase):
         session = self.make_session()
         rf = self.make_response_future(session)
         rf.send_request()
-        result = Mock(spec=ResultMessage, kind=999, results=[1, 2, 3])
+        result = Mock(spec=ResultMessage, kind=999, results=[1, 2, 3],
+                      trace_id=None, warnings=None, custom_payload=None)
         rf._set_result(None, None, None, result)
         assert rf.result()[0] == result
 
@@ -436,6 +440,13 @@ class ResponseFutureTests(unittest.TestCase):
         session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
         session._pools = {}
 
+        # Faithful to the real Session._set_keyspace_for_all_pools: it only
+        # updates session.keyspace and pooled connections (none here, since
+        # _pools is empty) -- it has no way to reach an out-of-pool
+        # connection such as the control connection's fallback connection.
+        # If this mock updated `connection` itself, it would mask a
+        # regression where _set_result stops updating a fallback control
+        # connection's keyspace directly.
         def set_keyspace_for_all_pools(keyspace, callback):
             session.keyspace = keyspace
             callback({})
@@ -919,8 +930,8 @@ class ResponseFutureTests(unittest.TestCase):
 
         response = Mock(spec=ResultMessage,
                         kind=RESULT_KIND_PREPARED,
-                        result_metadata_id=b'foo')
-        response.results = (None, None, None, None, None)
+                        result_metadata_id=b'foo',
+                        column_metadata=[('ks', 'tb', 'col', Mock())])
         response.query_id = query_id
 
         rf._query = Mock(return_value=True)
@@ -1513,3 +1524,94 @@ class ResponseFutureTests(unittest.TestCase):
         connection.send_msg.assert_called_once()
         # _query decodes with the construction snapshot, not the mutated cache
         assert connection.send_msg.call_args.kwargs['result_metadata'] is meta_v1
+
+    def test_set_result_uses_construction_snapshot_for_columns_not_live_cache(self):
+        """
+        The column names/types used to build the result set must come from the
+        snapshot taken when this ResponseFuture's message was constructed --
+        the same snapshot the response was decoded against (see
+        test_query_decodes_with_construction_snapshot_not_live_cache) -- not
+        from a fresh read of the prepared statement's live cache.
+
+        Simulates two in-flight responses sharing one prepared statement: this
+        future's message is built while the statement still has old_meta
+        cached, then another in-flight response's METADATA_CHANGED replaces
+        the statement's cache with new_meta *before* this future's own
+        response callback runs. Without a per-future snapshot, the rows
+        (decoded against old_meta, per the previous test) would be paired
+        with column names/types derived from new_meta instead.
+        """
+        old_meta = [('ks', 'tb', 'old_col', Mock())]
+        new_meta = [('ks', 'tb', 'new_col', Mock())]
+        ps = self._make_prepared_statement(old_meta, b'id1')
+
+        # Message built (and metadata + column names/types snapshotted
+        # together, atomically) while ps still has old_meta cached.
+        rf = self._create_execute_future(ps)
+        assert rf._bound_result_metadata is old_meta
+        assert rf._bound_col_names == ['old_col']
+        assert rf._bound_col_types == [old_meta[0][3]]
+
+        # Another in-flight response for the same prepared statement completes
+        # a METADATA_CHANGED update before this future's callback runs.
+        ps.update_result_metadata(new_meta, b'id2')
+        assert ps.result_metadata is new_meta
+
+        # This response was decoded against old_meta (the skip_meta path: no
+        # column_metadata and no new result_metadata_id on the response
+        # itself -- the server didn't resend metadata).
+        response = self._make_rows_response(result_metadata_id=None, column_metadata=None)
+        response.column_names = ['SHOULD_NOT_BE_USED']
+        response.column_types = ['SHOULD_NOT_BE_USED']
+        rf._set_result(None, None, None, response)
+
+        # Must reflect old_meta -- what the rows were actually decoded
+        # against -- never new_meta, the prepared statement's current,
+        # since-mutated cache.
+        assert rf._col_names == ['old_col']
+        assert rf._col_types == [old_meta[0][3]]
+
+    def test_set_result_uses_response_metadata_when_metadata_changed(self):
+        """
+        The inverse of test_set_result_uses_construction_snapshot_for_columns_not_live_cache:
+        when THIS response is itself the METADATA_CHANGED response -- it carries
+        fresh column_metadata -- its rows were decoded (by
+        ResultMessage.recv_results_rows) against that fresh metadata, not
+        against the bound snapshot taken when this ResponseFuture's message was
+        constructed. response.column_names/column_types are derived from that
+        same fresh column_metadata, so _set_result must prefer them over the
+        now-stale bound snapshot.
+
+        Regression test: previously _set_result preferred the bound snapshot
+        whenever one existed, regardless of whether the response carried its
+        own metadata. After a schema change that altered the column count,
+        this paired a changed row shape with the old column-name list, which
+        made the row factory raise TypeError (wrong number of positional
+        arguments).
+        """
+        old_meta = [('ks', 'tb', 'old_col', Mock())]
+        new_meta = [('ks', 'tb', 'a', Mock()), ('ks', 'tb', 'b', Mock())]
+        ps = self._make_prepared_statement(old_meta, b'id1')
+
+        # Message built (and metadata + column names/types snapshotted
+        # together, atomically) while ps still has old_meta cached -- one
+        # column.
+        rf = self._create_execute_future(ps)
+        assert rf._bound_col_names == ['old_col']
+
+        # This response IS the METADATA_CHANGED response: the schema changed
+        # server-side since prepare, so it carries fresh column_metadata (two
+        # columns) and a new result_metadata_id, and its rows were decoded
+        # against that fresh metadata -- not the one-column bound snapshot.
+        response = self._make_rows_response(result_metadata_id=b'id2', column_metadata=new_meta)
+        response.column_names = ['a', 'b']
+        response.column_types = [new_meta[0][3], new_meta[1][3]]
+        response.parsed_rows = [(1, 2)]
+
+        rf._set_result(None, None, None, response)
+
+        # Must reflect the response's own fresh metadata -- what its rows were
+        # actually decoded against -- never the stale one-column bound
+        # snapshot, which would mismatch the two-value rows.
+        assert rf._col_names == ['a', 'b']
+        assert rf._col_types == [new_meta[0][3], new_meta[1][3]]

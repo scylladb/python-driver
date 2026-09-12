@@ -451,7 +451,19 @@ class PreparedStatement(object):
     protocol_version = None
     query_id = None
     query_string = None
-    _result_metadata_and_id = (None, None)
+    # Cached (result_metadata, result_metadata_id, result_col_names, result_col_types)
+    # stored as ONE tuple, replaced atomically (single attribute assignment) by
+    # update_result_metadata(). Response callbacks may update a statement while
+    # request threads read it; keeping all four values together means a single
+    # attribute read always observes a self-consistent snapshot: result_col_names
+    # and result_col_types can never be a torn pair (one from an old assignment,
+    # one from a newer one), and neither can ever be paired with a
+    # result_metadata/result_metadata_id from a different schema version.
+    # Callers that need that full guarantee (e.g. a ResponseFuture snapshotting
+    # state for one specific in-flight response, in cassandra.cluster) should
+    # read result_metadata_snapshot in one shot rather than combining
+    # result_metadata_and_id with a separate column names/types read.
+    _result_metadata_and_id = (None, None, None, None)
     column_encryption_policy = None
     routing_key_indexes = None
     _routing_key_index_set = None
@@ -471,7 +483,7 @@ class PreparedStatement(object):
         self.query_string = query
         self.keyspace = keyspace
         self.protocol_version = protocol_version
-        self._result_metadata_and_id = (result_metadata, result_metadata_id)
+        self._set_result_metadata(result_metadata, result_metadata_id)
         self.column_encryption_policy = column_encryption_policy
         self.is_idempotent = False
         self._is_lwt = is_lwt
@@ -482,12 +494,13 @@ class PreparedStatement(object):
         The cached result metadata and its metadata id as one immutable
         ``(result_metadata, result_metadata_id)`` pair.
 
-        Read this property when both values are needed together: the tuple is
-        replaced atomically by :meth:`update_result_metadata`, so a single read
-        can never observe the metadata of one schema version paired with the
-        metadata id of another.
+        Read this property when both values are needed together: the
+        underlying tuple is replaced atomically by
+        :meth:`update_result_metadata`, so a single read can never observe
+        the metadata of one schema version paired with the metadata id of
+        another.
         """
-        return self._result_metadata_and_id
+        return self._result_metadata_and_id[:2]
 
     @property
     def result_metadata(self):
@@ -507,20 +520,54 @@ class PreparedStatement(object):
         """
         return self._result_metadata_and_id[1]
 
+    @property
+    def result_metadata_snapshot(self):
+        """
+        Full atomic snapshot: ``(result_metadata, result_metadata_id,
+        result_col_names, result_col_types)``, with all four values replaced
+        together in a single attribute assignment by
+        :meth:`update_result_metadata`.
+
+        Unlike reading :attr:`result_metadata_and_id` and the column
+        names/types as two separate reads, a single read of this property is
+        guaranteed self-consistent even if another thread's
+        :meth:`update_result_metadata` call (e.g. from a concurrent
+        in-flight response's callback) races with it: there is no window in
+        which the two reads could observe different schema versions.
+        """
+        return self._result_metadata_and_id
+
     def update_result_metadata(self, result_metadata, result_metadata_id):
         """
-        Replace the cached result metadata and metadata id together, in a single
-        atomic attribute store. Response callbacks may update a statement while
-        request threads read it; updating the pair in one step (rather than the
-        two fields separately) prevents a reader from pairing a fresh metadata id
-        with stale metadata — a state in which the server would skip sending
-        metadata and rows would be decoded against the wrong columns.
+        Replace the cached result metadata, metadata id, and the column
+        names/types derived from that metadata, together in a single atomic
+        attribute store. Response callbacks may update a statement while
+        request threads read it; updating everything in one step (rather
+        than as separate fields) prevents a reader from pairing a fresh
+        metadata id with stale metadata, or column names/types cached for
+        one schema version with a metadata/id pair from another — a state in
+        which the server would skip sending metadata and rows would be
+        decoded against the wrong (or wrongly-named/typed) columns.
 
         Also re-arms :attr:`_warned_missing_column_metadata`, so an anomaly that
         recurs after the metadata was recovered is logged again.
         """
-        self._result_metadata_and_id = (result_metadata, result_metadata_id)
+        self._set_result_metadata(result_metadata, result_metadata_id)
         self._warned_missing_column_metadata = False
+
+    def _set_result_metadata(self, result_metadata, result_metadata_id):
+        """
+        Store result_metadata/result_metadata_id together with the column
+        names/types derived from that exact metadata, as one atomic tuple
+        (see :attr:`_result_metadata_and_id`).
+        """
+        if result_metadata:
+            col_names = [c[2] for c in result_metadata]
+            col_types = [c[3] for c in result_metadata]
+        else:
+            col_names = None
+            col_types = None
+        self._result_metadata_and_id = (result_metadata, result_metadata_id, col_names, col_types)
 
     @classmethod
     def from_message(cls, query_id, column_metadata, pk_indexes, cluster_metadata,
