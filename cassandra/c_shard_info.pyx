@@ -73,7 +73,11 @@ cdef class ShardingInfo():
 
     def __init__(self, shard_id, shards_count, partitioner, sharding_algorithm, sharding_ignore_msb, shard_aware_port,
                  shard_aware_port_ssl):
-        self.shards_count = int(shards_count)
+        shards_count = int(shards_count)
+        if shards_count < 0:
+            # negative values sign-extend to huge uint64_t and corrupt shard_id_from_token
+            raise ValueError("shards_count must be non-negative, got %d" % shards_count)
+        self.shards_count = shards_count
         self.partitioner = partitioner
         self.sharding_algorithm = sharding_algorithm
         self.sharding_ignore_msb = int(sharding_ignore_msb)
