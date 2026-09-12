@@ -14,8 +14,11 @@
 import unittest
 
 from concurrent.futures import Future
+import inspect
+import itertools
 import logging
 import socket
+import time
 from types import SimpleNamespace
 
 from unittest.mock import patch, Mock
@@ -189,6 +192,41 @@ class ClusterTest(unittest.TestCase):
         for invalid_port in [0, 65536, -1]:
             with pytest.raises(ValueError):
                 cluster = Cluster(contact_points=['127.0.0.1'], port=invalid_port)
+
+    def test_prepare_on_all_hosts_defaults_to_unset(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        assert cluster.prepare_on_all_hosts is False
+        assert cluster._prepare_on_all_hosts_explicit is False
+
+        explicit_cluster = Cluster(prepare_on_all_hosts=True)
+        self.addCleanup(explicit_cluster.shutdown)
+        assert explicit_cluster.prepare_on_all_hosts is True
+        assert explicit_cluster._prepare_on_all_hosts_explicit is True
+
+    def test_reprepare_on_up_keeps_its_positional_slot(self):
+        # guards against prepare_on_all_hosts_warmup_seconds shifting reprepare_on_up's
+        # position and silently breaking callers that pass it positionally; the names
+        # below are the pre-existing params, in their pre-existing order, up to and
+        # including reprepare_on_up (see e.g. commit 3583fdcf's Cluster.__init__)
+        pre_existing_params_up_to_reprepare_on_up = [
+            'contact_points', 'port', 'compression', 'auth_provider', 'load_balancing_policy',
+            'reconnection_policy', 'default_retry_policy', 'conviction_policy_factory',
+            'metrics_enabled', 'connection_class', 'ssl_options', 'sockopts', 'cql_version',
+            'protocol_version', 'executor_threads', 'max_schema_agreement_wait',
+            'control_connection_timeout', 'idle_heartbeat_interval', 'schema_event_refresh_window',
+            'topology_event_refresh_window', 'connect_timeout', 'schema_metadata_enabled',
+            'token_metadata_enabled', 'schema_metadata_page_size', 'address_translator',
+            'status_event_refresh_window', 'prepare_on_all_hosts',
+        ]
+        sig = inspect.signature(Cluster.__init__)
+        args = [sig.parameters[name].default for name in pre_existing_params_up_to_reprepare_on_up]
+        args.append(False)  # positionally where reprepare_on_up used to be (and must still be)
+        cluster = Cluster(*args)
+        self.addCleanup(cluster.shutdown)
+        assert cluster.reprepare_on_up is False
+        assert cluster.prepare_on_all_hosts is False
+        assert cluster._prepare_on_all_hosts_explicit is False
 
     def test_control_connection_query_fallback_modes(self):
         default_cluster = Cluster()
@@ -419,6 +457,140 @@ class ClusterTest(unittest.TestCase):
 
         assert factory.call_args.kwargs['session_id'] == cluster.session_id
         assert factory.call_args.kwargs['driver_config_reporter'] is None
+
+
+class PrepareOnAllHostsWarmupTest(unittest.TestCase):
+    """
+    Covers the post-connect warm-up window that decides whether Session.prepare()
+    eagerly broadcasts to all pooled hosts when Cluster.prepare_on_all_hosts was
+    left unset. See Session._should_prepare_on_all_hosts.
+    """
+
+    def _make_session(self, **cluster_kwargs):
+        cluster = Cluster(**cluster_kwargs)
+        self.addCleanup(cluster.shutdown)
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host.set_up()
+        cluster.metadata.add_or_return_host(host)
+        return Session(cluster, [host])
+
+    @mock_session_pools
+    def test_within_warmup_window_prepares_eagerly_by_default(self, *_):
+        session = self._make_session()
+        session._connect_time = time.time()
+
+        assert session._should_prepare_on_all_hosts() is True
+
+    @mock_session_pools
+    def test_after_warmup_window_falls_back_to_lazy_by_default(self, *_):
+        session = self._make_session()
+        session._connect_time = time.time() - session.cluster.prepare_on_all_hosts_warmup_seconds - 1
+
+        assert session._should_prepare_on_all_hosts() is False
+
+    @mock_session_pools
+    def test_explicit_true_is_respected_even_after_warmup_elapses(self, *_):
+        session = self._make_session(prepare_on_all_hosts=True)
+        session._connect_time = time.time() - session.cluster.prepare_on_all_hosts_warmup_seconds - 1
+
+        assert session._should_prepare_on_all_hosts() is True
+
+    @mock_session_pools
+    def test_explicit_false_is_respected_even_within_warmup_window(self, *_):
+        session = self._make_session(prepare_on_all_hosts=False)
+        session._connect_time = time.time()
+
+        assert session._should_prepare_on_all_hosts() is False
+
+    @mock_session_pools
+    def test_runtime_assignment_after_construction_is_respected(self, *_):
+        session = self._make_session()
+        session._connect_time = time.time() - session.cluster.prepare_on_all_hosts_warmup_seconds - 1
+
+        session.cluster.prepare_on_all_hosts = True
+        assert session._should_prepare_on_all_hosts() is True
+
+        session._connect_time = time.time()
+        session.cluster.prepare_on_all_hosts = False
+        assert session._should_prepare_on_all_hosts() is False
+
+    @mock_session_pools
+    def test_zero_warmup_seconds_disables_eager_behavior(self, *_):
+        session = self._make_session(prepare_on_all_hosts_warmup_seconds=0)
+        session._connect_time = time.time()
+
+        assert session._should_prepare_on_all_hosts() is False
+
+    @mock_session_pools
+    def test_prepare_uses_should_prepare_on_all_hosts_decision(self, *_):
+        session = self._make_session()
+        session._connect_time = time.time()
+
+        message = Mock(query_id=b'qid', bind_metadata=[], pk_indexes=[], column_metadata=[],
+                        result_metadata_id=None, is_lwt=False)
+        future = Mock()
+        future.result.return_value.one.return_value = message
+        future._current_host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+        with patch('cassandra.cluster.ResponseFuture', return_value=future), \
+             patch.object(session.cluster, 'add_prepared'), \
+             patch.object(Session, 'prepare_on_all_hosts') as prepare_on_all_hosts:
+            session.prepare("SELECT * FROM t")
+
+        assert prepare_on_all_hosts.call_count == 1
+
+        session._connect_time = time.time() - session.cluster.prepare_on_all_hosts_warmup_seconds - 1
+        with patch('cassandra.cluster.ResponseFuture', return_value=future), \
+             patch.object(session.cluster, 'add_prepared'), \
+             patch.object(Session, 'prepare_on_all_hosts') as prepare_on_all_hosts:
+            session.prepare("SELECT * FROM t")
+
+        assert prepare_on_all_hosts.call_count == 0
+
+    @mock_session_pools
+    def test_wait_for_all_pools_starts_warmup_window_after_slow_pool_connects(self, *_):
+        # Cluster.connect(wait_for_all_pools=True) must reset the warm-up window's start
+        # to after Session.__init__'s own wait (first pool up) finishes waiting for every
+        # initial pool, not leave it at Session.__init__'s earlier timestamp.
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host.set_up()
+        cluster.metadata.add_or_return_host(host)
+
+        # A monotonically increasing counter, not a fixed-size list: DEBUG-level log
+        # records also call time.time() on some Python versions, so the exact number
+        # of calls before connect()'s reset can't be pinned down to a fixed count.
+        timestamps = itertools.count(100.0, 100.0)
+        with patch.object(cluster.control_connection, 'connect'), \
+             patch.object(cluster, '_populate_hosts'), \
+             patch.object(cluster.profile_manager, 'check_supported'), \
+             patch('cassandra.cluster.time.time', side_effect=lambda: next(timestamps)):
+            session = cluster.connect(wait_for_all_pools=True)
+
+        # connect()'s reset must be later than the first timestamp ever handed out
+        # (Session.__init__'s own stamp), proving it didn't just keep that early value.
+        assert session._connect_time > 100.0
+
+    @mock_session_pools
+    def test_prepare_all_queries_on_host_up_is_unaffected_by_flag_or_warmup(self, *_):
+        # Cluster._prepare_all_queries (the reprepare_on_up path for late-joining hosts)
+        # is a separate mechanism from prepare_on_all_hosts/warmup and must keep firing
+        # regardless of either.
+        session = self._make_session(prepare_on_all_hosts=False, prepare_on_all_hosts_warmup_seconds=0)
+        session._connect_time = time.time() - 1000
+        cluster = session.cluster
+
+        prepared_statement = Mock(query_string="SELECT * FROM t", keyspace=None)
+        cluster._prepared_statements = {b'qid': prepared_statement}
+
+        new_host = Host("127.0.0.2", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        new_host.set_up()
+
+        with patch.object(cluster, 'connection_factory') as connection_factory:
+            cluster._prepare_all_queries(new_host)
+
+        assert connection_factory.call_count == 1
 
 
 class SchedulerTest(unittest.TestCase):
