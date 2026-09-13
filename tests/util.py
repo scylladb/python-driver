@@ -30,11 +30,13 @@ def wait_until(condition, delay, max_attempts):
                          of this function is delay*max_attempts
     """
     attempt = 0
-    while not condition() and attempt < max_attempts:
+    success = condition()
+    while not success and attempt < max_attempts:
         attempt += 1
         time.sleep(delay)
+        success = condition()
 
-    if attempt >= max_attempts:
+    if not success:
         raise Exception("Condition is still False after {} attempts.".format(max_attempts))
 
 
