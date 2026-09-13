@@ -1513,3 +1513,51 @@ class ResponseFutureTests(unittest.TestCase):
         connection.send_msg.assert_called_once()
         # _query decodes with the construction snapshot, not the mutated cache
         assert connection.send_msg.call_args.kwargs['result_metadata'] is meta_v1
+
+    def test_cache_tablet_from_payload_uses_keyspace_snapshotted_at_construction(self):
+        """
+        _cache_tablet_from_payload must cache under the keyspace in effect when the
+        request was sent, not whatever self.session.keyspace happens to be when the
+        response arrives. Otherwise a session.keyspace change that lands in between
+        would cache the tablet under the wrong keyspace.
+        """
+        session = self.make_basic_session()
+        session.keyspace = 'ks_at_send_time'
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools.get.return_value = self.make_pool()
+
+        query = SimpleStatement("SELECT * FROM foo")
+        message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
+        rf = ResponseFuture(session, message, query, 1)
+
+        # keyspace changes on the session after construction, before the response
+        session.keyspace = 'ks_changed_mid_flight'
+
+        rf._custom_payload = {'tablets-routing-v1': b'payload'}
+        ctype = Mock()
+        ctype.from_binary.return_value = ('col', 'val')
+        with patch('cassandra.cluster.Tablet') as MockTablet:
+            fake_tablet = Mock()
+            MockTablet.from_row.return_value = fake_tablet
+            rf.query.table = 'tbl'
+            rf._cache_tablet_from_payload('tablets-routing-v1', ctype)
+
+        session.cluster.metadata._tablets.add_tablet.assert_called_once_with(
+            'ks_at_send_time', 'tbl', fake_tablet)
+
+    def test_init_keyspace_snapshot_handles_none_query(self):
+        """
+        Session.prepare()/prepare_on_all_hosts() construct ResponseFuture with
+        query=None (there's no Statement yet, just a PrepareMessage). The keyspace
+        snapshot must fall back to session.keyspace in that case instead of raising
+        AttributeError on query.keyspace.
+        """
+        session = self.make_basic_session()
+        session.keyspace = 'ks_from_session'
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session._pools.get.return_value = self.make_pool()
+
+        message = Mock()
+        rf = ResponseFuture(session, message, query=None, timeout=1)
+
+        assert rf._keyspace == 'ks_from_session'
