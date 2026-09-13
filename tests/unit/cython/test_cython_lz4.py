@@ -131,11 +131,40 @@ class CythonLZ4Test(unittest.TestCase):
             lz4_decompress(bad_frame)
 
     def test_decompress_oversized_header(self):
-        """Header claiming > 256 MiB should raise ValueError."""
-        # 0x10000001 = 256 MiB + 1
-        huge_header = struct.pack('>I', 0x10000001) + b"\x00" * 10
+        """Header claiming > INT32_MAX should raise ValueError."""
+        # 0x80000000 = INT32_MAX + 1 (high bit set, would overflow int)
+        too_big = struct.pack('>I', 0x80000000) + b"\x00" * 10
         with self.assertRaises(ValueError):
-            lz4_decompress(huge_header)
+            lz4_decompress(too_big)
+        # 0xFFFFFFFF = UINT32_MAX, also too large for signed int
+        max_u32 = struct.pack('>I', 0xFFFFFFFF) + b"\x00" * 10
+        with self.assertRaises(ValueError):
+            lz4_decompress(max_u32)
+
+    def test_decompress_accepts_int32_max_header(self):
+        """Header claiming exactly INT32_MAX should be accepted (not rejected).
+
+        The native protocol permits uncompressed frame sizes up to the
+        signed 32-bit limit (~2 GiB).  Operators configure ``frame_size``
+        above the 256 MiB server default on production clusters, so the
+        Cython codec must not reject those frames (issue #1000).
+        """
+        # INT32_MAX = 0x7FFFFFFF.  The header is well-formed but the
+        # payload is missing, so decompression must fail at the LZ4
+        # stage (RuntimeError) -- never at the size-validation stage.
+        header_only = struct.pack('>I', 0x7FFFFFFF)
+        with self.assertRaises(RuntimeError):
+            lz4_decompress(header_only)
+
+    def test_decompress_accepts_512mb_header(self):
+        """A 512 MiB declared size must pass validation (issue #1000).
+
+        Validates the boundary behaviour introduced for clusters that
+        configure ``frame_size`` above the previous 256 MiB safety cap.
+        """
+        header_only = struct.pack('>I', 512 * 1024 * 1024)
+        with self.assertRaises(RuntimeError):
+            lz4_decompress(header_only)
 
     def test_round_trip_all_zeros(self):
         """All-zero payloads compress extremely well; verify correctness."""
