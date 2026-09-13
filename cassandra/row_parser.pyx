@@ -35,13 +35,19 @@ def make_recv_results_rows(ColumnParser colparser):
         desc = ParseDesc(self.column_names, self.column_types, column_encryption_policy,
                         [ColDesc(md[0], md[1], md[2]) for md in column_metadata],
                         make_deserializers(self.column_types), protocol_version)
-        reader = BytesIOReader(f.read())
+        # Zero-copy handoff: reuse the underlying bytes buffer at its current
+        # position instead of copying via f.read().
+        if hasattr(f, 'remaining_buffer'):
+            buf_data, buf_offset = f.remaining_buffer()
+            reader = BytesIOReader(buf_data, buf_offset)
+        else:
+            reader = BytesIOReader(f.read())
         try:
             self.parsed_rows = colparser.parse_rows(reader, desc)
         except Exception as e:
             # Use explicitly the TupleRowParser to display better error messages for column decoding failures
             rowparser = TupleRowParser()
-            reader.buf_ptr = reader.buf
+            reader.buf_ptr = <char*>reader.buf + reader._initial_offset
             reader.pos = 0
             rowcount = read_int(reader)
             for i in range(rowcount):
