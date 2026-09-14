@@ -1931,6 +1931,9 @@ class Cluster(object):
                 log.debug("Host %s was already marked up", host)
                 return
 
+            # Authentication failure only fences reconnect work queued by the
+            # failed add attempt. A later UP begins a new recovery attempt.
+            host._reconnection_disabled = False
             host._currently_handling_node_up = True
         log.debug("Starting to handle up status of node %s", host)
 
@@ -2005,7 +2008,7 @@ class Cluster(object):
         # on_remove() will clear and cancel this handler; if removal wins, do
         # not leave retry work attached to a terminal Host object.
         with host.lock:
-            if host._is_removed:
+            if host._is_removed or host._reconnection_disabled:
                 return
             reconnector = _HostReconnectionHandler(
                 host, conn_factory, is_host_addition, on_add, self.on_up,
@@ -2162,8 +2165,13 @@ class Cluster(object):
                     result is None for result in futures_results)
                 pending_reconnector = None
                 if authentication_failed:
-                    old_reconnector = \
-                        host.get_and_set_reconnection_handler(None)
+                    # Authentication is terminal for this Host lifecycle.
+                    # Fence DOWN work already queued by another failed pool
+                    # before detaching any handler it installed.
+                    with host.lock:
+                        host._reconnection_disabled = True
+                        old_reconnector = host._reconnection_handler
+                        host._reconnection_handler = None
                     if old_reconnector:
                         old_reconnector.cancel()
                 else:
@@ -2230,7 +2238,11 @@ class Cluster(object):
 
     def _finalize_add(self, host, set_up=True):
         if set_up:
-            host.set_up()
+            with host.lock:
+                # A successful later add starts a new lifecycle attempt after
+                # an authentication failure fenced callbacks from the prior one.
+                host._reconnection_disabled = False
+                host.set_up()
 
         for listener in self.listeners:
             listener.on_add(host)

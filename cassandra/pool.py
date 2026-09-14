@@ -155,6 +155,7 @@ class Host(object):
     _datacenter = None
     _rack = None
     _reconnection_handler = None
+    _reconnection_disabled = False
     lock = None
 
     _currently_handling_node_up = False
@@ -175,6 +176,7 @@ class Host(object):
         self.endpoint = endpoint if isinstance(endpoint, EndPoint) else DefaultEndPoint(endpoint)
         self._host_id = host_id
         self._is_removed = False
+        self._reconnection_disabled = False
         self.conviction_policy = conviction_policy_factory(self)
         self.set_location_info(datacenter, rack)
         self.lock = RLock()
@@ -243,7 +245,7 @@ class Host(object):
             if self._reconnection_handler is not handler:
                 return False
             self._reconnection_handler = None
-            return not self._is_removed
+            return not self._is_removed and not self._reconnection_disabled
 
     def __eq__(self, other):
         if not isinstance(other, Host):

@@ -16,7 +16,7 @@ import unittest
 from concurrent.futures import Future
 import logging
 import socket
-from threading import RLock
+from threading import Event, RLock
 from types import SimpleNamespace
 
 from unittest.mock import ANY, Mock, call, patch
@@ -374,6 +374,89 @@ class ClusterTest(unittest.TestCase):
         cluster.control_connection.on_down.assert_called_once_with(host)
         listener.on_down.assert_called_once_with(host)
         listener.on_add.assert_not_called()
+
+    def test_authentication_failure_fences_queued_replacement_down(self):
+        cluster = Cluster(executor_threads=1)
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock())
+        cluster.scheduler.schedule = Mock()
+
+        worker_started = Event()
+        release_worker = Event()
+        self.addCleanup(release_worker.set)
+
+        def block_worker():
+            worker_started.set()
+            release_worker.wait()
+
+        blocker = cluster.executor.submit(block_worker)
+        assert worker_started.wait(5)
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        retryable_future = Future()
+        authentication_future = Future()
+        retryable_session = Mock()
+        retryable_session.add_or_renew_pool.return_value = retryable_future
+        retryable_session.get_pool_state.return_value = {}
+        authentication_session = Mock()
+        authentication_session.add_or_renew_pool.return_value = \
+            authentication_future
+        authentication_session.get_pool_state.return_value = {}
+        cluster.sessions = (retryable_session, authentication_session)
+
+        cluster.on_add(
+            host, refresh_nodes=False, reconcile_pools_on_failure=True)
+        on_add_reconnection = retryable_session.add_or_renew_pool \
+            .call_args.kwargs["on_add_reconnection"]
+
+        # Model retryable pool failure queuing DOWN work while the sole worker
+        # is busy, followed by a non-retryable authentication result.
+        cluster.on_down(
+            host, is_host_addition=True, expect_host_to_be_down=True,
+            on_add_reconnection=on_add_reconnection)
+        retryable_future.set_result(False)
+        authentication_future.set_result(None)
+
+        release_worker.set()
+        blocker.result(timeout=5)
+        cluster.executor.submit(lambda: None).result(timeout=5)
+
+        assert host._reconnection_disabled
+        assert not host.is_currently_reconnecting()
+        cluster.scheduler.schedule.assert_not_called()
+
+        # A later UP is a new recovery attempt. It must clear the temporary
+        # fence so a subsequent DOWN can install another reconnector.
+        cluster.sessions = ()
+        cluster.on_up(host)
+        assert host.is_up is True
+        assert not host._reconnection_disabled
+
+        cluster.scheduler.schedule.reset_mock()
+        host.set_down()
+        assert cluster._start_reconnector(
+            host, is_host_addition=False) is not None
+        cluster.scheduler.schedule.assert_called_once()
+
+    def test_successful_add_clears_authentication_reconnection_fence(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host._reconnection_disabled = True
+
+        cluster._finalize_add(host)
+
+        assert host.is_up is True
+        assert not host._reconnection_disabled
 
     def test_replacement_reconnector_refreshes_nodes(self):
         cluster = Cluster()

@@ -246,6 +246,16 @@ class _PoolTests(unittest.TestCase):
 
         assert host.host_id == host_id
 
+    def test_disabled_reconnection_handler_cannot_resume_recovery(self):
+        host = Host(
+            '127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        handler = Mock()
+        host.get_and_set_reconnection_handler(handler)
+        host._reconnection_disabled = True
+
+        assert not host._clear_reconnection_handler(handler)
+        assert not host.is_currently_reconnecting()
+
     def test_host_hash_is_stable_when_endpoint_changes(self):
         host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
         hosts_by_id = {host: "pool"}
