@@ -243,7 +243,7 @@ class Host(object):
             if self._reconnection_handler is not handler:
                 return False
             self._reconnection_handler = None
-            return True
+            return not self._is_removed
 
     def __eq__(self, other):
         if not isinstance(other, Host):
