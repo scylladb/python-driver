@@ -551,6 +551,62 @@ class ClusterTest(unittest.TestCase):
             .call_args_list == [call(force_token_rebuild=True)] * 2
         listener.on_add.assert_not_called()
 
+    def test_ignored_replacement_reconnect_restores_pool_eligibility(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        distance = [HostDistance.LOCAL]
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.side_effect = lambda host: distance[0]
+        cluster.control_connection.on_add = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster.scheduler.schedule = Mock()
+        probe = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock(
+            return_value=probe))
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        failed_future = Future()
+        eligible_future = Future()
+        session = Session.__new__(Session)
+        session.cluster = cluster
+        session._profile_manager = cluster.profile_manager
+        session._pools = {}
+        session.is_shutdown = False
+        session.add_or_renew_pool = Mock(return_value=failed_future)
+        session.shutdown = Mock()
+        cluster.sessions.add(session)
+
+        cluster.on_add(
+            host, refresh_nodes=False, reconcile_pools_on_failure=True)
+        failed_future.set_result(False)
+
+        assert host.is_up is False
+        assert host.is_currently_reconnecting()
+
+        # Another remote host can consume the policy's eligible slot before
+        # the replacement probe succeeds. The probe still establishes that
+        # this host is reachable, even though it does not currently need a
+        # pool.
+        distance[0] = HostDistance.IGNORED
+        cluster.scheduler.schedule.call_args.args[1]()
+
+        assert host.is_up is True
+        assert not host.is_currently_reconnecting()
+        probe.close.assert_called_once_with()
+
+        # Once the slot opens, update_created_pools must be able to create a
+        # pool without waiting for an unrelated UP event.
+        session.add_or_renew_pool.reset_mock(return_value=True)
+        session.add_or_renew_pool.return_value = eligible_future
+        distance[0] = HostDistance.REMOTE
+        futures = session.update_created_pools()
+
+        assert futures == {eligible_future}
+        session.add_or_renew_pool.assert_called_once_with(host, False)
+
     def test_unconvicted_replacement_retry_keeps_reconnecting(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)

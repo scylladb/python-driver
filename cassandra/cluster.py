@@ -2079,7 +2079,8 @@ class Cluster(object):
                 on_add_reconnection=on_add_reconnection)
 
     def on_add(self, host, refresh_nodes=True,
-               reconcile_pools_on_failure=False):
+               reconcile_pools_on_failure=False,
+               set_up_if_ignored=False):
         if self.is_shutdown:
             return
 
@@ -2096,7 +2097,7 @@ class Cluster(object):
         if distance == HostDistance.IGNORED:
             log.debug("Not adding connection pool for new host %r because the "
                       "load balancing policy has marked it as IGNORED", host)
-            self._finalize_add(host, set_up=False)
+            self._finalize_add(host, set_up=set_up_if_ignored)
             return
 
         futures_lock = Lock()
@@ -2109,7 +2110,8 @@ class Cluster(object):
             # current node metadata.
             on_add_reconnection = partial(
                 self.on_add, refresh_nodes=True,
-                reconcile_pools_on_failure=True)
+                reconcile_pools_on_failure=True,
+                set_up_if_ignored=True)
 
         def future_completed(future):
             with futures_lock:
