@@ -375,7 +375,7 @@ class ClusterTest(unittest.TestCase):
         listener.on_down.assert_called_once_with(host)
         listener.on_add.assert_not_called()
 
-    def test_replacement_reconnector_preserves_recovery_context(self):
+    def test_replacement_reconnector_refreshes_nodes(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)
         cluster.profile_manager = Mock()
@@ -463,9 +463,9 @@ class ClusterTest(unittest.TestCase):
         assert failing_session.update_created_pools.call_args_list == \
             expected_reconciliation
         assert cluster.control_connection.on_add.call_args_list == \
-            [call(host, False)] * 3
-        cluster.control_connection.refresh_node_list_and_token_map \
-            .assert_not_called()
+            [call(host, False), call(host, True), call(host, True)]
+        assert cluster.control_connection.refresh_node_list_and_token_map \
+            .call_args_list == [call(force_token_rebuild=True)] * 2
         listener.on_add.assert_not_called()
 
     def test_unconvicted_replacement_retry_keeps_reconnecting(self):
@@ -1339,6 +1339,27 @@ class SessionTest(unittest.TestCase):
         assert session.remove_pool(same_host_at_another_endpoint) is shutdown_future
         assert session._pools == {}
         session.cluster.executor.submit.assert_called_once_with(pool.shutdown)
+
+    def test_update_created_pools_excludes_only_same_host_object(self):
+        session = Session.__new__(Session)
+        host_id = uuid.uuid4()
+        excluded_host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=host_id)
+        replacement_host = Host(
+            "127.0.0.2", SimpleConvictionPolicy, host_id=host_id)
+        replacement_host.set_up()
+        session._pools = {}
+        session.cluster = Mock(
+            allow_control_connection_query_fallback=ControlConnectionQueryFallback.Disabled)
+        session._profile_manager = Mock()
+        session._profile_manager.distance.return_value = HostDistance.LOCAL
+        session.add_or_renew_pool = Mock(return_value=None)
+
+        assert session.update_created_pools(
+            excluded_host=excluded_host, hosts=(replacement_host,)) == set()
+
+        session.add_or_renew_pool.assert_called_once_with(
+            replacement_host, False)
 
     def test_pool_renewal_uses_pool_host_not_retained_dict_key(self):
         session = Session.__new__(Session)

@@ -2101,8 +2101,11 @@ class Cluster(object):
         futures = set()
         on_add_reconnection = None
         if reconcile_pools_on_failure:
+            # The initial addition may be running inside a topology refresh,
+            # but a later reconnection is outside that refresh and must fetch
+            # current node metadata.
             on_add_reconnection = partial(
-                self.on_add, refresh_nodes=refresh_nodes,
+                self.on_add, refresh_nodes=True,
                 reconcile_pools_on_failure=True)
 
         def future_completed(future):
@@ -3596,7 +3599,7 @@ class Session(object):
 
         futures = set()
         for host in hosts:
-            if excluded_host is not None and host == excluded_host:
+            if excluded_host is not None and host is excluded_host:
                 continue
             distance = self._profile_manager.distance(host)
             pool = self._pools.get(host)
