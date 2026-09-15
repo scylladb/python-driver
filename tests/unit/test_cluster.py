@@ -15,7 +15,11 @@ import unittest
 
 from concurrent.futures import Future
 import logging
+from pathlib import Path
 import socket
+import subprocess
+import sys
+import tempfile
 from types import SimpleNamespace
 
 from unittest.mock import patch, Mock
@@ -36,6 +40,26 @@ import pytest
 
 
 log = logging.getLogger(__name__)
+
+
+def _run_shutdown_subprocess(script):
+    """Run shutdown code without letting the source tree shadow an installed wheel."""
+    driver_path = str(Path(__file__).parents[2])
+    script = "import sys\nsys.path.append({!r})\n".format(driver_path) + script
+    with tempfile.TemporaryDirectory() as temp_dir:
+        result = subprocess.run(
+            [sys.executable, '-c', script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=temp_dir,
+        )
+
+    assert result.returncode == 0, (
+        "Subprocess failed\nstdout:\n{}\nstderr:\n{}".format(
+            result.stdout, result.stderr))
+    return result
+
 
 class ExceptionTypeTest(unittest.TestCase):
 
@@ -423,6 +447,98 @@ class ClusterTest(unittest.TestCase):
 
 class SchedulerTest(unittest.TestCase):
     # TODO: this suite could be expanded; for now just adding a test covering a ticket
+
+    def test_scheduler_cleanup_precedes_executor_shutdown(self):
+        """Scheduler cleanup must precede executor shutdown."""
+        script = '''
+import time
+
+from cassandra.cluster import Cluster, _register_cluster_shutdown
+
+
+cluster = Cluster()
+_register_cluster_shutdown(cluster)
+cluster.executor.submit(time.sleep, 0.5)
+cluster.scheduler.schedule(0.1, lambda: None)
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'Exception in thread Task Scheduler' not in result.stderr
+        assert 'cannot schedule new futures' not in result.stderr
+
+    def test_cluster_shutdown_follows_application_thread_shutdown(self):
+        """Full cluster cleanup must wait for application threads."""
+        script = '''
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+from cassandra.cluster import Cluster, _register_cluster_shutdown
+
+
+cluster = Cluster()
+_register_cluster_shutdown(cluster)
+
+
+def run_query():
+    time.sleep(0.1)
+    print('cluster is active:', not cluster.is_shutdown)
+
+
+ThreadPoolExecutor(max_workers=1).submit(run_query)
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'cluster is active: True' in result.stdout
+
+    def test_scheduler_cleanup_error_does_not_abort_threading_shutdown(self):
+        """Scheduler failures must not prevent later shutdown callbacks."""
+        script = '''
+import threading
+
+
+threading._register_atexit(lambda: print('remaining callback ran'))
+
+from cassandra.cluster import Cluster, _register_cluster_shutdown
+
+
+cluster = Cluster()
+_register_cluster_shutdown(cluster)
+original_shutdown = cluster.scheduler.shutdown
+shutdown_calls = 0
+
+
+def fail_first_shutdown():
+    global shutdown_calls
+    shutdown_calls += 1
+    if shutdown_calls == 1:
+        raise RuntimeError('scheduler cleanup failed')
+    original_shutdown()
+
+
+cluster.scheduler.shutdown = fail_first_shutdown
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'remaining callback ran' in result.stdout
+
+    def test_late_import_does_not_fail(self):
+        """Late registration must not make the cluster module import fail."""
+        script = '''
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+
+threading._SHUTTING_DOWN = True
+try:
+    import cassandra.cluster
+finally:
+    threading._SHUTTING_DOWN = False
+'''
+
+        _run_shutdown_subprocess(script)
 
     @patch('time.time', return_value=3)  # always queue at same time
     @patch('cassandra.cluster._Scheduler.run')  # don't actually run the thread
