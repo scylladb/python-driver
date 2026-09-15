@@ -224,7 +224,7 @@ class ConnectionTests(SimulacronBase):
             # Send always to same host
             def make_query_plan(self, working_keyspace=None, query=None):
                 if query and query.query_string == query_to_prime:
-                    return filter(lambda h: h == query_host, self._live_hosts)
+                    return filter(lambda h: h.address == query_host, self._live_hosts)
                 else:
                     return super(PatchedRoundRobinPolicy, self).make_query_plan()
 
