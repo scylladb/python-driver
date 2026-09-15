@@ -38,6 +38,7 @@ import queue
 import socket
 import time
 from threading import Lock, RLock, Thread, Event
+from threading import _register_atexit as _register_threading_atexit
 import uuid
 
 import weakref
@@ -203,22 +204,66 @@ def run_in_executor(f):
 
 
 _clusters_for_shutdown = set()
+_clusters_for_shutdown_lock = Lock()
+_cluster_scheduler_shutdown_started = False
 
 
 def _register_cluster_shutdown(cluster):
-    _clusters_for_shutdown.add(cluster)
+    """Track a cluster for interpreter shutdown."""
+    with _clusters_for_shutdown_lock:
+        if not _cluster_scheduler_shutdown_started:
+            _clusters_for_shutdown.add(cluster)
+            return
+
+    # threading shutdown callbacks run before non-daemon application threads
+    # are joined. A thread can therefore reach connect() after scheduler
+    # cleanup. Do not let that cluster outlive the executor shutdown callback.
+    cluster.shutdown()
+    raise DriverException("Cannot connect a Cluster during interpreter shutdown")
 
 
 def _discard_cluster_shutdown(cluster):
-    _clusters_for_shutdown.discard(cluster)
+    """Stop tracking a cluster after explicit shutdown."""
+    with _clusters_for_shutdown_lock:
+        _clusters_for_shutdown.discard(cluster)
+
+
+def _shutdown_cluster_schedulers():
+    """Stop registered schedulers without aborting interpreter shutdown."""
+    global _cluster_scheduler_shutdown_started
+    with _clusters_for_shutdown_lock:
+        _cluster_scheduler_shutdown_started = True
+        clusters = _clusters_for_shutdown.copy()
+    for cluster in clusters:
+        try:
+            if not cluster.scheduler.is_shutdown:
+                cluster.scheduler.shutdown()
+        except Exception:
+            # Exceptions from threading atexit callbacks prevent the remaining
+            # callbacks and non-daemon thread joins from running.
+            log.exception("Failed to shut down Cluster scheduler")
 
 
 def _shutdown_clusters():
-    clusters = _clusters_for_shutdown.copy()  # copy because shutdown modifies the global set "discard"
+    """Shut down registered clusters during normal atexit processing."""
+    with _clusters_for_shutdown_lock:
+        # Copy because shutdown removes clusters from the global set.
+        clusters = _clusters_for_shutdown.copy()
     for cluster in clusters:
         cluster.shutdown()
 
 
+# concurrent.futures is imported before this registration and installs its
+# _python_exit callback first. threading runs callbacks in reverse order, so
+# schedulers stop before ThreadPoolExecutor disables submissions. Full cluster
+# shutdown remains an ordinary atexit callback so application threads finish
+# before their connections close.
+try:
+    _register_threading_atexit(_shutdown_cluster_schedulers)
+except RuntimeError:
+    # Keep imports from failing when concurrent.futures was initialized before
+    # threading shutdown started.
+    log.warning("Could not register Cluster scheduler shutdown during interpreter shutdown")
 atexit.register(_shutdown_clusters)
 
 
@@ -1998,7 +2043,8 @@ class Cluster(object):
         if self._idle_heartbeat:
             self._idle_heartbeat.stop()
 
-        self.scheduler.shutdown()
+        if not self.scheduler.is_shutdown:
+            self.scheduler.shutdown()
 
         self.control_connection.shutdown()
 
