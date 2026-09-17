@@ -1,0 +1,231 @@
+# Copyright 2026 ScyllaDB, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""
+TLS session resumption against a real, TLS-enabled Scylla cluster.
+
+The mechanics of resumption are covered by
+``tests/unit/test_tls_resumption.py`` against a local TLS server.  What needs
+a real cluster is whether the *server* accepts one session offered by several
+connections at once, which is the case DRIVER-165 is about: a pool opens one
+connection per shard and they all offer the same cached session.
+"""
+
+import logging
+import shutil
+import ssl
+import tempfile
+import unittest
+
+from cassandra.cluster import Cluster
+from cassandra.ssl_session_cache import SSLSessionCache
+from tests.integration import (use_singledc, get_cluster, remove_cluster,
+                               start_cluster_wait_for_up, KEEP_TEST_CLUSTER,
+                               SCYLLA_VERSION, TestCluster)
+from tests.tls_certificates import HAVE_CRYPTOGRAPHY, write_self_signed_cert
+from tests.util import wait_until
+
+log = logging.getLogger(__name__)
+
+_cert_dir = None
+_cert_path = None
+_key_path = None
+
+
+
+def setup_module():
+    """
+    Restart the shared cluster with client encryption enabled, the way other
+    modules in this directory reconfigure it (see test_custom_cluster).
+    teardown_module drops it so the next module gets a clean one.
+    """
+    if SCYLLA_VERSION is None:
+        raise unittest.SkipTest(
+            'client_encryption_options are configured the Scylla way here; '
+            'set SCYLLA_VERSION to run this')
+    # Asked of the class TestCluster will actually use, not of the selector:
+    # tests.integration sets Cluster.connection_class from EVENT_LOOP_MANAGER
+    # only when it resolved one, and leaves the driver's own default in place
+    # otherwise -- which, with no selector and no libev, is the asyncio reactor.
+    reactor = Cluster.connection_class
+    if not getattr(reactor, 'supports_tls_session_resumption', False):
+        raise unittest.SkipTest(
+            '%s cannot restore a cached TLS session before the handshake, so '
+            'there is no resumption here to test'
+            % getattr(reactor, '__name__', reactor))
+    if not HAVE_CRYPTOGRAPHY:
+        raise unittest.SkipTest(
+            'cryptography is required to generate a server certificate')
+
+    global _cert_dir, _cert_path, _key_path
+    _cert_dir = tempfile.mkdtemp(prefix='tls_resumption_')
+    try:
+        use_singledc(start=False)
+        ccm_cluster = get_cluster()
+        ccm_cluster.stop()
+        # The certificate has to name every node, so it can only be issued once
+        # the cluster exists.
+        _cert_path, _key_path = write_self_signed_cert(
+            _cert_dir, [node.address() for node in ccm_cluster.nodelist()])
+        ccm_cluster.set_configuration_options({
+            # Per-shard connections go to this port, which is where resumption
+            # has to pay off; Scylla leaves it unset by default.
+            'native_shard_aware_transport_port_ssl': 19142,
+            'client_encryption_options': {
+                'enabled': True,
+                'certificate': _cert_path,
+                'keyfile': _key_path,
+                # Set rather than assumed: this defaults to false before
+                # Scylla 2026.3, and without it the server issues no
+                # NewSessionTicket and nothing can be resumed.
+                'enable_session_tickets': True,
+            }
+        })
+        start_cluster_wait_for_up(ccm_cluster)
+    except Exception:
+        # pytest skips teardown_module when setup_module raises, so undo both
+        # halves here: the cluster would otherwise be left stopped and still
+        # configured for TLS for every module that runs after this one, and the
+        # key and certificate would be left behind on disk.
+        try:
+            remove_cluster()
+        finally:
+            _discard_certificate()
+        raise
+
+
+def _discard_certificate():
+    """
+    Remove the key and certificate, unless the cluster that was configured to
+    use them is being kept.
+
+    KEEP_TEST_CLUSTER makes remove_cluster() a no-op, and what it leaves behind
+    still names these files in its client_encryption_options: deleting them
+    would leave a cluster that cannot be started again, which is the one thing
+    that mode exists to avoid.
+    """
+    global _cert_dir
+    if _cert_dir is None:
+        return
+    if KEEP_TEST_CLUSTER:
+        log.info('Keeping the TLS key and certificate in %s: the cluster kept '
+                 'by KEEP_TEST_CLUSTER is still configured to use them.',
+                 _cert_dir)
+    else:
+        shutil.rmtree(_cert_dir, ignore_errors=True)
+    _cert_dir = None
+
+
+def teardown_module():
+    try:
+        remove_cluster()
+    finally:
+        _discard_certificate()
+
+
+def make_ssl_context():
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_verify_locations(_cert_path)
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.check_hostname = True
+    return context
+
+
+def resumption_of_every_connection(cluster):
+    """
+    What OpenSSL reports for each of the cluster's live connections: a list of
+    ``session_reused`` flags, one per connection that still has a socket.
+
+    A connection that went away between being collected here and being read is
+    left out rather than reported: SSLSocket.session_reused answers None once
+    the socket is closed, which reads as "did not resume" and would fail an
+    assertion about a connection that is no longer there.  The count is
+    asserted separately, so leaving one out cannot quietly shrink the sample.
+    """
+    return [bool(connection._socket.session_reused)
+            for holder in cluster.get_connection_holders()
+            for connection in holder.get_connections()
+            if connection._socket is not None
+            and not (connection.is_closed or connection.is_defunct)]
+
+
+def expected_connection_count(cluster):
+    """
+    One control connection, plus one pool connection per shard of every host
+    the driver considers up.
+    """
+    return 1 + sum(host.sharding_info.shards_count if host.sharding_info else 1
+                   for host in cluster.metadata.all_hosts() if host.is_up)
+
+
+def collect_resumption(cluster):
+    """
+    Wait for the pools to fill, then report whether each connection resumed a
+    TLS session.  The wait and the count assertion matter: per-shard
+    connections are opened in the background, so an assertion made too early
+    would run against a fraction of them -- or against the control connection
+    alone -- and pass without testing anything.
+    """
+    expected = expected_connection_count(cluster)
+    wait_until(lambda: len(resumption_of_every_connection(cluster)) >= expected, 0.5, 40)
+
+    resumed = resumption_of_every_connection(cluster)
+    log.info('%d of %d connections resumed a TLS session (expected at least %d)',
+             sum(resumed), len(resumed), expected)
+    assert len(resumed) >= expected, \
+        'inspected %d connections, expected at least %d' % (len(resumed), expected)
+    return resumed
+
+
+class TLSSessionResumptionTests(unittest.TestCase):
+
+    def setUp(self):
+        # Cluster.sessions is a WeakSet and HostConnection keeps only a
+        # weakref.proxy to its session, so a Session nobody holds is collected
+        # and takes the pools -- everything worth inspecting -- with it.
+        self._sessions = []
+
+    def connect(self, **kwargs):
+        cluster = TestCluster(**kwargs)
+        self.addCleanup(cluster.shutdown)
+        self._sessions.append(cluster.connect(wait_for_all_pools=True))
+        return cluster
+
+    def test_resumption_is_on_by_default_with_an_ssl_context(self):
+        cluster = self.connect(ssl_context=make_ssl_context())
+
+        assert isinstance(cluster.ssl_session_cache, SSLSessionCache)
+        assert len(cluster.ssl_session_cache) > 0
+
+    def test_every_connection_resumes_from_a_warmed_cache(self):
+        # Warm a cache, then hand it to a second cluster using the same
+        # SSLContext.  Every connection that cluster opens -- including the
+        # whole batch of per-shard connections opened at once, which reach the
+        # node on its shard-aware port -- then has a session to offer, so the
+        # server has to accept the same one from all of them concurrently.
+        context = make_ssl_context()
+        cache = SSLSessionCache()
+        self.connect(ssl_context=context, ssl_session_cache=cache)
+
+        cluster = self.connect(ssl_context=context, ssl_session_cache=cache)
+
+        assert all(collect_resumption(cluster))
+
+    def test_nothing_resumes_when_the_cache_is_disabled(self):
+        context = make_ssl_context()
+        self.connect(ssl_context=context, ssl_session_cache=SSLSessionCache())
+
+        cluster = self.connect(ssl_context=context, ssl_session_cache=None)
+
+        assert cluster.ssl_session_cache is None
+        assert not any(collect_resumption(cluster))
