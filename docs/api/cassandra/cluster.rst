@@ -43,6 +43,8 @@ Clusters and Sessions
 
    .. autoattribute:: ssl_options
 
+   .. autoattribute:: ssl_session_cache
+
    .. autoattribute:: sockopts
 
    .. autoattribute:: max_schema_agreement_wait
