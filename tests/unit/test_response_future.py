@@ -22,7 +22,8 @@ from unittest.mock import Mock, MagicMock, ANY, patch
 from cassandra import ConsistencyLevel, InvalidRequest, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
 from cassandra.cluster import (Session, ResponseFuture, NoHostAvailable, ProtocolVersion,
                                ControlConnection, ControlConnectionQueryFallback, _NOT_SET)
-from cassandra.connection import Connection, ConnectionBusy, ConnectionException
+from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
+                                  ConnectionShutdown)
 from cassandra.datastax.graph import SimpleGraphStatement
 from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessage,
                                 UnavailableErrorMessage, ResultMessage, QueryMessage,
@@ -310,7 +311,8 @@ class ResponseFutureTests(unittest.TestCase):
         host = Mock()
         rf._set_result(host, None, None, result)
 
-        rf.session.cluster.scheduler.schedule.assert_called_once_with(ANY, rf._retry_task, True, host)
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
+            ANY, rf._abort_retry, rf._retry_task, True, host)
         assert 1 == rf._query_retries
 
         connection = Mock(spec=Connection)
@@ -345,7 +347,8 @@ class ResponseFutureTests(unittest.TestCase):
         host = Mock()
         rf._set_result(host, None, None, result)
 
-        rf.session.cluster.scheduler.schedule.assert_called_once_with(ANY, rf._retry_task, False, host)
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
+            ANY, rf._abort_retry, rf._retry_task, False, host)
         # query_retries does get incremented for Overloaded/Bootstrapping errors (since 3.18)
         assert 1 == rf._query_retries
 
@@ -377,7 +380,8 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(host, None, None, result)
 
         # simulate the executor running this
-        rf.session.cluster.scheduler.schedule.assert_called_once_with(ANY, rf._retry_task, False, host)
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
+            ANY, rf._abort_retry, rf._retry_task, False, host)
 
         rf._retry_task(False, host)
 
@@ -388,7 +392,8 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(host, None, None, result)
 
         # simulate the executor running this
-        rf.session.cluster.scheduler.schedule.assert_called_with(ANY, rf._retry_task, False, host)
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_with(
+            ANY, rf._abort_retry, rf._retry_task, False, host)
         rf._retry_task(False, host)
 
         with pytest.raises(NoHostAvailable):
@@ -411,11 +416,21 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(host, None, None, result)
 
         # simulate the executor running this
-        rf.session.cluster.scheduler.schedule.assert_called_once_with(ANY, rf._retry_task, False, host)
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
+            ANY, rf._abort_retry, rf._retry_task, False, host)
 
-        delay = rf.session.cluster.scheduler.schedule.mock_calls[-1][1][0]
+        delay = rf.session.cluster.scheduler.schedule_with_shutdown.mock_calls[-1][1][0]
         assert delay > 0.05
         rf._retry_task(False, host)
+
+    def test_retry_is_failed_when_scheduler_shuts_down(self):
+        session = self.make_session()
+        rf = self.make_response_future(session)
+
+        rf._abort_retry()
+
+        with pytest.raises(ConnectionShutdown, match="scheduler was shut down"):
+            rf.result()
 
     def test_all_pools_shutdown(self):
         session = self.make_basic_session()
@@ -1068,7 +1083,8 @@ class ResponseFutureTests(unittest.TestCase):
         first_response.to_exception.return_value = first_response
         connection.send_msg.call_args[1]['cb'](first_response)
 
-        rf.session.cluster.scheduler.schedule.assert_called_once_with(ANY, rf._retry_task, False, control_host)
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
+            ANY, rf._abort_retry, rf._retry_task, False, control_host)
 
         # The retry decision must come from the future state, not the live connection reference.
         rf._connection = Mock(is_control_connection=False)
@@ -1848,7 +1864,8 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(specific_host, None, None, result)
         
         # The retry should be scheduled
-        rf.session.cluster.scheduler.schedule.assert_called_once_with(ANY, rf._retry_task, False, specific_host)
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
+            ANY, rf._abort_retry, rf._retry_task, False, specific_host)
         assert 1 == rf._query_retries
         
         # Reset mocks to track next calls

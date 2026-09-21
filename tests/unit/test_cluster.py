@@ -979,6 +979,62 @@ ThreadPoolExecutor(max_workers=1).submit(run_query)
 
         assert 'cluster is active: True' in result.stdout
 
+    def test_scheduler_cleanup_fails_retry_blocking_application_thread(self):
+        """A pending retry must not strand a non-daemon thread at shutdown."""
+        script = '''
+from types import SimpleNamespace
+from threading import Thread
+
+from cassandra import ConsistencyLevel
+from cassandra.cluster import Cluster, ResponseFuture, _register_cluster_shutdown
+from cassandra.connection import ConnectionShutdown
+from cassandra.protocol import QueryMessage
+from cassandra.query import SimpleStatement
+
+
+cluster = Cluster()
+_register_cluster_shutdown(cluster)
+query = SimpleStatement('SELECT * FROM system.local')
+session = SimpleNamespace(
+    cluster=cluster,
+    keyspace=None,
+    row_factory=lambda columns, rows: rows,
+)
+response_future = ResponseFuture(
+    session,
+    QueryMessage(query.query_string, ConsistencyLevel.ONE),
+    query,
+    timeout=None,
+)
+response_future._retry(False, None, None, 60)
+
+
+def wait_for_retry():
+    try:
+        response_future.result()
+    except ConnectionShutdown:
+        print('pending retry failed')
+
+
+Thread(target=wait_for_retry).start()
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'pending retry failed' in result.stdout
+        assert 'cannot schedule new futures' not in result.stderr
+
+    def test_task_scheduled_after_shutdown_is_rejected(self):
+        scheduler = _Scheduler(Mock())
+        scheduler.shutdown()
+        on_shutdown = Mock()
+
+        accepted = scheduler.schedule_with_shutdown(
+            0, on_shutdown, lambda: None)
+
+        assert not accepted
+        on_shutdown.assert_called_once_with()
+
     def test_scheduler_cleanup_error_does_not_abort_threading_shutdown(self):
         """Scheduler failures must not prevent later shutdown callbacks."""
         script = '''

@@ -5131,6 +5131,7 @@ class _Scheduler(Thread):
         self._scheduled_tasks = set()
         self._count = count()
         self._executor = executor
+        self._lock = Lock()
 
         Thread.__init__(self, name="Task Scheduler")
         self.daemon = True
@@ -5142,12 +5143,35 @@ class _Scheduler(Thread):
         except AttributeError:
             # this can happen on interpreter shutdown
             pass
-        self.is_shutdown = True
-        self._queue.put_nowait((0, 0, None))
+        with self._lock:
+            if self.is_shutdown:
+                return
+            self.is_shutdown = True
+        self._queue.put_nowait((0, 0, None, None))
         self.join()
 
+        shutdown_callbacks = []
+        with self._lock:
+            while True:
+                try:
+                    _, _, task, on_shutdown = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                if task is not None:
+                    self._scheduled_tasks.discard(task)
+                    if on_shutdown is not None:
+                        shutdown_callbacks.append(on_shutdown)
+
+        for callback in shutdown_callbacks:
+            self._run_shutdown_callback(callback)
+
     def schedule(self, delay, fn, *args, **kwargs):
-        self._insert_task(delay, (fn, args, tuple(kwargs.items())))
+        return self._insert_task(delay, (fn, args, tuple(kwargs.items())))
+
+    def schedule_with_shutdown(self, delay, on_shutdown, fn, *args, **kwargs):
+        """Schedule a task and notify it if shutdown prevents it from running."""
+        return self._insert_task(
+            delay, (fn, args, tuple(kwargs.items())), on_shutdown=on_shutdown)
 
     def schedule_unique(self, delay, fn, *args, **kwargs):
         task = (fn, args, tuple(kwargs.items()))
@@ -5156,13 +5180,34 @@ class _Scheduler(Thread):
         else:
             log.debug("Ignoring schedule_unique for already-scheduled task: %r", task)
 
-    def _insert_task(self, delay, task):
-        if not self.is_shutdown:
-            run_at = time.time() + delay
-            self._scheduled_tasks.add(task)
-            self._queue.put_nowait((run_at, next(self._count), task))
-        else:
+    def _insert_task(self, delay, task, on_shutdown=None):
+        with self._lock:
+            if not self.is_shutdown:
+                run_at = time.time() + delay
+                self._scheduled_tasks.add(task)
+                self._queue.put_nowait(
+                    (run_at, next(self._count), task, on_shutdown))
+                return True
+
+        if on_shutdown is not None:
+            self._run_shutdown_callback(on_shutdown)
+        try:
             log.debug("Ignoring scheduled task after shutdown: %r", task)
+        except AttributeError:
+            # this can happen on interpreter shutdown
+            pass
+        return False
+
+    @staticmethod
+    def _run_shutdown_callback(callback):
+        try:
+            callback()
+        except Exception:
+            try:
+                log.exception("Scheduled task shutdown callback failed")
+            except AttributeError:
+                # this can happen on interpreter shutdown
+                pass
 
     def run(self):
         while True:
@@ -5171,19 +5216,29 @@ class _Scheduler(Thread):
 
             try:
                 while True:
-                    run_at, i, task = self._queue.get(block=True, timeout=None)
-                    if self.is_shutdown:
-                        if task:
-                            log.debug("Not executing scheduled task due to Scheduler shutdown")
+                    run_at, i, task, on_shutdown = self._queue.get(block=True, timeout=None)
+                    reject_task = False
+                    future = None
+                    with self._lock:
+                        if self.is_shutdown:
+                            if task is not None:
+                                self._scheduled_tasks.discard(task)
+                                reject_task = True
+                        elif run_at <= time.time():
+                            self._scheduled_tasks.discard(task)
+                            fn, args, kwargs = task
+                            future = self._executor.submit(
+                                fn, *args, **dict(kwargs))
+                        else:
+                            self._queue.put_nowait((run_at, i, task, on_shutdown))
+
+                    if reject_task:
+                        if on_shutdown is not None:
+                            self._run_shutdown_callback(on_shutdown)
                         return
-                    if run_at <= time.time():
-                        self._scheduled_tasks.discard(task)
-                        fn, args, kwargs = task
-                        kwargs = dict(kwargs)
-                        future = self._executor.submit(fn, *args, **kwargs)
+                    if future is not None:
                         future.add_done_callback(self._log_if_failed)
                     else:
-                        self._queue.put_nowait((run_at, i, task))
                         break
             except queue.Empty:
                 pass
@@ -6361,7 +6416,13 @@ class ResponseFuture(object):
                 self.message.consistency_level = consistency_level
 
         # don't retry on the event loop thread
-        self.session.cluster.scheduler.schedule(delay, self._retry_task, reuse_connection, host)
+        self.session.cluster.scheduler.schedule_with_shutdown(
+            delay, self._abort_retry, self._retry_task, reuse_connection, host)
+
+    def _abort_retry(self):
+        if not self._event.is_set():
+            self._set_final_exception(ConnectionShutdown(
+                "Cluster scheduler was shut down before the retry could run"))
 
     def _retry_task(self, reuse_connection, host):
         if self._final_exception:
