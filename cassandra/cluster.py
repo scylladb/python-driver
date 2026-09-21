@@ -262,7 +262,10 @@ try:
     _register_threading_atexit(_shutdown_cluster_schedulers)
 except RuntimeError:
     # Keep imports from failing when concurrent.futures was initialized before
-    # threading shutdown started.
+    # threading shutdown started. No scheduler cleanup callback can run now,
+    # so reject clusters through the same path as completed cleanup.
+    with _clusters_for_shutdown_lock:
+        _cluster_scheduler_shutdown_started = True
     log.warning("Could not register Cluster scheduler shutdown during interpreter shutdown")
 atexit.register(_shutdown_clusters)
 

@@ -1014,27 +1014,39 @@ cluster.scheduler.shutdown = fail_first_shutdown
         assert 'remaining callback ran' in result.stdout
         assert 'Failed to shut down Cluster scheduler' in result.stderr
 
-    def test_late_import_after_concurrent_futures_does_not_fail(self):
-        """Late driver registration must not make a warm import fail."""
+    def test_late_import_after_concurrent_futures_rejects_cluster_connect(self):
+        """A warm late import must reject connects when cleanup cannot register."""
         script = '''
 import logging
 import threading
 # Load concurrent.futures.thread before shutdown. A genuinely cold import fails
 # in the standard library before cassandra.cluster can handle registration.
 from concurrent.futures import ThreadPoolExecutor
+from cassandra import DriverException
 
 
 logging.basicConfig(level=logging.WARNING)
 threading._SHUTTING_DOWN = True
 try:
-    import cassandra.cluster
+    from cassandra.cluster import Cluster
 finally:
     threading._SHUTTING_DOWN = False
+
+cluster = Cluster()
+try:
+    cluster.connect()
+except DriverException as exc:
+    print('late connect rejected:', exc)
+
+print('cluster is shutdown:', cluster.is_shutdown)
 '''
 
         result = _run_shutdown_subprocess(script)
 
         assert 'Could not register Cluster scheduler shutdown' in result.stderr
+        assert ('late connect rejected: Cannot connect a Cluster during interpreter shutdown'
+                in result.stdout)
+        assert 'cluster is shutdown: True' in result.stdout
 
     @patch('time.time', return_value=3)  # always queue at same time
     @patch('cassandra.cluster._Scheduler.run')  # don't actually run the thread
