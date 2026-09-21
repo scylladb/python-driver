@@ -432,6 +432,37 @@ class ResponseFutureTests(unittest.TestCase):
         with pytest.raises(ConnectionShutdown, match="scheduler was shut down"):
             rf.result()
 
+    def test_retry_abort_does_not_replace_completed_result(self):
+        session = self.make_session()
+        rf = self.make_response_future(session)
+        result = object()
+        callback = Mock()
+        errback = Mock()
+        rf.add_callbacks(callback, errback)
+
+        rf._set_final_result(result)
+        rf._abort_retry()
+
+        assert rf._final_result is result
+        assert rf._final_exception is None
+        callback.assert_called_once_with(result)
+        errback.assert_not_called()
+
+    def test_result_does_not_replace_completed_retry_abort(self):
+        session = self.make_session()
+        rf = self.make_response_future(session)
+        callback = Mock()
+        errback = Mock()
+        rf.add_callbacks(callback, errback)
+
+        rf._abort_retry()
+        rf._set_final_result(object())
+
+        with pytest.raises(ConnectionShutdown, match="scheduler was shut down"):
+            rf.result()
+        callback.assert_not_called()
+        errback.assert_called_once()
+
     def test_all_pools_shutdown(self):
         session = self.make_basic_session()
         session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1', 'ip2']

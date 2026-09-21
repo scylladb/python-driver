@@ -5366,6 +5366,7 @@ class ResponseFuture(object):
         self._host = host
         self._routing_token = routing_token
         self._control_connection_query_attempted = False
+        self._retry_aborted = False
         self._spec_execution_plan = speculative_execution_plan or self._spec_execution_plan
         self._make_query_plan()
         self._event = Event()
@@ -6326,11 +6327,9 @@ class ResponseFuture(object):
                 "statement on host %s: %s" % (host, response)))
 
     def _set_final_result(self, response):
-        self._cancel_timer()
-        if self._metrics is not None:
-            self._metrics.request_timer.addValue(time.time() - self._start_time)
-
         with self._callback_lock:
+            if self._retry_aborted:
+                return False
             self._final_result = response
             # save off current callbacks inside lock for execution outside it
             # -- prevents case where _final_result is set, then a callback is
@@ -6341,18 +6340,24 @@ class ResponseFuture(object):
                 for (fn, args, kwargs) in self._callbacks
             )
 
+        self._cancel_timer()
+        if self._metrics is not None:
+            self._metrics.request_timer.addValue(time.time() - self._start_time)
         self._event.set()
 
         # apply each callback
         for callback_partial in to_call:
             callback_partial()
+        return True
 
-    def _set_final_exception(self, response):
-        self._cancel_timer()
-        if self._metrics is not None:
-            self._metrics.request_timer.addValue(time.time() - self._start_time)
-
+    def _set_final_exception(self, response, abort_retry=False):
         with self._callback_lock:
+            if self._retry_aborted:
+                return False
+            if abort_retry:
+                if self._final_result is not _NOT_SET or self._final_exception is not None:
+                    return False
+                self._retry_aborted = True
             self._final_exception = response
             # save off current errbacks inside lock for execution outside it --
             # prevents case where _final_exception is set, then an errback is
@@ -6362,11 +6367,16 @@ class ResponseFuture(object):
                 partial(fn, response, *args, **kwargs)
                 for (fn, args, kwargs) in self._errbacks
             )
+
+        self._cancel_timer()
+        if self._metrics is not None:
+            self._metrics.request_timer.addValue(time.time() - self._start_time)
         self._event.set()
 
         # apply each callback
         for callback_partial in to_call:
             callback_partial()
+        return True
 
     def _handle_retry_decision(self, retry_decision, response, host):
 
@@ -6420,9 +6430,9 @@ class ResponseFuture(object):
             delay, self._abort_retry, self._retry_task, reuse_connection, host)
 
     def _abort_retry(self):
-        if not self._event.is_set():
-            self._set_final_exception(ConnectionShutdown(
-                "Cluster scheduler was shut down before the retry could run"))
+        self._set_final_exception(ConnectionShutdown(
+            "Cluster scheduler was shut down before the retry could run"),
+            abort_retry=True)
 
     def _retry_task(self, reuse_connection, host):
         if self._final_exception:
