@@ -1219,6 +1219,43 @@ class ClusterDownHandlingTest(unittest.TestCase):
             "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
         self.host.set_up()
 
+    def test_down_handling_reaches_control_connection_despite_a_raising_policy(self):
+        # signal_connection_failure() reports DOWN handling as dispatched, and
+        # the control connection relies on that to mean its own reconnection
+        # will be started. A user policy raising must not be what prevents it.
+        del self.cluster.on_down_potentially_blocking  # use the real method
+        self.cluster.profile_manager.on_down = Mock(
+            side_effect=RuntimeError('load balancing policy failed'))
+        self.cluster.control_connection = Mock()
+        self.cluster._start_reconnector = Mock()
+        # The method runs in the executor; call the body directly so nothing
+        # is swallowed by the future.
+        body = Cluster.on_down_potentially_blocking.__wrapped__
+
+        body(self.cluster, self.host, is_host_addition=False)
+
+        self.cluster.control_connection.on_down.assert_called_once_with(
+            self.host)
+        self.cluster._start_reconnector.assert_called_once()
+
+    def test_down_handling_continues_when_the_control_connection_raises(self):
+        # The control connection goes first, so a failure there -- the executor
+        # rejecting its reconnect submission, say -- must not skip the pool and
+        # listener work or the host reconnector that follows it.
+        del self.cluster.on_down_potentially_blocking  # use the real method
+        self.cluster.control_connection = Mock()
+        self.cluster.control_connection.on_down.side_effect = RuntimeError(
+            'cannot schedule new futures after shutdown')
+        self.cluster._start_reconnector = Mock()
+        self.cluster.profile_manager.on_down = Mock()
+        body = Cluster.on_down_potentially_blocking.__wrapped__
+
+        body(self.cluster, self.host, is_host_addition=False)
+
+        self.cluster.profile_manager.on_down.assert_called_once_with(self.host)
+        self.cluster._start_reconnector.assert_called_once_with(
+            self.host, False)
+
     def test_signal_connection_failure_rejected_by_conviction_policy(self):
         error = ConnectionException("connection failed")
         self.host.signal_connection_failure = Mock(return_value=False)

@@ -267,6 +267,11 @@ class _ReconnectionHandler(object):
 
     _cancelled = False
 
+    # Whether on_reconnection() keeps the connection it is handed. A handler
+    # that only uses it to probe the host leaves this False and run() closes
+    # the connection for it.
+    _keeps_connection = False
+
     def __init__(self, scheduler, schedule, callback, *callback_args, **callback_kwargs):
         self.scheduler = scheduler
         self.schedule = schedule
@@ -287,6 +292,7 @@ class _ReconnectionHandler(object):
             return
 
         conn = None
+        handed_off = False
         try:
             conn = self.try_reconnect()
         except Exception as exc:
@@ -306,10 +312,16 @@ class _ReconnectionHandler(object):
                     self.scheduler.schedule(next_delay, self.run)
         else:
             if not self._cancelled:
+                # Mark the handoff before it happens: on_reconnection() adopts
+                # the connection and may then raise (installing the new control
+                # connection closes the old one, which runs user callbacks). If
+                # the flag were set afterwards, that raise would leave us
+                # closing a connection the subclass is already using.
+                handed_off = self._keeps_connection
                 self.on_reconnection(conn)
                 self.callback(*(self.callback_args), **(self.callback_kwargs))
         finally:
-            if conn:
+            if conn and not handed_off:
                 conn.close()
 
     def cancel(self):
