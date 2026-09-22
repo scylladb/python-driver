@@ -65,6 +65,71 @@ keystore files with these instructions:
 
 * `Scylla TLS/SSL Guide <https://opensource.docs.scylladb.com/stable/operating-scylla/security/client-node-encryption.html>`_
 
+TLS Session Resumption
+^^^^^^^^^^^^^^^^^^^^^^
+A shard-aware driver opens one connection per shard to every node, and a full
+TLS handshake on each is the expensive part of that. Whenever
+:attr:`.Cluster.ssl_context` is set, the driver caches the TLS session each
+connection establishes and offers it on the next one, so the connections that
+follow resume instead of handshaking in full. This is on by default and needs no
+configuration.
+
+There is one thing to weigh before leaving it on. A resumed handshake carries
+no Certificate message, so nothing about the server's certificate is checked
+again while a cached session is being offered -- not its expiry, and not a
+revocation list the ``SSLContext`` carries. A certificate that expires or is
+revoked goes on being accepted by connections that resume, until the cached
+entry goes: that is the lifetime the server announced with the ticket, which
+the driver caps at seven days. Connections that handshake in full verify as
+they always have. The hostname is not re-checked either, which is why the
+driver keys each cached session by the name verified when it was established,
+so a session is never offered to a connection expecting a different one. Where
+that window is not acceptable, turn resumption off with
+``ssl_session_cache=None``.
+
+It does need the server to issue something to resume from. Scylla sends session
+tickets only when ``enable_session_tickets`` is set in its
+``client_encryption_options``, which defaults to true from Scylla 2026.3 and to
+false in the releases before it:
+
+.. code-block:: yaml
+
+    client_encryption_options:
+        enabled: true
+        certificate: /path/to/scylla.crt
+        keyfile: /path/to/scylla.key
+        enable_session_tickets: true
+
+Without that, nothing resumes and every connection performs a full handshake, as
+it did before.
+
+Resumption also needs a reactor that can offer a session before the handshake
+begins: the ``libev`` reactor, and ``asyncore`` on the Python versions that still
+ship it, which is up to 3.11. The ``asyncio`` reactor performs its handshake
+inside ``loop.create_connection()``, leaving no point at which to restore a
+session, so resumption is unavailable there -- worth knowing, because that is the
+default reactor on Python 3.12 and newer when the libev extension is not
+installed. It is unavailable too with the deprecated
+:attr:`.Cluster.ssl_options`-only configuration below, since each of those
+connections builds its own ``SSLContext`` and a session cannot be replayed onto a
+different one.
+
+Where resumption is unavailable, no cache is created and
+:attr:`.Cluster.ssl_session_cache` reads as ``None``; asking for one anyway is
+reported when :meth:`.Cluster.connect` is called. To turn resumption off, or to
+size the cache or share it between clusters, see
+:attr:`.Cluster.ssl_session_cache`:
+
+.. code-block:: python
+
+    from cassandra.cluster import Cluster
+    from cassandra.ssl_session_cache import SSLSessionCache
+
+    cluster = Cluster(ssl_context=ssl_context, ssl_session_cache=None)
+
+    cluster = Cluster(ssl_context=ssl_context,
+                      ssl_session_cache=SSLSessionCache(max_size=64))
+
 SSL Configuration Examples
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 Here, we'll describe the server and driver configuration necessary to set up SSL to meet various goals, such as the client verifying the server and the server verifying the client. We'll also include Python code demonstrating how to use servers and drivers configured in these ways.

@@ -1735,22 +1735,14 @@ class Cluster(object):
             cluster = Cluster(ssl_context=ssl_context,
                               ssl_session_cache=SSLSessionCache(max_size=64))
 
-        Resumption is available when TLS is configured through
-        :attr:`~Cluster.ssl_context` and the reactor establishes TLS with the
-        standard library's ``ssl`` module: the ``libev`` reactor, and ``asyncore``
-        on the Python versions that still ship it, which is up to 3.11.  Which of
-        them is the default depends on what can be imported -- libev first, then
-        asyncore, then asyncio -- so on Python 3.12 and newer without the libev
-        extension the default is the ``asyncio`` reactor, and resumption is off.
-
-        It is not available with the deprecated :attr:`~Cluster.ssl_options`-only
-        configuration, because each connection builds its own ``SSLContext`` and a
-        session cannot be replayed onto a different one; nor on the ``asyncio``
-        reactor, which performs the handshake inside
-        ``loop.create_connection()``, leaving no point at which to restore a
-        session.  In those cases no cache is created and connections handshake in
-        full.
-"""
+        What resumption asks of the reactor, and of the server -- Scylla issues
+        session tickets only when told to, before 2026.3 -- is described under
+        :ref:`security`.  Where any of that is missing no cache is created and
+        this reads as :const:`None`, and connections handshake in full as they
+        did before.  Over TLS 1.2 a server that issues no tickets still assigns
+        a session id, so the cache may hold an entry it will not honour;
+        offering that costs nothing and the handshake simply completes in
+        full."""
         if not self._tls_session_resumption_available():
             return None
         if self._ssl_session_cache is not _NOT_SET:
