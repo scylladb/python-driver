@@ -16,7 +16,7 @@ import time
 import unittest
 
 from collections import deque
-from threading import RLock, Thread
+from threading import Event, RLock, Thread
 from unittest.mock import Mock, MagicMock, ANY, patch
 
 from cassandra import ConsistencyLevel, InvalidRequest, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
@@ -693,6 +693,79 @@ class ResponseFutureTests(unittest.TestCase):
         assert not session.cluster.control_connection._application_sessions
         assert session.cluster.control_connection._get_application_keyspace() is _NOT_SET
         assert session.cluster.control_connection._application_requests_in_flight == 0
+
+    def test_control_connection_fallback_concurrent_send_preserves_session(self):
+        session = self._make_fallback_session(keyspace='ks1')
+        session.cluster.allow_control_connection_query_fallback = \
+            ControlConnectionQueryFallback.Fallback
+        control_connection = session.cluster.control_connection
+        connection = self.make_control_connection()
+        connection.keyspace = 'ks1'
+        connection.get_request_id.side_effect = [7, 8, 9]
+        control_connection._connection = connection
+        session.cluster.get_control_connection_host.return_value = \
+            Mock(endpoint=connection.endpoint)
+
+        first_send_started = Event()
+        second_send_started = Event()
+        release_first_send = Event()
+        release_second_send = Event()
+
+        def send_msg(message, request_id, **kwargs):
+            if request_id == 7:
+                first_send_started.set()
+                assert release_first_send.wait(5)
+                raise ConnectionBusy('no streams')
+            if request_id == 8:
+                second_send_started.set()
+                assert release_second_send.wait(5)
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+        rf1 = self.make_response_future(session)
+        first_result = []
+        first_thread = Thread(target=lambda: first_result.append(rf1.send_request()))
+        first_thread.start()
+        assert first_send_started.wait(5)
+
+        rf2 = self.make_response_future(session)
+        second_result = []
+        second_thread = Thread(
+            target=lambda: second_result.append(rf2.send_request()))
+        second_thread.start()
+        assert second_send_started.wait(5)
+
+        # Even before the second send returns successfully, its pending claim
+        # prevents the first failure from discarding their shared Session.
+        release_first_send.set()
+        first_thread.join(5)
+        assert not first_thread.is_alive()
+        assert first_result == [False]
+        assert session in control_connection._application_sessions
+
+        release_second_send.set()
+        second_thread.join(5)
+        assert not second_thread.is_alive()
+        assert second_result == [True]
+
+        # The successful concurrent request claimed the provisional binding.
+        # Finishing the failed first send must not release its live Session.
+        connection.send_msg.call_args_list[1][1]['cb'](
+            self.make_mock_response(['value'], [('two',)]))
+        assert control_connection._application_requests_in_flight == 0
+        assert session in control_connection._application_sessions
+        assert control_connection._get_application_keyspace() == 'ks1'
+
+        other_session = self._make_fallback_session(
+            cluster=session.cluster, keyspace='ks2')
+        other_rf = self.make_response_future(other_session)
+        assert other_rf.send_request()
+        with pytest.raises(InvalidRequest, match='already attached'):
+            other_rf.result()
+
+        rf3 = self.make_response_future(session)
+        assert rf3.send_request()
+        assert connection.send_msg.call_args_list[2][0][0] is rf3.message
 
     def test_speculative_execute_honours_expired_deadline_without_attempts(self):
         session = self.make_basic_session()
