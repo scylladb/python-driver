@@ -84,7 +84,12 @@ Bug Fixes
   would have left that replacement retrying where nothing could find it. An attempt that
   fails while an overlapping one succeeds no longer parks a handler in the slot the
   successful attempt emptied, which would have blocked reconnection for the length of its
-  backoff and then replaced a healthy control connection.
+  backoff and then replaced a healthy control connection. Once retry handling begins, its
+  cadence follows ``reconnection_policy`` up to ``max_reconnection_delay`` instead of
+  being restarted by each ``idle_heartbeat_interval``. Operators that need a shorter
+  recovery bound should configure a lower maximum delay. A finite schedule gives up after
+  its configured attempts, and recurring heartbeat returns for the same failed connection
+  do not re-arm it; continued automatic recovery requires an infinite schedule.
 * The control connection is no longer closed immediately after a reconnection handler
   restores it. ``_ReconnectionHandler.run()`` closed the connection it had just opened,
   which is right for the host handler that only uses it to probe the host, but left the

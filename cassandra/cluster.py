@@ -2209,10 +2209,16 @@ class Cluster(object):
             except Exception:
                 log.exception("Error in control connection down handler for host %s", host)
             for session in tuple(self.sessions):
-                session.on_down(host)
+                try:
+                    session.on_down(host)
+                except Exception:
+                    log.exception("Error marking host %s down in session", host)
 
             for listener in self.listeners:
-                listener.on_down(host)
+                try:
+                    listener.on_down(host)
+                except Exception:
+                    log.exception("Error in host state listener down handler for host %s", host)
 
             self._start_reconnector(host, is_host_addition)
         finally:
@@ -4584,7 +4590,7 @@ class ControlConnection(object):
         with self._reconnection_lock:
             if self._reconnection_handler is not None:
                 handler = self._reconnection_handler
-                if getattr(handler, '_is_running', False) is True:
+                if handler._is_running:
                     handler._reconnect_requested = True
 
                 # A handler can have been started proactively while the
@@ -4595,7 +4601,7 @@ class ControlConnection(object):
                 # heartbeats for an already-failed connection do not extend a
                 # finite schedule indefinitely.
                 connection = self._connection
-                if (getattr(handler, '_failed_connection', None) is None and
+                if (handler._failed_connection is None and
                         connection is not None and
                         (connection.is_defunct or connection.is_closed)):
                     handler._failed_connection = connection
@@ -5348,7 +5354,7 @@ class ControlConnection(object):
                     log.debug("[control connection] Reconnection schedule is "
                               "exhausted for the defunct connection")
                     return
-                self.reconnect()
+            self.reconnect()
 
 
 def _stop_scheduler(scheduler, thread):

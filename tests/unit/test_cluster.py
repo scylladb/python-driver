@@ -1232,7 +1232,8 @@ class ClusterDownHandlingTest(unittest.TestCase):
         # is swallowed by the future.
         body = Cluster.on_down_potentially_blocking.__wrapped__
 
-        body(self.cluster, self.host, is_host_addition=False)
+        body(self.cluster, self.host, is_host_addition=False,
+             down_event_generation=self.host._down_event_generation)
 
         self.cluster.control_connection.on_down.assert_called_once_with(
             self.host)
@@ -1250,9 +1251,44 @@ class ClusterDownHandlingTest(unittest.TestCase):
         self.cluster.profile_manager.on_down = Mock()
         body = Cluster.on_down_potentially_blocking.__wrapped__
 
-        body(self.cluster, self.host, is_host_addition=False)
+        body(self.cluster, self.host, is_host_addition=False,
+             down_event_generation=self.host._down_event_generation)
 
         self.cluster.profile_manager.on_down.assert_called_once_with(self.host)
+        self.cluster._start_reconnector.assert_called_once_with(
+            self.host, False)
+
+    def test_down_handling_continues_when_a_session_raises(self):
+        del self.cluster.on_down_potentially_blocking  # use the real method
+        failing_session = Mock()
+        failing_session.on_down.side_effect = RuntimeError(
+            'session down handling failed')
+        following_session = Mock()
+        self.cluster.sessions = [failing_session, following_session]
+        self.cluster._start_reconnector = Mock()
+        body = Cluster.on_down_potentially_blocking.__wrapped__
+
+        body(self.cluster, self.host, is_host_addition=False,
+             down_event_generation=self.host._down_event_generation)
+
+        following_session.on_down.assert_called_once_with(self.host)
+        self.cluster._start_reconnector.assert_called_once_with(
+            self.host, False)
+
+    def test_down_handling_continues_when_a_listener_raises(self):
+        del self.cluster.on_down_potentially_blocking  # use the real method
+        failing_listener = Mock()
+        failing_listener.on_down.side_effect = RuntimeError(
+            'listener down handling failed')
+        following_listener = Mock()
+        self.cluster._listeners = {failing_listener, following_listener}
+        self.cluster._start_reconnector = Mock()
+        body = Cluster.on_down_potentially_blocking.__wrapped__
+
+        body(self.cluster, self.host, is_host_addition=False,
+             down_event_generation=self.host._down_event_generation)
+
+        following_listener.on_down.assert_called_once_with(self.host)
         self.cluster._start_reconnector.assert_called_once_with(
             self.host, False)
 
