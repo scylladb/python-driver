@@ -786,6 +786,58 @@ class ResponseFutureTests(unittest.TestCase):
         rf._on_timeout.assert_called_once_with()
         session.cluster.connection_class.create_timer.assert_not_called()
 
+    def test_speculative_timeout_during_first_send_orphans_real_stream(self):
+        session = self.make_basic_session()
+        host = Mock(endpoint='ip1')
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [host]
+
+        pool = Mock(is_shutdown=False)
+        connection = Mock(spec=Connection)
+        connection.lock = RLock()
+        connection._requests = {}
+        connection.in_flight = 1
+        connection.is_control_connection = False
+        connection.orphaned_request_ids = set()
+        connection.orphaned_threshold = 75
+        connection.orphaned_threshold_reached = False
+        pool.borrow_connection.return_value = (connection, 11)
+        session._pools = {host: pool}
+
+        send_started = Event()
+        release_send = Event()
+
+        def send_msg(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = \
+                (cb, kwargs.get('decoder'), kwargs.get('result_metadata'))
+            send_started.set()
+            assert release_send.wait(5)
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+        rf = self.make_response_future(session)
+        send_result = []
+        send_thread = Thread(target=lambda: send_result.append(rf.send_request()))
+        send_thread.start()
+        assert send_started.wait(5)
+
+        # send_request() has not returned to copy its local request id yet, but
+        # the timeout must still detach the callback send_msg() installed.
+        assert not rf.attempted_hosts
+        assert rf._req_id == 11
+        rf._start_time = time.time() - 5
+        rf._on_speculative_execute()
+
+        release_send.set()
+        send_thread.join(5)
+        assert not send_thread.is_alive()
+        assert send_result == [True]
+        assert 11 not in connection._requests
+        assert 11 in connection.orphaned_request_ids
+        pool.return_connection.assert_called_once_with(
+            connection, stream_was_orphaned=True)
+        with pytest.raises(OperationTimedOut):
+            rf.result()
+
     def _make_fallback_session(self, cluster=None, keyspace=None):
         session = self.make_basic_session()
         if cluster is not None:
@@ -1278,6 +1330,51 @@ class ResponseFutureTests(unittest.TestCase):
         assert session.cluster.control_connection._application_requests_in_flight == 0
         assert (connection, 7) in \
             session.cluster.control_connection._application_orphaned_requests
+        with pytest.raises(OperationTimedOut):
+            rf.result()
+
+    def test_control_connection_timeout_does_not_orphan_reused_stream(self):
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+
+        def send_msg(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = \
+                (cb, kwargs.get('decoder'), kwargs.get('result_metadata'))
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+
+        # Complete the physical fallback request with a schema change. The
+        # future remains pending while schema agreement runs, but stream 7 is
+        # no longer owned by it and may be reused by control traffic.
+        response_cb, _, _ = connection._requests.pop(7)
+        response_cb(Mock(spec=ResultMessage,
+                         kind=RESULT_KIND_SCHEMA_CHANGE,
+                         schema_change_event={}))
+        assert not rf._event.is_set()
+        assert not rf._control_connection_requests
+        assert session.cluster.control_connection._application_requests_in_flight == 0
+
+        unrelated_cb = Mock()
+        unrelated_decoder = Mock()
+        unrelated_metadata = Mock()
+        unrelated_request = \
+            (unrelated_cb, unrelated_decoder, unrelated_metadata)
+        connection._requests[7] = unrelated_request
+        connection.in_flight = 1
+        recovered_pool = Mock(is_shutdown=False)
+        session._pools = {rf._current_host: recovered_pool}
+
+        rf._on_timeout()
+
+        assert connection._requests[7] is unrelated_request
+        assert not connection.orphaned_request_ids
+        recovered_pool.return_connection.assert_not_called()
+        assert session.cluster.control_connection._application_requests_in_flight == 0
+        assert not session.cluster.control_connection._application_orphaned_requests
         with pytest.raises(OperationTimedOut):
             rf.result()
 

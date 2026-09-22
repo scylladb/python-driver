@@ -5198,6 +5198,13 @@ class ResponseFuture(object):
         self._errors = {}
         self._callbacks = []
         self._errbacks = []
+        # Maps fallback (connection, request id) pairs to the callback this
+        # future installed. Request ids may be reused as soon as a response
+        # callback returns, while the future can remain pending for a retry,
+        # reprepare, or schema agreement. Keep the callback identity as well as
+        # the id so a later timeout cannot detach an unrelated request that
+        # reused the same stream.
+        self._control_connection_requests = {}
         self.attempted_hosts = []
         self._start_timer()
         self._continuous_paging_state = continuous_paging_state
@@ -5240,13 +5247,18 @@ class ResponseFuture(object):
 
         conn_in_flight = None
         if self._connection is not None:
-            orphaned_control_request = \
+            control_connection_request = \
                 self._connection.is_control_connection and \
-                self._control_connection_query_attempted and \
+                self._control_connection_query_attempted
+            if control_connection_request:
                 self._orphan_control_connection_request(
                     self._connection, self._req_id)
             try:
-                if not orphaned_control_request:
+                # A completed fallback stream may already have been reused by
+                # control traffic while this future waits for follow-up work.
+                # _orphan_control_connection_request() verifies ownership; if
+                # it does not own the stream, leave the current request alone.
+                if not control_connection_request:
                     self._connection._requests.pop(self._req_id)
             # PYTHON-1044
             # This request might have been removed from the connection after the latter was defunct by heartbeat.
@@ -5263,7 +5275,11 @@ class ResponseFuture(object):
             # Capture connection stats before pool.return_connection() can alter state
             conn_in_flight = self._connection.in_flight
 
-            pool = self.session._pools.get(self._current_host)
+            # Fallback requests never belong to a Session pool. A pool may
+            # recover while the future waits for retry/schema work, but the
+            # completed fallback stream must not be returned through that pool.
+            pool = None if control_connection_request else \
+                self.session._pools.get(self._current_host)
             if pool and not pool.is_shutdown:
                 # Do not return the stream ID to the pool yet. We cannot reuse it
                 # because the node might still be processing the query and will
@@ -5277,7 +5293,7 @@ class ResponseFuture(object):
 
                 pool.return_connection(self._connection, stream_was_orphaned=True)
             elif self._connection.is_control_connection and \
-                    not orphaned_control_request:
+                    not control_connection_request:
                 with self._connection.lock:
                     self._connection.orphaned_request_ids.add(self._req_id)
                     if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
@@ -5405,15 +5421,31 @@ class ResponseFuture(object):
                                             provisional_session=None):
         control_connection = self.session.cluster.control_connection
         with control_connection._application_query_lock:
-            with connection.lock:
-                connection.in_flight -= 1
-                connection.request_ids.append(request_id)
-                connection._requests.pop(request_id, None)
-            control_connection._application_requests_in_flight -= 1
+            request_key = (connection, request_id)
+            active_request = self._control_connection_requests.pop(
+                request_key, None)
+            orphaned_request = request_key in \
+                control_connection._application_orphaned_requests
+            if orphaned_request:
+                control_connection._application_orphaned_requests.discard(
+                    request_key)
+
+            # A timeout may have taken ownership while send_msg() was still
+            # encoding and then send_msg() may fail before pushing any bytes.
+            # Retire either form of ownership exactly once in that case.
+            if active_request is not None or orphaned_request:
+                with connection.lock:
+                    connection.in_flight -= 1
+                    connection.request_ids.append(request_id)
+                    connection._requests.pop(request_id, None)
+                    connection.orphaned_request_ids.discard(request_id)
+                if active_request is not None:
+                    control_connection._application_requests_in_flight -= 1
             control_connection._finish_application_session_claim(
                 provisional_session, False)
 
-    def _handle_control_connection_response(self, connection, cb, response):
+    def _handle_control_connection_response(self, connection, request_id, cb,
+                                            response):
         control_connection = self.session.cluster.control_connection
         with connection.lock:
             connection.in_flight -= 1
@@ -5425,7 +5457,10 @@ class ResponseFuture(object):
             cb(response)
         finally:
             with control_connection._application_query_lock:
-                control_connection._application_requests_in_flight -= 1
+                request_key = (connection, request_id)
+                if self._control_connection_requests.pop(
+                        request_key, None) is not None:
+                    control_connection._application_requests_in_flight -= 1
 
     def _orphan_control_connection_request(self, connection, request_id):
         """Detach a timed-out fallback request while retaining a safe barrier.
@@ -5439,14 +5474,19 @@ class ResponseFuture(object):
         control_connection = self.session.cluster.control_connection
         with control_connection._application_query_lock:
             with connection.lock:
+                orphan_key = (connection, request_id)
+                expected_callback = self._control_connection_requests.get(
+                    orphan_key)
+                if expected_callback is None:
+                    return False
                 try:
-                    _, decoder, result_metadata = connection._requests[request_id]
+                    callback, decoder, result_metadata = \
+                        connection._requests[request_id]
                 except KeyError:
                     return False
 
-                orphan_key = (connection, request_id)
-                if orphan_key in control_connection._application_orphaned_requests:
-                    return True
+                if callback is not expected_callback:
+                    return False
                 callback = partial(
                     control_connection._handle_orphaned_application_response,
                     connection, request_id)
@@ -5456,6 +5496,7 @@ class ResponseFuture(object):
                 if len(connection.orphaned_request_ids) >= connection.orphaned_threshold:
                     connection.orphaned_threshold_reached = True
 
+            self._control_connection_requests.pop(orphan_key, None)
             control_connection._application_requests_in_flight -= 1
             control_connection._application_orphaned_requests.add(orphan_key)
             return True
@@ -5544,11 +5585,17 @@ class ResponseFuture(object):
         try:
             if request_id is None:
                 request_id = self._borrow_control_connection(connection)
-            self._connection = connection
             result_meta = self._bound_result_metadata
             if cb is None:
                 cb = partial(self._set_result, host, connection, None)
-            cb = partial(self._handle_control_connection_response, connection, cb)
+            cb = partial(self._handle_control_connection_response, connection,
+                         request_id, cb)
+
+            control_connection = self.session.cluster.control_connection
+            with control_connection._application_query_lock:
+                self._control_connection_requests[(connection, request_id)] = cb
+                self._connection = connection
+                self._req_id = request_id
 
             log.debug("No usable node pools; falling back to control connection for host %s", host)
             # Record the stream id before sending, not after. The reply can be
@@ -5557,13 +5604,11 @@ class ResponseFuture(object):
             # whose id survives in _req_id. Assigning after send_msg() would put
             # the already-completed USE id there instead, so a later timeout would
             # orphan the wrong stream and leave the real request in _requests.
-            self._req_id = request_id
             encoded_size = connection.send_msg(message, request_id, cb=cb,
                                                encoder=self._protocol_handler.encode_message,
                                                decoder=self._protocol_handler.decode_message,
                                                result_metadata=result_meta)
             request_sent = True
-            control_connection = self.session.cluster.control_connection
             control_connection._finish_application_session_claim(
                 provisional_session, True)
             if record_size:
@@ -5676,6 +5721,9 @@ class ResponseFuture(object):
         self._current_host = host
 
         connection = None
+        previous_req_id = self._req_id
+        request_id = None
+        request_sent = False
         try:
             # TODO get connectTimeout from cluster settings
             if self.query:
@@ -5693,10 +5741,15 @@ class ResponseFuture(object):
             if cb is None:
                 cb = partial(self._set_result, host, connection, pool)
 
+            # Record the stream before send_msg() starts. Encoding or pushing a
+            # message can overlap the deadline timer; the timeout must be able
+            # to detach the callback send_msg() has installed for this stream.
+            self._req_id = request_id
             self.request_encoded_size = connection.send_msg(message, request_id, cb=cb,
                                                             encoder=self._protocol_handler.encode_message,
                                                             decoder=self._protocol_handler.decode_message,
                                                             result_metadata=result_meta)
+            request_sent = True
             self.attempted_hosts.append(host)
             return request_id
         except NoConnectionsAvailable as exc:
@@ -5712,6 +5765,10 @@ class ResponseFuture(object):
                 self._metrics.on_connection_error()
             if connection:
                 pool.return_connection(connection)
+        finally:
+            if request_id is not None and not request_sent and \
+                    self._req_id == request_id:
+                self._req_id = previous_req_id
 
         return None
 
