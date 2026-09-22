@@ -185,6 +185,10 @@ def _future_completed(future):
 def run_in_executor(f):
     """
     A decorator to run the given method in the ThreadPoolExecutor.
+
+    The wrapper returns the submitted Future, or None when the cluster is
+    shutting down or the executor rejected the submission, in which case the
+    wrapped method never runs.
     """
 
     @wraps(f)
@@ -2226,9 +2230,11 @@ class Cluster(object):
     def on_down(self, host, is_host_addition, expect_host_to_be_down=False):
         """
         Intended for internal use only.
+
+        Returns whether DOWN handling was dispatched.
         """
         if self.is_shutdown or self.allow_control_connection_query_fallback == ControlConnectionQueryFallback.SkipPoolCreation:
-            return
+            return False
 
         restart_reconnector = False
         with host.lock:
@@ -2244,13 +2250,13 @@ class Cluster(object):
                     if pool_state:
                         connected |= pool_state['open_count'] > 0
                 if connected:
-                    return
+                    return False
 
             host.set_down()
             if (not was_up and
                     (host.is_currently_reconnecting() or
                      host._currently_handling_node_down)):
-                return
+                return False
 
             if not was_up and not expect_host_to_be_down:
                 # A terminal failure may have released this down host's old
@@ -2269,7 +2275,9 @@ class Cluster(object):
                 with host.lock:
                     if down_event_generation == host._down_event_generation:
                         host._currently_handling_node_down = False
-            return
+            # Restarting the host reconnector does not dispatch the DOWN
+            # callbacks that reconnect the control connection.
+            return False
 
         log.warning("Host %s has been marked down", host)
 
@@ -2279,6 +2287,7 @@ class Cluster(object):
             with host.lock:
                 if down_event_generation == host._down_event_generation:
                     host._currently_handling_node_down = False
+        return future is not None
 
     def on_add(self, host, refresh_nodes=True):
         if self.is_shutdown:
@@ -2373,10 +2382,11 @@ class Cluster(object):
             reconnection_handler.cancel()
 
     def signal_connection_failure(self, host, connection_exc, is_host_addition, expect_host_to_be_down=False):
+        """Return whether the failure caused DOWN handling to be dispatched."""
         is_down = host.signal_connection_failure(connection_exc)
-        if is_down:
-            self.on_down(host, is_host_addition, expect_host_to_be_down)
-        return is_down
+        if not is_down:
+            return False
+        return self.on_down(host, is_host_addition, expect_host_to_be_down)
 
     def add_host(self, endpoint, datacenter=None, rack=None, signal=True, refresh_nodes=True, host_id=None):
         """
@@ -4978,51 +4988,18 @@ class ControlConnection(object):
             if self._is_shutdown:
                 return
 
-            # try just signaling the cluster, as this will trigger a reconnect
-            # as part of marking the host down
+            # If DOWN handling is dispatched, its control connection callback
+            # will reconnect. Otherwise reconnect directly.
             if self._connection and self._connection.is_defunct:
                 connection = self._connection
                 host = self._get_host_for_connection(connection)
-                # host may be None if it's already been removed, but that indicates
-                # that errors have already been reported, so we're fine
-                if host:
-                    original_endpoint = getattr(
-                        connection, 'original_endpoint', None)
-                    unix_backed = (
-                        isinstance(host.endpoint, UnixSocketEndPoint) or
-                        isinstance(connection.endpoint, UnixSocketEndPoint) or
-                        isinstance(original_endpoint, UnixSocketEndPoint))
-                    route_mismatch = connection.endpoint != host.endpoint
-                    # Keep ordinary endpoint-equal TCP connections on the
-                    # legacy signal-only path. General suppressed-DOWN recovery
-                    # and its reconnection cadence are outside this change.
-                    if not unix_backed and not route_mismatch:
-                        self._cluster.signal_connection_failure(
-                            host, connection.last_error,
-                            is_host_addition=False)
-                        return
+                if host and self._cluster.signal_connection_failure(
+                        host, connection.last_error,
+                        is_host_addition=False):
+                    return
 
-                    # A newly resolvable Unix Host or alternate connection
-                    # route still needs the direct reconnect fallback when
-                    # host-state handling suppresses its DOWN notification. A
-                    # fresh DOWN transition guarantees that on_down() will
-                    # enqueue the reconnect instead.
-                    with host.lock:
-                        host_was_up = host.is_up is True
-                        host_was_reconnecting = (
-                            host.is_currently_reconnecting())
-                        self._cluster.signal_connection_failure(
-                            host, connection.last_error,
-                            is_host_addition=False)
-                        down_notification_queued = (
-                            host_was_up and not host_was_reconnecting and
-                            host.is_up is False)
-
-                    if down_notification_queued:
-                        return
-
-        # if the connection is not defunct or the host already left, reconnect
-        # manually
+        # If the connection is not defunct, the host is unresolved, or DOWN
+        # handling was suppressed, reconnect manually.
         self.reconnect()
 
     def on_up(self, host):

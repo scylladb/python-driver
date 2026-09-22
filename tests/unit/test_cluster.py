@@ -1204,6 +1204,192 @@ class SessionTest(unittest.TestCase):
         callback.assert_called_once()
         assert callback.call_args.args[0] == {'host1': [keyspace_error]}
 
+
+class ClusterDownHandlingTest(unittest.TestCase):
+
+    def setUp(self):
+        self.cluster = Cluster(contact_points=[])
+        self.addCleanup(self.cluster.shutdown)
+        self.cluster.profile_manager.distance = Mock(
+            return_value=HostDistance.LOCAL)
+        # The real method reports whether the executor accepted the work.
+        self.cluster.on_down_potentially_blocking = Mock(return_value=True)
+        self.cluster._restart_reconnector = Mock(return_value=None)
+        self.host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        self.host.set_up()
+
+    def test_signal_connection_failure_rejected_by_conviction_policy(self):
+        error = ConnectionException("connection failed")
+        self.host.signal_connection_failure = Mock(return_value=False)
+        self.cluster.on_down = Mock(return_value=True)
+
+        assert not self.cluster.signal_connection_failure(
+            self.host, error, is_host_addition=False)
+
+        self.host.signal_connection_failure.assert_called_once_with(error)
+        self.cluster.on_down.assert_not_called()
+
+    def test_signal_connection_failure_returns_down_handling_result(self):
+        error = ConnectionException("connection failed")
+        self.host.signal_connection_failure = Mock(return_value=True)
+        self.cluster.on_down = Mock(return_value=False)
+
+        assert not self.cluster.signal_connection_failure(
+            self.host, error, is_host_addition=True,
+            expect_host_to_be_down=True)
+
+        self.cluster.on_down.assert_called_once_with(
+            self.host, True, True)
+
+    def test_on_down_dispatches_normal_up_to_down_transition(self):
+        assert self.cluster.on_down(self.host, is_host_addition=False)
+
+        assert self.host.is_up is False
+        self.cluster.on_down_potentially_blocking.assert_called_once_with(
+            self.host, False, self.host._down_event_generation)
+
+    def test_on_down_discounted_when_any_session_has_an_open_pool(self):
+        missing_pool = Mock()
+        missing_pool.get_pool_state.return_value = {}
+        closed_pool = Mock()
+        closed_pool.get_pool_state.return_value = {
+            self.host: {'open_count': 0}}
+        open_pool = Mock()
+        open_pool.get_pool_state.return_value = {
+            self.host: {'open_count': 1}}
+        self.cluster.sessions = [missing_pool, closed_pool, open_pool]
+
+        assert not self.cluster.on_down(self.host, is_host_addition=False)
+
+        assert self.host.is_up is True
+        self.cluster.on_down_potentially_blocking.assert_not_called()
+
+    def test_on_down_not_discounted_when_all_pools_are_missing_or_closed(self):
+        missing_pool = Mock()
+        missing_pool.get_pool_state.return_value = {}
+        closed_pool = Mock()
+        closed_pool.get_pool_state.return_value = {
+            self.host: {'open_count': 0}}
+        self.cluster.sessions = [missing_pool, closed_pool]
+
+        assert self.cluster.on_down(self.host, is_host_addition=False)
+
+        self.cluster.on_down_potentially_blocking.assert_called_once_with(
+            self.host, False, self.host._down_event_generation)
+
+    def test_on_down_open_pool_discount_can_be_disabled(self):
+        open_pool = Mock()
+        open_pool.get_pool_state.return_value = {
+            self.host: {'open_count': 1}}
+        self.cluster.sessions = [open_pool]
+        self.cluster._discount_down_events = False
+
+        assert self.cluster.on_down(self.host, is_host_addition=False)
+
+        self.cluster.on_down_potentially_blocking.assert_called_once_with(
+            self.host, False, self.host._down_event_generation)
+
+    def test_on_down_does_not_discount_ignored_host(self):
+        open_pool = Mock()
+        open_pool.get_pool_state.return_value = {
+            self.host: {'open_count': 1}}
+        self.cluster.sessions = [open_pool]
+        self.cluster.profile_manager.distance.return_value = \
+            HostDistance.IGNORED
+
+        assert self.cluster.on_down(self.host, is_host_addition=False)
+
+        self.cluster.on_down_potentially_blocking.assert_called_once_with(
+            self.host, False, self.host._down_event_generation)
+
+    def test_on_down_skipped_during_shutdown(self):
+        self.cluster.is_shutdown = True
+
+        try:
+            assert not self.cluster.on_down(
+                self.host, is_host_addition=False)
+        finally:
+            # Keep the real shutdown cleanup effective for this test cluster.
+            self.cluster.is_shutdown = False
+
+        assert self.host.is_up is True
+        self.cluster.on_down_potentially_blocking.assert_not_called()
+
+    def test_on_down_skipped_when_pool_creation_is_disabled(self):
+        self.cluster.allow_control_connection_query_fallback = \
+            ControlConnectionQueryFallback.SkipPoolCreation
+
+        assert not self.cluster.on_down(self.host, is_host_addition=False)
+
+        assert self.host.is_up is True
+        self.cluster.on_down_potentially_blocking.assert_not_called()
+
+    def test_on_down_restarts_already_down_or_uninitialized_host(self):
+        for initial_state in (False, None):
+            with self.subTest(initial_state=initial_state):
+                self.host.is_up = initial_state
+                self.host._currently_handling_node_down = False
+                self.cluster.on_down_potentially_blocking.reset_mock()
+                self.cluster._restart_reconnector.reset_mock()
+
+                assert not self.cluster.on_down(
+                    self.host, is_host_addition=False)
+
+                assert self.host.is_up is False
+                self.cluster.on_down_potentially_blocking.assert_not_called()
+                self.cluster._restart_reconnector.assert_called_once_with(
+                    self.host, False, self.host._down_event_generation)
+
+    def test_on_down_expected_down_host_dispatches_recovery(self):
+        for initial_state in (False, None):
+            with self.subTest(initial_state=initial_state):
+                self.host.is_up = initial_state
+                self.host._currently_handling_node_down = False
+                self.cluster.on_down_potentially_blocking.reset_mock()
+
+                assert self.cluster.on_down(
+                    self.host, is_host_addition=True,
+                    expect_host_to_be_down=True)
+
+                self.cluster.on_down_potentially_blocking \
+                    .assert_called_once_with(
+                        self.host, True, self.host._down_event_generation)
+
+    def test_on_down_dispatches_transition_with_existing_reconnector(self):
+        self.host.get_and_set_reconnection_handler(Mock())
+
+        assert self.cluster.on_down(self.host, is_host_addition=False)
+
+        assert self.host.is_up is False
+        self.cluster.on_down_potentially_blocking.assert_called_once_with(
+            self.host, False, self.host._down_event_generation)
+
+    def test_on_down_reports_undispatched_when_the_executor_rejects_it(self):
+        # Restore the real method so the executor submission is exercised.
+        del self.cluster.on_down_potentially_blocking
+        real_executor = self.cluster.executor
+        self.addCleanup(setattr, self.cluster, 'executor', real_executor)
+        self.cluster.executor = Mock()
+        self.cluster.executor.submit.side_effect = RuntimeError(
+            "cannot schedule new futures")
+
+        assert not self.cluster.on_down(self.host, is_host_addition=False)
+
+        assert self.host.is_up is False
+        self.cluster.executor.submit.assert_called_once()
+
+    def test_on_down_reports_dispatched_when_the_executor_accepts_it(self):
+        del self.cluster.on_down_potentially_blocking
+        real_executor = self.cluster.executor
+        self.addCleanup(setattr, self.cluster, 'executor', real_executor)
+        self.cluster.executor = Mock()
+
+        assert self.cluster.on_down(self.host, is_host_addition=False)
+
+        self.cluster.executor.submit.assert_called_once()
+
+
 class ProtocolVersionTests(unittest.TestCase):
 
     def test_protocol_downgrade_test(self):
