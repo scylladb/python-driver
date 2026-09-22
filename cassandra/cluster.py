@@ -4030,6 +4030,7 @@ class ControlConnection(object):
         self._application_keyspace = _NOT_SET
         self._application_sessions = WeakSet()
         self._application_requests_in_flight = 0
+        self._application_orphaned_requests = set()
 
     def connect(self):
         if self._is_shutdown:
@@ -4067,14 +4068,26 @@ class ControlConnection(object):
         with self._application_query_lock:
             self._prune_application_sessions()
 
-            # A Session already holding the binding is not in conflict with
-            # itself: it may rebind to the keyspace it switched to.
-            if any(other is not session for other in self._application_sessions):
-                if self._application_keyspace != keyspace:
-                    return ("Control-connection fallback is already attached to "
-                            "keyspace %r; cannot use it from a Session using "
-                            "keyspace %r" % (self._application_keyspace, keyspace))
-            elif keyspace is None:
+            other_sessions = any(
+                other is not session for other in self._application_sessions)
+            current_connection_has_orphans = \
+                self._current_connection_has_application_orphans()
+            binding_is_busy = self._application_requests_in_flight or \
+                current_connection_has_orphans
+
+            # Even the Session that owns the binding cannot change it while a
+            # request is active. A recovered node pool may have changed the
+            # Session keyspace while an earlier control-connection USE or query
+            # is still outstanding, and allowing the next fallback request to
+            # rebind would put both keyspaces on the shared connection at once.
+            if self._application_keyspace is not _NOT_SET and \
+                    self._application_keyspace != keyspace and \
+                    (other_sessions or binding_is_busy):
+                return ("Control-connection fallback is already attached to "
+                        "keyspace %r; cannot use it from a Session using "
+                        "keyspace %r" % (self._application_keyspace, keyspace))
+
+            if keyspace is None:
                 # Reclaiming from a gone Session cannot undo the USE it left on
                 # the shared connection: CQL has no way back to "no keyspace".
                 leftover = self._leftover_application_keyspace()
@@ -4093,7 +4106,8 @@ class ControlConnection(object):
         with self._application_query_lock:
             self._application_sessions.discard(session)
             if not self._application_sessions and \
-                    not self._application_requests_in_flight:
+                    not self._application_requests_in_flight and \
+                    not self._current_connection_has_application_orphans():
                 self._application_keyspace = _NOT_SET
 
     def _prune_application_sessions(self):
@@ -4106,8 +4120,6 @@ class ControlConnection(object):
 
     def _leftover_application_keyspace(self):
         """The keyspace a released binding left the shared connection in, if any."""
-        if self._application_keyspace is _NOT_SET or self._application_keyspace is None:
-            return None
         connection = self._connection
         # A reconnect replaces the connection, and a fresh one starts out with
         # no keyspace, so the leftover USE state went away with the old one.
@@ -4115,9 +4127,26 @@ class ControlConnection(object):
             return None
         return connection.keyspace
 
+    def _current_connection_has_application_orphans(self):
+        return any(
+            connection is self._connection
+            for connection, _ in self._application_orphaned_requests)
+
     def _get_application_keyspace(self):
         with self._application_query_lock:
             return self._application_keyspace
+
+    def _handle_orphaned_application_response(self, connection, request_id,
+                                               response):
+        """Retire a timed-out fallback stream without resuming its request."""
+        try:
+            if isinstance(response, ResultMessage) and \
+                    response.kind == RESULT_KIND_SET_KEYSPACE:
+                connection.keyspace = response.new_keyspace
+        finally:
+            with self._application_query_lock:
+                self._application_orphaned_requests.discard(
+                    (connection, request_id))
 
     def _try_connect_to_hosts(self):
         errors = {}
@@ -5181,8 +5210,14 @@ class ResponseFuture(object):
 
         conn_in_flight = None
         if self._connection is not None:
+            orphaned_control_request = \
+                self._connection.is_control_connection and \
+                self._control_connection_query_attempted and \
+                self._orphan_control_connection_request(
+                    self._connection, self._req_id)
             try:
-                self._connection._requests.pop(self._req_id)
+                if not orphaned_control_request:
+                    self._connection._requests.pop(self._req_id)
             # PYTHON-1044
             # This request might have been removed from the connection after the latter was defunct by heartbeat.
             # We should still raise OperationTimedOut to reject the future so that the main event thread will not
@@ -5211,7 +5246,8 @@ class ResponseFuture(object):
                         self._connection.orphaned_threshold_reached = True
 
                 pool.return_connection(self._connection, stream_was_orphaned=True)
-            elif self._connection.is_control_connection:
+            elif self._connection.is_control_connection and \
+                    not orphaned_control_request:
                 with self._connection.lock:
                     self._connection.orphaned_request_ids.add(self._req_id)
                     if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
@@ -5361,8 +5397,43 @@ class ResponseFuture(object):
             with control_connection._application_query_lock:
                 control_connection._application_requests_in_flight -= 1
 
+    def _orphan_control_connection_request(self, connection, request_id):
+        """Detach a timed-out fallback request while retaining a safe barrier.
+
+        The normal response callback owns the application in-flight count. A
+        timeout removes that callback, so replace it with a cleanup-only
+        callback and release the count here. The orphan remains a binding
+        barrier until its late response arrives because a timed-out ``USE`` can
+        still change the physical connection keyspace.
+        """
+        control_connection = self.session.cluster.control_connection
+        with control_connection._application_query_lock:
+            with connection.lock:
+                try:
+                    _, decoder, result_metadata = connection._requests[request_id]
+                except KeyError:
+                    return False
+
+                orphan_key = (connection, request_id)
+                if orphan_key in control_connection._application_orphaned_requests:
+                    return True
+                callback = partial(
+                    control_connection._handle_orphaned_application_response,
+                    connection, request_id)
+                connection._requests[request_id] = \
+                    (callback, decoder, result_metadata)
+                connection.orphaned_request_ids.add(request_id)
+                if len(connection.orphaned_request_ids) >= connection.orphaned_threshold:
+                    connection.orphaned_threshold_reached = True
+
+            control_connection._application_requests_in_flight -= 1
+            control_connection._application_orphaned_requests.add(orphan_key)
+            return True
+
     def _is_keyspace_change_query(self, message=None):
         message = self.message if message is None else message
+        if isinstance(self.query, GraphStatement):
+            return False
         if not isinstance(message, QueryMessage):
             return False
         query = getattr(message.query, 'query_string', message.query)
