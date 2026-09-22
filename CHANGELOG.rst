@@ -29,6 +29,33 @@ Features
   statements skip re-sending result metadata on EXECUTE, and the driver automatically
   refreshes cached metadata when the server detects a schema change (DRIVER-153)
 
+Bug Fixes
+---------
+* Prevent sessions from leaking keyspace state when application queries fall back to
+  the shared control connection. The first fallback session binds that connection to
+  its keyspace (including no keyspace); other fallback sessions with a different
+  keyspace are rejected while that binding is held. The binding is released once
+  every session holding it has been shut down or garbage collected and its fallback
+  requests have drained, so a later session can take it over. Taking it over from a
+  session without a keyspace is rejected when the previous holder left the shared
+  connection in a keyspace, since CQL offers no way back to "no keyspace". An explicit
+  ``USE`` statement -- including the one ``Session.set_keyspace()`` executes -- is now
+  rejected with ``InvalidRequest`` on the fallback path, since it would change the
+  keyspace of the shared connection under every other session using it; the keyspace
+  has to be chosen when the session is created (#1013).
+* Fix the client-side timeout never firing for a request on the control-connection
+  fallback path while the driver's own ``USE`` is in flight. The ``USE`` is sent
+  without recording a host attempt, and ``_on_speculative_execute`` checked its
+  "no attempt recorded yet" guard before the deadline, so with a speculative
+  execution policy configured a repeatedly failing ``USE`` rescheduled the callback
+  every 10ms instead of ever timing the request out. The deadline is now checked
+  first (#1013).
+* Fix ``ResponseFuture._req_id`` being left pointing at the driver's own ``USE``
+  instead of the request actually in flight, when the ``SET_KEYSPACE`` reply is
+  processed before ``send_msg()`` returns. On a later timeout the driver then
+  orphaned the wrong stream id and left the real request in the connection's
+  request map (#1013).
+
 Others
 ------
 * ``DCAwareRoundRobinPolicy.local_dc`` is now read-only. It is set by the constructor,

@@ -29,7 +29,7 @@ import uuid
 from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, RequestExecutionException, ReadTimeout, WriteTimeout, CoordinationFailure, ReadFailure, WriteFailure, FunctionFailure, AlreadyExists,\
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
 from cassandra.cluster import _Scheduler, Session, Cluster, ResultSet, SchemaAgreementScope, ControlConnectionQueryFallback, default_lbp_factory, \
-    ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT
+    ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT, _NOT_SET
 from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
                                   DefaultEndPoint)
 from cassandra.ssl_session_cache import SSLSessionCache
@@ -231,6 +231,11 @@ class ClusterTest(unittest.TestCase):
         assert session._pools == {}
         assert session.update_created_pools() == set()
 
+        same_keyspace_session = Session(cluster, [host])
+        assert same_keyspace_session.keyspace is None
+        with pytest.raises(InvalidRequest, match='already attached'):
+            Session(cluster, [host], keyspace='different')
+
     def test_control_connection_query_fallback_fallback_tolerates_empty_initial_pools(self):
         cluster = Cluster(
             allow_control_connection_query_fallback=ControlConnectionQueryFallback.Fallback,
@@ -246,6 +251,8 @@ class ClusterTest(unittest.TestCase):
         mocked_add_or_renew_pool.assert_called_once_with(host, is_host_addition=False)
         assert session._initial_connect_futures == {future}
         assert session._pools == {}
+        assert set(cluster.control_connection._application_sessions) == set()
+        assert cluster.control_connection._get_application_keyspace() is _NOT_SET
 
     def test_compression_autodisabled_without_libraries(self):
         with patch.dict('cassandra.cluster.locally_supported_compressions', {}, clear=True):
