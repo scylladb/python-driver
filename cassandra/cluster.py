@@ -4029,6 +4029,10 @@ class ControlConnection(object):
         self._application_query_lock = RLock()
         self._application_keyspace = _NOT_SET
         self._application_sessions = WeakSet()
+        # A new Session is provisional until one of its fallback sends
+        # succeeds. Count concurrent attempts so one failure cannot discard an
+        # attachment another attempt is about to confirm.
+        self._application_session_claims = {}
         self._application_requests_in_flight = 0
         self._application_orphaned_requests = set()
 
@@ -4104,11 +4108,37 @@ class ControlConnection(object):
     def _discard_application_session(self, session):
         """Undo an attachment when its first fallback request was not sent."""
         with self._application_query_lock:
+            self._application_session_claims.pop(session, None)
             self._application_sessions.discard(session)
             if not self._application_sessions and \
                     not self._application_requests_in_flight and \
                     not self._current_connection_has_application_orphans():
                 self._application_keyspace = _NOT_SET
+
+    def _begin_application_session_claim(self, session, new_session):
+        """Track a send that can confirm a provisional Session attachment."""
+        with self._application_query_lock:
+            if new_session:
+                self._application_session_claims[session] = 0
+            if session not in self._application_session_claims:
+                return None
+            self._application_session_claims[session] += 1
+            return session
+
+    def _finish_application_session_claim(self, session, request_sent):
+        """Confirm an attachment, or discard it after all initial sends fail."""
+        if session is None:
+            return
+        with self._application_query_lock:
+            claims = self._application_session_claims.get(session)
+            if claims is None:
+                return
+            if request_sent:
+                del self._application_session_claims[session]
+            elif claims > 1:
+                self._application_session_claims[session] = claims - 1
+            else:
+                self._discard_application_session(session)
 
     def _prune_application_sessions(self):
         """Drop shut-down owners after shared-connection requests have drained."""
@@ -5372,7 +5402,7 @@ class ResponseFuture(object):
             return request_id
 
     def _release_control_connection_request(self, connection, request_id,
-                                            application_session=None):
+                                            provisional_session=None):
         control_connection = self.session.cluster.control_connection
         with control_connection._application_query_lock:
             with connection.lock:
@@ -5380,8 +5410,8 @@ class ResponseFuture(object):
                 connection.request_ids.append(request_id)
                 connection._requests.pop(request_id, None)
             control_connection._application_requests_in_flight -= 1
-            if application_session is not None:
-                control_connection._discard_application_session(application_session)
+            control_connection._finish_application_session_claim(
+                provisional_session, False)
 
     def _handle_control_connection_response(self, connection, cb, response):
         control_connection = self.session.cluster.control_connection
@@ -5452,7 +5482,7 @@ class ResponseFuture(object):
 
     def _set_control_connection_keyspace(self, connection, host, keyspace,
                                          message=None, cb=None, request_id=_NOT_SET,
-                                         release_session_on_failure=None):
+                                         provisional_session=None):
         use_message = QueryMessage(
             query='USE %s' % protect_name(keyspace),
             consistency_level=ConsistencyLevel.ONE)
@@ -5487,12 +5517,12 @@ class ResponseFuture(object):
             message=use_message, cb=keyspace_set, connection=connection,
             host=host, record_attempt=False, record_size=False,
             request_id=request_id,
-            release_session_on_failure=release_session_on_failure)
+            provisional_session=provisional_session)
 
     def _send_control_connection_message(self, message=None, cb=None, connection=None,
                                          host=None, record_attempt=True, record_size=True,
                                          request_id=_NOT_SET,
-                                         release_session_on_failure=None):
+                                         provisional_session=None):
         if message is None:
             message = self.message
 
@@ -5532,9 +5562,12 @@ class ResponseFuture(object):
                                                encoder=self._protocol_handler.encode_message,
                                                decoder=self._protocol_handler.decode_message,
                                                result_metadata=result_meta)
+            request_sent = True
+            control_connection = self.session.cluster.control_connection
+            control_connection._finish_application_session_claim(
+                provisional_session, True)
             if record_size:
                 self.request_encoded_size = encoded_size
-            request_sent = True
             if record_attempt:
                 self.attempted_hosts.append(host)
             return request_id
@@ -5556,7 +5589,7 @@ class ResponseFuture(object):
                 if self._req_id == request_id:
                     self._req_id = previous_req_id
                 self._release_control_connection_request(
-                    connection, request_id, release_session_on_failure)
+                    connection, request_id, provisional_session)
 
         return None
 
@@ -5591,6 +5624,9 @@ class ResponseFuture(object):
             if conflict is not None:
                 self._set_final_exception(InvalidRequest(conflict))
                 return _NOT_SET
+            provisional_session = \
+                control_connection._begin_application_session_claim(
+                    self.session, new_application_session)
 
             if host is None:
                 host = self.session.cluster.get_control_connection_host() or connection.endpoint
@@ -5600,29 +5636,28 @@ class ResponseFuture(object):
             except NoConnectionsAvailable as exc:
                 log.debug("Control connection is at capacity")
                 self._errors[host] = exc
-                if new_application_session:
-                    control_connection._discard_application_session(self.session)
+                control_connection._finish_application_session_claim(
+                    provisional_session, False)
                 return None
             except Exception as exc:
                 log.debug("Error borrowing control connection", exc_info=True)
                 self._errors[host] = exc
-                if new_application_session:
-                    control_connection._discard_application_session(self.session)
+                control_connection._finish_application_session_claim(
+                    provisional_session, False)
                 if self._metrics is not None:
                     self._metrics.on_connection_error()
                 return None
 
-        release_session_on_failure = self.session if new_application_session else None
         if keyspace is not None and connection.keyspace != keyspace:
             return self._set_control_connection_keyspace(
                 connection, host, keyspace, message=message, cb=cb,
                 request_id=request_id,
-                release_session_on_failure=release_session_on_failure)
+                provisional_session=provisional_session)
 
         return self._send_control_connection_message(
             message=message, cb=cb, connection=connection, host=host,
             request_id=request_id,
-            release_session_on_failure=release_session_on_failure)
+            provisional_session=provisional_session)
 
     def _query(self, host, message=None, cb=None):
         if message is None:
