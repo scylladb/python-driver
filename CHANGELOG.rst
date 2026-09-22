@@ -59,6 +59,37 @@ Bug Fixes
   authentication fails or its retry schedule is exhausted. A later DOWN event can
   therefore start a new handler after credentials recover or another reconnection
   opportunity appears, instead of treating the stopped handler as an active one (#1026).
+* A defunct control connection is no longer left unreconnected when the cluster does not
+  run DOWN handling for its host (#847). ``ControlConnection._signal_error()`` treated the
+  conviction policy accepting a failure as a guarantee that a DOWN callback would
+  reconnect it, but the two are not the same: ``Cluster.on_down()`` deliberately skips
+  DOWN handling when a session pool to the host is still open, when the host is already
+  down or already reconnecting, and when pool creation is disabled -- and the default
+  ``SimpleConvictionPolicy`` rejects the conviction outright for ``OperationTimedOut``.
+  In all of those cases the control connection stayed defunct with nothing scheduled to
+  replace it. ``Cluster.on_down()`` and ``Cluster.signal_connection_failure()`` now return
+  whether DOWN handling was actually dispatched, and the control connection reconnects
+  directly whenever it was not. This applies uniformly to TCP, Unix socket,
+  alternate-route and stable host-ID connections, and does not duplicate the reconnect
+  that an accepted DOWN transition already performs. Two related cases are fixed with
+  it: a control connection whose reconnection attempts are already backing off no longer
+  has that schedule cancelled and restarted from its initial delay by every further
+  error, and a reconnection handler that has stopped for good -- once its retry schedule
+  is exhausted -- now releases the slot it occupies, so a later error starts a fresh
+  reconnection instead of mistaking the dead handler for one still retrying. The slot is
+  likewise released once a connection is installed, so a handler whose backoff outlived
+  the reconnection that succeeded without it no longer blocks the next one. Every release
+  is identity-checked, so a handler that stops can only ever clear itself: it cannot evict
+  a replacement another thread installed while it was handing its connection over, which
+  would have left that replacement retrying where nothing could find it. An attempt that
+  fails while an overlapping one succeeds no longer parks a handler in the slot the
+  successful attempt emptied, which would have blocked reconnection for the length of its
+  backoff and then replaced a healthy control connection.
+* The control connection is no longer closed immediately after a reconnection handler
+  restores it. ``_ReconnectionHandler.run()`` closed the connection it had just opened,
+  which is right for the host handler that only uses it to probe the host, but left the
+  control connection dead the moment its backoff finally succeeded -- until a heartbeat
+  noticed, or forever with ``idle_heartbeat_interval=0``.
 
 Others
 ------
