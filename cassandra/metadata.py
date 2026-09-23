@@ -359,7 +359,8 @@ class Metadata(object):
     def remove_host_by_host_id(self, host_id, endpoint=None):
         self._tablets.drop_tablets_by_host_id(host_id)
         with self._hosts_lock:
-            if endpoint and self._host_id_by_endpoint[endpoint] == host_id:
+            if (endpoint and
+                    self._host_id_by_endpoint.get(endpoint) == host_id):
                 self._host_id_by_endpoint.pop(endpoint, False)
             return bool(self._hosts.pop(host_id, False))
 
