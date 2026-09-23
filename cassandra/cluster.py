@@ -2210,12 +2210,18 @@ class Cluster(object):
             for listener in self.listeners:
                 listener.on_down(host)
 
-            if on_add_reconnection is None:
-                self._start_reconnector(host, is_host_addition)
-            else:
-                self._start_reconnector(
-                    host, is_host_addition,
-                    on_add_reconnection=on_add_reconnection)
+            # Pool cleanup and listener callbacks above may race a newer DOWN
+            # generation. Pair the final generation check with installation
+            # so stale work cannot publish a reconnector after invalidation.
+            with host.lock:
+                if down_event_generation != host._down_event_generation:
+                    return
+                if on_add_reconnection is None:
+                    self._start_reconnector(host, is_host_addition)
+                else:
+                    self._start_reconnector(
+                        host, is_host_addition,
+                        on_add_reconnection=on_add_reconnection)
         finally:
             with host.lock:
                 if down_event_generation == host._down_event_generation:

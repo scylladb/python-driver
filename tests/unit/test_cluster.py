@@ -444,6 +444,39 @@ class ClusterTest(unittest.TestCase):
         assert cluster.executor.submit.call_count == 2
         assert host._currently_handling_node_down
 
+    def test_stale_down_worker_does_not_install_reconnector(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._start_reconnector = Mock()
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host.set_down()
+        host._currently_handling_node_down = True
+        host._down_event_generation = 1
+
+        session = Mock()
+
+        def invalidate_down_generation(_host):
+            with host.lock:
+                host._down_event_generation += 1
+                host._currently_handling_node_down = False
+
+        session.on_down.side_effect = invalidate_down_generation
+        cluster.sessions.add(session)
+
+        Cluster.on_down_potentially_blocking.__wrapped__(
+            cluster, host, is_host_addition=True,
+            down_event_generation=1)
+
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_not_called()
+        assert not host._currently_handling_node_down
+
     def test_replacement_reconnector_preserves_recovery_context(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)
