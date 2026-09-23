@@ -2343,14 +2343,13 @@ class Cluster(object):
             self._finalize_add(host)
 
     def _finalize_add(self, host, set_up=True):
-        if set_up:
-            host.set_up()
+        with host.lock:
+            if set_up:
+                host.set_up()
+            host._pending_host_addition = False
 
         for listener in self.listeners:
             listener.on_add(host)
-
-        with host.lock:
-            host._pending_host_addition = False
 
         # see if there are any pools to add or remove now that the host is marked up
         for session in tuple(self.sessions):

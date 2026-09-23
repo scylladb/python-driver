@@ -773,6 +773,45 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         assert not self.host._reconnection_handler.is_host_addition
         listener.on_add.assert_not_called()
 
+    def test_successful_add_resolves_pending_state_before_listener(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.metadata.add_or_return_host(self.host)
+        cluster.profile_manager.distance = Mock(
+            return_value=HostDistance.LOCAL)
+        cluster.profile_manager.on_add = Mock()
+        cluster.profile_manager.on_down = Mock()
+        cluster.control_connection.on_add = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock())
+        cluster.executor.submit.return_value = Future()
+        listener = Mock()
+        cluster.register_listener(listener)
+
+        def on_add(host):
+            assert host.is_up
+            assert not host._pending_host_addition
+
+            cluster.on_down(host, is_host_addition=False)
+            down_task, *args = cluster.executor.submit.call_args.args
+            down_task(*args)
+
+            raise RuntimeError('listener failed')
+
+        listener.on_add.side_effect = on_add
+
+        with pytest.raises(RuntimeError, match='listener failed'):
+            cluster.on_add(self.host)
+
+        assert not self.host._pending_host_addition
+        assert not self.host._reconnection_handler.is_host_addition
+
     def test_repeated_down_waits_for_pending_down_processing(self):
         cluster = Cluster()
         cluster.scheduler.shutdown()
