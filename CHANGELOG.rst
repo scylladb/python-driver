@@ -55,6 +55,10 @@ Bug Fixes
   processed before ``send_msg()`` returns. On a later timeout the driver then
   orphaned the wrong stream id and left the real request in the connection's
   request map (#1013).
+* A host reconnection handler now releases the host's reconnection slot when
+  authentication fails or its retry schedule is exhausted. A later DOWN event can
+  therefore start a new handler after credentials recover or another reconnection
+  opportunity appears, instead of treating the stopped handler as an active one (#1026).
 
 Others
 ------

@@ -34,8 +34,8 @@ from cassandra.connection import (Connection, ConnectionBusy, ConnectionExceptio
                                   DefaultEndPoint)
 from cassandra.ssl_session_cache import SSLSessionCache
 from cassandra.driver_config import DriverConfigReporter
-from cassandra.pool import Host
-from cassandra.policies import HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
+from cassandra.pool import Host, _HostReconnectionHandler
+from cassandra.policies import ExponentialReconnectionPolicy, HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
 from tests.unit.utils import mock_session_pools
 from tests import connection_class
@@ -434,6 +434,386 @@ class ClusterTest(unittest.TestCase):
         assert factory.call_args.kwargs['session_id'] == cluster.session_id
         assert factory.call_args.kwargs['driver_config_reporter'] is None
 
+
+class HostReconnectionHandlerTest(unittest.TestCase):
+
+    def setUp(self):
+        self.host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+    def make_handler(self, connection_factory=None, schedule=None, scheduler=None):
+        handler = _HostReconnectionHandler(
+            self.host, connection_factory or Mock(), False, Mock(), Mock(),
+            scheduler or Mock(), schedule if schedule is not None else iter(()),
+            self.host.get_and_set_reconnection_handler, new_handler=None)
+        self.host.get_and_set_reconnection_handler(handler)
+        return handler
+
+    def test_releases_slot_when_it_gives_up(self):
+        cases = (
+            (AuthenticationFailed('bad credentials'), iter((0, 1.0))),
+            (ConnectionException('refused'), iter((0,))),
+        )
+        for exc, schedule in cases:
+            with self.subTest(exc=exc):
+                handler = self.make_handler(
+                    connection_factory=Mock(side_effect=exc),
+                    schedule=schedule)
+
+                handler.start()
+                handler.run()
+
+                assert not self.host.is_currently_reconnecting()
+
+    def test_keeps_slot_while_retrying(self):
+        scheduler = Mock()
+        handler = self.make_handler(
+            connection_factory=Mock(side_effect=ConnectionException('refused')),
+            schedule=iter((0, 1.0)), scheduler=scheduler)
+
+        handler.start()
+        handler.run()
+
+        assert self.host._reconnection_handler is handler
+        assert scheduler.schedule.call_count == 2
+
+    def test_releases_slot_when_initial_schedule_is_empty(self):
+        scheduler = Mock()
+        schedule = ExponentialReconnectionPolicy(
+            1.0, 60.0, max_attempts=0).new_schedule()
+        handler = self.make_handler(schedule=schedule, scheduler=scheduler)
+
+        handler.start()
+
+        assert not self.host.is_currently_reconnecting()
+        scheduler.schedule.assert_not_called()
+
+    def test_never_releases_replacement(self):
+        handler = self.make_handler()
+        replacement = self.make_handler()
+
+        handler.on_exception(AuthenticationFailed('bad credentials'), 1.0)
+
+        assert self.host._reconnection_handler is replacement
+
+    def test_later_down_event_restarts_after_terminal_failure(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.reconnection_policy = Mock()
+        cluster.reconnection_policy.new_schedule.side_effect = (
+            iter((0, 1.0)), iter((0, 1.0)))
+        connection_factory = Mock(
+            side_effect=AuthenticationFailed('bad credentials'))
+        cluster._make_connection_factory = Mock(
+            return_value=connection_factory)
+        cluster.profile_manager.distance = Mock(
+            return_value=HostDistance.LOCAL)
+        cluster.metadata.add_or_return_host(self.host)
+        self.host.set_down()
+
+        cluster._start_reconnector(self.host, is_host_addition=False)
+        stopped_handler = self.host._reconnection_handler
+        stopped_handler.run()
+        assert not self.host.is_currently_reconnecting()
+
+        pending_future = Future()
+        cluster.executor.submit.return_value = pending_future
+        cluster.on_down(self.host, is_host_addition=False)
+
+        assert self.host._reconnection_handler is None
+        assert self.host._currently_handling_node_down
+        cluster.on_down(self.host, is_host_addition=False)
+        cluster.executor.submit.assert_called_once()
+
+        restart_task, *args = cluster.executor.submit.call_args.args
+        restart_task(*args)
+
+        assert self.host._reconnection_handler is not stopped_handler
+        assert self.host.is_currently_reconnecting()
+        assert not self.host._currently_handling_node_down
+
+    def test_later_down_preserves_pending_host_addition(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.reconnection_policy = Mock()
+        cluster.reconnection_policy.new_schedule.side_effect = (
+            iter((0, 1.0)), iter((0, 1.0)))
+        connection = Mock()
+        connection_factory = Mock(side_effect=(
+            AuthenticationFailed('bad credentials'), connection))
+        cluster._make_connection_factory = Mock(
+            return_value=connection_factory)
+        cluster.profile_manager.distance = Mock(
+            return_value=HostDistance.LOCAL)
+        cluster.profile_manager.on_add = Mock()
+        cluster.control_connection.on_add = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster.on_up = Mock()
+        listener = Mock()
+        cluster.register_listener(listener)
+        cluster.metadata.add_or_return_host(self.host)
+        self.host.set_down()
+
+        cluster._start_reconnector(self.host, is_host_addition=True)
+        stopped_handler = self.host._reconnection_handler
+        stopped_handler.run()
+        assert not self.host.is_currently_reconnecting()
+
+        cluster.executor.submit.return_value = Future()
+        cluster.on_down(self.host, is_host_addition=False)
+        restart_task, *args = cluster.executor.submit.call_args.args
+        restart_task(*args)
+        replacement_handler = self.host._reconnection_handler
+        replacement_handler.run()
+
+        assert replacement_handler.is_host_addition
+        listener.on_add.assert_called_once_with(self.host)
+        cluster.on_up.assert_not_called()
+        assert self.host.is_up
+        assert not self.host._pending_host_addition
+
+    def test_queued_reconnector_restart_skips_recovered_host(self):
+        cluster = Cluster()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.metadata.add_or_return_host(self.host)
+        cluster._start_reconnector = Mock()
+        cluster.executor.submit.return_value = Future()
+        self.host.set_down()
+
+        cluster.on_down(self.host, is_host_addition=False)
+        restart_task, *args = cluster.executor.submit.call_args.args
+        self.host.set_up()
+        restart_task(*args)
+
+        cluster._start_reconnector.assert_not_called()
+        assert not self.host._currently_handling_node_down
+
+    def test_fresh_down_supersedes_queued_reconnector_restart(self):
+        cluster = Cluster()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.metadata.add_or_return_host(self.host)
+        cluster.profile_manager.on_down = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._start_reconnector = Mock()
+        session = Mock()
+        listener = Mock()
+        cluster.sessions.add(session)
+        cluster.register_listener(listener)
+        cluster.executor.submit.return_value = Future()
+        self.host.set_down()
+
+        cluster.on_down(self.host, is_host_addition=False)
+        self.host.set_up()
+        cluster.on_down(self.host, is_host_addition=False)
+
+        assert cluster.executor.submit.call_count == 2
+        restart_task, *restart_args = (
+            cluster.executor.submit.call_args_list[0].args)
+        down_task, *down_args = cluster.executor.submit.call_args_list[1].args
+
+        restart_task(*restart_args)
+        assert self.host._currently_handling_node_down
+        cluster._start_reconnector.assert_not_called()
+
+        down_task(*down_args)
+        cluster.profile_manager.on_down.assert_called_once_with(self.host)
+        cluster.control_connection.on_down.assert_called_once_with(self.host)
+        session.on_down.assert_called_once_with(self.host)
+        listener.on_down.assert_called_once_with(self.host)
+        cluster._start_reconnector.assert_called_once_with(self.host, False)
+        assert not self.host._currently_handling_node_down
+
+    def test_queued_reconnector_restart_skips_pending_up(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.metadata.add_or_return_host(self.host)
+        cluster.profile_manager.distance = Mock(
+            return_value=HostDistance.LOCAL)
+        cluster.profile_manager.on_up = Mock()
+        cluster.profile_manager.on_down = Mock()
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._prepare_all_queries = Mock()
+        session = Mock()
+        pool_future = Future()
+        session.add_or_renew_pool.return_value = pool_future
+        cluster.sessions.add(session)
+        cluster.executor.submit.return_value = Future()
+        self.host.set_down()
+
+        cluster.on_up(self.host)
+        assert self.host._currently_handling_node_up
+
+        cluster.on_down(self.host, is_host_addition=False)
+        restart_task, *args = cluster.executor.submit.call_args.args
+        restart_task(*args)
+
+        assert not self.host.is_currently_reconnecting()
+        assert not self.host._currently_handling_node_down
+
+        pool_future.set_result(True)
+        assert self.host.is_up
+        assert not self.host._currently_handling_node_up
+
+        cluster.on_down(self.host, is_host_addition=False)
+        assert cluster.executor.submit.call_count == 2
+        down_task, *args = cluster.executor.submit.call_args.args
+        down_task(*args)
+
+        cluster.profile_manager.on_down.assert_called_once_with(self.host)
+        cluster.control_connection.on_down.assert_called_once_with(self.host)
+        session.on_down.assert_called_once_with(self.host)
+
+    def test_queued_reconnector_restart_preserves_failed_up_handler(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.metadata.add_or_return_host(self.host)
+        cluster.profile_manager.distance = Mock(
+            return_value=HostDistance.LOCAL)
+        cluster.profile_manager.on_up = Mock()
+        cluster.profile_manager.on_down = Mock()
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock())
+        session = Mock()
+        pool_future = Future()
+        session.add_or_renew_pool.return_value = pool_future
+        cluster.sessions.add(session)
+        cluster.executor.submit.return_value = Future()
+        self.host.set_down()
+
+        cluster.on_up(self.host)
+        cluster.on_down(self.host, is_host_addition=False)
+        restart_task, *args = cluster.executor.submit.call_args.args
+
+        pool_future.set_result(False)
+        failed_up_handler = self.host._reconnection_handler
+        assert failed_up_handler is not None
+        assert not self.host._currently_handling_node_up
+
+        restart_task(*args)
+
+        assert self.host._reconnection_handler is failed_up_handler
+        assert not failed_up_handler._cancelled
+        assert cluster.scheduler.schedule.call_count == 1
+        assert not self.host._currently_handling_node_down
+
+    def test_successful_up_resolves_pending_host_addition(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.metadata.add_or_return_host(self.host)
+        cluster.profile_manager.distance = Mock(
+            return_value=HostDistance.LOCAL)
+        cluster.profile_manager.on_add = Mock()
+        cluster.profile_manager.on_up = Mock()
+        cluster.profile_manager.on_down = Mock()
+        cluster.control_connection.on_add = Mock()
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock())
+        listener = Mock()
+        cluster.register_listener(listener)
+        session = Mock()
+        failed_add_future = Future()
+        up_future = Future()
+        session.add_or_renew_pool.side_effect = (
+            failed_add_future, up_future)
+        cluster.sessions.add(session)
+        cluster.executor.submit.return_value = Future()
+
+        cluster.on_add(self.host)
+        failed_add_future.set_result(False)
+        assert self.host._pending_host_addition
+        listener.on_add.assert_not_called()
+
+        cluster.on_up(self.host)
+        up_future.set_result(True)
+
+        assert self.host.is_up
+        assert not self.host._pending_host_addition
+        listener.on_up.assert_called_once_with(self.host)
+
+        cluster.on_down(self.host, is_host_addition=False)
+        down_task, *args = cluster.executor.submit.call_args.args
+        down_task(*args)
+
+        assert not self.host._reconnection_handler.is_host_addition
+        listener.on_add.assert_not_called()
+
+    def test_repeated_down_waits_for_pending_down_processing(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.metadata.add_or_return_host(self.host)
+        cluster.profile_manager.on_down = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._start_reconnector = Mock()
+        pending_future = Future()
+        cluster.executor.submit.return_value = pending_future
+        self.host.set_up()
+
+        cluster.on_down(self.host, is_host_addition=False)
+        cluster.on_down(self.host, is_host_addition=False)
+
+        cluster.executor.submit.assert_called_once()
+        cluster._start_reconnector.assert_not_called()
+
+        down_task, *args = cluster.executor.submit.call_args.args
+        down_task(*args)
+
+        cluster._start_reconnector.assert_called_once_with(self.host, False)
+        assert not self.host._currently_handling_node_down
+
+    def test_failed_down_submission_releases_pending_state(self):
+        cluster = Cluster()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.metadata.add_or_return_host(self.host)
+        cluster.executor.submit.side_effect = RuntimeError('executor stopped')
+        self.host.set_up()
+
+        cluster.on_down(self.host, is_host_addition=False)
+
+        assert not self.host._currently_handling_node_down
 
 class SchedulerTest(unittest.TestCase):
     # TODO: this suite could be expanded; for now just adding a test covering a ticket
