@@ -389,6 +389,11 @@ class Metadata(object):
         with self._hosts_lock:
             return self._hosts.get(host_id)
 
+    def _is_host_registered(self, host):
+        """Return whether this exact Host is stored under any host ID."""
+        with self._hosts_lock:
+            return any(known_host is host for known_host in self._hosts.values())
+
     def _get_host_by_address(self, address, port=None):
         for host in self._hosts.values():
             if (host.broadcast_rpc_address == address and
