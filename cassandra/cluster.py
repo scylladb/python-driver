@@ -4027,6 +4027,7 @@ class _ControlReconnectionHandler(_ReconnectionHandler):
         # the final failed attempt, though, there is no later retry to own the
         # trigger, so _release() must hand it back to reconnect().
         self._is_running = False
+        self._run_generation = 0
         self._reconnect_requested = False
         # A proactive handler may be waiting while its still-healthy control
         # connection fails. Its remaining retries own the immediate recovery,
@@ -4039,6 +4040,8 @@ class _ControlReconnectionHandler(_ReconnectionHandler):
         try:
             control_connection = self.control_connection
             with control_connection._reconnection_lock:
+                self._run_generation += 1
+                run_generation = self._run_generation
                 self._is_running = True
         except ReferenceError:
             return _ReconnectionHandler.run(self)
@@ -4048,7 +4051,11 @@ class _ControlReconnectionHandler(_ReconnectionHandler):
         finally:
             try:
                 with control_connection._reconnection_lock:
-                    self._is_running = False
+                    # A zero-delay retry may already be running on another
+                    # worker. Only the invocation that most recently claimed
+                    # the state may clear it.
+                    if self._run_generation == run_generation:
+                        self._is_running = False
             except ReferenceError:
                 pass
 

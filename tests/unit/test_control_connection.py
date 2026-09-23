@@ -17,6 +17,7 @@ import unittest
 import weakref
 
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Thread
 from unittest.mock import Mock, ANY, call, patch
 
 from cassandra import (AuthenticationFailed, OperationTimedOut,
@@ -1117,6 +1118,53 @@ class ControlConnectionTest(unittest.TestCase):
         assert self.control_connection._reconnection_exhausted_connection \
             is self.connection
         self.cluster.executor.submit.assert_not_called()
+
+    def test_older_handler_run_does_not_clear_overlapping_retry_state(self):
+        self.connection.is_defunct = True
+        handler = _ControlReconnectionHandler(
+            self.control_connection, self.cluster.scheduler, iter([0]))
+        self.control_connection._reconnection_handler = handler
+        second_started = Event()
+        finish_second = Event()
+        attempts = [0]
+        retry_thread = []
+
+        def fail_reconnect():
+            attempts[0] += 1
+            if attempts[0] == 1:
+                raise NoHostAvailable('no host', {})
+            second_started.set()
+            finish_second.wait(5)
+            raise NoHostAvailable('no host', {})
+
+        def start_retry(_delay, run):
+            retry_thread.append(Thread(target=run))
+            retry_thread[0].start()
+            assert second_started.wait(5)
+
+        self.cluster.scheduler.schedule.side_effect = start_retry
+        self.cluster.executor.reset_mock()
+
+        with patch.object(self.control_connection, '_reconnect_internal',
+                          side_effect=fail_reconnect):
+            handler.run()
+            try:
+                # The zero-delay final retry started before the first run's
+                # finally block. The older run must leave its active state set
+                # so this heartbeat trigger is preserved if the retry fails.
+                assert handler._is_running
+                self.control_connection.return_connection(self.connection)
+            finally:
+                finish_second.set()
+                retry_thread[0].join(5)
+
+        assert not retry_thread[0].is_alive()
+        assert self.control_connection._reconnection_handler is None
+        assert self.control_connection._reconnection_exhausted_connection \
+            is None
+        assert self.control_connection._reconnect_pending
+        self.cluster.executor.submit.assert_called_once_with(
+            self.control_connection._reconnect)
 
     def test_heartbeat_does_not_restart_an_empty_reconnection_schedule(self):
         self.cluster.reconnection_policy = ExponentialReconnectionPolicy(
