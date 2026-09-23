@@ -161,6 +161,9 @@ class Host(object):
     lock = None
 
     _currently_handling_node_up = False
+    _currently_handling_node_down = False
+    _down_event_generation = 0
+    _pending_host_addition = False
 
     sharding_info = None
 
@@ -355,6 +358,18 @@ class _HostReconnectionHandler(_ReconnectionHandler):
         self.host = host
         self.connection_factory = connection_factory
 
+    def start(self):
+        try:
+            _ReconnectionHandler.start(self)
+        except StopIteration:
+            # An empty schedule means this handler will never run.
+            self._release_slot()
+
+    def _release_slot(self):
+        with self.host.lock:
+            if self.host._reconnection_handler is self:
+                self.host._reconnection_handler = None
+
     def try_reconnect(self):
         return self.connection_factory()
 
@@ -367,12 +382,19 @@ class _HostReconnectionHandler(_ReconnectionHandler):
 
     def on_exception(self, exc, next_delay):
         if isinstance(exc, AuthenticationFailed):
-            return False
+            keep_retrying = False
         else:
             log.warning("Error attempting to reconnect to %s, scheduling retry in %s seconds: %s",
                         self.host, next_delay, exc)
             log.debug("Reconnection error details", exc_info=True)
-            return True
+            keep_retrying = True
+
+        if not keep_retrying or next_delay is None:
+            # This handler will never run again. Release the slot it occupies,
+            # or a later DOWN event will mistake it for a live reconnector.
+            self._release_slot()
+
+        return keep_retrying
 
 
 class HostConnection(object):

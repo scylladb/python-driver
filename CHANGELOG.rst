@@ -29,6 +29,13 @@ Features
   statements skip re-sending result metadata on EXECUTE, and the driver automatically
   refreshes cached metadata when the server detects a schema change (DRIVER-153)
 
+Bug Fixes
+---------
+* A host reconnection handler now releases the host's reconnection slot when
+  authentication fails or its retry schedule is exhausted. A later DOWN event can
+  therefore start a new handler after credentials recover or another reconnection
+  opportunity appears, instead of treating the stopped handler as an active one (#1026).
+
 Others
 ------
 * ``DCAwareRoundRobinPolicy.local_dc`` is now read-only. It is set by the constructor,
