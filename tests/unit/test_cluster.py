@@ -787,6 +787,38 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         cluster._start_reconnector.assert_called_once_with(self.host, False)
         assert not self.host._currently_handling_node_down
 
+    def test_pending_down_processing_survives_host_id_reindex(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.profile_manager.distance = Mock(
+            return_value=HostDistance.LOCAL)
+        cluster.profile_manager.on_down = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock())
+        cluster.metadata.add_or_return_host(self.host)
+        pending_future = Future()
+        cluster.executor.submit.return_value = pending_future
+        self.host.set_up()
+
+        cluster.on_down(self.host, is_host_addition=False)
+        down_task, *args = cluster.executor.submit.call_args.args
+        old_host_id = self.host.host_id
+        self.host.host_id = uuid.uuid4()
+        assert cluster.metadata.get_host_by_host_id(old_host_id) is self.host
+        assert cluster.metadata.get_host_by_host_id(self.host.host_id) is None
+
+        down_task(*args)
+
+        cluster.profile_manager.on_down.assert_called_once_with(self.host)
+        cluster.control_connection.on_down.assert_called_once_with(self.host)
+        assert self.host.is_currently_reconnecting()
+        assert not self.host._currently_handling_node_down
+
     def test_failed_down_submission_releases_pending_state(self):
         cluster = Cluster()
         cluster.executor.shutdown()
@@ -800,6 +832,70 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         cluster.on_down(self.host, is_host_addition=False)
 
         assert not self.host._currently_handling_node_down
+
+    def test_down_processing_does_not_reconnect_removed_host(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.metadata.add_or_return_host(self.host)
+        cluster.profile_manager.on_down = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._start_reconnector = Mock()
+        pending_future = Future()
+        cluster.executor.submit.return_value = pending_future
+        self.host.set_up()
+
+        cluster.on_down(self.host, is_host_addition=False)
+        down_task, *args = cluster.executor.submit.call_args.args
+        cluster.remove_host(self.host)
+        cluster.profile_manager.on_down.reset_mock()
+        cluster.control_connection.on_down.reset_mock()
+
+        down_task(*args)
+        cluster.on_down(self.host, is_host_addition=False)
+
+        cluster.profile_manager.on_down.assert_not_called()
+        cluster.control_connection.on_down.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
+        assert not self.host._currently_handling_node_down
+
+    def test_reconnector_does_not_start_for_removed_host(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster._make_connection_factory = Mock()
+        cluster.metadata.add_or_return_host(self.host)
+        cluster.metadata.remove_host(self.host)
+
+        cluster._start_reconnector(self.host, is_host_addition=False)
+
+        cluster._make_connection_factory.assert_not_called()
+        assert not self.host.is_currently_reconnecting()
+
+    def test_reconnector_does_not_install_after_host_removal(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster.metadata.add_or_return_host(self.host)
+        cluster._make_connection_factory = Mock(return_value=Mock())
+
+        def remove_host_before_install(host):
+            cluster.metadata.remove_host(host)
+            return HostDistance.LOCAL
+
+        cluster.profile_manager.distance = Mock(
+            side_effect=remove_host_before_install)
+
+        cluster._start_reconnector(self.host, is_host_addition=False)
+
+        assert not cluster.metadata._is_host_registered(self.host)
+        assert not self.host.is_currently_reconnecting()
+        cluster.scheduler.schedule.assert_not_called()
+
 
 class SchedulerTest(unittest.TestCase):
     # TODO: this suite could be expanded; for now just adding a test covering a ticket

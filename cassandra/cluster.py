@@ -1991,6 +1991,9 @@ class Cluster(object):
         return futures
 
     def _start_reconnector(self, host, is_host_addition):
+        if not self.metadata._is_host_registered(host):
+            return
+
         if self.profile_manager.distance(host) == HostDistance.IGNORED:
             return
 
@@ -2002,6 +2005,11 @@ class Cluster(object):
         conn_factory = self._make_connection_factory(host)
 
         with host.lock:
+            # Host removal can race with the work above. Recheck while holding
+            # the same lock used by on_remove() to clear the handler so a
+            # completed removal cannot be followed by a new installation.
+            if not self.metadata._is_host_registered(host):
+                return
             if is_host_addition:
                 host._pending_host_addition = True
             is_host_addition = host._pending_host_addition
@@ -2022,7 +2030,8 @@ class Cluster(object):
                                      down_event_generation):
         try:
             with host.lock:
-                if down_event_generation != host._down_event_generation:
+                if (down_event_generation != host._down_event_generation or
+                        not self.metadata._is_host_registered(host)):
                     return
 
             self.profile_manager.on_down(host)
@@ -2066,8 +2075,14 @@ class Cluster(object):
         if self.is_shutdown or self.allow_control_connection_query_fallback == ControlConnectionQueryFallback.SkipPoolCreation:
             return
 
+        if not self.metadata._is_host_registered(host):
+            return
+
         restart_reconnector = False
         with host.lock:
+            if not self.metadata._is_host_registered(host):
+                return
+
             was_up = host.is_up
 
             # ignore down signals if we have open pools to the host
