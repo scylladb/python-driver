@@ -386,6 +386,64 @@ class ClusterTest(unittest.TestCase):
             on_add_reconnection=ANY, start=False)
         listener.on_add.assert_not_called()
 
+    def test_replacement_auth_failure_invalidates_queued_restart(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        cluster.executor.submit.return_value = Future()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock())
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        session = Session.__new__(Session)
+        session.cluster = cluster
+        session._profile_manager = cluster.profile_manager
+        session._pools = {}
+        session._lock = RLock()
+        session.keyspace = None
+        session.is_shutdown = False
+        session.shutdown = Mock()
+        session.update_created_pools = Mock(return_value=set())
+
+        def submit(fn, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except Exception as exc:
+                future.set_exception(exc)
+            return future
+
+        session.submit = submit
+        cluster.sessions.add(session)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=AuthenticationFailed('bad credentials')):
+            cluster.on_add(
+                host, refresh_nodes=False,
+                reconcile_pools_on_failure=True)
+
+        cluster.executor.submit.assert_called_once()
+        restart_task, *restart_args = cluster.executor.submit.call_args.args
+        restart_task(*restart_args)
+
+        assert not host.is_currently_reconnecting()
+        assert not host._currently_handling_node_down
+        cluster.scheduler.schedule.assert_not_called()
+
+        cluster.on_down(host, is_host_addition=True)
+
+        assert cluster.executor.submit.call_count == 2
+        assert host._currently_handling_node_down
+
     def test_replacement_reconnector_preserves_recovery_context(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)

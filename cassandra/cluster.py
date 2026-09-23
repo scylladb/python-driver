@@ -2395,8 +2395,16 @@ class Cluster(object):
                     result is None for result in futures_results)
                 pending_reconnector = None
                 if authentication_failed:
-                    old_reconnector = \
-                        host.get_and_set_reconnection_handler(None)
+                    # signal_connection_failure() may have queued a restart
+                    # before this aggregate result identified authentication
+                    # as terminal. Supersede that task as well as any handler
+                    # it managed to install, and allow a later DOWN event to
+                    # start fresh handling.
+                    with host.lock:
+                        host._down_event_generation += 1
+                        host._currently_handling_node_down = False
+                        old_reconnector = \
+                            host.get_and_set_reconnection_handler(None)
                     if old_reconnector:
                         old_reconnector.cancel()
                 else:
