@@ -17,6 +17,7 @@ from concurrent.futures import Future
 import gc
 import logging
 from pathlib import Path
+from queue import PriorityQueue
 import socket
 import ssl
 import subprocess
@@ -25,6 +26,7 @@ import tempfile
 import threading
 import time
 import weakref
+from threading import Event, RLock, Thread
 from types import SimpleNamespace
 
 from unittest.mock import patch, Mock
@@ -1034,6 +1036,126 @@ Thread(target=wait_for_retry).start()
 
         assert not accepted
         on_shutdown.assert_called_once_with()
+
+    def test_concurrent_scheduler_shutdown_waits_for_callbacks(self):
+        scheduler = _Scheduler(Mock())
+        callback_started = Event()
+        release_callback = Event()
+        second_shutdown_complete = Event()
+
+        def on_shutdown():
+            callback_started.set()
+            assert release_callback.wait(5)
+
+        scheduler.schedule_with_shutdown(60, on_shutdown, lambda: None)
+        first_shutdown = Thread(target=scheduler.shutdown)
+        first_shutdown.start()
+        assert callback_started.wait(5)
+
+        def run_second_shutdown():
+            scheduler.shutdown()
+            second_shutdown_complete.set()
+
+        second_shutdown = Thread(target=run_second_shutdown)
+        second_shutdown.start()
+        assert not second_shutdown_complete.wait(0.05)
+
+        release_callback.set()
+        first_shutdown.join(5)
+        second_shutdown.join(5)
+        assert not first_shutdown.is_alive()
+        assert not second_shutdown.is_alive()
+        assert second_shutdown_complete.is_set()
+
+    def test_scheduler_shutdown_callback_can_reenter_shutdown(self):
+        scheduler = _Scheduler(Mock())
+        callback_complete = Event()
+
+        def on_shutdown():
+            scheduler.shutdown()
+            callback_complete.set()
+
+        scheduler.schedule_with_shutdown(60, on_shutdown, lambda: None)
+        shutdown = Thread(target=scheduler.shutdown)
+        shutdown.start()
+        shutdown.join(5)
+
+        assert not shutdown.is_alive()
+        assert callback_complete.is_set()
+
+    def test_dequeued_shutdown_callback_can_reenter_shutdown(self):
+        task_dequeued = Event()
+        release_task = Event()
+        callback_complete = Event()
+
+        class PausingQueue(object):
+
+            def __init__(self):
+                self._queue = PriorityQueue()
+
+            def get(self, *args, **kwargs):
+                item = self._queue.get(*args, **kwargs)
+                if item[2] is not None:
+                    task_dequeued.set()
+                    assert release_task.wait(5)
+                return item
+
+            def get_nowait(self):
+                return self._queue.get_nowait()
+
+            def put_nowait(self, item):
+                self._queue.put_nowait(item)
+
+        task_queue = PausingQueue()
+        with patch('cassandra.cluster.queue.PriorityQueue',
+                   return_value=task_queue):
+            scheduler = _Scheduler(Mock())
+
+        def on_shutdown():
+            scheduler.shutdown()
+            callback_complete.set()
+
+        scheduler.schedule_with_shutdown(0, on_shutdown, lambda: None)
+        assert task_dequeued.wait(5)
+
+        shutdown = Thread(target=scheduler.shutdown)
+        shutdown.start()
+        deadline = time.time() + 5
+        while not scheduler.is_shutdown and time.time() < deadline:
+            time.sleep(0.001)
+        assert scheduler.is_shutdown
+        release_task.set()
+        shutdown.join(5)
+
+        assert not shutdown.is_alive()
+        assert callback_complete.is_set()
+
+    @patch('cassandra.cluster.time.sleep')
+    def test_shutdown_sentinel_exits_without_scheduler_sleep(self, sleep):
+        scheduler = object.__new__(_Scheduler)
+        scheduler.is_shutdown = False
+        scheduler._lock = RLock()
+        scheduler._scheduled_tasks = set()
+        scheduler._queue = Mock()
+
+        def get_shutdown_sentinel(**kwargs):
+            scheduler.is_shutdown = True
+            return (0, 0, None, None)
+
+        scheduler._queue.get.side_effect = get_shutdown_sentinel
+
+        scheduler.run()
+
+        sleep.assert_not_called()
+
+    @patch('cassandra.cluster._Scheduler.run')
+    def test_schedule_unique_queues_task_once(self, _):
+        scheduler = _Scheduler(Mock())
+        task = Mock()
+
+        assert scheduler.schedule_unique(0, task) is None
+        assert scheduler.schedule_unique(0, task) is None
+        assert scheduler._queue.qsize() == 1
 
     def test_scheduler_cleanup_error_does_not_abort_threading_shutdown(self):
         """Scheduler failures must not prevent later shutdown callbacks."""

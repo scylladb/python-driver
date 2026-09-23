@@ -16,7 +16,7 @@ import time
 import unittest
 
 from collections import deque
-from threading import Event, RLock, Thread
+from threading import Barrier, Event, RLock, Thread
 from unittest.mock import Mock, MagicMock, ANY, patch
 
 from cassandra import ConsistencyLevel, InvalidRequest, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
@@ -312,7 +312,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(host, None, None, result)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, rf._abort_retry, rf._retry_task, True, host)
+            ANY, ANY, rf._retry_task, True, host)
         assert 1 == rf._query_retries
 
         connection = Mock(spec=Connection)
@@ -348,7 +348,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(host, None, None, result)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, rf._abort_retry, rf._retry_task, False, host)
+            ANY, ANY, rf._retry_task, False, host)
         # query_retries does get incremented for Overloaded/Bootstrapping errors (since 3.18)
         assert 1 == rf._query_retries
 
@@ -381,7 +381,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         # simulate the executor running this
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, rf._abort_retry, rf._retry_task, False, host)
+            ANY, ANY, rf._retry_task, False, host)
 
         rf._retry_task(False, host)
 
@@ -393,7 +393,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         # simulate the executor running this
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_with(
-            ANY, rf._abort_retry, rf._retry_task, False, host)
+            ANY, ANY, rf._retry_task, False, host)
         rf._retry_task(False, host)
 
         with pytest.raises(NoHostAvailable):
@@ -417,7 +417,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         # simulate the executor running this
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, rf._abort_retry, rf._retry_task, False, host)
+            ANY, ANY, rf._retry_task, False, host)
 
         delay = rf.session.cluster.scheduler.schedule_with_shutdown.mock_calls[-1][1][0]
         assert delay > 0.05
@@ -427,7 +427,7 @@ class ResponseFutureTests(unittest.TestCase):
         session = self.make_session()
         rf = self.make_response_future(session)
 
-        rf._abort_retry()
+        rf._abort_retry(rf._page_generation)
 
         with pytest.raises(ConnectionShutdown, match="scheduler was shut down"):
             rf.result()
@@ -441,7 +441,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf.add_callbacks(callback, errback)
 
         rf._set_final_result(result)
-        rf._abort_retry()
+        rf._abort_retry(rf._page_generation)
 
         assert rf._final_result is result
         assert rf._final_exception is None
@@ -455,13 +455,132 @@ class ResponseFutureTests(unittest.TestCase):
         errback = Mock()
         rf.add_callbacks(callback, errback)
 
-        rf._abort_retry()
+        rf._abort_retry(rf._page_generation)
         rf._set_final_result(object())
 
         with pytest.raises(ConnectionShutdown, match="scheduler was shut down"):
             rf.result()
         callback.assert_not_called()
         errback.assert_called_once()
+
+    def test_retry_abort_does_not_replace_completed_exception(self):
+        session = self.make_session()
+        rf = self.make_response_future(session)
+        error = RuntimeError('request failed')
+        errback = Mock()
+        rf.add_errback(errback)
+
+        rf._set_final_exception(error)
+        rf._abort_retry(rf._page_generation)
+
+        with pytest.raises(RuntimeError, match='request failed'):
+            rf.result()
+        errback.assert_called_once_with(error)
+
+    def test_exception_does_not_replace_completed_retry_abort(self):
+        session = self.make_session()
+        rf = self.make_response_future(session)
+        errback = Mock()
+        rf.add_errback(errback)
+
+        rf._abort_retry(rf._page_generation)
+        rf._set_final_exception(RuntimeError('late failure'))
+        rf._abort_retry(rf._page_generation)
+
+        with pytest.raises(ConnectionShutdown, match='scheduler was shut down'):
+            rf.result()
+        errback.assert_called_once()
+
+    def test_retry_abort_race_has_one_completion(self):
+        session = self.make_session()
+        rf = self.make_response_future(session)
+        result = object()
+        callback = Mock()
+        errback = Mock()
+        rf.add_callbacks(callback, errback)
+        barrier = Barrier(3)
+
+        def set_result():
+            barrier.wait()
+            rf._set_final_result(result)
+
+        def abort_retry():
+            barrier.wait()
+            rf._abort_retry(rf._page_generation)
+
+        threads = [Thread(target=set_result), Thread(target=abort_retry)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(5)
+            assert not thread.is_alive()
+
+        assert rf._event.is_set()
+        assert callback.call_count + errback.call_count == 1
+        if rf._retry_aborted:
+            assert rf._final_result is _NOT_SET
+            assert isinstance(rf._final_exception, ConnectionShutdown)
+        else:
+            assert rf._final_result is result
+            assert rf._final_exception is None
+
+    def test_stale_retry_abort_does_not_abort_next_page(self):
+        session = self.make_session()
+        rf = self.make_response_future(session)
+        rf._retry(False, None, Mock(), 0)
+        on_shutdown = session.cluster.scheduler.schedule_with_shutdown.call_args.args[1]
+        first_result = object()
+        rf._paging_state = b'next-page'
+        rf._set_final_result(first_result)
+        rf.send_request = Mock()
+
+        rf.start_fetching_next_page()
+        current_timer = Mock()
+        rf._timer = current_timer
+        on_shutdown()
+
+        assert not rf._event.is_set()
+        assert rf._final_result is _NOT_SET
+        assert rf._final_exception is None
+        assert not rf._retry_aborted
+        current_timer.cancel.assert_not_called()
+
+        second_result = object()
+        rf._set_final_result(second_result)
+        assert rf._final_result is second_result
+
+    def test_next_page_after_retry_abort_fails_immediately(self):
+        session = self.make_session()
+        rf = self.make_response_future(session)
+        rf._paging_state = b'next-page'
+        rf._make_query_plan = Mock()
+        rf.send_request = Mock()
+        rf._abort_retry(rf._page_generation)
+
+        with pytest.raises(ConnectionShutdown, match='scheduler was shut down'):
+            rf.start_fetching_next_page()
+
+        assert rf._event.is_set()
+        assert rf._retry_aborted
+        rf._make_query_plan.assert_not_called()
+        rf.send_request.assert_not_called()
+
+    def test_next_page_query_plan_failure_preserves_completed_page(self):
+        session = self.make_session()
+        rf = self.make_response_future(session)
+        result = object()
+        rf._paging_state = b'next-page'
+        rf._set_final_result(result)
+        rf._make_query_plan = Mock(side_effect=RuntimeError('plan failed'))
+
+        with pytest.raises(RuntimeError, match='plan failed'):
+            rf.start_fetching_next_page()
+
+        assert rf._event.is_set()
+        assert rf._final_result is result
+        assert rf._final_exception is None
+        assert rf._page_generation == 0
 
     def test_all_pools_shutdown(self):
         session = self.make_basic_session()
@@ -756,7 +875,7 @@ class ResponseFutureTests(unittest.TestCase):
             ConnectionException('control connection failed', connection.endpoint))
 
         session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            0, rf._abort_retry, rf._retry_task, False, control_host)
+            0, ANY, rf._retry_task, False, control_host)
         session.submit.assert_not_called()
 
     def test_control_connection_fallback_use_retry_fails_when_scheduler_stops(self):
@@ -1157,7 +1276,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection.send_msg.call_args[1]['cb'](first_response)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, rf._abort_retry, rf._retry_task, False, control_host)
+            ANY, ANY, rf._retry_task, False, control_host)
 
         # The retry decision must come from the future state, not the live connection reference.
         rf._connection = Mock(is_control_connection=False)
@@ -1938,7 +2057,7 @@ class ResponseFutureTests(unittest.TestCase):
         
         # The retry should be scheduled
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, rf._abort_retry, rf._retry_task, False, specific_host)
+            ANY, ANY, rf._retry_task, False, specific_host)
         assert 1 == rf._query_retries
         
         # Reset mocks to track next calls
