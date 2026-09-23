@@ -5718,8 +5718,10 @@ class ResponseFuture(object):
                 # and this is the driver's own USE. It also has no backoff, so a
                 # flapping control connection re-sends USE until the client-side
                 # timeout fires instead of failing fast. Routing it through the
-                # retry machinery shared with the pooled path would be the fix.
-                self.session.submit(self._retry_task, False, host)
+                # policy machinery shared with the pooled path would be the fix.
+                # Use the common scheduler handoff so Session or executor
+                # shutdown cannot leave this ResponseFuture pending forever.
+                self._retry(False, None, host, 0)
             elif isinstance(response, Exception):
                 self._set_final_exception(response)
             else:
