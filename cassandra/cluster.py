@@ -195,6 +195,7 @@ def run_in_executor(f):
         try:
             future = self.executor.submit(f, self, *args, **kwargs)
             future.add_done_callback(_future_completed)
+            return future
         except Exception:
             log.exception("Failed to submit task to executor")
 
@@ -2067,7 +2068,9 @@ class Cluster(object):
 
             log.info("Connection pools established for node %s", host)
             # mark the host as up and notify all listeners
-            host.set_up()
+            with host.lock:
+                host.set_up()
+                host._pending_host_addition = False
             for listener in self.listeners:
                 listener.on_up(host)
         finally:
@@ -2145,6 +2148,7 @@ class Cluster(object):
             if not have_future:
                 with host.lock:
                     host.set_up()
+                    host._pending_host_addition = False
                     host._currently_handling_node_up = False
 
         # for testing purposes
@@ -2161,12 +2165,15 @@ class Cluster(object):
         # of the current Cluster attributes to create new Connections with
         conn_factory = self._make_connection_factory(host)
 
-        reconnector = _HostReconnectionHandler(
-            host, conn_factory, is_host_addition, self.on_add, self.on_up,
-            self.scheduler, schedule, host.get_and_set_reconnection_handler,
-            new_handler=None)
-
-        old_reconnector = host.get_and_set_reconnection_handler(reconnector)
+        with host.lock:
+            if is_host_addition:
+                host._pending_host_addition = True
+            is_host_addition = host._pending_host_addition
+            reconnector = _HostReconnectionHandler(
+                host, conn_factory, is_host_addition, self.on_add, self.on_up,
+                self.scheduler, schedule,
+                host.get_and_set_reconnection_handler, new_handler=None)
+            old_reconnector = host.get_and_set_reconnection_handler(reconnector)
         if old_reconnector:
             log.debug("Old host reconnector found for %s, cancelling", host)
             old_reconnector.cancel()
@@ -2175,16 +2182,46 @@ class Cluster(object):
         reconnector.start()
 
     @run_in_executor
-    def on_down_potentially_blocking(self, host, is_host_addition):
-        self.profile_manager.on_down(host)
-        self.control_connection.on_down(host)
-        for session in tuple(self.sessions):
-            session.on_down(host)
+    def on_down_potentially_blocking(self, host, is_host_addition,
+                                     down_event_generation):
+        try:
+            with host.lock:
+                if down_event_generation != host._down_event_generation:
+                    return
 
-        for listener in self.listeners:
-            listener.on_down(host)
+            self.profile_manager.on_down(host)
+            self.control_connection.on_down(host)
+            for session in tuple(self.sessions):
+                session.on_down(host)
 
-        self._start_reconnector(host, is_host_addition)
+            for listener in self.listeners:
+                listener.on_down(host)
+
+            self._start_reconnector(host, is_host_addition)
+        finally:
+            with host.lock:
+                if down_event_generation == host._down_event_generation:
+                    host._currently_handling_node_down = False
+
+    @run_in_executor
+    def _restart_reconnector(self, host, is_host_addition,
+                             down_event_generation):
+        try:
+            # Match the old synchronous path's ordering with on_up(): if the
+            # host recovered or is still being brought up while this task was
+            # queued, there is nothing to restart. A failed UP transition
+            # starts its own reconnector before releasing the UP guard, which
+            # must not be replaced by this stale task.
+            with host.lock:
+                if (down_event_generation == host._down_event_generation and
+                        host.is_up is False and
+                        not host._currently_handling_node_up and
+                        not host.is_currently_reconnecting()):
+                    self._start_reconnector(host, is_host_addition)
+        finally:
+            with host.lock:
+                if down_event_generation == host._down_event_generation:
+                    host._currently_handling_node_down = False
 
     def on_down(self, host, is_host_addition, expect_host_to_be_down=False):
         """
@@ -2193,6 +2230,7 @@ class Cluster(object):
         if self.is_shutdown or self.allow_control_connection_query_fallback == ControlConnectionQueryFallback.SkipPoolCreation:
             return
 
+        restart_reconnector = False
         with host.lock:
             was_up = host.is_up
 
@@ -2209,15 +2247,45 @@ class Cluster(object):
                     return
 
             host.set_down()
-            if (not was_up and not expect_host_to_be_down) or host.is_currently_reconnecting():
+            if (not was_up and
+                    (host.is_currently_reconnecting() or
+                     host._currently_handling_node_down)):
                 return
+
+            if not was_up and not expect_host_to_be_down:
+                # A terminal failure may have released this down host's old
+                # handler. Start a new retry cycle without repeating the DOWN
+                # notifications that were sent on the original transition.
+                restart_reconnector = True
+
+            host._currently_handling_node_down = True
+            host._down_event_generation += 1
+            down_event_generation = host._down_event_generation
+
+        if restart_reconnector:
+            future = self._restart_reconnector(
+                host, is_host_addition, down_event_generation)
+            if future is None:
+                with host.lock:
+                    if down_event_generation == host._down_event_generation:
+                        host._currently_handling_node_down = False
+            return
+
         log.warning("Host %s has been marked down", host)
 
-        self.on_down_potentially_blocking(host, is_host_addition)
+        future = self.on_down_potentially_blocking(
+            host, is_host_addition, down_event_generation)
+        if future is None:
+            with host.lock:
+                if down_event_generation == host._down_event_generation:
+                    host._currently_handling_node_down = False
 
     def on_add(self, host, refresh_nodes=True):
         if self.is_shutdown:
             return
+
+        with host.lock:
+            host._pending_host_addition = True
 
         log.debug("Handling new host %r and notifying listeners", host)
 
@@ -2280,6 +2348,9 @@ class Cluster(object):
 
         for listener in self.listeners:
             listener.on_add(host)
+
+        with host.lock:
+            host._pending_host_addition = False
 
         # see if there are any pools to add or remove now that the host is marked up
         for session in tuple(self.sessions):
