@@ -2207,7 +2207,7 @@ class Cluster(object):
         for session in tuple(self.sessions):
             session.update_created_pools()
 
-    def on_remove(self, host):
+    def on_remove(self, host, refresh_nodes=True):
         if self.is_shutdown:
             return
 
@@ -2218,7 +2218,7 @@ class Cluster(object):
             session.on_remove(host)
         for listener in self.listeners:
             listener.on_remove(host)
-        self.control_connection.on_remove(host)
+        self.control_connection.on_remove(host, refresh_nodes=refresh_nodes)
 
         reconnection_handler = host.get_and_set_reconnection_handler(None)
         if reconnection_handler:
@@ -2248,14 +2248,31 @@ class Cluster(object):
 
         return host, new
 
-    def remove_host(self, host):
+    def remove_host(self, host, refresh_nodes=True):
         """
         Called when the control connection observes that a node has left the
         ring.  Intended for internal use only.
         """
         if host and self.metadata.remove_host(host):
             log.info("Cassandra host %s removed", host)
-            self.on_remove(host)
+            self.on_remove(host, refresh_nodes=refresh_nodes)
+
+    def remove_host_by_host_id(self, host_id, endpoint=None,
+                               refresh_nodes=True):
+        """Remove the host stored under a specific metadata key."""
+        host = self.metadata.get_host_by_host_id(host_id)
+        if not host or not self.metadata.remove_host_by_host_id(
+                host_id, endpoint):
+            return
+
+        # A refresh can reindex the same Host under a new host ID before
+        # cleaning up its stale old key. In that case only the alias was
+        # removed; the Host itself is still part of the cluster.
+        if self.metadata._is_host_registered(host):
+            return
+
+        log.info("Cassandra host %s removed", host)
+        self.on_remove(host, refresh_nodes=refresh_nodes)
 
     def register_listener(self, listener):
         """
@@ -3914,6 +3931,7 @@ class ControlConnection(object):
         self._schema_meta_page_size = schema_meta_page_size
 
         self._lock = RLock()
+        self._refresh_nodes_lock = RLock()
         self._schema_agreement_lock = Lock()
 
         self._reconnection_handler = None
@@ -4192,6 +4210,13 @@ class ControlConnection(object):
 
     def _refresh_node_list_and_token_map(self, connection, preloaded_results=None,
                                          force_token_rebuild=False):
+        with self._refresh_nodes_lock:
+            return self._refresh_node_list_and_token_map_locked(
+                connection, preloaded_results, force_token_rebuild)
+
+    def _refresh_node_list_and_token_map_locked(
+            self, connection, preloaded_results=None,
+            force_token_rebuild=False):
         if preloaded_results:
             log.debug("[control connection] Refreshing node list and token map using preloaded results")
             peers_result = preloaded_results[0]
@@ -4318,7 +4343,8 @@ class ControlConnection(object):
             if old_host_id not in found_host_ids:
                 should_rebuild_token_map = True
                 log.debug("[control connection] Removing host not found in peers metadata: %r", old_host)
-                self._cluster.metadata.remove_host_by_host_id(old_host_id, old_host.endpoint)
+                self._cluster.remove_host_by_host_id(
+                    old_host_id, old_host.endpoint, refresh_nodes=False)
 
         log.debug("[control connection] Finished fetching ring info")
         if partitioner and should_rebuild_token_map:
@@ -4735,13 +4761,13 @@ class ControlConnection(object):
         if refresh_nodes:
             self.refresh_node_list_and_token_map(force_token_rebuild=True)
 
-    def on_remove(self, host):
+    def on_remove(self, host, refresh_nodes=True):
         c = self._connection
         if self._connection_matches_host(c, host):
             log.debug("[control connection] Control connection host (%s) is being removed. Reconnecting", host)
             # refresh will be done on reconnect
             self.reconnect()
-        else:
+        elif refresh_nodes:
             self.refresh_node_list_and_token_map(force_token_rebuild=True)
 
     def get_connections(self):

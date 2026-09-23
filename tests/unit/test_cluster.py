@@ -151,6 +151,46 @@ class OperationTimedOutTest(unittest.TestCase):
 
 class ClusterTest(unittest.TestCase):
 
+    def test_remove_host_by_id_runs_lifecycle_without_refresh(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        cluster.profile_manager.on_remove = Mock()
+        cluster.control_connection.on_remove = Mock()
+        session = Mock()
+        cluster.sessions.add(session)
+
+        cluster.remove_host_by_host_id(
+            host.host_id, host.endpoint, refresh_nodes=False)
+
+        cluster.profile_manager.on_remove.assert_called_once_with(host)
+        session.on_remove.assert_called_once_with(host)
+        cluster.control_connection.on_remove.assert_called_once_with(
+            host, refresh_nodes=False)
+
+    def test_remove_host_by_stale_id_preserves_reindexed_host(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        old_host_id = uuid.uuid4()
+        new_host_id = uuid.uuid4()
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=old_host_id)
+        host.set_up()
+        cluster.metadata.add_or_return_host(host)
+        host.host_id = new_host_id
+        cluster.metadata.update_host(host, old_endpoint=host.endpoint)
+        cluster.on_remove = Mock()
+
+        cluster.remove_host_by_host_id(old_host_id, host.endpoint)
+
+        assert cluster.metadata.get_host_by_host_id(old_host_id) is None
+        assert cluster.metadata.get_host_by_host_id(new_host_id) is host
+        assert cluster.metadata.get_host(host.endpoint) is host
+        assert host.is_up
+        cluster.on_remove.assert_not_called()
+
     def test_tuple_for_contact_points(self):
         cluster = Cluster(contact_points=[('localhost', 9045), ('127.0.0.2', 9046), '127.0.0.3'], port=9999)
         self.addCleanup(cluster.shutdown)

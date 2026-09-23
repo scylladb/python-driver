@@ -15,6 +15,7 @@
 import unittest
 
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock, Thread
 from unittest.mock import Mock, ANY, call, patch
 
 from cassandra import OperationTimedOut, SchemaTargetType, SchemaChangeType
@@ -90,10 +91,12 @@ class MockMetadata(object):
         return list(self.hosts.items())
 
     def remove_host_by_host_id(self, host_id, endpoint=None):
-        if endpoint and self._host_id_by_endpoint[endpoint] == host_id:
+        if endpoint and self._host_id_by_endpoint.get(endpoint) == host_id:
             self._host_id_by_endpoint.pop(endpoint, False)
-        self.removed_hosts.append(self.hosts.pop(host_id, False))
-        return bool(self.hosts.pop(host_id, False))
+        removed_host = self.hosts.pop(host_id, None)
+        if removed_host:
+            self.removed_hosts.append(removed_host)
+        return bool(removed_host)
 
 
 class MockCluster(object):
@@ -109,6 +112,8 @@ class MockCluster(object):
     def __init__(self):
         self.metadata = MockMetadata()
         self.added_hosts = []
+        self.removed_host = None
+        self.removed_host_refresh_nodes = None
         self.scheduler = Mock(spec=_Scheduler)
         self.executor = Mock(spec=ThreadPoolExecutor)
         self.profile_manager.profiles[EXEC_PROFILE_DEFAULT] = ExecutionProfile(RoundRobinPolicy())
@@ -121,8 +126,21 @@ class MockCluster(object):
         self.added_hosts.append(host)
         return host, True
 
-    def remove_host(self, host):
-        pass
+    def remove_host(self, host, refresh_nodes=True):
+        removed = self.metadata.remove_host_by_host_id(
+            host.host_id, host.endpoint)
+        if removed:
+            self.removed_host = host
+            self.removed_host_refresh_nodes = refresh_nodes
+
+    def remove_host_by_host_id(self, host_id, endpoint=None,
+                               refresh_nodes=True):
+        host = self.metadata.get_host_by_host_id(host_id)
+        removed = self.metadata.remove_host_by_host_id(host_id, endpoint)
+        if (removed and
+                self.metadata.get_host_by_host_id(host.host_id) is not host):
+            self.removed_host = host
+            self.removed_host_refresh_nodes = refresh_nodes
 
     def on_up(self, host):
         pass
@@ -615,6 +633,14 @@ class ControlConnectionTest(unittest.TestCase):
         self.cluster.executor.submit.assert_called_once_with(
             self.control_connection._reconnect)
 
+    def test_remove_non_control_host_can_skip_refresh(self):
+        host = self.cluster.metadata.get_host_by_host_id('uuid2')
+        self.control_connection.refresh_node_list_and_token_map = Mock()
+
+        self.control_connection.on_remove(host, refresh_nodes=False)
+
+        self.control_connection.refresh_node_list_and_token_map.assert_not_called()
+
     def test_down_matches_replacement_at_stale_control_endpoint(self):
         self.control_connection.refresh_node_list_and_token_map()
         old_host = self.cluster.metadata.get_host_by_host_id('uuid1')
@@ -769,6 +795,84 @@ class ControlConnectionTest(unittest.TestCase):
         self.control_connection.refresh_node_list_and_token_map()
         assert 1 == len(self.cluster.metadata.removed_hosts)
         assert self.cluster.metadata.removed_hosts[0].address == "192.168.1.2"
+        assert self.cluster.removed_host is \
+            self.cluster.metadata.removed_hosts[0]
+        assert self.cluster.removed_host_refresh_nodes is False
+
+    def test_refresh_nodes_and_tokens_preserves_reindexed_host(self):
+        old_host = self.cluster.metadata.get_host_by_host_id('uuid2')
+        endpoint = old_host.endpoint
+        self.connection.peer_results[1][0][-1] = 'replacement-id'
+
+        self.control_connection.refresh_node_list_and_token_map()
+        self.control_connection.refresh_node_list_and_token_map()
+
+        assert self.cluster.metadata.get_host_by_host_id('uuid2') is None
+        assert self.cluster.metadata.get_host_by_host_id(
+            'replacement-id') is old_host
+        assert self.cluster.metadata.get_host(endpoint) is old_host
+        assert len(self.cluster.metadata.all_hosts()) == 3
+        assert old_host.is_up
+        assert self.cluster.removed_host is None
+
+    def test_overlapping_refreshes_serialize_host_reindex(self):
+        old_host = self.cluster.metadata.get_host_by_host_id('uuid2')
+        endpoint = old_host.endpoint
+        self.connection.peer_results[1][0][-1] = 'replacement-id'
+
+        original_refresh = (
+            self.control_connection._refresh_node_list_and_token_map_locked)
+        first_entered = Event()
+        release_first = Event()
+        state_lock = Lock()
+        active = [0]
+        max_active = [0]
+
+        def controlled_refresh(*args, **kwargs):
+            with state_lock:
+                active[0] += 1
+                max_active[0] = max(max_active[0], active[0])
+                is_first = active[0] == 1 and not first_entered.is_set()
+            try:
+                if is_first:
+                    first_entered.set()
+                    assert release_first.wait(2)
+                return original_refresh(*args, **kwargs)
+            finally:
+                with state_lock:
+                    active[0] -= 1
+
+        self.control_connection._refresh_node_list_and_token_map_locked = \
+            controlled_refresh
+        results = []
+
+        def refresh():
+            results.append(
+                self.control_connection.refresh_node_list_and_token_map())
+
+        first = Thread(target=refresh)
+        second = Thread(target=refresh)
+        first.start()
+        assert first_entered.wait(2)
+        acquired = self.control_connection._refresh_nodes_lock.acquire(False)
+        if acquired:
+            self.control_connection._refresh_nodes_lock.release()
+        assert not acquired
+        second.start()
+        release_first.set()
+        first.join(2)
+        second.join(2)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert results == [True, True]
+        assert max_active[0] == 1
+        assert self.cluster.metadata.get_host_by_host_id('uuid2') is None
+        assert self.cluster.metadata.get_host_by_host_id(
+            'replacement-id') is old_host
+        assert self.cluster.metadata.get_host(endpoint) is old_host
+        assert old_host.is_up
+        assert self.cluster.removed_host is None
 
     def test_refresh_nodes_and_tokens_timeout(self):
 
