@@ -14,6 +14,7 @@
 
 import time
 import unittest
+import uuid
 
 from collections import deque
 from threading import Event, RLock, Thread
@@ -32,8 +33,8 @@ from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessag
                                 RESULT_KIND_ROWS, RESULT_KIND_SET_KEYSPACE,
                                 RESULT_KIND_SCHEMA_CHANGE, RESULT_KIND_PREPARED,
                                 ProtocolHandler)
-from cassandra.policies import RetryPolicy, ExponentialBackoffRetryPolicy
-from cassandra.pool import NoConnectionsAvailable
+from cassandra.policies import RetryPolicy, ExponentialBackoffRetryPolicy, SimpleConvictionPolicy
+from cassandra.pool import Host, NoConnectionsAvailable
 from cassandra.query import SimpleStatement, PreparedStatement, BoundStatement
 from tests.util import assertEqual, assertIsInstance
 import pytest
@@ -1311,9 +1312,13 @@ class ResponseFutureTests(unittest.TestCase):
         session = self.make_basic_session()
         session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
         session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
-        session._pools = {}
         connection = self.make_control_connection()
         session.cluster.control_connection._connection = connection
+        control_host = Host(
+            connection.endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        session.cluster.get_control_connection_host.return_value = control_host
+        data_pool = Mock(is_shutdown=False)
+        session._pools = {}
 
         def send_msg(message, request_id, cb, **kwargs):
             connection._requests[request_id] = (cb, kwargs.get('decoder'), kwargs.get('result_metadata'))
@@ -1323,6 +1328,8 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf = self.make_response_future(session)
         rf.send_request()
+        # Model a node pool appearing while the control request is in flight.
+        session._pools = {control_host: data_pool}
         rf._on_timeout()
 
         assert 7 in connection.orphaned_request_ids
@@ -1330,6 +1337,7 @@ class ResponseFutureTests(unittest.TestCase):
         assert session.cluster.control_connection._application_requests_in_flight == 0
         assert (connection, 7) in \
             session.cluster.control_connection._application_orphaned_requests
+        data_pool.return_connection.assert_not_called()
         with pytest.raises(OperationTimedOut):
             rf.result()
 
@@ -1793,7 +1801,8 @@ class ResponseFutureTests(unittest.TestCase):
         pool = self.make_pool()
         session._pools.get.return_value = pool
         connection = Mock(spec=Connection, lock=RLock(), _requests={}, request_ids=deque(),
-                orphaned_request_ids=set(), orphaned_threshold=256, in_flight=3)
+                orphaned_request_ids=set(), orphaned_threshold=256, in_flight=3,
+                is_control_connection=False)
         pool.borrow_connection.return_value = (connection, 1)
 
         rf = self.make_response_future(session)
