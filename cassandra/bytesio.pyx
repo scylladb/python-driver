@@ -42,3 +42,27 @@ cdef class BytesIOReader:
         cdef char *res = self.buf_ptr + self.pos
         self.pos = newpos
         return res
+
+    cdef void seek(self, Py_ssize_t new_pos) except *:
+        """
+        Reposition the reader to an absolute offset within the buffer, so
+        the next read() starts at `new_pos`.
+
+        `buf_ptr` is the base address of `buf` (the underlying bytes
+        object); it is set once in __init__ and is never reassigned
+        anywhere else -- read() always computes `buf_ptr + pos`, so `pos`
+        is the only mutable cursor state and the only field a caller ever
+        needs to reset. This method exists so callers reposition the
+        reader through a single explicit entry point instead of reaching
+        into `pos` (and, in older code, the always-redundant `buf_ptr`)
+        directly at the call site.
+
+        `new_pos` must stay within [0, size]: a negative pos plus a
+        subsequent read() would return bytes before the buffer start, and
+        a pos > size would return bytes past its end (read()'s own bounds
+        check only catches newpos > size, not an already-out-of-range pos).
+        """
+        if new_pos < 0 or new_pos > self.size:
+            raise ValueError(
+                "seek position %d out of range [0, %d]" % (new_pos, self.size))
+        self.pos = new_pos
