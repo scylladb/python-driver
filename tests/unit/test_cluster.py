@@ -997,7 +997,7 @@ from cassandra.cluster import (
     Cluster,
     _shutdown_cluster_schedulers,
 )
-from threading import Event, Thread
+from threading import Event
 
 
 cluster = Cluster()
@@ -1014,12 +1014,11 @@ def connect_after_cleanup():
         print('late connect rejected')
 
 
-thread = Thread(target=connect_after_cleanup)
-thread.start()
+future = cluster.executor.submit(connect_after_cleanup)
 ready.wait()
 _shutdown_cluster_schedulers()
 continue_registration.set()
-thread.join()
+future.result(timeout=2)
 
 print('cluster is shutdown:', cluster.is_shutdown)
 print('scheduler is shutdown:', cluster.scheduler.is_shutdown)
@@ -1041,7 +1040,7 @@ from cassandra.cluster import (
     ControlConnectionQueryFallback,
     _shutdown_cluster_schedulers,
 )
-from threading import Event, Thread
+from threading import Event
 from unittest.mock import patch
 
 
@@ -1068,12 +1067,11 @@ def connect_after_cleanup():
         print('late connect rejected:', exc)
 
 
-thread = Thread(target=connect_after_cleanup)
-thread.start()
+future = cluster.executor.submit(connect_after_cleanup)
 ready.wait()
 _shutdown_cluster_schedulers()
 continue_connect.set()
-thread.join()
+future.result(timeout=2)
 
 print('session count:', len(sessions))
 print('initial session is shutdown:', sessions[0].is_shutdown)
@@ -1087,10 +1085,77 @@ print('scheduler is shutdown:', cluster.scheduler.is_shutdown)
                 'Cannot connect a Cluster during interpreter shutdown'
                 in result.stdout)
         assert 'session count: 1' in result.stdout
-        assert 'initial session is shutdown: True' in result.stdout
-        assert 'cluster is shutdown: True' in result.stdout
+        assert 'initial session is shutdown: False' in result.stdout
+        assert 'cluster is shutdown: False' in result.stdout
         assert 'scheduler is shutdown: True' in result.stdout
         assert 'cannot schedule new futures' not in result.stderr
+
+    def test_late_connect_does_not_join_reentrant_executor_shutdown(self):
+        """Late rejection must not join a worker waiting to shut down."""
+        script = '''
+import cassandra.cluster as cluster_module
+
+from cassandra import DriverException
+from cassandra.cluster import (
+    Cluster,
+    ControlConnectionQueryFallback,
+    _shutdown_cluster_schedulers,
+)
+from threading import Event
+from unittest.mock import patch
+
+
+cluster = Cluster(
+    idle_heartbeat_interval=0,
+    allow_control_connection_query_fallback=
+    ControlConnectionQueryFallback.SkipPoolCreation,
+)
+with patch.object(cluster.connection_class, 'initialize_reactor'), \
+        patch.object(cluster.control_connection, 'connect'), \
+        patch.object(cluster, '_populate_hosts'), \
+        patch.object(cluster.profile_manager, 'check_supported'):
+    cluster.connect()
+
+release_worker = Event()
+worker_shutting_down = Event()
+
+
+def shutdown_from_executor():
+    release_worker.wait()
+    worker_shutting_down.set()
+    cluster.shutdown()
+    print('executor shutdown completed')
+
+
+future = cluster.executor.submit(shutdown_from_executor)
+_shutdown_cluster_schedulers()
+register_cluster = cluster_module._register_cluster_shutdown
+
+
+def coordinate_reentrant_shutdown(current_cluster):
+    release_worker.set()
+    worker_shutting_down.wait()
+    return register_cluster(current_cluster)
+
+
+with patch.object(
+        cluster_module,
+        '_register_cluster_shutdown',
+        side_effect=coordinate_reentrant_shutdown):
+    try:
+        cluster.connect()
+    except DriverException:
+        print('main connect rejected')
+
+future.result(timeout=2)
+print('reentrant shutdown completed')
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'main connect rejected' in result.stdout
+        assert 'executor shutdown completed' in result.stdout
+        assert 'reentrant shutdown completed' in result.stdout
 
     def test_cluster_shutdown_follows_application_thread_shutdown(self):
         """Full cluster cleanup must wait for application threads."""

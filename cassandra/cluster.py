@@ -1976,6 +1976,8 @@ class Cluster(object):
         established or attempted. Default is `False`, which means it will return when the first
         successful connection is established. Remaining pools are added asynchronously.
         """
+        reject_late_connect = False
+        shutdown_rejected_cluster = False
         with self._lock:
             if self.is_shutdown:
                 raise DriverException("Cluster is already shut down")
@@ -1988,13 +1990,16 @@ class Cluster(object):
             if not _register_cluster_shutdown(self):
                 # threading shutdown callbacks run before non-daemon
                 # application threads are joined. A thread can therefore
-                # reach connect() after scheduler cleanup. Do not let that
-                # cluster outlive the executor shutdown callback.
-                self.shutdown()
-                raise DriverException(
-                    "Cannot connect a Cluster during interpreter shutdown")
+                # reach connect() after scheduler cleanup. Existing clusters
+                # remain registered for ordinary atexit cleanup. A new cluster
+                # must claim shutdown here, but cleanup cannot wait for its
+                # executor while this call may itself be running on a worker.
+                reject_late_connect = True
+                if not self._is_setup:
+                    self.is_shutdown = True
+                    shutdown_rejected_cluster = True
 
-            if not self._is_setup:
+            elif not self._is_setup:
                 self._report_tls_session_resumption()
 
                 try:
@@ -2017,6 +2022,12 @@ class Cluster(object):
                         timeout=self.idle_heartbeat_timeout
                     )
                 self._is_setup = True
+
+        if reject_late_connect:
+            if shutdown_rejected_cluster:
+                self._shutdown(wait_for_executor=False)
+            raise DriverException(
+                "Cannot connect a Cluster during interpreter shutdown")
 
         session = self._new_session(keyspace)
         if wait_for_all_pools:
@@ -2070,6 +2081,14 @@ class Cluster(object):
             else:
                 self.is_shutdown = True
 
+        # Once interpreter scheduler cleanup has begun, executor teardown is
+        # imminent and this call may itself be running on an executor worker.
+        self._shutdown(
+            wait_for_executor=not _cluster_scheduler_shutdown_started)
+
+    def _shutdown(self, wait_for_executor):
+        """Finish cleanup after shutdown has been claimed under ``self._lock``."""
+
         if self._idle_heartbeat:
             self._idle_heartbeat.stop()
 
@@ -2080,7 +2099,7 @@ class Cluster(object):
         for session in tuple(self.sessions):
             session.shutdown()
 
-        self.executor.shutdown()
+        self.executor.shutdown(wait=wait_for_executor)
 
         if self.metrics_enabled and self.metrics:
             self.metrics.shutdown()
