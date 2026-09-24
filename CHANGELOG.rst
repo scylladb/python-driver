@@ -88,8 +88,11 @@ Bug Fixes
   cadence follows ``reconnection_policy`` up to ``max_reconnection_delay`` instead of
   being restarted by each ``idle_heartbeat_interval``. Operators that need a shorter
   recovery bound should configure a lower maximum delay. A finite schedule gives up after
-  its configured attempts, and recurring heartbeat returns for the same failed connection
-  do not re-arm it; continued automatic recovery requires an infinite schedule.
+  its configured attempts only when its final attempt does not overlap another reconnect
+  trigger. A trigger received while the final attempt is running starts a fresh schedule if
+  that attempt fails, so reconnection can be retriggered indefinitely when attempts outlast
+  ``idle_heartbeat_interval``. Heartbeat returns after exhaustion for the same failed
+  connection do not re-arm it; an infinite schedule provides timing-independent recovery.
 * The control connection is no longer closed immediately after a reconnection handler
   restores it. ``_ReconnectionHandler.run()`` closed the connection it had just opened,
   which is right for the host handler that only uses it to probe the host, but left the

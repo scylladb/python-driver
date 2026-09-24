@@ -4013,8 +4013,9 @@ class _ControlReconnectionHandler(_ReconnectionHandler):
         _ReconnectionHandler.__init__(self, scheduler, schedule, self._release)
         self.control_connection = weakref.proxy(control_connection)
         # Remember a failed connection that caused this retry run. If the
-        # finite schedule is exhausted, the heartbeat will keep returning this
-        # same object and must not start the schedule over from the beginning.
+        # finite schedule is exhausted without a reconnect trigger retained
+        # from its final running attempt, the heartbeat will keep returning
+        # this same object and must not restart the schedule.
         # A healthy connection may also be replaced after a topology event;
         # exhausting that attempt must not suppress recovery if the connection
         # fails later for an independent reason.
@@ -4086,9 +4087,9 @@ class _ControlReconnectionHandler(_ReconnectionHandler):
         if next_delay is None:
             # The schedule is exhausted, so this handler will never run again.
             # Release the slot it occupies while remembering the connection
-            # whose retries were exhausted. A later explicit error may start a
-            # fresh run, but heartbeats for this same defunct connection must
-            # not reset the finite schedule on every interval.
+            # whose retries were exhausted. A trigger retained from this final
+            # running attempt starts a fresh schedule; otherwise heartbeats for
+            # the same defunct connection must not reset the finite schedule.
             self._release(exhausted=True)
         else:
             # This failure already has another scheduled attempt to own any
