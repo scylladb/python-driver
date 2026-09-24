@@ -213,17 +213,12 @@ _cluster_scheduler_shutdown_started = False
 
 
 def _register_cluster_shutdown(cluster):
-    """Track a cluster for interpreter shutdown."""
+    """Track a cluster unless scheduler shutdown has already started."""
     with _clusters_for_shutdown_lock:
         if not _cluster_scheduler_shutdown_started:
             _clusters_for_shutdown.add(cluster)
-            return
-
-    # threading shutdown callbacks run before non-daemon application threads
-    # are joined. A thread can therefore reach connect() after scheduler
-    # cleanup. Do not let that cluster outlive the executor shutdown callback.
-    cluster.shutdown()
-    raise DriverException("Cannot connect a Cluster during interpreter shutdown")
+            return True
+        return False
 
 
 def _discard_cluster_shutdown(cluster):
@@ -1976,7 +1971,14 @@ class Cluster(object):
                 log.debug("Connecting to cluster, contact points: %s; protocol version: %s",
                           self.contact_points, self.protocol_version)
                 self.connection_class.initialize_reactor()
-                _register_cluster_shutdown(self)
+                if not _register_cluster_shutdown(self):
+                    # threading shutdown callbacks run before non-daemon
+                    # application threads are joined. A thread can therefore
+                    # reach connect() after scheduler cleanup. Do not let that
+                    # cluster outlive the executor shutdown callback.
+                    self.shutdown()
+                    raise DriverException(
+                        "Cannot connect a Cluster during interpreter shutdown")
                 self._report_tls_session_resumption()
 
                 try:
@@ -5202,9 +5204,9 @@ class _Scheduler(Thread):
         task = (fn, args, tuple(kwargs.items()))
         with self._lock:
             if task not in self._scheduled_tasks:
-                self._insert_task(delay, task)
-                return
+                return self._insert_task(delay, task)
         log.debug("Ignoring schedule_unique for already-scheduled task: %r", task)
+        return False
 
     def _insert_task(self, delay, task, on_shutdown=None):
         with self._lock:

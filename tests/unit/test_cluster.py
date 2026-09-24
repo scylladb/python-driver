@@ -912,13 +912,12 @@ cluster.scheduler.schedule(0.1, lambda: None)
         assert 'Exception in thread Task Scheduler' not in result.stderr
         assert 'cannot schedule new futures' not in result.stderr
 
-    def test_cluster_registration_after_scheduler_cleanup_is_rejected(self):
+    def test_cluster_connect_after_scheduler_cleanup_is_rejected(self):
         """A late cluster must not survive into executor shutdown."""
         script = '''
 from cassandra import DriverException
 from cassandra.cluster import (
     Cluster,
-    _register_cluster_shutdown,
     _shutdown_cluster_schedulers,
 )
 from threading import Event, Thread
@@ -929,16 +928,16 @@ ready = Event()
 continue_registration = Event()
 
 
-def register_after_cleanup():
+def connect_after_cleanup():
     ready.set()
     continue_registration.wait()
     try:
-        _register_cluster_shutdown(cluster)
+        cluster.connect()
     except DriverException:
-        print('late registration rejected')
+        print('late connect rejected')
 
 
-thread = Thread(target=register_after_cleanup)
+thread = Thread(target=connect_after_cleanup)
 thread.start()
 ready.wait()
 _shutdown_cluster_schedulers()
@@ -951,7 +950,7 @@ print('scheduler is shutdown:', cluster.scheduler.is_shutdown)
 
         result = _run_shutdown_subprocess(script)
 
-        assert 'late registration rejected' in result.stdout
+        assert 'late connect rejected' in result.stdout
         assert 'cluster is shutdown: True' in result.stdout
         assert 'scheduler is shutdown: True' in result.stdout
         assert 'cannot schedule new futures' not in result.stderr
@@ -1130,8 +1129,8 @@ Thread(target=wait_for_retry).start()
         assert not shutdown.is_alive()
         assert callback_complete.is_set()
 
-    @patch('cassandra.cluster.time.sleep')
-    def test_shutdown_sentinel_exits_without_scheduler_sleep(self, sleep):
+    @patch('cassandra.cluster.time')
+    def test_shutdown_sentinel_exits_without_scheduler_sleep(self, scheduler_time):
         scheduler = object.__new__(_Scheduler)
         scheduler.is_shutdown = False
         scheduler._lock = RLock()
@@ -1146,15 +1145,15 @@ Thread(target=wait_for_retry).start()
 
         scheduler.run()
 
-        sleep.assert_not_called()
+        scheduler_time.sleep.assert_not_called()
 
     @patch('cassandra.cluster._Scheduler.run')
     def test_schedule_unique_queues_task_once(self, _):
         scheduler = _Scheduler(Mock())
         task = Mock()
 
-        assert scheduler.schedule_unique(0, task) is None
-        assert scheduler.schedule_unique(0, task) is None
+        assert scheduler.schedule_unique(0, task)
+        assert not scheduler.schedule_unique(0, task)
         assert scheduler._queue.qsize() == 1
 
     def test_scheduler_cleanup_error_does_not_abort_threading_shutdown(self):
