@@ -299,10 +299,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         retry_policy = Mock()
         retry_policy.on_unavailable.return_value = (RetryPolicy.RETRY, ConsistencyLevel.ONE)
-        metrics = Mock()
-
-        rf = ResponseFuture(session, message, query, 1, metrics=metrics,
-                            retry_policy=retry_policy)
+        rf = ResponseFuture(session, message, query, 1, retry_policy=retry_policy)
         rf.send_request()
 
         rf.session._pools.get.assert_called_once_with('ip1')
@@ -315,7 +312,6 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
             ANY, ANY, rf._retry_task, True, host)
-        metrics.on_retry.assert_called_once_with()
         assert 1 == rf._query_retries
 
         connection = Mock(spec=Connection)
@@ -861,51 +857,6 @@ class ResponseFutureTests(unittest.TestCase):
         assert not session.cluster.control_connection._application_sessions
         assert session.cluster.control_connection._get_application_keyspace() is _NOT_SET
         assert session.cluster.control_connection._application_requests_in_flight == 0
-
-    def test_control_connection_fallback_use_retry_uses_scheduler_after_session_shutdown(self):
-        session = self._make_fallback_session(keyspace='ks1')
-        connection = self.make_control_connection()
-        session.cluster.control_connection._connection = connection
-        control_host = Mock(endpoint=connection.endpoint)
-        session.cluster.get_control_connection_host.return_value = control_host
-
-        rf = self.make_response_future(session)
-        rf._metrics = Mock()
-        rf.timeout = None
-        assert rf.send_request()
-        session.is_shutdown = True
-
-        connection.send_msg.call_args[1]['cb'](
-            ConnectionException('control connection failed', connection.endpoint))
-
-        session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            0, ANY, rf._retry_task, False, control_host)
-        rf._metrics.on_retry.assert_not_called()
-        assert rf._query_retries == 0
-        session.submit.assert_not_called()
-
-    def test_control_connection_fallback_use_retry_fails_when_scheduler_stops(self):
-        session = self._make_fallback_session(keyspace='ks1')
-        connection = self.make_control_connection()
-        session.cluster.control_connection._connection = connection
-        session.cluster.get_control_connection_host.return_value = \
-            Mock(endpoint=connection.endpoint)
-
-        def reject_retry(delay, on_shutdown, fn, *args):
-            on_shutdown()
-            return False
-
-        session.cluster.scheduler.schedule_with_shutdown.side_effect = reject_retry
-        rf = self.make_response_future(session)
-        rf.timeout = None
-        assert rf.send_request()
-
-        connection.send_msg.call_args[1]['cb'](
-            ConnectionException('control connection failed', connection.endpoint))
-
-        with pytest.raises(ConnectionShutdown, match='scheduler was shut down'):
-            rf.result()
-        session.submit.assert_not_called()
 
     def test_control_connection_fallback_concurrent_send_preserves_session(self):
         session = self._make_fallback_session(keyspace='ks1')

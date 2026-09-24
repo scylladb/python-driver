@@ -27,7 +27,7 @@ import tempfile
 import threading
 import time
 import weakref
-from threading import Event, RLock, Thread
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 
 from unittest.mock import patch, Mock
@@ -1335,7 +1335,7 @@ Thread(target=wait_for_retry).start()
     def test_shutdown_sentinel_exits_without_scheduler_sleep(self, scheduler_time):
         scheduler = object.__new__(_Scheduler)
         scheduler.is_shutdown = False
-        scheduler._lock = RLock()
+        scheduler._lock = Lock()
         scheduler._scheduled_tasks = set()
         scheduler._queue = Mock()
 
@@ -1348,15 +1348,6 @@ Thread(target=wait_for_retry).start()
         scheduler.run()
 
         scheduler_time.sleep.assert_not_called()
-
-    @patch('cassandra.cluster._Scheduler.run')
-    def test_schedule_unique_queues_task_once(self, _):
-        scheduler = _Scheduler(Mock())
-        task = Mock()
-
-        assert scheduler.schedule_unique(0, task)
-        assert not scheduler.schedule_unique(0, task)
-        assert scheduler._queue.qsize() == 1
 
     def test_executor_submission_does_not_hold_scheduler_lock(self):
         executor = Mock()
@@ -1393,50 +1384,6 @@ Thread(target=wait_for_retry).start()
             scheduler.shutdown()
 
         assert not schedule_thread.is_alive()
-
-    def test_executor_rejection_shuts_down_scheduler_and_drains_callbacks(self):
-        executor = Mock()
-        submit_started = Event()
-        release_submit = Event()
-        claimed_task_aborted = Event()
-        queued_task_aborted = Event()
-
-        def reject_submission(*args, **kwargs):
-            submit_started.set()
-            assert release_submit.wait(5)
-            raise RuntimeError('executor stopped')
-
-        executor.submit.side_effect = reject_submission
-        scheduler = _Scheduler(executor)
-
-        def abort_claimed_task():
-            # Re-entry must not wait for the scheduler thread to join itself.
-            scheduler.shutdown()
-            claimed_task_aborted.set()
-
-        scheduler.schedule_with_shutdown(
-            0, abort_claimed_task, lambda: None)
-        assert submit_started.wait(5)
-        scheduler.schedule_with_shutdown(
-            60, queued_task_aborted.set, lambda: None)
-
-        try:
-            release_submit.set()
-            assert claimed_task_aborted.wait(5)
-            assert queued_task_aborted.wait(5)
-            scheduler.join(5)
-
-            assert not scheduler.is_alive()
-            assert scheduler.is_shutdown
-            assert scheduler._shutdown_complete.is_set()
-
-            late_task_aborted = Mock()
-            assert not scheduler.schedule_with_shutdown(
-                0, late_task_aborted, lambda: None)
-            late_task_aborted.assert_called_once_with()
-        finally:
-            release_submit.set()
-            scheduler.shutdown()
 
     def test_scheduler_cleanup_error_does_not_abort_threading_shutdown(self):
         """Scheduler failures must not prevent later shutdown callbacks."""

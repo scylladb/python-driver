@@ -5176,7 +5176,7 @@ class _Scheduler(Thread):
         self._scheduled_tasks = set()
         self._count = count()
         self._executor = executor
-        self._lock = RLock()
+        self._lock = Lock()
         self._shutdown_complete = Event()
         self._shutdown_owner = None
 
@@ -5229,26 +5229,6 @@ class _Scheduler(Thread):
         for callback in shutdown_callbacks:
             self._run_shutdown_callback(callback)
 
-    def _shutdown_after_executor_rejection(self, queue_item):
-        """Stop after a terminal executor rejection without losing a task."""
-        shutdown_owner = get_ident()
-        with self._lock:
-            # The task was already claimed and removed from the scheduled set.
-            # Put it back so whichever shutdown owner won can drain its callback.
-            self._queue.put_nowait(queue_item)
-            if self.is_shutdown:
-                return
-            self.is_shutdown = True
-            self._shutdown_owner = shutdown_owner
-
-        try:
-            # We are the scheduler thread, so joining is neither necessary nor
-            # possible. Marking this thread as the owner keeps callbacks that
-            # re-enter shutdown from waiting on themselves.
-            self._drain_shutdown_callbacks()
-        finally:
-            self._shutdown_complete.set()
-
     def schedule(self, delay, fn, *args, **kwargs):
         return self._insert_task(delay, (fn, args, tuple(kwargs.items())))
 
@@ -5259,11 +5239,10 @@ class _Scheduler(Thread):
 
     def schedule_unique(self, delay, fn, *args, **kwargs):
         task = (fn, args, tuple(kwargs.items()))
-        with self._lock:
-            if task not in self._scheduled_tasks:
-                return self._insert_task(delay, task)
-        log.debug("Ignoring schedule_unique for already-scheduled task: %r", task)
-        return False
+        if task not in self._scheduled_tasks:
+            self._insert_task(delay, task)
+        else:
+            log.debug("Ignoring schedule_unique for already-scheduled task: %r", task)
 
     def _insert_task(self, delay, task, on_shutdown=None):
         with self._lock:
@@ -5324,16 +5303,8 @@ class _Scheduler(Thread):
                         return
                     if task_to_submit is not None:
                         fn, args, kwargs = task_to_submit
-                        try:
-                            future = self._executor.submit(
-                                fn, *args, **dict(kwargs))
-                        except RuntimeError:
-                            # ThreadPoolExecutor rejection is terminal (shutdown
-                            # or broken pool). Shut this scheduler down as well,
-                            # including the callback for the claimed task.
-                            self._shutdown_after_executor_rejection(
-                                (run_at, i, task, on_shutdown))
-                            return
+                        future = self._executor.submit(
+                            fn, *args, **dict(kwargs))
                         future.add_done_callback(self._log_if_failed)
                     else:
                         break
@@ -5816,11 +5787,8 @@ class ResponseFuture(object):
                 # and this is the driver's own USE. It also has no backoff, so a
                 # flapping control connection re-sends USE until the client-side
                 # timeout fires instead of failing fast. Routing it through the
-                # policy machinery shared with the pooled path would be the fix.
-                # Use the common scheduler handoff so Session or executor
-                # shutdown cannot leave this ResponseFuture pending forever.
-                self._retry(False, None, host, 0,
-                            record_retry_metric=False)
+                # retry machinery shared with the pooled path would be the fix.
+                self.session.submit(self._retry_task, False, host)
             elif isinstance(response, Exception):
                 self._set_final_exception(response)
             else:
@@ -6520,8 +6488,7 @@ class ResponseFuture(object):
 
         self._errors[host] = exception_from_response(response)
 
-    def _retry(self, reuse_connection, consistency_level, host, delay,
-               record_retry_metric=True):
+    def _retry(self, reuse_connection, consistency_level, host, delay):
         with self._callback_lock:
             if self._final_exception:
                 # the connection probably broke while we were waiting
@@ -6529,7 +6496,7 @@ class ResponseFuture(object):
                 return
             page_generation = self._page_generation
 
-        if record_retry_metric and self._metrics is not None:
+        if self._metrics is not None:
             self._metrics.on_retry()
         if consistency_level is not None:
             # Never downgrade from serial to non-serial consistency, as that
