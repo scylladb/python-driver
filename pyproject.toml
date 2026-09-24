@@ -23,7 +23,7 @@ classifiers = [
 dependencies = ['geomet>=1.1', 'pyyaml > 5.0']
 dynamic = ["version", "readme"]
 license = {text = "Apache-2.0"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 
 [project.urls]
 "Homepage" = "https://github.com/scylladb/python-driver"
@@ -43,7 +43,9 @@ auth-kerberos = [
 
 [dependency-groups]
 dev = [
-    "pytest~=8.0",
+    # Keep the patched 9.x range without a literal "<": cibuildwheel runs
+    # test-group installs through cmd.exe, where "<" is input redirection.
+    "pytest~=9.1",
     "PyYAML",
     "pure-sasl",
     "cryptography>=42.0",
