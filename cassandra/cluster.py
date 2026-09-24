@@ -30,6 +30,7 @@ from itertools import groupby, count, chain
 import enum
 import json
 import logging
+import os
 from typing import Any, Dict, Optional, Union, Tuple
 from warnings import warn
 from random import random
@@ -212,6 +213,14 @@ _clusters_for_shutdown_lock = Lock()
 _cluster_scheduler_shutdown_started = False
 
 
+def _clear_clusters_for_shutdown_after_fork():
+    """Forget parent-owned clusters and locks in a fork child."""
+    global _clusters_for_shutdown_lock, _cluster_scheduler_shutdown_started
+    _clusters_for_shutdown_lock = Lock()
+    _cluster_scheduler_shutdown_started = False
+    _clusters_for_shutdown.clear()
+
+
 def _register_cluster_shutdown(cluster):
     """Track a cluster unless scheduler shutdown has already started."""
     with _clusters_for_shutdown_lock:
@@ -249,6 +258,10 @@ def _shutdown_clusters():
         clusters = _clusters_for_shutdown.copy()
     for cluster in clusters:
         cluster.shutdown()
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_clear_clusters_for_shutdown_after_fork)
 
 
 # concurrent.futures is imported before this registration and installs its
@@ -5174,21 +5187,43 @@ class _Scheduler(Thread):
         try:
             self._queue.put_nowait((0, 0, None, None))
             self.join()
+            self._drain_shutdown_callbacks()
+        finally:
+            self._shutdown_complete.set()
 
-            shutdown_callbacks = []
-            with self._lock:
-                while True:
-                    try:
-                        _, _, task, on_shutdown = self._queue.get_nowait()
-                    except queue.Empty:
-                        break
-                    if task is not None:
-                        self._scheduled_tasks.discard(task)
-                        if on_shutdown is not None:
-                            shutdown_callbacks.append(on_shutdown)
+    def _drain_shutdown_callbacks(self):
+        shutdown_callbacks = []
+        with self._lock:
+            while True:
+                try:
+                    _, _, task, on_shutdown = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                if task is not None:
+                    self._scheduled_tasks.discard(task)
+                    if on_shutdown is not None:
+                        shutdown_callbacks.append(on_shutdown)
 
-            for callback in shutdown_callbacks:
-                self._run_shutdown_callback(callback)
+        for callback in shutdown_callbacks:
+            self._run_shutdown_callback(callback)
+
+    def _shutdown_after_executor_rejection(self, queue_item):
+        """Stop after a terminal executor rejection without losing a task."""
+        shutdown_owner = get_ident()
+        with self._lock:
+            # The task was already claimed and removed from the scheduled set.
+            # Put it back so whichever shutdown owner won can drain its callback.
+            self._queue.put_nowait(queue_item)
+            if self.is_shutdown:
+                return
+            self.is_shutdown = True
+            self._shutdown_owner = shutdown_owner
+
+        try:
+            # We are the scheduler thread, so joining is neither necessary nor
+            # possible. Marking this thread as the owner keeps callbacks that
+            # re-enter shutdown from waiting on themselves.
+            self._drain_shutdown_callbacks()
         finally:
             self._shutdown_complete.set()
 
@@ -5267,8 +5302,16 @@ class _Scheduler(Thread):
                         return
                     if task_to_submit is not None:
                         fn, args, kwargs = task_to_submit
-                        future = self._executor.submit(
-                            fn, *args, **dict(kwargs))
+                        try:
+                            future = self._executor.submit(
+                                fn, *args, **dict(kwargs))
+                        except RuntimeError:
+                            # ThreadPoolExecutor rejection is terminal (shutdown
+                            # or broken pool). Shut this scheduler down as well,
+                            # including the callback for the claimed task.
+                            self._shutdown_after_executor_rejection(
+                                (run_at, i, task, on_shutdown))
+                            return
                         future.add_done_callback(self._log_if_failed)
                     else:
                         break

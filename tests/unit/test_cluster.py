@@ -16,6 +16,7 @@ import unittest
 from concurrent.futures import Future
 import gc
 import logging
+import multiprocessing
 from pathlib import Path
 from queue import PriorityQueue
 import socket
@@ -883,6 +884,82 @@ class HostReconnectionHandlerTest(unittest.TestCase):
 class SchedulerTest(unittest.TestCase):
     # TODO: this suite could be expanded; for now just adding a test covering a ticket
 
+    @pytest.mark.skipif(
+        'fork' not in multiprocessing.get_all_start_methods(),
+        reason='requires the multiprocessing fork start method')
+    def test_fork_child_ignores_parent_scheduler_registry(self):
+        """A fork child must not run callbacks or locks inherited from its parent."""
+        script = '''
+import multiprocessing
+import os
+from threading import Event, Thread
+
+from cassandra.cluster import (
+    _clusters_for_shutdown_lock,
+    _discard_cluster_shutdown,
+    _register_cluster_shutdown,
+)
+
+
+class Scheduler:
+
+    def __init__(self, owner):
+        self.owner = owner
+
+    def shutdown(self):
+        print(self.owner + ' scheduler cleanup pid: ' + str(os.getpid()), flush=True)
+
+
+class RegisteredCluster:
+
+    def __init__(self, owner):
+        self.scheduler = Scheduler(owner)
+
+    def shutdown(self):
+        pass
+
+
+def child_target():
+    _register_cluster_shutdown(RegisteredCluster('child'))
+
+
+parent_cluster = RegisteredCluster('parent')
+_register_cluster_shutdown(parent_cluster)
+lock_acquired = Event()
+release_lock = Event()
+
+
+def hold_registry_lock():
+    with _clusters_for_shutdown_lock:
+        lock_acquired.set()
+        release_lock.wait()
+
+
+holder = Thread(target=hold_registry_lock)
+holder.start()
+lock_acquired.wait()
+child = multiprocessing.get_context('fork').Process(target=child_target)
+try:
+    child.start()
+    child.join(1)
+    print('child exited:', not child.is_alive())
+    print('child exitcode:', child.exitcode)
+    if child.is_alive():
+        child.terminate()
+        child.join()
+finally:
+    release_lock.set()
+    holder.join()
+    _discard_cluster_shutdown(parent_cluster)
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'child exited: True' in result.stdout
+        assert 'child exitcode: 0' in result.stdout
+        assert 'child scheduler cleanup pid:' in result.stdout
+        assert 'parent scheduler cleanup pid:' not in result.stdout
+
     def test_scheduler_cleanup_precedes_executor_shutdown(self):
         """Scheduler cleanup must precede executor shutdown."""
         script = '''
@@ -1191,6 +1268,50 @@ Thread(target=wait_for_retry).start()
             scheduler.shutdown()
 
         assert not schedule_thread.is_alive()
+
+    def test_executor_rejection_shuts_down_scheduler_and_drains_callbacks(self):
+        executor = Mock()
+        submit_started = Event()
+        release_submit = Event()
+        claimed_task_aborted = Event()
+        queued_task_aborted = Event()
+
+        def reject_submission(*args, **kwargs):
+            submit_started.set()
+            assert release_submit.wait(5)
+            raise RuntimeError('executor stopped')
+
+        executor.submit.side_effect = reject_submission
+        scheduler = _Scheduler(executor)
+
+        def abort_claimed_task():
+            # Re-entry must not wait for the scheduler thread to join itself.
+            scheduler.shutdown()
+            claimed_task_aborted.set()
+
+        scheduler.schedule_with_shutdown(
+            0, abort_claimed_task, lambda: None)
+        assert submit_started.wait(5)
+        scheduler.schedule_with_shutdown(
+            60, queued_task_aborted.set, lambda: None)
+
+        try:
+            release_submit.set()
+            assert claimed_task_aborted.wait(5)
+            assert queued_task_aborted.wait(5)
+            scheduler.join(5)
+
+            assert not scheduler.is_alive()
+            assert scheduler.is_shutdown
+            assert scheduler._shutdown_complete.is_set()
+
+            late_task_aborted = Mock()
+            assert not scheduler.schedule_with_shutdown(
+                0, late_task_aborted, lambda: None)
+            late_task_aborted.assert_called_once_with()
+        finally:
+            release_submit.set()
+            scheduler.shutdown()
 
     def test_scheduler_cleanup_error_does_not_abort_threading_shutdown(self):
         """Scheduler failures must not prevent later shutdown callbacks."""
