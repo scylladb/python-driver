@@ -185,6 +185,10 @@ def _future_completed(future):
 def run_in_executor(f):
     """
     A decorator to run the given method in the ThreadPoolExecutor.
+
+    The wrapper returns the submitted Future, or None when the cluster is
+    shutting down or the executor rejected the submission, in which case the
+    wrapped method never runs.
     """
 
     @wraps(f)
@@ -2189,13 +2193,32 @@ class Cluster(object):
                 if down_event_generation != host._down_event_generation:
                     return
 
-            self.profile_manager.on_down(host)
-            self.control_connection.on_down(host)
+            # The load balancing policies go first, so that the query plan the
+            # control connection's reconnect walks no longer offers the host
+            # that just went down; otherwise the reconnect submitted below can
+            # start before the policies have dropped it and burn a
+            # connect_timeout on a dead node. Both calls are guarded because
+            # on_down() reports successful dispatch to callers that rely on a
+            # reconnection being started.
+            try:
+                self.profile_manager.on_down(host)
+            except Exception:
+                log.exception("Error in load balancing policy down handler for host %s", host)
+            try:
+                self.control_connection.on_down(host)
+            except Exception:
+                log.exception("Error in control connection down handler for host %s", host)
             for session in tuple(self.sessions):
-                session.on_down(host)
+                try:
+                    session.on_down(host)
+                except Exception:
+                    log.exception("Error marking host %s down in session", host)
 
             for listener in self.listeners:
-                listener.on_down(host)
+                try:
+                    listener.on_down(host)
+                except Exception:
+                    log.exception("Error in host state listener down handler for host %s", host)
 
             self._start_reconnector(host, is_host_addition)
         finally:
@@ -2226,9 +2249,11 @@ class Cluster(object):
     def on_down(self, host, is_host_addition, expect_host_to_be_down=False):
         """
         Intended for internal use only.
+
+        Returns whether DOWN handling was dispatched.
         """
         if self.is_shutdown or self.allow_control_connection_query_fallback == ControlConnectionQueryFallback.SkipPoolCreation:
-            return
+            return False
 
         restart_reconnector = False
         with host.lock:
@@ -2244,13 +2269,13 @@ class Cluster(object):
                     if pool_state:
                         connected |= pool_state['open_count'] > 0
                 if connected:
-                    return
+                    return False
 
             host.set_down()
             if (not was_up and
                     (host.is_currently_reconnecting() or
                      host._currently_handling_node_down)):
-                return
+                return False
 
             if not was_up and not expect_host_to_be_down:
                 # A terminal failure may have released this down host's old
@@ -2269,7 +2294,9 @@ class Cluster(object):
                 with host.lock:
                     if down_event_generation == host._down_event_generation:
                         host._currently_handling_node_down = False
-            return
+            # Restarting the host reconnector does not dispatch the DOWN
+            # callbacks that reconnect the control connection.
+            return False
 
         log.warning("Host %s has been marked down", host)
 
@@ -2279,6 +2306,7 @@ class Cluster(object):
             with host.lock:
                 if down_event_generation == host._down_event_generation:
                     host._currently_handling_node_down = False
+        return future is not None
 
     def on_add(self, host, refresh_nodes=True):
         if self.is_shutdown:
@@ -2373,10 +2401,11 @@ class Cluster(object):
             reconnection_handler.cancel()
 
     def signal_connection_failure(self, host, connection_exc, is_host_addition, expect_host_to_be_down=False):
+        """Return whether the failure caused DOWN handling to be dispatched."""
         is_down = host.signal_connection_failure(connection_exc)
-        if is_down:
-            self.on_down(host, is_host_addition, expect_host_to_be_down)
-        return is_down
+        if not is_down:
+            return False
+        return self.on_down(host, is_host_addition, expect_host_to_be_down)
 
     def add_host(self, endpoint, datacenter=None, rack=None, signal=True, refresh_nodes=True, host_id=None):
         """
@@ -3971,23 +4000,133 @@ class _ControlReconnectionHandler(_ReconnectionHandler):
     Internal
     """
 
-    def __init__(self, control_connection, *args, **kwargs):
-        _ReconnectionHandler.__init__(self, *args, **kwargs)
+    # on_reconnection() installs the connection as the control connection,
+    # so it must outlive the handler run that opened it.
+    _keeps_connection = True
+
+    def __init__(self, control_connection, scheduler, schedule):
+        # The run-completed callback releases this handler's own slot. It is
+        # identity-checked, so a run that finishes after another thread has
+        # installed a replacement leaves that replacement alone. Anything that
+        # evicts a handler must also cancel it, or the evicted one keeps
+        # retrying where nothing can find it.
+        _ReconnectionHandler.__init__(self, scheduler, schedule, self._release)
         self.control_connection = weakref.proxy(control_connection)
+        # Remember a failed connection that caused this retry run. If the
+        # finite schedule is exhausted without a reconnect trigger retained
+        # from its final running attempt, the heartbeat will keep returning
+        # this same object and must not restart the schedule.
+        # A healthy connection may also be replaced after a topology event;
+        # exhausting that attempt must not suppress recovery if the connection
+        # fails later for an independent reason.
+        connection = control_connection._connection
+        self._failed_connection = connection \
+            if connection is not None and (
+                connection.is_defunct or connection.is_closed) else None
+        # A reconnect trigger that arrives while an attempt is actually
+        # running is normally covered by that attempt. If this turns out to be
+        # the final failed attempt, though, there is no later retry to own the
+        # trigger, so _release() must hand it back to reconnect().
+        self._is_running = False
+        self._run_generation = 0
+        self._reconnect_requested = False
+        # A proactive handler may be waiting while its still-healthy control
+        # connection fails. Its remaining retries own the immediate recovery,
+        # but the failure must receive a fresh schedule if those retries are
+        # exhausted. Unlike a trigger received during a running attempt, this
+        # state therefore survives every non-final handler run.
+        self._new_failure_detected = False
+
+    def run(self):
+        try:
+            control_connection = self.control_connection
+            with control_connection._reconnection_lock:
+                self._run_generation += 1
+                run_generation = self._run_generation
+                self._is_running = True
+        except ReferenceError:
+            return _ReconnectionHandler.run(self)
+
+        try:
+            _ReconnectionHandler.run(self)
+        finally:
+            try:
+                with control_connection._reconnection_lock:
+                    # A zero-delay retry may already be running on another
+                    # worker. Only the invocation that most recently claimed
+                    # the state may clear it.
+                    if self._run_generation == run_generation:
+                        self._is_running = False
+            except ReferenceError:
+                pass
 
     def try_reconnect(self):
         return self.control_connection._reconnect_internal()
 
     def on_reconnection(self, connection):
-        self.control_connection._set_new_connection(connection)
+        try:
+            # Resolving the attribute is what dereferences the weak proxy, so
+            # it is bound here rather than called directly: a ReferenceError
+            # raised from inside _set_new_connection() would mean the
+            # connection was already adopted, and must not be closed.
+            set_new_connection = self.control_connection._set_new_connection
+        except ReferenceError:
+            # The ControlConnection was collected while we were retrying. The
+            # handler has already marked the connection as handed off, so
+            # nothing else would ever close it.
+            connection.close()
+            return
+        set_new_connection(connection)
 
     def on_exception(self, exc, next_delay):
-        # TODO only overridden to add logging, so add logging
-        if isinstance(exc, AuthenticationFailed):
-            return False
+        # Every reason to stop retrying is worth retrying here: an attempt
+        # covers the whole query plan, so an authentication failure is a
+        # failure of the host it happened to reach, not of the cluster.
+        log.debug("Error trying to reconnect control connection: %r", exc)
+
+        if next_delay is None:
+            # The schedule is exhausted, so this handler will never run again.
+            # Release the slot it occupies while remembering the connection
+            # whose retries were exhausted. A trigger retained from this final
+            # running attempt starts a fresh schedule; otherwise heartbeats for
+            # the same defunct connection must not reset the finite schedule.
+            self._release(exhausted=True)
         else:
-            log.debug("Error trying to reconnect control connection: %r", exc)
-            return True
+            # This failure already has another scheduled attempt to own any
+            # trigger that arrived while it was running.
+            try:
+                control_connection = self.control_connection
+                with control_connection._reconnection_lock:
+                    self._is_running = False
+                    self._reconnect_requested = False
+            except ReferenceError:
+                pass
+
+        return True
+
+    def _release(self, exhausted=False):
+        reconnect_requested = False
+        try:
+            control_connection = self.control_connection
+            with control_connection._reconnection_lock:
+                if control_connection._reconnection_handler is self:
+                    control_connection._reconnection_handler = None
+                    reconnect_requested = exhausted and (
+                        self._reconnect_requested or
+                        self._new_failure_detected)
+                    self._reconnect_requested = False
+                    self._new_failure_detected = False
+                    if (exhausted and not reconnect_requested and
+                            self._failed_connection is not None and
+                            control_connection._connection is
+                            self._failed_connection):
+                        control_connection._reconnection_exhausted_connection = \
+                            self._failed_connection
+        except ReferenceError:
+            pass  # our weak reference to the ControlConnection is no good
+
+        if reconnect_requested:
+            control_connection.reconnect()
 
 
 def _watch_callback(obj_weakref, method_name, *args, **kwargs):
@@ -4084,6 +4223,24 @@ class ControlConnection(object):
 
         self._reconnection_handler = None
         self._reconnection_lock = RLock()
+        # A finite retry schedule may be exhausted while the heartbeat still
+        # owns and returns the same defunct connection. Keep that identity so
+        # heartbeat passes do not create a fresh schedule indefinitely.
+        self._reconnection_exhausted_connection = None
+        self._reconnect_pending = False
+        # Set when reconnect() is called while an attempt is already pending.
+        # If that attempt fails without installing a retry handler, its final
+        # action consumes this flag by queuing one follow-up attempt.
+        self._reconnect_requested = False
+        # Bumped every time _reconnect_pending is raised. An attempt clears the
+        # flag only while it still owns it: _set_new_connection() drops the flag
+        # as the connection goes in, so a newer reconnect() can claim it before
+        # the attempt that installed the connection reaches its finally clause,
+        # and clearing it there would strand the attempt that newer flag owns.
+        self._reconnect_pending_seq = 0
+        # Bumped every time a connection is installed. _reconnect() compares it
+        # across its attempt to tell whether another attempt got there first.
+        self._connection_generation = 0
 
         self._event_schedule_times = {}
 
@@ -4113,19 +4270,60 @@ class ControlConnection(object):
         self._protocol_version = self._cluster.protocol_version
         self._set_new_connection(self._reconnect_internal())
 
-        self._cluster.metadata.dbaas = self._connection._product_type == dscloud.DATASTAX_CLOUD_PRODUCT_TYPE
+        # _set_new_connection declines to install anything once shutdown() has
+        # run, so there may be no connection to ask.
+        if self._connection:
+            self._cluster.metadata.dbaas = self._connection._product_type == dscloud.DATASTAX_CLOUD_PRODUCT_TYPE
 
     def _set_new_connection(self, conn):
         """
-        Replace existing connection (if there is one) and close it.
+        Adopt `conn` as the control connection, closing the one it replaces.
+
+        Also ends any reconnection in progress: a handler parked in the slot is
+        cancelled and cleared, because it would otherwise be mistaken for one
+        still retrying and its next attempt would replace this connection.
+
+        If the ControlConnection has already been shut down, `conn` is not
+        installed at all -- nothing would ever use it or close it on our
+        behalf, so it is closed here instead.
         """
-        with self._lock:
-            old = self._connection
-            self._connection = conn
+        # Whatever put this connection in place, the reconnection is over. A
+        # handler left parked in the slot would be mistaken for one still
+        # retrying, and its next attempt would replace this connection.
+        #
+        # _reconnection_lock is held across the install so that the generation
+        # bump is visible to any _reconnect() that is about to decide whether
+        # another attempt beat it; releasing it first leaves a window where a
+        # failing attempt reads the old generation and parks a handler over
+        # this healthy connection.
+        with self._reconnection_lock:
+            if self._reconnection_handler:
+                self._reconnection_handler.cancel()
+                self._reconnection_handler = None
+
+            # A connection is in place, so an error on it must be able to queue
+            # a fresh attempt rather than be collapsed into the one ending here.
+            self._reconnect_pending = False
+            self._reconnect_requested = False
+
+            with self._lock:
+                if self._is_shutdown:
+                    # shutdown() won the race, so nothing would ever use this
+                    # connection or close it on our behalf.
+                    old, orphan = None, conn
+                else:
+                    old, orphan = self._connection, None
+                    self._connection = conn
+                    self._reconnection_exhausted_connection = None
+                    self._connection_generation += 1
 
         if old:
             log.debug("[control connection] Closing old connection %r, replacing with %r", old, conn)
             old.close()
+
+        if orphan:
+            log.debug("[control connection] Control connection is shut down, closing new connection %r", orphan)
+            orphan.close()
 
     def _attach_application_session(self, keyspace, session):
         """Bind application use of the control connection to ``keyspace``.
@@ -4384,44 +4582,177 @@ class ControlConnection(object):
         if self._is_shutdown:
             return
 
-        self._submit(self._reconnect)
+        # Collapse attempts that are queued but have not started yet. Without
+        # this, a burst of errors queues one _reconnect() each, and every one
+        # of them past the first cancels the reconnection handler the previous
+        # one installed and restarts its backoff schedule.
+        #
+        # An in-flight reconnection handler is already retrying on its own
+        # schedule, and _reconnect() would cancel it and restart that schedule
+        # from its initial delay. The check lives here rather than in the
+        # callers so that it covers every entry point: return_connection() is
+        # driven by the heartbeat and fires once per idle_heartbeat_interval
+        # for as long as the control connection stays defunct, which would
+        # otherwise reset the backoff on every pass and stop it ever growing.
+        # The lock is an RLock, so callers already holding it re-enter safely.
+        with self._reconnection_lock:
+            if self._reconnection_handler is not None:
+                handler = self._reconnection_handler
+                if handler._is_running:
+                    handler._reconnect_requested = True
+
+                # A handler can have been started proactively while the
+                # current connection was healthy. If that connection fails
+                # during the handler's backoff, the remaining proactive retry
+                # still goes first, but exhaustion must hand this independent
+                # failure a fresh schedule. Record it once so recurring
+                # heartbeats for an already-failed connection do not extend a
+                # finite schedule indefinitely.
+                connection = self._connection
+                if (handler._failed_connection is None and
+                        connection is not None and
+                        (connection.is_defunct or connection.is_closed)):
+                    handler._failed_connection = connection
+                    handler._new_failure_detected = True
+                log.debug("[control connection] Reconnection already in progress, "
+                          "not starting another one")
+                return
+            if self._reconnect_pending:
+                log.debug("[control connection] A reconnection attempt is "
+                          "already queued")
+                # Do not discard this trigger. The pending attempt may fail
+                # before it installs a handler that owns future retries.
+                self._reconnect_requested = True
+                return
+            pending_seq = self._raise_reconnect_pending()
+
+        submitted = None
+        try:
+            submitted = self._submit(self._reconnect)
+        finally:
+            if submitted is None:
+                # Nothing was queued, so nothing will clear the flag. This has
+                # to hold even when the submission raised, or no further
+                # reconnection would ever be attempted.
+                self._clear_reconnect_pending(pending_seq)
+
+    def _raise_reconnect_pending(self):
+        """
+        Mark a reconnection attempt as pending and return a token identifying
+        it. Only the holder of the newest token may clear the flag again.
+        """
+        with self._reconnection_lock:
+            self._reconnect_pending = True
+            self._reconnect_pending_seq += 1
+            return self._reconnect_pending_seq
+
+    def _clear_reconnect_pending(self, pending_seq):
+        """
+        Clear the pending flag, unless a newer attempt has claimed it since
+        `pending_seq` was handed out -- that attempt is the one the flag now
+        stands for, and dropping it would let a burst of errors queue several
+        concurrent reconnects.
+        """
+        with self._reconnection_lock:
+            if self._reconnect_pending_seq == pending_seq:
+                self._reconnect_pending = False
+                self._reconnect_requested = False
+
+    def _finish_reconnect(self, pending_seq):
+        """
+        Finish an active attempt, preserving any trigger it collapsed unless
+        a connection or reconnection handler now owns future work.
+        """
+        follow_up_seq = None
+        with self._reconnection_lock:
+            if self._reconnect_pending_seq != pending_seq:
+                return
+
+            if (self._reconnection_handler is not None or
+                    not self._reconnect_requested):
+                self._reconnect_pending = False
+                self._reconnect_requested = False
+                return
+
+            # Keep the pending flag raised while handing the retained trigger
+            # to the executor, so another burst still collapses into this one.
+            self._reconnect_requested = False
+            self._reconnect_pending_seq += 1
+            follow_up_seq = self._reconnect_pending_seq
+
+        submitted = None
+        try:
+            submitted = self._submit(self._reconnect)
+        finally:
+            if submitted is None:
+                self._clear_reconnect_pending(follow_up_seq)
 
     def _reconnect(self):
+        # _reconnect_pending stays set for as long as this attempt runs.
+        # _reconnect_internal() walks the whole query plan twice with a DNS
+        # re-resolution in between, which routinely outlasts
+        # idle_heartbeat_interval when the cluster is unreachable; clearing the
+        # flag here would let every heartbeat in that window queue another
+        # attempt, each one cancelling the handler the previous one installed
+        # and restarting its backoff from the initial delay.
+        pending_seq = self._raise_reconnect_pending()
+
+        with self._lock:
+            generation = self._connection_generation
+
         log.debug("[control connection] Attempting to reconnect")
         try:
             self._set_new_connection(self._reconnect_internal())
-        except NoHostAvailable:
+        except (NoHostAvailable, UnresolvableContactPoints):
             # make a retry schedule (which includes backoff)
             schedule = self._cluster.reconnection_policy.new_schedule()
 
             with self._reconnection_lock:
+                with self._lock:
+                    if self._connection_generation != generation:
+                        # An attempt that overlapped this one installed a
+                        # connection while we were failing. Parking a handler
+                        # now would block every later reconnect() for the whole
+                        # backoff and then replace a healthy connection.
+                        log.debug("[control connection] Reconnect failed but "
+                                  "another attempt succeeded, not scheduling "
+                                  "retries")
+                        return
 
                 # cancel existing reconnection attempts
                 if self._reconnection_handler:
                     self._reconnection_handler.cancel()
 
                 # when a connection is successfully made, _set_new_connection
-                # will be called with the new connection and then our
-                # _reconnection_handler will be cleared out
-                self._reconnection_handler = _ControlReconnectionHandler(
-                    self, self._cluster.scheduler, schedule,
-                    self._get_and_set_reconnection_handler,
-                    new_handler=None)
-                self._reconnection_handler.start()
+                # will be called with the new connection and will clear out
+                # our _reconnection_handler
+                handler = _ControlReconnectionHandler(
+                    self, self._cluster.scheduler, schedule)
+                self._reconnection_handler = handler
+                try:
+                    handler.start()
+                except StopIteration:
+                    # An empty schedule means that the policy permits no
+                    # retries. Treat it like a finite schedule exhausted by a
+                    # failed handler run so heartbeats for the same defunct
+                    # connection do not start it over indefinitely.
+                    handler._release(exhausted=True)
+                except Exception:
+                    # A handler that never started would sit in the slot
+                    # forever, and reconnect() would take it for one still
+                    # retrying.
+                    if self._reconnection_handler is handler:
+                        self._reconnection_handler = None
+                    raise
         except Exception:
             log.debug("[control connection] error reconnecting", exc_info=True)
             raise
-
-    def _get_and_set_reconnection_handler(self, new_handler):
-        """
-        Called by the _ControlReconnectionHandler when a new connection
-        is successfully created.  Clears out the _reconnection_handler on
-        this ControlConnection.
-        """
-        with self._reconnection_lock:
-            old = self._reconnection_handler
-            self._reconnection_handler = new_handler
-            return old
+        finally:
+            # The attempt is over either way: a connection is installed (the
+            # flag was already cleared as it went in), a handler is parked and
+            # collapses later attempts on its own, or a retained trigger queues
+            # one follow-up after a failure that left no durable retry work.
+            self._finish_reconnect(pending_seq)
 
     def _submit(self, *args, **kwargs):
         try:
@@ -4978,51 +5309,19 @@ class ControlConnection(object):
             if self._is_shutdown:
                 return
 
-            # try just signaling the cluster, as this will trigger a reconnect
-            # as part of marking the host down
+            # If DOWN handling is dispatched, its control connection callback
+            # will reconnect. Otherwise reconnect directly.
             if self._connection and self._connection.is_defunct:
                 connection = self._connection
                 host = self._get_host_for_connection(connection)
-                # host may be None if it's already been removed, but that indicates
-                # that errors have already been reported, so we're fine
-                if host:
-                    original_endpoint = getattr(
-                        connection, 'original_endpoint', None)
-                    unix_backed = (
-                        isinstance(host.endpoint, UnixSocketEndPoint) or
-                        isinstance(connection.endpoint, UnixSocketEndPoint) or
-                        isinstance(original_endpoint, UnixSocketEndPoint))
-                    route_mismatch = connection.endpoint != host.endpoint
-                    # Keep ordinary endpoint-equal TCP connections on the
-                    # legacy signal-only path. General suppressed-DOWN recovery
-                    # and its reconnection cadence are outside this change.
-                    if not unix_backed and not route_mismatch:
-                        self._cluster.signal_connection_failure(
-                            host, connection.last_error,
-                            is_host_addition=False)
-                        return
+                if host and self._cluster.signal_connection_failure(
+                        host, connection.last_error,
+                        is_host_addition=False):
+                    return
 
-                    # A newly resolvable Unix Host or alternate connection
-                    # route still needs the direct reconnect fallback when
-                    # host-state handling suppresses its DOWN notification. A
-                    # fresh DOWN transition guarantees that on_down() will
-                    # enqueue the reconnect instead.
-                    with host.lock:
-                        host_was_up = host.is_up is True
-                        host_was_reconnecting = (
-                            host.is_currently_reconnecting())
-                        self._cluster.signal_connection_failure(
-                            host, connection.last_error,
-                            is_host_addition=False)
-                        down_notification_queued = (
-                            host_was_up and not host_was_reconnecting and
-                            host.is_up is False)
-
-                    if down_notification_queued:
-                        return
-
-        # if the connection is not defunct or the host already left, reconnect
-        # manually
+        # If the connection is not defunct, the host is unresolved, or DOWN
+        # handling was suppressed, reconnect manually. reconnect() leaves an
+        # in-flight reconnection handler alone on its own schedule.
         self.reconnect()
 
     def on_up(self, host):
@@ -5031,12 +5330,13 @@ class ControlConnection(object):
     def on_down(self, host):
 
         conn = self._connection
-        if self._connection_matches_host(conn, host) and \
-                self._reconnection_handler is None:
-            log.debug("[control connection] Control connection host (%s) is "
-                      "considered down, starting reconnection", host)
-            # this will result in a task being submitted to the executor to reconnect
-            self.reconnect()
+        if not self._connection_matches_host(conn, host):
+            return
+
+        log.debug("[control connection] Control connection host (%s) is "
+                  "considered down, starting reconnection", host)
+        # this will result in a task being submitted to the executor to reconnect
+        self.reconnect()
 
     def on_add(self, host, refresh_nodes=True):
         if refresh_nodes:
@@ -5057,6 +5357,11 @@ class ControlConnection(object):
 
     def return_connection(self, connection):
         if connection is self._connection and (connection.is_defunct or connection.is_closed):
+            with self._reconnection_lock:
+                if connection is self._reconnection_exhausted_connection:
+                    log.debug("[control connection] Reconnection schedule is "
+                              "exhausted for the defunct connection")
+                    return
             self.reconnect()
 
 
