@@ -1032,6 +1032,66 @@ print('scheduler is shutdown:', cluster.scheduler.is_shutdown)
         assert 'scheduler is shutdown: True' in result.stdout
         assert 'cannot schedule new futures' not in result.stderr
 
+    def test_initialized_cluster_connect_after_scheduler_cleanup_is_rejected(self):
+        """An initialized cluster must not create a session after cleanup."""
+        script = '''
+from cassandra import DriverException
+from cassandra.cluster import (
+    Cluster,
+    ControlConnectionQueryFallback,
+    _shutdown_cluster_schedulers,
+)
+from threading import Event, Thread
+from unittest.mock import patch
+
+
+cluster = Cluster(
+    idle_heartbeat_interval=0,
+    allow_control_connection_query_fallback=
+    ControlConnectionQueryFallback.SkipPoolCreation,
+)
+with patch.object(cluster.connection_class, 'initialize_reactor'), \
+        patch.object(cluster.control_connection, 'connect'), \
+        patch.object(cluster, '_populate_hosts'), \
+        patch.object(cluster.profile_manager, 'check_supported'):
+    sessions = [cluster.connect()]
+ready = Event()
+continue_connect = Event()
+
+
+def connect_after_cleanup():
+    ready.set()
+    continue_connect.wait()
+    try:
+        sessions.append(cluster.connect())
+    except DriverException as exc:
+        print('late connect rejected:', exc)
+
+
+thread = Thread(target=connect_after_cleanup)
+thread.start()
+ready.wait()
+_shutdown_cluster_schedulers()
+continue_connect.set()
+thread.join()
+
+print('session count:', len(sessions))
+print('initial session is shutdown:', sessions[0].is_shutdown)
+print('cluster is shutdown:', cluster.is_shutdown)
+print('scheduler is shutdown:', cluster.scheduler.is_shutdown)
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert ('late connect rejected: '
+                'Cannot connect a Cluster during interpreter shutdown'
+                in result.stdout)
+        assert 'session count: 1' in result.stdout
+        assert 'initial session is shutdown: True' in result.stdout
+        assert 'cluster is shutdown: True' in result.stdout
+        assert 'scheduler is shutdown: True' in result.stdout
+        assert 'cannot schedule new futures' not in result.stderr
+
     def test_cluster_shutdown_follows_application_thread_shutdown(self):
         """Full cluster cleanup must wait for application threads."""
         script = '''

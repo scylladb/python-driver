@@ -1984,14 +1984,17 @@ class Cluster(object):
                 log.debug("Connecting to cluster, contact points: %s; protocol version: %s",
                           self.contact_points, self.protocol_version)
                 self.connection_class.initialize_reactor()
-                if not _register_cluster_shutdown(self):
-                    # threading shutdown callbacks run before non-daemon
-                    # application threads are joined. A thread can therefore
-                    # reach connect() after scheduler cleanup. Do not let that
-                    # cluster outlive the executor shutdown callback.
-                    self.shutdown()
-                    raise DriverException(
-                        "Cannot connect a Cluster during interpreter shutdown")
+
+            if not _register_cluster_shutdown(self):
+                # threading shutdown callbacks run before non-daemon
+                # application threads are joined. A thread can therefore
+                # reach connect() after scheduler cleanup. Do not let that
+                # cluster outlive the executor shutdown callback.
+                self.shutdown()
+                raise DriverException(
+                    "Cannot connect a Cluster during interpreter shutdown")
+
+            if not self._is_setup:
                 self._report_tls_session_resumption()
 
                 try:
