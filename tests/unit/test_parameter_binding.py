@@ -19,10 +19,16 @@ from cassandra.encoder import Encoder
 from cassandra.protocol import ColumnMetadata
 from cassandra.query import (bind_params, ValueSequence, PreparedStatement,
                              BoundStatement, UNSET_VALUE)
-from cassandra.cqltypes import Int32Type
+from cassandra.cqltypes import Int32Type, TimestampType
 from cassandra.util import OrderedDict
 
 from tests.util import assertListEqual
+
+try:
+    import cassandra.serializers as _serializers_mod
+    HAVE_CYTHON_SERIALIZERS = True
+except ImportError:
+    HAVE_CYTHON_SERIALIZERS = False
 
 
 class ParamBindingTest(unittest.TestCase):
@@ -183,6 +189,38 @@ class BoundStatementTestV3(unittest.TestCase):
             self.bound.bind({'rk0': 0, 'rk1': 0, 'ck0': 0, 'v0': UNSET_VALUE})
         with pytest.raises(ValueError):
             self.bound.bind((0, 0, 0, UNSET_VALUE))
+
+
+@pytest.mark.skipif(not HAVE_CYTHON_SERIALIZERS, reason="cassandra.serializers not built")
+class BoundStatementSerializerWiringTest(unittest.TestCase):
+    """Regression test: bind() must actually route through the Cython
+    serializers (PR #798), not just have them exist unused."""
+
+    def test_bind_uses_serdatetype_for_timestamp_column(self):
+        column_metadata = [ColumnMetadata('keyspace', 'cf', 'ts', TimestampType)]
+        prepared = PreparedStatement(column_metadata=column_metadata,
+                                      query_id=None,
+                                      routing_key_indexes=[],
+                                      query=None,
+                                      keyspace='keyspace',
+                                      protocol_version=4,
+                                      result_metadata=None,
+                                      result_metadata_id=None)
+        # PreparedStatement should have pre-built (and cached) a SerDateType
+        # for this column at construction time, not per bind().
+        real_serializer = prepared._serializers[0]
+        assert isinstance(real_serializer, _serializers_mod.SerDateType)
+
+        # cdef extension types can't be monkeypatched at the class level, so
+        # spy by swapping the cached serializer instance for a wrapping mock.
+        from unittest import mock
+        spy = mock.Mock(wraps=real_serializer)
+        prepared._serializers[0] = spy
+
+        bound = prepared.bind((1234567890000,))
+
+        spy.serialize.assert_called_once_with(1234567890000, 4)
+        assert bound.values == [TimestampType.serialize(1234567890000, 4)]
 
 
 class BoundStatementTestV4(BoundStatementTestV3):
