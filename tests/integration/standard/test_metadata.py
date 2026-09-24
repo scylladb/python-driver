@@ -16,7 +16,6 @@ import unittest
 
 import logging
 import sys
-import time
 import os
 
 from packaging.version import Version
@@ -2390,13 +2389,11 @@ class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
         assert "fouls" in score_table.columns
 
         # This is a workaround for mv notifications being separate from base table schema responses.
-        # This maybe fixed with future protocol changes
-        for i in range(10):
-            mv_alltime = self.cluster.metadata.keyspaces[self.keyspace_name].views["alltimehigh"]
-            if("fouls" in mv_alltime.columns):
-                break
-            time.sleep(.2)
-
+        # This maybe fixed with future protocol changes. CI load can push the lag well past a couple
+        # seconds, so poll for up to 30s (see https://github.com/scylladb/python-driver/issues/1020).
+        wait_until(lambda: "fouls" in self.cluster.metadata.keyspaces[self.keyspace_name].views["alltimehigh"].columns,
+                   delay=.5, max_attempts=60)
+        mv_alltime = self.cluster.metadata.keyspaces[self.keyspace_name].views["alltimehigh"]
         assert "fouls" in mv_alltime.columns
 
         mv_alltime_fouls_comumn = self.cluster.metadata.keyspaces[self.keyspace_name].views["alltimehigh"].columns['fouls']
@@ -2446,13 +2443,12 @@ class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
         score_column = self.cluster.metadata.keyspaces[self.keyspace_name].tables['scores'].columns['score']
         assert score_column.cql_type == 'blob'
 
-        # until CASSANDRA-9920+CASSANDRA-10500 MV updates are only available later with an async event
-        for i in range(10):
-            score_mv_column = self.cluster.metadata.keyspaces[self.keyspace_name].views["monthlyhigh"].columns['score']
-            if "blob" == score_mv_column.cql_type:
-                break
-            time.sleep(.2)
-
+        # until CASSANDRA-9920+CASSANDRA-10500 MV updates are only available later with an async event.
+        # CI load can push the lag well past a couple seconds, so poll for up to 30s
+        # (see https://github.com/scylladb/python-driver/issues/1020).
+        wait_until(lambda: self.cluster.metadata.keyspaces[self.keyspace_name].views["monthlyhigh"].columns['score'].cql_type == 'blob',
+                   delay=.5, max_attempts=60)
+        score_mv_column = self.cluster.metadata.keyspaces[self.keyspace_name].views["monthlyhigh"].columns['score']
         assert score_mv_column.cql_type == 'blob'
 
     def test_metadata_with_quoted_identifiers(self):
