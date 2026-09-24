@@ -2870,7 +2870,7 @@ class SchemaParserV3(SchemaParserV22):
             # OrderedDict, and it assumes keys are inserted first, in order, when exporting CQL
             column_meta = self._build_column_metadata(meta, r)
             meta.columns[column_meta.name] = column_meta
-            meta.partition_key.append(meta.columns[r.get('column_name')])
+            meta.partition_key.append(column_meta)
 
         # clustering key
         if not compact_static:
@@ -2881,7 +2881,7 @@ class SchemaParserV3(SchemaParserV22):
             for r in clustering_rows:
                 column_meta = self._build_column_metadata(meta, r)
                 meta.columns[column_meta.name] = column_meta
-                meta.clustering_key.append(meta.columns[r.get('column_name')])
+                meta.clustering_key.append(column_meta)
 
         for col_row in (r for r in col_rows
                         if r.get('kind', None) not in ('partition_key', 'clustering')):
