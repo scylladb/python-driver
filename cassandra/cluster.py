@@ -5245,7 +5245,7 @@ class _Scheduler(Thread):
             try:
                 while True:
                     run_at, i, task, on_shutdown = self._queue.get(block=True, timeout=None)
-                    future = None
+                    task_to_submit = None
                     stop = False
                     with self._lock:
                         if self.is_shutdown:
@@ -5259,15 +5259,16 @@ class _Scheduler(Thread):
                                     (run_at, i, task, on_shutdown))
                         elif run_at <= time.time():
                             self._scheduled_tasks.discard(task)
-                            fn, args, kwargs = task
-                            future = self._executor.submit(
-                                fn, *args, **dict(kwargs))
+                            task_to_submit = task
                         else:
                             self._queue.put_nowait((run_at, i, task, on_shutdown))
 
                     if stop:
                         return
-                    if future is not None:
+                    if task_to_submit is not None:
+                        fn, args, kwargs = task_to_submit
+                        future = self._executor.submit(
+                            fn, *args, **dict(kwargs))
                         future.add_done_callback(self._log_if_failed)
                     else:
                         break

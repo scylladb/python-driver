@@ -1156,6 +1156,42 @@ Thread(target=wait_for_retry).start()
         assert not scheduler.schedule_unique(0, task)
         assert scheduler._queue.qsize() == 1
 
+    def test_executor_submission_does_not_hold_scheduler_lock(self):
+        executor = Mock()
+        submit_started = Event()
+        release_submit = Event()
+        schedule_started = Event()
+        schedule_complete = Event()
+        submitted_future = Future()
+        submitted_future.set_result(None)
+
+        def submit(*args, **kwargs):
+            submit_started.set()
+            assert release_submit.wait(5)
+            return submitted_future
+
+        executor.submit.side_effect = submit
+        scheduler = _Scheduler(executor)
+        scheduler.schedule(0, lambda: None)
+        assert submit_started.wait(5)
+
+        def schedule_later_task():
+            schedule_started.set()
+            scheduler.schedule(60, lambda: None)
+            schedule_complete.set()
+
+        schedule_thread = Thread(target=schedule_later_task)
+        schedule_thread.start()
+        try:
+            assert schedule_started.wait(5)
+            assert schedule_complete.wait(1)
+        finally:
+            release_submit.set()
+            schedule_thread.join(5)
+            scheduler.shutdown()
+
+        assert not schedule_thread.is_alive()
+
     def test_scheduler_cleanup_error_does_not_abort_threading_shutdown(self):
         """Scheduler failures must not prevent later shutdown callbacks."""
         script = '''
