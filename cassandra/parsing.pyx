@@ -20,6 +20,33 @@ cdef class ParseDesc:
     """Description of what structure to parse"""
 
     def __init__(self, colnames, coltypes, column_encryption_policy, coldescs, deserializers, protocol_version):
+        if len(deserializers) != len(colnames):
+            # The row parsers (obj_parser.pyx TupleRowParser.unpack_plain_row /
+            # unpack_col_encrypted_row) index into `deserializers` with
+            # @cython.boundscheck(False), bounded by rowsize == len(colnames).
+            # A length mismatch here would turn into an out-of-bounds memory
+            # read at parse time instead of a clean, immediate error, so this
+            # invariant is validated once at construction time. Use a real
+            # exception (not `assert`) so the guard cannot be stripped by
+            # running Python with optimizations enabled (-O).
+            raise ValueError(
+                "deserializers must have the same length as colnames "
+                "(got %d deserializers for %d columns)" % (len(deserializers), len(colnames)))
+        # coldescs is only None when there's no column_encryption_policy, since
+        # unpack_plain_row never touches it. With a truthy policy,
+        # unpack_col_encrypted_row indexes desc.coldescs[i] with
+        # boundscheck(False), so a None or too-short coldescs must be
+        # rejected here rather than crashing (or reading out of bounds) later.
+        if column_encryption_policy:
+            if coldescs is None or len(coldescs) != len(colnames):
+                got = 0 if coldescs is None else len(coldescs)
+                raise ValueError(
+                    "coldescs must have the same length as colnames when a "
+                    "column_encryption_policy is set (got %d coldescs for %d columns)" % (got, len(colnames)))
+        elif coldescs is not None and len(coldescs) != len(colnames):
+            raise ValueError(
+                "coldescs must have the same length as colnames "
+                "(got %d coldescs for %d columns)" % (len(coldescs), len(colnames)))
         self.colnames = colnames
         self.coltypes = coltypes
         self.column_encryption_policy = column_encryption_policy
@@ -39,8 +66,14 @@ cdef class ColumnParser:
 cdef class RowParser:
     """Parser for a single row"""
 
-    cpdef unpack_row(self, BytesIOReader reader, ParseDesc desc):
+    cpdef unpack_plain_row(self, BytesIOReader reader, ParseDesc desc):
         """
         Unpack a single row of data in a ResultMessage.
+        """
+        raise NotImplementedError
+
+    cpdef unpack_col_encrypted_row(self, BytesIOReader reader, ParseDesc desc):
+        """
+        Unpack a single row of data in a ResultMessage, with column encryption support.
         """
         raise NotImplementedError
