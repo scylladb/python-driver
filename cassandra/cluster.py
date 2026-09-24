@@ -4869,17 +4869,15 @@ class ControlConnection(object):
             return False
 
     def _get_schema_mismatches(self, peers_result, local_result, local_address):
-        peers_result = dict_factory(peers_result.column_names, peers_result.parsed_rows)
-
-        versions = defaultdict(set)
+        local_version = None
         if local_result.parsed_rows:
-            local_row = dict_factory(local_result.column_names, local_result.parsed_rows)[0]
-            if local_row.get("schema_version"):
-                versions[local_row.get("schema_version")].add(local_address)
+            local_version = dict_factory(local_result.column_names, local_result.parsed_rows)[0].get("schema_version")
+        if not local_version:
+            return {None: [local_address]}
 
-        for row in peers_result:
+        for row in dict_factory(peers_result.column_names, peers_result.parsed_rows):
             schema_ver = row.get('schema_version')
-            if not schema_ver:
+            if not schema_ver or schema_ver == local_version:
                 continue
             endpoint = self._cluster.endpoint_factory.create(row)
             peer = self._cluster.metadata.get_host(endpoint)
@@ -4891,13 +4889,10 @@ class ControlConnection(object):
                                    UnixSocketEndPoint)):
                     peer = peer_by_host_id
             if peer and peer.is_up is not False:
-                versions[schema_ver].add(peer.endpoint)
+                return {local_version: [local_address], schema_ver: [peer.endpoint]}
 
-        if len(versions) == 1:
-            log.debug("[control connection] Schemas match")
-            return None
-
-        return dict((version, list(nodes)) for version, nodes in versions.items())
+        log.debug("[control connection] Schemas match")
+        return None
 
     def _get_host_for_connection(self, connection):
         if connection is None:
