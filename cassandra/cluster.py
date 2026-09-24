@@ -5809,7 +5809,11 @@ class ResponseFuture(object):
             result_meta = self._bound_result_metadata
 
             if cb is None:
-                cb = partial(self._set_result, host, connection, pool)
+                _set_result = self._set_result
+
+                # default-arg capture avoids late-binding of host/connection/pool in the closure
+                def cb(response, _h=host, _c=connection, _p=pool, _sr=_set_result):
+                    _sr(_h, _c, _p, response)
 
             # Record the stream before send_msg() starts. Encoding or pushing a
             # message can overlap the deadline timer; the timeout must be able
