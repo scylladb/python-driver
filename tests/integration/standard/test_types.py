@@ -1069,7 +1069,10 @@ class TypeTestsVector(BasicSharedKeyspaceUnitTestCase):
         self._round_trip_test("text", _random_string, assertEqual)
 
     def test_round_trip_date_and_time(self):
-        _almost_equal_test_fn = partial(pytest.approx, abs=timedelta(seconds=1))
+        def _assert_almost_equal(observed, expected):
+            # Datetimes support an absolute timedelta, not relative tolerance.
+            assert observed == pytest.approx(expected, abs=timedelta(seconds=1), rel=None)
+
         def _random_datetime():
             return datetime.today() - timedelta(hours=random.randint(0,18), days=random.randint(1,1000))
         def _random_date():
@@ -1079,7 +1082,7 @@ class TypeTestsVector(BasicSharedKeyspaceUnitTestCase):
 
         self._round_trip_test("date", _random_date, assertEqual)
         self._round_trip_test("time", _random_time, assertEqual)
-        self._round_trip_test("timestamp", _random_datetime, _almost_equal_test_fn)
+        self._round_trip_test("timestamp", _random_datetime, _assert_almost_equal)
 
     def test_round_trip_uuid(self):
         self._round_trip_test("uuid", uuid.uuid1, assertEqual)
