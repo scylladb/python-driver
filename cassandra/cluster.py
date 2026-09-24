@@ -5751,7 +5751,8 @@ class ResponseFuture(object):
                 # policy machinery shared with the pooled path would be the fix.
                 # Use the common scheduler handoff so Session or executor
                 # shutdown cannot leave this ResponseFuture pending forever.
-                self._retry(False, None, host, 0)
+                self._retry(False, None, host, 0,
+                            record_retry_metric=False)
             elif isinstance(response, Exception):
                 self._set_final_exception(response)
             else:
@@ -6451,7 +6452,8 @@ class ResponseFuture(object):
 
         self._errors[host] = exception_from_response(response)
 
-    def _retry(self, reuse_connection, consistency_level, host, delay):
+    def _retry(self, reuse_connection, consistency_level, host, delay,
+               record_retry_metric=True):
         with self._callback_lock:
             if self._final_exception:
                 # the connection probably broke while we were waiting
@@ -6459,7 +6461,7 @@ class ResponseFuture(object):
                 return
             page_generation = self._page_generation
 
-        if self._metrics is not None:
+        if record_retry_metric and self._metrics is not None:
             self._metrics.on_retry()
         if consistency_level is not None:
             # Never downgrade from serial to non-serial consistency, as that
