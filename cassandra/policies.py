@@ -560,11 +560,7 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                 yield host
             return
 
-        # Deferred: cassandra.metadata reaches this module through
-        # cassandra.protocol, so importing it at module scope closes an import
-        # cycle. Same reason cassandra.connection imports from metadata inside
-        # its functions.
-        from cassandra.metadata import _ConsistencyMode
+        is_lwt = query.is_lwt()
 
         replicas = []
         leader_host = None
@@ -572,10 +568,25 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         tablet = self._cluster_metadata._tablets.get_tablet_for_key(keyspace, query.table, token)
 
         if tablet is not None:
-            replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
-            child_plan = child.make_query_plan(keyspace, query)
+            # Deferred: cassandra.metadata reaches this module through
+            # cassandra.protocol, so importing it at module scope closes an
+            # import cycle. Same reason cassandra.connection imports from
+            # metadata inside its functions. Only needed here (tablet path).
+            from cassandra.metadata import _ConsistencyMode
+            if is_lwt:
+                # For LWT queries, preserve the tablet's natural replica order
+                # so that the first replica is tried first by every client.
+                # Using the child policy's round-robin order would lose this,
+                # and round-robin position is itself location/timing-dependent,
+                # which defeats the purpose -- see the detailed rationale in the
+                # "if is_lwt" block below, near yield_in_order().
+                replicas = self._cluster_metadata.get_hosts_by_host_ids(
+                    host_id for host_id, _shard in tablet.replicas)
+            else:
+                replicas_mapped = {host_id for host_id, _shard in tablet.replicas}
+                child_plan = child.make_query_plan(keyspace, query)
 
-            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+                replicas = [host for host in child_plan if host.host_id in replicas_mapped]
 
             # The leader concept only exists for strongly-consistent keyspaces,
             # which today means exactly the keyspaces whose consistency mode is
@@ -616,14 +627,8 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         else:
             replicas = self._cluster_metadata.get_replicas(keyspace, query.routing_key)
 
-        if self.shuffle_replicas and not query.is_lwt() and not ConsistencyLevel.is_serial(query.consistency_level):
+        if self.shuffle_replicas and not is_lwt and not ConsistencyLevel.is_serial(query.consistency_level):
             shuffle(replicas)
-
-        def yield_in_order(hosts):
-            for distance in [HostDistance.LOCAL_RACK, HostDistance.LOCAL, HostDistance.REMOTE]:
-                for replica in hosts:
-                    if replica.is_up and child.distance(replica) == distance:
-                        yield replica
 
         # If we have a leader hint, yield it first -- but respect the child
         # policy's own filter: never front-run a host the child policy would
@@ -632,14 +637,119 @@ class TokenAwarePolicy(LoadBalancingPolicy):
                 and child.distance(leader_host) != HostDistance.IGNORED):
             yield leader_host
 
-        # yield replicas: local_rack, local, remote (skipping leader already yielded)
-        for host in yield_in_order(replicas):
-            if host is not leader_host:
-                yield host
+        if is_lwt:
+            # For LWT queries, yield replicas in their natural token-ring order
+            # (or tablet.replicas order, see above) *within* each locality
+            # bucket, instead of re-sorting by rack. Only skip hosts that are
+            # down or IGNORED by the child policy, and skip the leader host
+            # already yielded above.
+            #
+            # This is intentional and is not merely a single-client latency
+            # optimization. Paxos rounds for a given partition benefit from
+            # being coordinated by the *same* replica across successive
+            # requests (the coordinator can reuse/short-circuit part of the
+            # protocol instead of running a full prepare-propose-commit every
+            # time). That benefit only materializes if every client, no matter
+            # which rack it connects from, converges on the same "first"
+            # replica for a given key -- and natural order has that property
+            # within a DC, because it depends only on the key/token, not on
+            # the client's rack. Rack-based bucketing (RackAwareRoundRobinPolicy)
+            # breaks this: a client in rack1 and a client in rack2 would each
+            # compute a *different* "closest" replica as their first pick,
+            # producing multiple concurrent Paxos proposers (dueling
+            # proposers) for the same key instead of one. See #780/#781.
+            #
+            # We deliberately stop at the DC boundary and do NOT extend this
+            # to ignore DC locality too (i.e. we do not let a natural-order-
+            # first REMOTE replica jump ahead of healthy LOCAL/LOCAL_RACK
+            # ones), even though that would in principle let *every* client
+            # cluster-wide converge on one replica:
+            #
+            # 1. It would silently break DCAwareRoundRobinPolicy's documented
+            #    "remote data centers ... as a last resort" contract for
+            #    `used_hosts_per_remote_dc > 0` -- a REMOTE replica would be
+            #    tried before healthy LOCAL ones purely because it happens to
+            #    be natural-order-first. For LOCAL_SERIAL queries this can
+            #    also shift which DC the serial phase actually runs in.
+            # 2. For the non-tablet path, replica order comes from
+            #    NetworkTopologyStrategy.make_token_replica_map(), which
+            #    groups replicas by DC in an order determined by whichever DC
+            #    owns the very first token of the (sorted) ring -- a
+            #    cluster-wide constant, not something that varies per key.
+            #    In practice this means ONE arbitrary DC would end up
+            #    "natural-order-first" for essentially every key in the whole
+            #    keyspace, not just an occasional hot/contended one -- turning
+            #    what should be a rare, deterministic cross-DC hop into a
+            #    systematic redirection of all LWT coordinator traffic for the
+            #    entire keyspace to a single DC. (Verified empirically: with a
+            #    3-DC/6-hosts-per-DC/64-vnodes-per-host ring, the same DC came
+            #    first for 100% of tokens.)
+            #
+            # So: preserve natural order across LOCAL_RACK/LOCAL replicas, but
+            # defer REMOTE replicas until those local replicas are exhausted.
+            # See #780/#781 and the cross-driver discussion in
+            # scylladb/scylla-drivers#36 -- e.g. the Rust driver keeps
+            # rack/DC-based bucketing for LWT too (it only skips shuffling
+            # within a bucket), rather than ignoring DC locality outright.
+            replicas_yielded = set()
+            if leader_host is not None:
+                replicas_yielded.add(leader_host)
+            remote_replicas = []
+            for replica in replicas:
+                if replica in replicas_yielded or not replica.is_up:
+                    continue
+                distance = child.distance(replica)
+                if distance == HostDistance.IGNORED:
+                    continue
+                elif distance == HostDistance.REMOTE:
+                    remote_replicas.append(replica)
+                else:
+                    replicas_yielded.add(replica)
+                    yield replica
+            # Remote replicas are tried only after local ones are exhausted,
+            # still in natural order among themselves.
+            for replica in remote_replicas:
+                replicas_yielded.add(replica)
+                yield replica
+            # Yield remaining hosts (non-replicas) in distance order as fallback
+            yield from self._yield_in_order(
+                child,
+                [host for host in child.make_query_plan(keyspace, query)
+                 if host not in replicas_yielded])
+        else:
+            # yield replicas: local_rack, local, remote (skipping leader already yielded)
+            for host in self._yield_in_order(child, replicas):
+                if host is not leader_host:
+                    yield host
 
-        # yield rest of the cluster: local_rack, local, remote
-        # Note: The leader is always a replica, so we don't need to filter it out here.
-        yield from yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas])
+            # yield rest of the cluster: local_rack, local, remote
+            # Note: The leader is always a replica, so we don't need to filter it out here.
+            yield from self._yield_in_order(
+                child, [host for host in child.make_query_plan(keyspace, query) if host not in replicas])
+
+    @staticmethod
+    def _yield_in_order(child, hosts):
+        # Single pass: compute each host's distance once (instead of up
+        # to 3x, once per distance bucket) and bucket accordingly.
+        local_rack_hosts = []
+        local_hosts = []
+        remote_hosts = []
+        for replica in hosts:
+            if not replica.is_up:
+                continue
+            distance = child.distance(replica)
+            if distance == HostDistance.LOCAL_RACK:
+                local_rack_hosts.append(replica)
+            elif distance == HostDistance.LOCAL:
+                local_hosts.append(replica)
+            elif distance == HostDistance.REMOTE:
+                remote_hosts.append(replica)
+        for replica in local_rack_hosts:
+            yield replica
+        for replica in local_hosts:
+            yield replica
+        for replica in remote_hosts:
+            yield replica
 
     def on_up(self, *args, **kwargs):
         return self._child_policy.on_up(*args, **kwargs)
