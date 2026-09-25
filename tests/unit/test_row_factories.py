@@ -18,15 +18,11 @@ from cassandra.query import named_tuple_factory
 import logging
 import warnings
 
-import sys
-
 from unittest import TestCase
 
 
 log = logging.getLogger(__name__)
 
-
-NAMEDTUPLE_CREATION_BUG = sys.version_info >= (3,) and sys.version_info < (3, 7)
 
 class TestNamedTupleFactory(TestCase):
 
@@ -45,29 +41,16 @@ class TestNamedTupleFactory(TestCase):
         ]
     )
 
-    def test_creation_warning_on_long_column_list(self):
+    def test_creation_on_long_column_list(self):
         """
-        Reproduces the failure described in PYTHON-893
-
-        @since 3.15
-        @jira_ticket PYTHON-893
-        @expected_result creation fails on Python > 3 and < 3.7
-
-        @test_category row_factory
+        Verify that named_tuple_factory handles columns lists longer
+        than 255 without warnings (PYTHON-893 was fixed in Python 3.7+).
         """
-        if not NAMEDTUPLE_CREATION_BUG:
-            named_tuple_factory(self.long_colnames, self.long_rows)
-            return
-
         with warnings.catch_warnings(record=True) as w:
             rows = named_tuple_factory(self.long_colnames, self.long_rows)
-        assert len(w) == 1
-        warning = w[0]
-        assert 'pseudo_namedtuple_factory' in str(warning)
-        assert '3.7' in str(warning)
-
-        for r in rows:
-            assert r.col0 == self.long_rows[0][0]
+        assert len(w) == 0
+        assert hasattr(rows[0], '_fields')
+        assert isinstance(rows[0], tuple)
 
     def test_creation_no_warning_on_short_column_list(self):
         """
