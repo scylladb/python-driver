@@ -271,6 +271,22 @@ class ControlConnectionTest(unittest.TestCase):
         # the control connection should not have slept at all
         assert self.time.clock == 0
 
+    def test_get_schema_mismatches_without_local_version(self):
+        self.connection.local_results[1][0][1] = None
+        peers_response, local_response = _node_meta_results(
+            self.connection.local_results, self.connection.peer_results)
+        mismatches = self.control_connection._get_schema_mismatches(
+            peers_response, local_response, self.connection.endpoint)
+        assert mismatches == {None: [self.connection.endpoint]}
+
+    def test_get_schema_mismatches_reports_local_version(self):
+        self.connection.peer_results[1][1][2] = 'b'
+        peers_response, local_response = _node_meta_results(
+            self.connection.local_results, self.connection.peer_results)
+        mismatches = self.control_connection._get_schema_mismatches(
+            peers_response, local_response, self.connection.endpoint)
+        assert mismatches == {'a': [self.connection.endpoint], 'b': [DefaultEndPoint('192.168.1.2')]}
+
     @patch('cassandra.cluster.warn')
     def test_wait_for_schema_agreement_warns_about_deprecation(self, mocked_warn):
         assert self.control_connection.wait_for_schema_agreement()
