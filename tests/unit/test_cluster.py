@@ -16,11 +16,18 @@ import unittest
 from concurrent.futures import Future
 import gc
 import logging
+import multiprocessing
+from pathlib import Path
+from queue import PriorityQueue
 import socket
 import ssl
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 import weakref
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 
 from unittest.mock import patch, Mock
@@ -43,6 +50,26 @@ import pytest
 
 
 log = logging.getLogger(__name__)
+
+
+def _run_shutdown_subprocess(script):
+    """Run shutdown code without letting the source tree shadow an installed wheel."""
+    driver_path = str(Path(__file__).parents[2])
+    script = "import sys\nsys.path.append({!r})\n".format(driver_path) + script
+    with tempfile.TemporaryDirectory() as temp_dir:
+        result = subprocess.run(
+            [sys.executable, '-c', script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=temp_dir,
+        )
+
+    assert result.returncode == 0, (
+        "Subprocess failed\nstdout:\n{}\nstderr:\n{}".format(
+            result.stdout, result.stderr))
+    return result
+
 
 class ExceptionTypeTest(unittest.TestCase):
 
@@ -856,6 +883,576 @@ class HostReconnectionHandlerTest(unittest.TestCase):
 
 class SchedulerTest(unittest.TestCase):
     # TODO: this suite could be expanded; for now just adding a test covering a ticket
+
+    @pytest.mark.skipif(
+        'fork' not in multiprocessing.get_all_start_methods(),
+        reason='requires the multiprocessing fork start method')
+    def test_fork_child_ignores_parent_scheduler_registry(self):
+        """A fork child must not run callbacks or locks inherited from its parent."""
+        script = '''
+import multiprocessing
+import os
+from threading import Event, Thread
+
+from cassandra.cluster import (
+    _clusters_for_shutdown_lock,
+    _discard_cluster_shutdown,
+    _register_cluster_shutdown,
+)
+
+
+class Scheduler:
+
+    def __init__(self, owner):
+        self.owner = owner
+
+    def shutdown(self):
+        print(self.owner + ' scheduler cleanup pid: ' + str(os.getpid()), flush=True)
+
+
+class RegisteredCluster:
+
+    def __init__(self, owner):
+        self.scheduler = Scheduler(owner)
+
+    def shutdown(self):
+        pass
+
+
+def child_target():
+    _register_cluster_shutdown(RegisteredCluster('child'))
+
+
+parent_cluster = RegisteredCluster('parent')
+_register_cluster_shutdown(parent_cluster)
+lock_acquired = Event()
+release_lock = Event()
+
+
+def hold_registry_lock():
+    with _clusters_for_shutdown_lock:
+        lock_acquired.set()
+        release_lock.wait()
+
+
+holder = Thread(target=hold_registry_lock)
+holder.start()
+lock_acquired.wait()
+child = multiprocessing.get_context('fork').Process(target=child_target)
+try:
+    child.start()
+    child.join(1)
+    print('child exited:', not child.is_alive())
+    print('child exitcode:', child.exitcode)
+    if child.is_alive():
+        child.terminate()
+        child.join()
+finally:
+    release_lock.set()
+    holder.join()
+    _discard_cluster_shutdown(parent_cluster)
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'child exited: True' in result.stdout
+        assert 'child exitcode: 0' in result.stdout
+        assert 'child scheduler cleanup pid:' in result.stdout
+        assert 'parent scheduler cleanup pid:' not in result.stdout
+
+    def test_scheduler_cleanup_precedes_executor_shutdown(self):
+        """Scheduler cleanup must precede executor shutdown."""
+        script = '''
+import time
+
+from cassandra.cluster import Cluster, _register_cluster_shutdown
+
+
+cluster = Cluster()
+_register_cluster_shutdown(cluster)
+original_shutdown = cluster.scheduler.shutdown
+
+
+def marked_shutdown():
+    print('scheduler cleanup ran')
+    original_shutdown()
+
+
+cluster.scheduler.shutdown = marked_shutdown
+cluster.executor.submit(time.sleep, 0.5)
+cluster.scheduler.schedule(0.1, lambda: None)
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'scheduler cleanup ran' in result.stdout
+        assert 'Exception in thread Task Scheduler' not in result.stderr
+        assert 'cannot schedule new futures' not in result.stderr
+
+    def test_cluster_connect_after_scheduler_cleanup_is_rejected(self):
+        """A late cluster must not survive into executor shutdown."""
+        script = '''
+from cassandra import DriverException
+from cassandra.cluster import (
+    Cluster,
+    _shutdown_cluster_schedulers,
+)
+from threading import Event
+
+
+cluster = Cluster()
+ready = Event()
+continue_registration = Event()
+
+
+def connect_after_cleanup():
+    ready.set()
+    continue_registration.wait()
+    try:
+        cluster.connect()
+    except DriverException:
+        print('late connect rejected')
+
+
+future = cluster.executor.submit(connect_after_cleanup)
+ready.wait()
+_shutdown_cluster_schedulers()
+continue_registration.set()
+future.result(timeout=2)
+
+print('cluster is shutdown:', cluster.is_shutdown)
+print('scheduler is shutdown:', cluster.scheduler.is_shutdown)
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'late connect rejected' in result.stdout
+        assert 'cluster is shutdown: True' in result.stdout
+        assert 'scheduler is shutdown: True' in result.stdout
+        assert 'cannot schedule new futures' not in result.stderr
+
+    def test_initialized_cluster_connect_after_scheduler_cleanup_is_rejected(self):
+        """An initialized cluster must not create a session after cleanup."""
+        script = '''
+from cassandra import DriverException
+from cassandra.cluster import (
+    Cluster,
+    ControlConnectionQueryFallback,
+    _shutdown_cluster_schedulers,
+)
+from threading import Event
+from unittest.mock import patch
+
+
+cluster = Cluster(
+    idle_heartbeat_interval=0,
+    allow_control_connection_query_fallback=
+    ControlConnectionQueryFallback.SkipPoolCreation,
+)
+with patch.object(cluster.connection_class, 'initialize_reactor'), \
+        patch.object(cluster.control_connection, 'connect'), \
+        patch.object(cluster, '_populate_hosts'), \
+        patch.object(cluster.profile_manager, 'check_supported'):
+    sessions = [cluster.connect()]
+ready = Event()
+continue_connect = Event()
+
+
+def connect_after_cleanup():
+    ready.set()
+    continue_connect.wait()
+    try:
+        sessions.append(cluster.connect())
+    except DriverException as exc:
+        print('late connect rejected:', exc)
+
+
+future = cluster.executor.submit(connect_after_cleanup)
+ready.wait()
+_shutdown_cluster_schedulers()
+continue_connect.set()
+future.result(timeout=2)
+
+print('session count:', len(sessions))
+print('initial session is shutdown:', sessions[0].is_shutdown)
+print('cluster is shutdown:', cluster.is_shutdown)
+print('scheduler is shutdown:', cluster.scheduler.is_shutdown)
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert ('late connect rejected: '
+                'Cannot connect a Cluster during interpreter shutdown'
+                in result.stdout)
+        assert 'session count: 1' in result.stdout
+        assert 'initial session is shutdown: False' in result.stdout
+        assert 'cluster is shutdown: False' in result.stdout
+        assert 'scheduler is shutdown: True' in result.stdout
+        assert 'cannot schedule new futures' not in result.stderr
+
+    def test_late_connect_does_not_join_reentrant_executor_shutdown(self):
+        """Late rejection must not join a worker waiting to shut down."""
+        script = '''
+import cassandra.cluster as cluster_module
+
+from cassandra import DriverException
+from cassandra.cluster import (
+    Cluster,
+    ControlConnectionQueryFallback,
+    _shutdown_cluster_schedulers,
+)
+from threading import Event
+from unittest.mock import patch
+
+
+cluster = Cluster(
+    idle_heartbeat_interval=0,
+    allow_control_connection_query_fallback=
+    ControlConnectionQueryFallback.SkipPoolCreation,
+)
+with patch.object(cluster.connection_class, 'initialize_reactor'), \
+        patch.object(cluster.control_connection, 'connect'), \
+        patch.object(cluster, '_populate_hosts'), \
+        patch.object(cluster.profile_manager, 'check_supported'):
+    cluster.connect()
+
+release_worker = Event()
+worker_shutting_down = Event()
+
+
+def shutdown_from_executor():
+    release_worker.wait()
+    worker_shutting_down.set()
+    cluster.shutdown()
+    print('executor shutdown completed')
+
+
+future = cluster.executor.submit(shutdown_from_executor)
+_shutdown_cluster_schedulers()
+register_cluster = cluster_module._register_cluster_shutdown
+
+
+def coordinate_reentrant_shutdown(current_cluster):
+    release_worker.set()
+    worker_shutting_down.wait()
+    return register_cluster(current_cluster)
+
+
+with patch.object(
+        cluster_module,
+        '_register_cluster_shutdown',
+        side_effect=coordinate_reentrant_shutdown):
+    try:
+        cluster.connect()
+    except DriverException:
+        print('main connect rejected')
+
+future.result(timeout=2)
+print('reentrant shutdown completed')
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'main connect rejected' in result.stdout
+        assert 'executor shutdown completed' in result.stdout
+        assert 'reentrant shutdown completed' in result.stdout
+
+    def test_cluster_shutdown_follows_application_thread_shutdown(self):
+        """Full cluster cleanup must wait for application threads."""
+        script = '''
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+from cassandra.cluster import Cluster, _register_cluster_shutdown
+
+
+cluster = Cluster()
+_register_cluster_shutdown(cluster)
+
+
+def run_query():
+    time.sleep(0.1)
+    print('cluster is active:', not cluster.is_shutdown)
+
+
+ThreadPoolExecutor(max_workers=1).submit(run_query)
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'cluster is active: True' in result.stdout
+
+    def test_scheduler_cleanup_fails_retry_blocking_application_thread(self):
+        """A pending retry must not strand a non-daemon thread at shutdown."""
+        script = '''
+from types import SimpleNamespace
+from threading import Thread
+
+from cassandra import ConsistencyLevel
+from cassandra.cluster import Cluster, ResponseFuture, _register_cluster_shutdown
+from cassandra.connection import ConnectionShutdown
+from cassandra.protocol import QueryMessage
+from cassandra.query import SimpleStatement
+
+
+cluster = Cluster()
+_register_cluster_shutdown(cluster)
+query = SimpleStatement('SELECT * FROM system.local')
+session = SimpleNamespace(
+    cluster=cluster,
+    keyspace=None,
+    row_factory=lambda columns, rows: rows,
+)
+response_future = ResponseFuture(
+    session,
+    QueryMessage(query.query_string, ConsistencyLevel.ONE),
+    query,
+    timeout=None,
+)
+response_future._retry(False, None, None, 60)
+
+
+def wait_for_retry():
+    try:
+        response_future.result()
+    except ConnectionShutdown:
+        print('pending retry failed')
+
+
+Thread(target=wait_for_retry).start()
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'pending retry failed' in result.stdout
+        assert 'cannot schedule new futures' not in result.stderr
+
+    def test_task_scheduled_after_shutdown_is_rejected(self):
+        scheduler = _Scheduler(Mock())
+        scheduler.shutdown()
+        on_shutdown = Mock()
+
+        accepted = scheduler.schedule_with_shutdown(
+            0, on_shutdown, lambda: None)
+
+        assert not accepted
+        on_shutdown.assert_called_once_with()
+
+    def test_concurrent_scheduler_shutdown_waits_for_callbacks(self):
+        scheduler = _Scheduler(Mock())
+        callback_started = Event()
+        release_callback = Event()
+        second_shutdown_complete = Event()
+
+        def on_shutdown():
+            callback_started.set()
+            assert release_callback.wait(5)
+
+        scheduler.schedule_with_shutdown(60, on_shutdown, lambda: None)
+        first_shutdown = Thread(target=scheduler.shutdown)
+        first_shutdown.start()
+        assert callback_started.wait(5)
+
+        def run_second_shutdown():
+            scheduler.shutdown()
+            second_shutdown_complete.set()
+
+        second_shutdown = Thread(target=run_second_shutdown)
+        second_shutdown.start()
+        assert not second_shutdown_complete.wait(0.05)
+
+        release_callback.set()
+        first_shutdown.join(5)
+        second_shutdown.join(5)
+        assert not first_shutdown.is_alive()
+        assert not second_shutdown.is_alive()
+        assert second_shutdown_complete.is_set()
+
+    def test_scheduler_shutdown_callback_can_reenter_shutdown(self):
+        scheduler = _Scheduler(Mock())
+        callback_complete = Event()
+
+        def on_shutdown():
+            scheduler.shutdown()
+            callback_complete.set()
+
+        scheduler.schedule_with_shutdown(60, on_shutdown, lambda: None)
+        shutdown = Thread(target=scheduler.shutdown)
+        shutdown.start()
+        shutdown.join(5)
+
+        assert not shutdown.is_alive()
+        assert callback_complete.is_set()
+
+    def test_dequeued_shutdown_callback_can_reenter_shutdown(self):
+        task_dequeued = Event()
+        release_task = Event()
+        callback_complete = Event()
+
+        class PausingQueue(object):
+
+            def __init__(self):
+                self._queue = PriorityQueue()
+
+            def get(self, *args, **kwargs):
+                item = self._queue.get(*args, **kwargs)
+                if item[2] is not None:
+                    task_dequeued.set()
+                    assert release_task.wait(5)
+                return item
+
+            def get_nowait(self):
+                return self._queue.get_nowait()
+
+            def put_nowait(self, item):
+                self._queue.put_nowait(item)
+
+        task_queue = PausingQueue()
+        with patch('cassandra.cluster.queue.PriorityQueue',
+                   return_value=task_queue):
+            scheduler = _Scheduler(Mock())
+
+        def on_shutdown():
+            scheduler.shutdown()
+            callback_complete.set()
+
+        scheduler.schedule_with_shutdown(0, on_shutdown, lambda: None)
+        assert task_dequeued.wait(5)
+
+        shutdown = Thread(target=scheduler.shutdown)
+        shutdown.start()
+        deadline = time.time() + 5
+        while not scheduler.is_shutdown and time.time() < deadline:
+            time.sleep(0.001)
+        assert scheduler.is_shutdown
+        release_task.set()
+        shutdown.join(5)
+
+        assert not shutdown.is_alive()
+        assert callback_complete.is_set()
+
+    @patch('cassandra.cluster.time')
+    def test_shutdown_sentinel_exits_without_scheduler_sleep(self, scheduler_time):
+        scheduler = object.__new__(_Scheduler)
+        scheduler.is_shutdown = False
+        scheduler._lock = Lock()
+        scheduler._scheduled_tasks = set()
+        scheduler._queue = Mock()
+
+        def get_shutdown_sentinel(**kwargs):
+            scheduler.is_shutdown = True
+            return (0, 0, None, None)
+
+        scheduler._queue.get.side_effect = get_shutdown_sentinel
+
+        scheduler.run()
+
+        scheduler_time.sleep.assert_not_called()
+
+    def test_executor_submission_does_not_hold_scheduler_lock(self):
+        executor = Mock()
+        submit_started = Event()
+        release_submit = Event()
+        schedule_started = Event()
+        schedule_complete = Event()
+        submitted_future = Future()
+        submitted_future.set_result(None)
+
+        def submit(*args, **kwargs):
+            submit_started.set()
+            assert release_submit.wait(5)
+            return submitted_future
+
+        executor.submit.side_effect = submit
+        scheduler = _Scheduler(executor)
+        scheduler.schedule(0, lambda: None)
+        assert submit_started.wait(5)
+
+        def schedule_later_task():
+            schedule_started.set()
+            scheduler.schedule(60, lambda: None)
+            schedule_complete.set()
+
+        schedule_thread = Thread(target=schedule_later_task)
+        schedule_thread.start()
+        try:
+            assert schedule_started.wait(5)
+            assert schedule_complete.wait(1)
+        finally:
+            release_submit.set()
+            schedule_thread.join(5)
+            scheduler.shutdown()
+
+        assert not schedule_thread.is_alive()
+
+    def test_scheduler_cleanup_error_does_not_abort_threading_shutdown(self):
+        """Scheduler failures must not prevent later shutdown callbacks."""
+        script = '''
+import logging
+import threading
+
+
+logging.basicConfig(level=logging.ERROR)
+threading._register_atexit(lambda: print('remaining callback ran'))
+
+from cassandra.cluster import Cluster, _register_cluster_shutdown
+
+
+cluster = Cluster()
+_register_cluster_shutdown(cluster)
+original_shutdown = cluster.scheduler.shutdown
+shutdown_calls = 0
+
+
+def fail_first_shutdown():
+    global shutdown_calls
+    shutdown_calls += 1
+    if shutdown_calls == 1:
+        raise RuntimeError('scheduler cleanup failed')
+    original_shutdown()
+
+
+cluster.scheduler.shutdown = fail_first_shutdown
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'remaining callback ran' in result.stdout
+        assert 'Failed to shut down Cluster scheduler' in result.stderr
+
+    def test_late_import_after_concurrent_futures_rejects_cluster_connect(self):
+        """A warm late import must reject connects when cleanup cannot register."""
+        script = '''
+import logging
+import threading
+# Load concurrent.futures.thread before shutdown. A genuinely cold import fails
+# in the standard library before cassandra.cluster can handle registration.
+from concurrent.futures import ThreadPoolExecutor
+from cassandra import DriverException
+
+
+logging.basicConfig(level=logging.WARNING)
+threading._SHUTTING_DOWN = True
+try:
+    from cassandra.cluster import Cluster
+finally:
+    threading._SHUTTING_DOWN = False
+
+cluster = Cluster()
+try:
+    cluster.connect()
+except DriverException as exc:
+    print('late connect rejected:', exc)
+
+print('cluster is shutdown:', cluster.is_shutdown)
+'''
+
+        result = _run_shutdown_subprocess(script)
+
+        assert 'Could not register Cluster scheduler shutdown' in result.stderr
+        assert ('late connect rejected: Cannot connect a Cluster during interpreter shutdown'
+                in result.stdout)
+        assert 'cluster is shutdown: True' in result.stdout
 
     @patch('time.time', return_value=3)  # always queue at same time
     @patch('cassandra.cluster._Scheduler.run')  # don't actually run the thread

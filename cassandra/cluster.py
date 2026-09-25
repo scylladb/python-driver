@@ -30,6 +30,7 @@ from itertools import groupby, count, chain
 import enum
 import json
 import logging
+import os
 from typing import Any, Dict, Optional, Union, Tuple
 from warnings import warn
 from random import random
@@ -37,8 +38,13 @@ import re
 import queue
 import socket
 import time
-from threading import Lock, RLock, Thread, Event
+from threading import get_ident, Lock, RLock, Thread, Event
 import uuid
+
+try:
+    from threading import _register_atexit as _register_threading_atexit
+except ImportError:
+    _register_threading_atexit = None
 
 import weakref
 from weakref import WeakValueDictionary
@@ -207,22 +213,81 @@ def run_in_executor(f):
 
 
 _clusters_for_shutdown = set()
+_clusters_for_shutdown_lock = Lock()
+_cluster_scheduler_shutdown_started = False
+
+
+def _clear_clusters_for_shutdown_after_fork():
+    """Forget parent-owned clusters and locks in a fork child."""
+    global _clusters_for_shutdown_lock, _cluster_scheduler_shutdown_started
+    _clusters_for_shutdown_lock = Lock()
+    _cluster_scheduler_shutdown_started = False
+    _clusters_for_shutdown.clear()
 
 
 def _register_cluster_shutdown(cluster):
-    _clusters_for_shutdown.add(cluster)
+    """Track a cluster unless scheduler shutdown has already started."""
+    with _clusters_for_shutdown_lock:
+        if not _cluster_scheduler_shutdown_started:
+            _clusters_for_shutdown.add(cluster)
+            return True
+        return False
 
 
 def _discard_cluster_shutdown(cluster):
-    _clusters_for_shutdown.discard(cluster)
+    """Stop tracking a cluster after explicit shutdown."""
+    with _clusters_for_shutdown_lock:
+        _clusters_for_shutdown.discard(cluster)
+
+
+def _shutdown_cluster_schedulers():
+    """Stop registered schedulers without aborting interpreter shutdown."""
+    global _cluster_scheduler_shutdown_started
+    with _clusters_for_shutdown_lock:
+        _cluster_scheduler_shutdown_started = True
+        clusters = _clusters_for_shutdown.copy()
+    for cluster in clusters:
+        try:
+            cluster.scheduler.shutdown()
+        except Exception:
+            # Exceptions from threading atexit callbacks prevent the remaining
+            # callbacks and non-daemon thread joins from running.
+            log.exception("Failed to shut down Cluster scheduler")
 
 
 def _shutdown_clusters():
-    clusters = _clusters_for_shutdown.copy()  # copy because shutdown modifies the global set "discard"
+    """Shut down registered clusters during normal atexit processing."""
+    with _clusters_for_shutdown_lock:
+        # Copy because shutdown removes clusters from the global set.
+        clusters = _clusters_for_shutdown.copy()
     for cluster in clusters:
         cluster.shutdown()
 
 
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_clear_clusters_for_shutdown_after_fork)
+
+
+# concurrent.futures is imported before this registration and installs its
+# _python_exit callback first. threading runs callbacks in reverse order, so
+# schedulers stop before ThreadPoolExecutor disables submissions. Full cluster
+# shutdown remains an ordinary atexit callback so application threads finish
+# before their connections close.
+if _register_threading_atexit is not None:
+    try:
+        _register_threading_atexit(_shutdown_cluster_schedulers)
+    except RuntimeError:
+        # Keep imports from failing when concurrent.futures was initialized before
+        # threading shutdown started. No scheduler cleanup callback can run now,
+        # so reject clusters through the same path as completed cleanup.
+        with _clusters_for_shutdown_lock:
+            _cluster_scheduler_shutdown_started = True
+        log.warning("Could not register Cluster scheduler shutdown during interpreter shutdown")
+else:
+    # Unknown runtimes may not expose CPython's pre-thread-shutdown hook. Keep
+    # the driver importable there, but make the loss of early cleanup visible.
+    log.warning("Cluster schedulers cannot be stopped before executor teardown: "
+                "threading._register_atexit is unavailable")
 atexit.register(_shutdown_clusters)
 
 
@@ -1915,6 +1980,8 @@ class Cluster(object):
         established or attempted. Default is `False`, which means it will return when the first
         successful connection is established. Remaining pools are added asynchronously.
         """
+        reject_late_connect = False
+        shutdown_rejected_cluster = False
         with self._lock:
             if self.is_shutdown:
                 raise DriverException("Cluster is already shut down")
@@ -1923,7 +1990,20 @@ class Cluster(object):
                 log.debug("Connecting to cluster, contact points: %s; protocol version: %s",
                           self.contact_points, self.protocol_version)
                 self.connection_class.initialize_reactor()
-                _register_cluster_shutdown(self)
+
+            if not _register_cluster_shutdown(self):
+                # threading shutdown callbacks run before non-daemon
+                # application threads are joined. A thread can therefore
+                # reach connect() after scheduler cleanup. Existing clusters
+                # remain registered for ordinary atexit cleanup. A new cluster
+                # must claim shutdown here, but cleanup cannot wait for its
+                # executor while this call may itself be running on a worker.
+                reject_late_connect = True
+                if not self._is_setup:
+                    self.is_shutdown = True
+                    shutdown_rejected_cluster = True
+
+            elif not self._is_setup:
                 self._report_tls_session_resumption()
 
                 try:
@@ -1946,6 +2026,12 @@ class Cluster(object):
                         timeout=self.idle_heartbeat_timeout
                     )
                 self._is_setup = True
+
+        if reject_late_connect:
+            if shutdown_rejected_cluster:
+                self._shutdown(wait_for_executor=False)
+            raise DriverException(
+                "Cannot connect a Cluster during interpreter shutdown")
 
         session = self._new_session(keyspace)
         if wait_for_all_pools:
@@ -1999,6 +2085,14 @@ class Cluster(object):
             else:
                 self.is_shutdown = True
 
+        # Once interpreter scheduler cleanup has begun, executor teardown is
+        # imminent and this call may itself be running on an executor worker.
+        self._shutdown(
+            wait_for_executor=not _cluster_scheduler_shutdown_started)
+
+    def _shutdown(self, wait_for_executor):
+        """Finish cleanup after shutdown has been claimed under ``self._lock``."""
+
         if self._idle_heartbeat:
             self._idle_heartbeat.stop()
 
@@ -2009,7 +2103,7 @@ class Cluster(object):
         for session in tuple(self.sessions):
             session.shutdown()
 
-        self.executor.shutdown()
+        self.executor.shutdown(wait=wait_for_executor)
 
         if self.metrics_enabled and self.metrics:
             self.metrics.shutdown()
@@ -5387,6 +5481,9 @@ class _Scheduler(Thread):
         self._scheduled_tasks = set()
         self._count = count()
         self._executor = executor
+        self._lock = Lock()
+        self._shutdown_complete = Event()
+        self._shutdown_owner = None
 
         Thread.__init__(self, name="Task Scheduler")
         self.daemon = True
@@ -5398,12 +5495,52 @@ class _Scheduler(Thread):
         except AttributeError:
             # this can happen on interpreter shutdown
             pass
-        self.is_shutdown = True
-        self._queue.put_nowait((0, 0, None))
-        self.join()
+        shutdown_owner = get_ident()
+        with self._lock:
+            if self.is_shutdown:
+                if self._shutdown_complete.is_set() or \
+                        self._shutdown_owner == shutdown_owner:
+                    return
+                wait_for_shutdown = True
+            else:
+                self.is_shutdown = True
+                self._shutdown_owner = shutdown_owner
+                wait_for_shutdown = False
+
+        if wait_for_shutdown:
+            self._shutdown_complete.wait()
+            return
+
+        try:
+            self._queue.put_nowait((0, 0, None, None))
+            self.join()
+            self._drain_shutdown_callbacks()
+        finally:
+            self._shutdown_complete.set()
+
+    def _drain_shutdown_callbacks(self):
+        shutdown_callbacks = []
+        with self._lock:
+            while True:
+                try:
+                    _, _, task, on_shutdown = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                if task is not None:
+                    self._scheduled_tasks.discard(task)
+                    if on_shutdown is not None:
+                        shutdown_callbacks.append(on_shutdown)
+
+        for callback in shutdown_callbacks:
+            self._run_shutdown_callback(callback)
 
     def schedule(self, delay, fn, *args, **kwargs):
-        self._insert_task(delay, (fn, args, tuple(kwargs.items())))
+        return self._insert_task(delay, (fn, args, tuple(kwargs.items())))
+
+    def schedule_with_shutdown(self, delay, on_shutdown, fn, *args, **kwargs):
+        """Schedule a task and notify it if shutdown prevents it from running."""
+        return self._insert_task(
+            delay, (fn, args, tuple(kwargs.items())), on_shutdown=on_shutdown)
 
     def schedule_unique(self, delay, fn, *args, **kwargs):
         task = (fn, args, tuple(kwargs.items()))
@@ -5412,13 +5549,34 @@ class _Scheduler(Thread):
         else:
             log.debug("Ignoring schedule_unique for already-scheduled task: %r", task)
 
-    def _insert_task(self, delay, task):
-        if not self.is_shutdown:
-            run_at = time.time() + delay
-            self._scheduled_tasks.add(task)
-            self._queue.put_nowait((run_at, next(self._count), task))
-        else:
+    def _insert_task(self, delay, task, on_shutdown=None):
+        with self._lock:
+            if not self.is_shutdown:
+                run_at = time.time() + delay
+                self._scheduled_tasks.add(task)
+                self._queue.put_nowait(
+                    (run_at, next(self._count), task, on_shutdown))
+                return True
+
+        if on_shutdown is not None:
+            self._run_shutdown_callback(on_shutdown)
+        try:
             log.debug("Ignoring scheduled task after shutdown: %r", task)
+        except AttributeError:
+            # this can happen on interpreter shutdown
+            pass
+        return False
+
+    @staticmethod
+    def _run_shutdown_callback(callback):
+        try:
+            callback()
+        except Exception:
+            try:
+                log.exception("Scheduled task shutdown callback failed")
+            except AttributeError:
+                # this can happen on interpreter shutdown
+                pass
 
     def run(self):
         while True:
@@ -5427,19 +5585,33 @@ class _Scheduler(Thread):
 
             try:
                 while True:
-                    run_at, i, task = self._queue.get(block=True, timeout=None)
-                    if self.is_shutdown:
-                        if task:
-                            log.debug("Not executing scheduled task due to Scheduler shutdown")
+                    run_at, i, task, on_shutdown = self._queue.get(block=True, timeout=None)
+                    task_to_submit = None
+                    stop = False
+                    with self._lock:
+                        if self.is_shutdown:
+                            stop = True
+                            if task is not None:
+                                # Leave shutdown callbacks to shutdown(), after
+                                # this thread has stopped. Running one here can
+                                # deadlock if it re-enters scheduler shutdown
+                                # while the shutdown owner is joining us.
+                                self._queue.put_nowait(
+                                    (run_at, i, task, on_shutdown))
+                        elif run_at <= time.time():
+                            self._scheduled_tasks.discard(task)
+                            task_to_submit = task
+                        else:
+                            self._queue.put_nowait((run_at, i, task, on_shutdown))
+
+                    if stop:
                         return
-                    if run_at <= time.time():
-                        self._scheduled_tasks.discard(task)
-                        fn, args, kwargs = task
-                        kwargs = dict(kwargs)
-                        future = self._executor.submit(fn, *args, **kwargs)
+                    if task_to_submit is not None:
+                        fn, args, kwargs = task_to_submit
+                        future = self._executor.submit(
+                            fn, *args, **dict(kwargs))
                         future.add_done_callback(self._log_if_failed)
                     else:
-                        self._queue.put_nowait((run_at, i, task))
                         break
             except queue.Empty:
                 pass
@@ -5567,6 +5739,8 @@ class ResponseFuture(object):
         self._host = host
         self._routing_token = routing_token
         self._control_connection_query_attempted = False
+        self._page_generation = 0
+        self._retry_aborted = False
         self._spec_execution_plan = speculative_execution_plan or self._spec_execution_plan
         self._make_query_plan()
         self._event = Event()
@@ -6207,12 +6381,21 @@ class ResponseFuture(object):
         if not self._paging_state:
             raise QueryExhausted()
 
+        with self._callback_lock:
+            if self._retry_aborted:
+                raise self._final_exception
+
         self._make_query_plan()
-        self.message.paging_state = self._paging_state
-        self._event.clear()
-        self._final_result = _NOT_SET
-        self._final_exception = None
-        self._control_connection_query_attempted = False
+
+        with self._callback_lock:
+            if self._retry_aborted:
+                raise self._final_exception
+            self._page_generation += 1
+            self.message.paging_state = self._paging_state
+            self._event.clear()
+            self._final_result = _NOT_SET
+            self._final_exception = None
+            self._control_connection_query_attempted = False
         self._start_timer()
         self.send_request()
 
@@ -6528,10 +6711,9 @@ class ResponseFuture(object):
 
     def _set_final_result(self, response):
         self._cancel_timer()
-        if self._metrics is not None:
-            self._metrics.request_timer.addValue(time.time() - self._start_time)
-
         with self._callback_lock:
+            if self._retry_aborted:
+                return
             self._final_result = response
             # save off current callbacks inside lock for execution outside it
             # -- prevents case where _final_result is set, then a callback is
@@ -6542,18 +6724,29 @@ class ResponseFuture(object):
                 for (fn, args, kwargs) in self._callbacks
             )
 
+        if self._metrics is not None:
+            self._metrics.request_timer.addValue(time.time() - self._start_time)
         self._event.set()
 
         # apply each callback
         for callback_partial in to_call:
             callback_partial()
 
-    def _set_final_exception(self, response):
-        self._cancel_timer()
-        if self._metrics is not None:
-            self._metrics.request_timer.addValue(time.time() - self._start_time)
+    def _set_final_exception(self, response,
+                             retry_abort_generation=_NOT_SET):
+        abort_retry = retry_abort_generation is not _NOT_SET
+        if not abort_retry:
+            self._cancel_timer()
 
         with self._callback_lock:
+            if self._retry_aborted:
+                return
+            if abort_retry:
+                if retry_abort_generation != self._page_generation or \
+                        self._final_result is not _NOT_SET or \
+                        self._final_exception is not None:
+                    return
+                self._retry_aborted = True
             self._final_exception = response
             # save off current errbacks inside lock for execution outside it --
             # prevents case where _final_exception is set, then an errback is
@@ -6563,6 +6756,11 @@ class ResponseFuture(object):
                 partial(fn, response, *args, **kwargs)
                 for (fn, args, kwargs) in self._errbacks
             )
+
+        if abort_retry:
+            self._cancel_timer()
+        if self._metrics is not None:
+            self._metrics.request_timer.addValue(time.time() - self._start_time)
         self._event.set()
 
         # apply each callback
@@ -6596,10 +6794,12 @@ class ResponseFuture(object):
         self._errors[host] = exception_from_response(response)
 
     def _retry(self, reuse_connection, consistency_level, host, delay):
-        if self._final_exception:
-            # the connection probably broke while we were waiting
-            # to retry the operation
-            return
+        with self._callback_lock:
+            if self._final_exception:
+                # the connection probably broke while we were waiting
+                # to retry the operation
+                return
+            page_generation = self._page_generation
 
         if self._metrics is not None:
             self._metrics.on_retry()
@@ -6617,7 +6817,14 @@ class ResponseFuture(object):
                 self.message.consistency_level = consistency_level
 
         # don't retry on the event loop thread
-        self.session.cluster.scheduler.schedule(delay, self._retry_task, reuse_connection, host)
+        self.session.cluster.scheduler.schedule_with_shutdown(
+            delay, partial(self._abort_retry, page_generation),
+            self._retry_task, reuse_connection, host)
+
+    def _abort_retry(self, page_generation):
+        self._set_final_exception(ConnectionShutdown(
+            "Cluster scheduler was shut down before the retry could run"),
+            retry_abort_generation=page_generation)
 
     def _retry_task(self, reuse_connection, host):
         if self._final_exception:
