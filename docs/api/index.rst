@@ -8,6 +8,7 @@ Core Driver
 
    cassandra
    cassandra/cluster
+   cassandra/client-routes
    cassandra/policies
    cassandra/auth
    cassandra/metadata
