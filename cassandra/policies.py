@@ -893,7 +893,7 @@ class ConstantReconnectionPolicy(ReconnectionPolicy):
 
         `max_attempts` should be a total number of attempts to be made before
         giving up, or :const:`None` to continue reconnection attempts forever.
-        The default is 64.
+        By default, reconnection attempts continue indefinitely.
         """
         if delay < 0:
             raise ValueError("delay must not be negative")
@@ -927,7 +927,7 @@ class ExponentialReconnectionPolicy(ReconnectionPolicy):
 
         `max_attempts` should be a total number of attempts to be made before
         giving up, or :const:`None` to continue reconnection attempts forever.
-        The default is 64.
+        By default, reconnection attempts continue indefinitely.
         """
         if base_delay < 0 or max_delay < 0:
             raise ValueError("Delays may not be negative")

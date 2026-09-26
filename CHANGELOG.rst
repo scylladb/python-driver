@@ -1,5 +1,6 @@
-Unreleased
-==========
+3.29.12
+========
+Sep 26, 2026
 
 Features
 --------
@@ -27,7 +28,37 @@ Features
   applied to every connection the cluster opens rather than only to the first one.
 * Negotiate and implement the ``SCYLLA_USE_METADATA_ID`` protocol extension: prepared
   statements skip re-sending result metadata on EXECUTE, and the driver automatically
-  refreshes cached metadata when the server detects a schema change (DRIVER-153)
+  refreshes cached metadata when the server detects a schema change (DRIVER-153, #770).
+* Negotiate ``TABLETS_ROUTING_V2``, track tablet versions, and prefer tablet leaders for
+  strongly consistent tables (#913).
+* Resume TLS sessions through the new per-endpoint ``SSLSessionCache``, with cache
+  lifetime and security controls exposed by ``Cluster`` (#789, DRIVER-165).
+* Use a Cython LZ4 fast path linked directly to the C library for CQL v4 compression
+  (#809).
+
+Compatibility Changes
+---------------------
+* Python 3.10 or newer is now required (#1043). Python 3.15 is supported, including
+  published CPython 3.15 wheels; free-threaded 3.15t is tested but does not receive
+  wheels (#1005). Wheels are no longer published for 32-bit Windows (#916).
+* The eventlet, gevent, and Twisted reactors and their public modules have been removed
+  (#969, CASSPYTHON-13).
+* The Insights package and its ``Cluster`` configuration API have been removed
+  (#968, CASSPYTHON-24).
+* ``DCAwareRoundRobinPolicy.local_dc`` is now read-only. It is set by the constructor,
+  and filled in by the policy itself when the constructor was given none, from the first
+  host to come up. Code that assigned it should pass ``local_dc`` to the constructor
+  instead.
+* ``PreparedStatement.result_metadata`` and ``PreparedStatement.result_metadata_id`` are
+  now read-only. They are replaced together by
+  ``PreparedStatement.update_result_metadata()``, so a request cannot observe metadata
+  and its id from different schema versions. Code that assigned either attribute
+  directly must call ``update_result_metadata()`` instead.
+* Message serialization now receives the connection's negotiated ``ProtocolFeatures``.
+  Custom protocol handlers that override ``encode_message`` must accept a required
+  ``protocol_features`` keyword argument, and custom encoders that delegate to
+  ``msg.send_body`` must forward it. This enables the connection-specific serialization
+  required by ``SCYLLA_USE_METADATA_ID`` and ``TABLETS_ROUTING_V2``.
 
 Bug Fixes
 ---------
@@ -98,15 +129,31 @@ Bug Fixes
   which is right for the host handler that only uses it to probe the host, but left the
   control connection dead the moment its backoff finally succeeded -- until a heartbeat
   noticed, or forever with ``idle_heartbeat_interval=0``.
+* Preserve SERIAL and LOCAL_SERIAL semantics during routing and retries: LWT replicas
+  are no longer shuffled, and retries cannot downgrade to a non-serial consistency
+  level (#887).
+* The default constant and exponential reconnection schedules no longer stop after 64
+  attempts, and heartbeat failures report the configured timeout correctly (#834).
+* Treat an explicit empty ``ssl_options`` mapping as SSL configuration when selecting a
+  shard-aware endpoint (#936).
+* Invalidate cached tablet metadata when a table is deleted through a schema event
+  (#975).
+* Stop schedulers before executor teardown and fail pending retry work cleanly during
+  interpreter shutdown (#392).
+* Preserve Unix-socket control endpoints for local hosts (#944), and restore local
+  listen and broadcast metadata when token metadata is disabled (#1012).
+* Mark compatibility MD5 operations as non-security uses so they work in FIPS-enabled
+  environments (#970).
+* Use portable, precision-preserving shard-id arithmetic in the Cython implementation,
+  fixing MSVC builds and matching the Python implementation (#950).
+* Report errors from every pool when ``Session.set_keyspace()`` fails, rather than only
+  the final error (#911), and validate the scope passed to
+  ``Session.wait_for_schema_agreement()`` (#917).
+* Reject secure-connect-bundle archive paths that escape their extraction directory
+  (#969).
 
 Others
 ------
-* ``DCAwareRoundRobinPolicy.local_dc`` is now read-only. It is set by the constructor,
-  and filled in by the policy itself when the constructor was given none, from the first
-  host to come up. Assigning it afterwards was indistinguishable from that inference,
-  and the two mean different things: a datacenter the application chose against one the
-  driver guessed. Code that assigned it should pass ``local_dc`` to the constructor
-  instead.
 * ``Connection.max_request_id`` and ``Connection.orphaned_threshold`` now follow the
   ``max_in_flight`` actually in force. Both were computed in the class body, which runs
   once, so a subclass that set its own ``max_in_flight`` inherited values derived from the
@@ -128,27 +175,6 @@ Others
   come through unchanged. Previously ``DRIVER_NAME`` and ``DRIVER_VERSION`` could be
   overridden, which misreported the driver to the server for the life of the connection
   and, in the clients table, to the operator reading the row.
-* ``PreparedStatement.result_metadata`` and ``PreparedStatement.result_metadata_id`` are
-  now read-only. They are replaced together by
-  ``PreparedStatement.update_result_metadata()``, so a request can never observe a metadata
-  id paired with result metadata from a different schema version. Code that assigned either
-  attribute directly must call ``update_result_metadata()`` instead.
-* Message serialization now receives the connection's negotiated ``ProtocolFeatures``:
-  ``Connection.send_msg`` passes ``protocol_features`` to the encoder, and
-  ``_ProtocolHandler.encode_message`` forwards it to each message's ``send_body``.
-  This changes the contracted signature of ``encode_message`` (and of ``send_body``).
-  Custom protocol handlers that override ``encode_message`` must accept a required
-  ``protocol_features`` keyword argument (adding ``**kwargs`` is recommended for
-  future-proofing), and custom encoders that delegate to ``msg.send_body`` should
-  forward it. There is deliberately no compatibility fallback: protocol extensions
-  are negotiated per connection at STARTUP, so an encoder unaware of
-  ``protocol_features`` could silently omit fields a negotiated extension requires.
-  This release emits no new bytes on the wire; the parameter is groundwork for
-  upcoming protocol extensions (``SCYLLA_USE_METADATA_ID``, ``TABLETS_ROUTING_V2``).
-* Python 3.15 is now supported: wheels are published for it (cibuildwheel builds
-  ``cp315`` since 4.2.0, against a release candidate that is ABI compatible with the
-  final release) and the integration tests run on 3.15 and on free-threaded 3.15t.
-  As for 3.14, no free-threaded wheels are published; ``3.15t`` is tested only.
 
 3.29.11
 =======
