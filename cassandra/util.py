@@ -25,6 +25,7 @@ import pickle
 import random
 import re
 import socket
+import struct
 import sys
 import time
 import uuid
@@ -722,7 +723,7 @@ class OrderedMap(Mapping):
 
     def __getitem__(self, key):
         try:
-            index = self._index[self._serialize_key(key)]
+            index = self._index[self._lookup_key(key)]
             return self._items[index][1]
         except KeyError:
             raise KeyError(str(key))
@@ -730,7 +731,7 @@ class OrderedMap(Mapping):
     def __delitem__(self, key):
         # not efficient -- for convenience only
         try:
-            index = self._index.pop(self._serialize_key(key))
+            index = self._index.pop(self._lookup_key(key))
             self._index = dict((k, i if i < index else i - 1) for k, i in self._index.items())
             self._items.pop(index)
         except KeyError:
@@ -774,6 +775,9 @@ class OrderedMap(Mapping):
     def _serialize_key(self, key):
         return pickle.dumps(key)
 
+    def _lookup_key(self, key):
+        return self._serialize_key(key)
+
 
 class OrderedMapSerializedKey(OrderedMap):
 
@@ -787,12 +791,15 @@ class OrderedMapSerializedKey(OrderedMap):
         self._index[flat_key] = len(self._items) - 1
 
     def _serialize_key(self, key):
+        return self.cass_key_type.serialize(key, self.protocol_version)
+
+    def _lookup_key(self, key):
+        # Only lookups go through here, inserts still raise the serializer
+        # error. A key the key type rejects (wrong type or out of range)
+        # can't be in the map, so report it as missing like a dict would.
         try:
-            return self.cass_key_type.serialize(key, self.protocol_version)
-        except Exception:
-            # A key that cannot be serialized with the map's key type cannot
-            # be present, so treat it as missing to keep Mapping semantics
-            # (get() returns the default, `in` returns False).
+            return self._serialize_key(key)
+        except (TypeError, AttributeError, ValueError, struct.error):
             raise KeyError(str(key)) from None
 
 

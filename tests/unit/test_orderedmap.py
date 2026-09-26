@@ -197,3 +197,11 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
         assert None not in om
         with pytest.raises(KeyError):
             om[None]
+        with pytest.raises(KeyError):
+            del om[None]
+        assert list(om.items()) == [('one', 1)]
+
+        # inserting a key of the wrong type still surfaces the serializer error
+        with pytest.raises(AttributeError):
+            om[None] = 2
+        assert list(om.items()) == [('one', 1)]
