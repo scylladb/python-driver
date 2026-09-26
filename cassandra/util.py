@@ -787,7 +787,13 @@ class OrderedMapSerializedKey(OrderedMap):
         self._index[flat_key] = len(self._items) - 1
 
     def _serialize_key(self, key):
-        return self.cass_key_type.serialize(key, self.protocol_version)
+        try:
+            return self.cass_key_type.serialize(key, self.protocol_version)
+        except Exception:
+            # A key that cannot be serialized with the map's key type cannot
+            # be present, so treat it as missing to keep Mapping semantics
+            # (get() returns the default, `in` returns False).
+            raise KeyError(str(key)) from None
 
 
 @total_ordering

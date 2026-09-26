@@ -184,3 +184,16 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
         assert om[{'one': 1}] is om[{u'one': 1}]
         assert om[{'two': 2}] is om[{u'two': 2}]
         assert om[{'one': 1}] is not om[{'two': 2}]
+
+    def test_unserializable_key_treated_as_missing(self):
+        # a key that cannot be serialized with the map's key type cannot be
+        # present, so lookups behave like a plain dict instead of leaking the
+        # serializer's exception
+        om = OrderedMapSerializedKey(UTF8Type, 3)
+        om._insert_unchecked('one', UTF8Type.serialize('one', 3), 1)
+
+        assert om.get(None) is None
+        assert om.get(None, 2) == 2
+        assert None not in om
+        with pytest.raises(KeyError):
+            om[None]
