@@ -20,6 +20,9 @@ Contents
 :doc:`getting-started`
     A guide through the first steps of connecting to Scylla and executing queries
 
+:doc:`connectivity`
+    Configuring direct and private-network connections to a cluster
+
 :doc:`scylla-specific`
     A list of feature available only on ``scylla-driver``
 
@@ -62,6 +65,7 @@ Contents
    api/index
    installation
    getting-started
+   connectivity
    scylla-specific
    execution-profiles
    performance
