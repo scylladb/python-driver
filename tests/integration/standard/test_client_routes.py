@@ -34,6 +34,7 @@ import unittest
 import uuid
 
 import json as _json
+import urllib.error
 import urllib.request
 
 from cassandra.cluster import Cluster
@@ -232,17 +233,39 @@ def post_client_routes(contact_point, routes):
     url = "http://%s:10000/v2/client-routes" % contact_point
     log.info("Posting %d routes to %s", len(payload), url)
     data = _json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST",
-    )
-    response = urllib.request.urlopen(req)
-    log.info("Routes posted successfully (status %d)", response.status)
+
+    # A node can still be settling gossip/topology right after a
+    # decommission/bootstrap, making the REST API answer with a transient
+    # 500 for a brief window. Retry bounded 5xx responses; anything else
+    # (4xx, connection errors) is a real bug and should raise immediately.
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req) as response:
+                log.info("Routes posted successfully (status %d)", response.status)
+                return
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8", "replace")
+                if 500 <= e.code < 600 and attempt < max_attempts:
+                    log.warning(
+                        "POST %s -> HTTP %d (attempt %d/%d), retrying: %s",
+                        url, e.code, attempt, max_attempts, body)
+                    time.sleep(1)
+                    continue
+                log.error("POST %s -> HTTP %d: %s", url, e.code, body)
+                raise
+            finally:
+                e.close()
 
 
 def get_host_ids_from_cluster(session):
