@@ -38,6 +38,11 @@ of these nodes it will *automatically discover* the rest of the
 nodes in the cluster and connect to them, so you don't need to list
 every node in your cluster.
 
+The application must still be able to reach every discovered node that its
+load-balancing policy may use. See :doc:`connectivity/direct-connectivity` for
+direct and VPC-peered networks, or :doc:`connectivity/client-routes` when nodes
+are exposed through per-node proxies.
+
 If you need to use a non-standard port, use SSL, or customize the driver's
 behavior in some other way, this is the place to do it:
 
