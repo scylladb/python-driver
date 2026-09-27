@@ -13,9 +13,11 @@
 # limitations under the License.
 
 import unittest
+import uuid
 
 from cassandra.util import OrderedMap, OrderedMapSerializedKey
-from cassandra.cqltypes import EMPTY, UTF8Type, lookup_casstype
+from cassandra.cqltypes import (EMPTY, InetAddressType, Int32Type, UTF8Type,
+                               UUIDType, lookup_casstype)
 from tests.util import assertListEqual
 import pytest
 
@@ -205,3 +207,22 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
         with pytest.raises(AttributeError):
             om[None] = 2
         assert list(om.items()) == [('one', 1)]
+
+    def test_lookup_with_key_rejected_by_key_type(self):
+        # UUIDType raises TypeError, InetAddressType ValueError and Int32Type
+        # struct.error for these keys
+        for key_type, key, bad_key in [
+            (UUIDType, uuid.UUID(int=1), 'not-a-uuid'),
+            (InetAddressType, '127.0.0.1', 'not-an-ip'),
+            (Int32Type, 1, 2 ** 40),
+        ]:
+            om = OrderedMapSerializedKey(key_type, 3)
+            om[key] = 'v'
+
+            assert om.get(bad_key) is None
+            assert bad_key not in om
+            with pytest.raises(KeyError):
+                om[bad_key]
+            with pytest.raises(KeyError):
+                del om[bad_key]
+            assert list(om.items()) == [(key, 'v')]
