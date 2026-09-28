@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import struct
 import unittest
 import uuid
 
@@ -197,11 +198,23 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
         assert om.get(None) is None
         assert om.get(None, 2) == 2
         assert None not in om
-        with pytest.raises(KeyError):
+        with pytest.raises(KeyError) as excinfo:
             om[None]
-        with pytest.raises(KeyError):
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__suppress_context__
+        with pytest.raises(KeyError) as excinfo:
             del om[None]
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__suppress_context__
         assert list(om.items()) == [('one', 1)]
+
+        # the missing-key error must not depend on the key's __str__
+        class BadStr(object):
+            def __str__(self):
+                raise RuntimeError('no str')
+
+        assert om.get(BadStr()) is None
+        assert BadStr() not in om
 
         # inserting a key of the wrong type still surfaces the serializer error
         with pytest.raises(AttributeError):
@@ -211,10 +224,10 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
     def test_lookup_with_key_rejected_by_key_type(self):
         # UUIDType raises TypeError, InetAddressType ValueError and Int32Type
         # struct.error for these keys
-        for key_type, key, bad_key in [
-            (UUIDType, uuid.UUID(int=1), 'not-a-uuid'),
-            (InetAddressType, '127.0.0.1', 'not-an-ip'),
-            (Int32Type, 1, 2 ** 40),
+        for key_type, key, bad_key, error in [
+            (UUIDType, uuid.UUID(int=1), 'not-a-uuid', TypeError),
+            (InetAddressType, '127.0.0.1', 'not-an-ip', ValueError),
+            (Int32Type, 1, 2 ** 40, struct.error),
         ]:
             om = OrderedMapSerializedKey(key_type, 3)
             om[key] = 'v'
@@ -225,4 +238,9 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
                 om[bad_key]
             with pytest.raises(KeyError):
                 del om[bad_key]
+            assert list(om.items()) == [(key, 'v')]
+
+            # inserts are not translated, the serializer error still escapes
+            with pytest.raises(error):
+                om[bad_key] = 'x'
             assert list(om.items()) == [(key, 'v')]

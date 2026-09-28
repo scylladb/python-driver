@@ -726,7 +726,7 @@ class OrderedMap(Mapping):
             index = self._index[self._lookup_key(key)]
             return self._items[index][1]
         except KeyError:
-            raise KeyError(str(key))
+            raise KeyError(key) from None
 
     def __delitem__(self, key):
         # not efficient -- for convenience only
@@ -735,7 +735,7 @@ class OrderedMap(Mapping):
             self._index = dict((k, i if i < index else i - 1) for k, i in self._index.items())
             self._items.pop(index)
         except KeyError:
-            raise KeyError(str(key))
+            raise KeyError(key) from None
 
     def __iter__(self):
         for i in self._items:
@@ -800,7 +800,7 @@ class OrderedMapSerializedKey(OrderedMap):
         try:
             return self._serialize_key(key)
         except (TypeError, AttributeError, ValueError, struct.error):
-            raise KeyError(str(key)) from None
+            raise KeyError(key) from None
 
 
 @total_ordering
