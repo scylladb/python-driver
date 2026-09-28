@@ -82,11 +82,11 @@ You can run a specific test method like so::
 Running Integration Tests
 -------------------------
 In order to run integration tests, you must specify a version to run using either of:
-* ``SCYLLA_VERSION`` e.g. ``release:2025.2``
+* ``SCYLLA_VERSION`` e.g. ``release:2025.2.5``
 * ``CASSANDRA_VERSION``
 environment variable::
 
-    SCYLLA_VERSION="release:2025.2" uv run pytest tests/integration/standard tests/integration/cqlengine/
+    SCYLLA_VERSION="release:2025.2.5" uv run pytest tests/integration/standard tests/integration/cqlengine/
 
 Or you can specify a scylla/cassandra directory (to test unreleased versions)::
 
@@ -100,7 +100,7 @@ The protocol version defaults to:
 - 5 for Cassandra >= 4.0, 4 for Cassandra >= 2.2, 3 for Cassandra >= 2.1, 2 for Cassandra >= 2.0
 You can overwrite it with the ``PROTOCOL_VERSION`` environment variable::
 
-    PROTOCOL_VERSION=3 SCYLLA_VERSION="release:5.1" uv run pytest tests/integration/standard tests/integration/cqlengine/
+    PROTOCOL_VERSION=3 SCYLLA_VERSION="release:5.1.19" uv run pytest tests/integration/standard tests/integration/cqlengine/
 
 Seeing Test Logs in Real Time
 -----------------------------
@@ -121,7 +121,7 @@ if a Scylla/Cassandra version is available, the integration suite, under
     bash scripts/coverage.sh
 
     # include the integration suite too
-    SCYLLA_VERSION="release:2026.1" bash scripts/coverage.sh
+    SCYLLA_VERSION="release:2026.1.13" bash scripts/coverage.sh
 
 Open ``htmlcov/index.html`` afterwards for a line-by-line, browsable report.
 ``coverage.xml`` is also produced for tooling that consumes Cobertura-style
@@ -139,7 +139,7 @@ Running the Benchmarks
 ======================
 There needs to be a version of Scyll running locally so before running the benchmarks, if ccm is installed:
 
-	uv run ccm create benchmark_cluster --scylla -v release:2025.2 -n 1 -s
+	uv run ccm create benchmark_cluster --scylla -v release:2025.2.5 -n 1 -s
 
 To run the benchmarks, pick one of the files under the ``benchmarks/`` dir and run it::
 

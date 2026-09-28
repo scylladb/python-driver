@@ -36,7 +36,7 @@ jobs:
     if: "!contains(github.event.pull_request.labels.*.name, 'disable-coverage-tests')"
     runs-on: ubuntu-24.04
     env:
-      SCYLLA_VERSION: release:2026.1
+      SCYLLA_VERSION: release:2026.1.13
       PROTOCOL_VERSION: 4
       # Set once at job level so every step (including "Build driver" and the
       # summary step, both of which invoke `uv run`) sees the same value.
