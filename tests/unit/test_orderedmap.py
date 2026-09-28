@@ -200,10 +200,12 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
         assert None not in om
         with pytest.raises(KeyError) as excinfo:
             om[None]
+        assert excinfo.value.args == (None,)
         assert excinfo.value.__cause__ is None
         assert excinfo.value.__suppress_context__
         with pytest.raises(KeyError) as excinfo:
             del om[None]
+        assert excinfo.value.args == (None,)
         assert excinfo.value.__cause__ is None
         assert excinfo.value.__suppress_context__
         assert list(om.items()) == [('one', 1)]
@@ -234,13 +236,47 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
 
             assert om.get(bad_key) is None
             assert bad_key not in om
-            with pytest.raises(KeyError):
+            with pytest.raises(KeyError) as excinfo:
                 om[bad_key]
-            with pytest.raises(KeyError):
+            assert excinfo.value.args == (bad_key,)
+            with pytest.raises(KeyError) as excinfo:
                 del om[bad_key]
+            assert excinfo.value.args == (bad_key,)
             assert list(om.items()) == [(key, 'v')]
 
             # inserts are not translated, the serializer error still escapes
             with pytest.raises(error):
                 om[bad_key] = 'x'
             assert list(om.items()) == [(key, 'v')]
+
+            del om[key]
+            assert list(om.items()) == []
+            assert key not in om
+
+    def test_lookup_with_other_serializer_error(self):
+        class Boom(Exception):
+            pass
+
+        class BoomType(UTF8Type):
+            @staticmethod
+            def serialize(val, protocol_version):
+                if val == 'bad':
+                    raise Boom()
+                return UTF8Type.serialize(val, protocol_version)
+
+        om = OrderedMapSerializedKey(BoomType, 3)
+        om['one'] = 1
+        om['two'] = 2
+
+        assert om.get('bad') is None
+        assert 'bad' not in om
+        with pytest.raises(KeyError) as excinfo:
+            om['bad']
+        assert excinfo.value.args == ('bad',)
+        with pytest.raises(Boom):
+            om['bad'] = 3
+
+        del om['one']
+        assert list(om.items()) == [('two', 2)]
+        assert om['two'] == 2
+        assert 'one' not in om
