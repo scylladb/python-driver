@@ -152,7 +152,10 @@ class Tablets(object):
         with self._lock:
             for key, (tablets, _) in list(self._tablets.items()):
                 kept = [tablet for tablet in tablets if not tablet.replica_contains_host_id(host_id)]
-                if len(kept) != len(tablets):
+                if not kept:
+                    # Don't leave an empty entry for a table with no tablets left.
+                    del self._tablets[key]
+                elif len(kept) != len(tablets):
                     self._tablets[key] = (kept, [t.last_token for t in kept])
 
     def add_tablet(self, keyspace, table, tablet):

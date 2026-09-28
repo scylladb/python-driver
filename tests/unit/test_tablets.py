@@ -182,7 +182,7 @@ class TabletsCopyOnWriteTest(unittest.TestCase):
         tablets.drop_tablets_by_host_id(h2)
         self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")][0]), [(0, 100), (200, 300)])
         self._assert_consistent(tablets._tablets[("ks", "tb")])
-        self.assertEqual(tablets._tablets[("ks", "other")], ([], []))
+        self.assertNotIn(("ks", "other"), tablets._tablets)
         self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", _Token(150)))
         self.assertEqual(tablets.get_tablet_for_key("ks", "tb", _Token(250)).first_token, 200)
 
@@ -441,3 +441,47 @@ class TabletReplicaDictTest(unittest.TestCase):
         t = Tablet(0, 100, gen())
         self.assertEqual(t.replicas, ((u1, 3), (u2, 7)))
         self.assertEqual(t.get_replica_shard_id(u2), 7)
+
+
+class DropTabletsByHostIdTest(unittest.TestCase):
+    """Tests for Tablets.drop_tablets_by_host_id batch-filter path."""
+
+    def test_drop_removes_matching_tablets(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        t1 = Tablet(0, 100, [(u1, 0)])
+        t2 = Tablet(100, 200, [(u2, 0)])
+        t3 = Tablet(200, 300, [(u1, 1), (u2, 1)])
+        tablets = Tablets({("ks", "tb"): [t1, t2, t3]})
+
+        tablets.drop_tablets_by_host_id(u1)
+
+        remaining, last_tokens = tablets._tablets[("ks", "tb")]
+        self.assertEqual(len(remaining), 1)
+        self.assertIs(remaining[0], t2)
+        self.assertEqual(last_tokens, [200])
+
+    def test_drop_none_host_id_is_noop(self):
+        t1 = Tablet(0, 100, [(uuid4(), 0)])
+        tablets = Tablets({("ks", "tb"): [t1]})
+        tablets.drop_tablets_by_host_id(None)
+        self.assertEqual(len(tablets._tablets[("ks", "tb")][0]), 1)
+
+    def test_drop_nonexistent_host_id_is_noop(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u_missing = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t1 = Tablet(0, 100, [(u1, 0)])
+        tablets = Tablets({("ks", "tb"): [t1]})
+        tablets.drop_tablets_by_host_id(u_missing)
+        self.assertEqual(len(tablets._tablets[("ks", "tb")][0]), 1)
+
+    def test_drop_last_tablet_removes_table_keys(self):
+        # Dropping the only tablet of a table must not leave an empty entry (PR #651 cleanup).
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        t1 = Tablet(0, 100, [(u1, 0)])
+        tablets = Tablets({("ks", "tb"): [t1]})
+
+        tablets.drop_tablets_by_host_id(u1)
+
+        self.assertNotIn(("ks", "tb"), tablets._tablets)
+        self.assertFalse(tablets.table_has_tablets("ks", "tb"))
