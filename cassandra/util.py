@@ -25,6 +25,7 @@ import pickle
 import random
 import re
 import socket
+import struct
 import sys
 import time
 import uuid
@@ -793,12 +794,11 @@ class OrderedMapSerializedKey(OrderedMap):
         return self.cass_key_type.serialize(key, self.protocol_version)
 
     def _lookup_key(self, key):
-        # Only lookups go through here, inserts still raise the serializer
-        # error. A key the key type can't serialize can't be in the map, so
-        # report it as missing like a dict would.
+        # Translate expected type/value rejections, not unexpected serializer
+        # failures. Inserts still call _serialize_key directly.
         try:
             return self._serialize_key(key)
-        except Exception:
+        except (TypeError, AttributeError, ValueError, struct.error):
             raise KeyError(key) from None
 
 
