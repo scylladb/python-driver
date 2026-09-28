@@ -991,6 +991,28 @@ class TokenAwarePolicyTest(unittest.TestCase):
                 child_policy.make_query_plan.assert_called_once_with(keyspace, query)
             assert patched_shuffle.call_count == 1
 
+    def test_lwt_tablet_keeps_natural_replica_order(self):
+        """LWT on tablets must follow tablet.replicas order, not the rotating child plan (#781)."""
+        cluster = self._prepare_cluster_with_tablets()
+        hosts = cluster.metadata.all_hosts()
+        for h in hosts:
+            h.set_location_info("dc1", "rack1")
+        order = [hosts[3], hosts[1], hosts[2]]
+        cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(replicas=[(h.host_id, 0) for h in order])
+        by_id = {h.host_id: h for h in hosts}
+        cluster.metadata.get_host_by_host_id.side_effect = by_id.get
+
+        policy = TokenAwarePolicy(DCAwareRoundRobinPolicy("dc1"), shuffle_replicas=True)
+        policy.populate(cluster, hosts)
+
+        lwt = Statement(routing_key=b"key", keyspace="ks")
+        lwt.is_lwt = lambda: True
+        serial = Statement(routing_key=b"key", keyspace="ks")
+        serial.consistency_level = ConsistencyLevel.SERIAL
+        for query in (lwt, serial):
+            for _ in range(len(hosts)):
+                assert list(policy.make_query_plan(None, query))[:3] == order
+
     def test_leader_aware_routing_with_tablet_version(self):
         """
         For a strongly-consistent keyspace, the leader (first replica in the
