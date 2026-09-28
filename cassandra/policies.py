@@ -566,16 +566,23 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         # its functions.
         from cassandra.metadata import _ConsistencyMode
 
+        # LWT/serial replicas keep their natural order so every call picks the same Paxos coordinator.
+        keep_order = query.is_lwt() or ConsistencyLevel.is_serial(query.consistency_level)
         replicas = []
         leader_host = None
         token = self._cluster_metadata.token_map.token_class.from_key(query.routing_key)
         tablet = self._cluster_metadata._tablets.get_tablet_for_key(keyspace, query.table, token)
 
         if tablet is not None:
-            replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
-            child_plan = child.make_query_plan(keyspace, query)
+            if keep_order:
+                # The child plan is round-robin rotated, so it cannot provide a stable order.
+                replicas = [host for host in (self._cluster_metadata.get_host_by_host_id(host_id)
+                                              for host_id, _ in tablet.replicas) if host is not None]
+            else:
+                replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
+                child_plan = child.make_query_plan(keyspace, query)
 
-            replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+                replicas = [host for host in child_plan if host.host_id in replicas_mapped]
 
             # The leader concept only exists for strongly-consistent keyspaces,
             # which today means exactly the keyspaces whose consistency mode is
@@ -616,7 +623,7 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         else:
             replicas = self._cluster_metadata.get_replicas(keyspace, query.routing_key)
 
-        if self.shuffle_replicas and not query.is_lwt() and not ConsistencyLevel.is_serial(query.consistency_level):
+        if self.shuffle_replicas and not keep_order:
             shuffle(replicas)
 
         def yield_in_order(hosts):
