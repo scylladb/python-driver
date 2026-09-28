@@ -373,6 +373,16 @@ class TabletReplicaDictTest(unittest.TestCase):
         self.assertEqual(t.get_replica_shard_id(u2), 7)
 
 
+class TabletHostIdInternTest(unittest.TestCase):
+    def test_equal_host_ids_share_one_object(self):
+        u = uuid4()
+        t1 = Tablet(0, 100, [(UUID(int=u.int), 0)])
+        t2 = Tablet(100, 200, [(UUID(int=u.int), 1)])
+        self.assertIs(t1.leader, t2.leader)
+        self.assertEqual(t1.leader, u)
+        self.assertIs(next(iter(t1._replica_dict)), next(iter(t2._replica_dict)))
+
+
 class DropTabletsByHostIdTest(unittest.TestCase):
     """Tests for Tablets.drop_tablets_by_host_id batch-filter path."""
 
