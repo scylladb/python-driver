@@ -157,15 +157,22 @@ class Tablets(object):
         if host_id is None:
             return
         with self._lock:
+            emptied = []
             for key, tablets in self._tablets.items():
-                to_be_deleted = []
-                for tablet_id, tablet in enumerate(tablets):
-                    if tablet.replica_contains_host_id(host_id):
-                        to_be_deleted.append(tablet_id)
-
-                for tablet_id in reversed(to_be_deleted):
-                    tablets.pop(tablet_id)
-                    self._last_tokens[key].pop(tablet_id)
+                # Filter in one pass instead of popping one-by-one (O(n) vs O(k*n))
+                kept = [t for t in tablets if not t.replica_contains_host_id(host_id)]
+                if len(kept) == len(tablets):
+                    continue  # nothing to drop
+                if kept:
+                    self._tablets[key] = kept
+                    self._last_tokens[key] = [t.last_token for t in kept]
+                else:
+                    emptied.append(key)
+            # A table left with no tablets must not keep an empty entry in
+            # either map; drop both keys entirely instead.
+            for key in emptied:
+                del self._tablets[key]
+                self._last_tokens.pop(key, None)
 
     def add_tablet(self, keyspace, table, tablet):
         with self._lock:
