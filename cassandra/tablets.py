@@ -31,22 +31,26 @@ def random_tablet_version_block() -> int:
     return getrandbits(8)
 
 
+# host_id.int -> one shared UUID per host; tablets key by its .int so all share one int per host.
+# ponytail: never pruned; grows with every host ever seen, fine unless hosts churn by thousands.
+_host_ids = {}
+
+
 class Tablet(object):
     """
     Represents a single ScyllaDB tablet.
     It stores information about each replica, its host and shard,
     and the token interval in the format (first_token, last_token].
     """
-    __slots__ = ('first_token', 'last_token', 'replicas', 'tablet_version', '_replica_dict')
+    __slots__ = ('first_token', 'last_token', 'tablet_version', '_replica_dict')
 
     def __init__(self, first_token=0, last_token=0, replicas=None, tablet_version=None):
         self.first_token = first_token
         self.last_token = last_token
-        # Materialize once: `replicas` may be a one-shot iterator, and both
-        # the tuple and the lookup dict must come from the same iteration.
-        self.replicas = tuple(replicas) if replicas is not None else None
-        # Keyed by host_id.int: UUID.__hash__ is pure Python, int hashing is C (~2x faster).
-        self._replica_dict = {r[0].int: r[1] for r in self.replicas} if self.replicas else {}
+        # The only replica storage: {host_id.int: shard}, in wire order so the leader is first.
+        # Int keys: UUID.__hash__ is pure Python, and the wire's UUID objects can be freed.
+        intern = _host_ids.setdefault
+        self._replica_dict = {intern(u.int, u).int: s for u, s in replicas} if replicas is not None else {}
         # uint64 hash; None = unknown (cold start, or learned over TABLETS_ROUTING_V1).
         self.tablet_version = tablet_version
 
@@ -62,9 +66,14 @@ class Tablet(object):
             # deserialized from the wire as a signed LongType; normalize it
             # back to unsigned so it matches the server's representation.
             tablet_version &= 0xFFFFFFFFFFFFFFFF
-        # __init__ materializes replicas, so empty generators are caught too.
+        # __init__ consumes replicas once, so empty generators are caught too.
         tablet = Tablet(first_token, last_token, replicas, tablet_version)
-        return tablet if tablet.replicas else None
+        return tablet if tablet._replica_dict else None
+
+    @property
+    def replicas(self):
+        # Rebuilt on each access; kept for compatibility, not used on the query path.
+        return tuple([(_host_ids[k], s) for k, s in self._replica_dict.items()])
 
     @property
     def leader(self) -> Optional[UUID]:
@@ -89,9 +98,9 @@ class Tablet(object):
         Returns ``None`` for a tablet with no replicas rather than raising, so
         callers do not have to guard the lookup themselves.
         """
-        if not self.replicas:
-            return None
-        return self.replicas[0][0]
+        for key in self._replica_dict:
+            return _host_ids[key]
+        return None
 
     def replica_contains_host_id(self, uuid: Optional[UUID]) -> bool:
         # A host whose id is not yet known (discovery/metadata transitions) is
