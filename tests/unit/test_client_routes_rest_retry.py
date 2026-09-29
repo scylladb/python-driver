@@ -13,6 +13,7 @@
 # limitations under the License.
 """Cluster-free tests for the 5xx retry in the client-routes REST helper."""
 
+import importlib
 import io
 import os
 import unittest
@@ -20,10 +21,10 @@ import urllib.error
 import uuid
 from unittest import mock
 
-# tests.integration needs a version at import time; no cluster is started here.
-os.environ.setdefault("CASSANDRA_VERSION", "4.0.0")
-
-from tests.integration.standard import test_client_routes as tcr  # noqa: E402
+# tests.integration reads CASSANDRA_VERSION at import time and fails without
+# it. Scope the fallback to the import so it does not leak into later tests.
+with mock.patch.dict(os.environ, {"CASSANDRA_VERSION": "4.0.0"}):
+    tcr = importlib.import_module("tests.integration.standard.test_client_routes")
 
 ROUTES = [{"connection_id": uuid.uuid4(), "host_id": uuid.uuid4(),
            "address": "127.0.0.1", "port": 9042}]
@@ -85,15 +86,35 @@ class PostClientRoutesRetryTest(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual(up.call_count, 2)
 
-        _, _, err = self._run([bad() for _ in range(tcr.MAX_ATTEMPTS)])
+        with self.assertLogs(tcr.log, "ERROR") as cm:
+            _, _, err = self._run([bad() for _ in range(tcr.MAX_ATTEMPTS)])
         self.assertEqual(err.code, 500)
+        self.assertIn("<unreadable body>", "\n".join(cm.output))
 
-    def test_timeout_passed_and_failed_response_closed(self):
-        first = _http_error(500)
-        first.close = mock.Mock(wraps=first.close)
-        up, _, _ = self._run([first, _ok()])
-        self.assertEqual(up.call_args.kwargs["timeout"], tcr.REST_TIMEOUT)
-        first.close.assert_called_once()
+    def test_timeout_passed_on_every_attempt(self):
+        up, _, err = self._run([_http_error(500), _http_error(503), _ok()])
+        self.assertIsNone(err)
+        self.assertEqual(up.call_count, 3)
+        for call in up.call_args_list:
+            self.assertEqual(call.kwargs["timeout"], tcr.REST_TIMEOUT)
+
+    def test_retryable_and_terminal_responses_closed(self):
+        retryable = _http_error(500)
+        retryable.close = mock.Mock(wraps=retryable.close)
+        self._run([retryable, _ok()])
+        retryable.close.assert_called_once()
+
+        exhausted = [_http_error(500) for _ in range(tcr.MAX_ATTEMPTS)]
+        for e in exhausted:
+            e.close = mock.Mock(wraps=e.close)
+        self._run(exhausted)
+        for e in exhausted:
+            e.close.assert_called_once()
+
+        fatal = _http_error(404)
+        fatal.close = mock.Mock(wraps=fatal.close)
+        self._run([fatal])
+        fatal.close.assert_called_once()
 
     def test_error_body_is_logged(self):
         with self.assertLogs(tcr.log, "WARNING") as cm:
