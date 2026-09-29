@@ -62,6 +62,22 @@ class _PoolTests(unittest.TestCase):
         if not self.uses_single_connection:
             assert conn not in pool._trash
 
+    def test_init_logs_none_shard_id(self):
+        """shard_id is None off Scylla; the rendered debug line must say so."""
+        host = Mock(spec=Host, address='ip1')
+        session = self.make_session()
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False, max_request_id=100)
+        conn.features = ProtocolFeatures(shard_id=None, sharding_info=None)
+        session.cluster.connection_factory.return_value = conn
+
+        with self.assertLogs('cassandra.pool', level='DEBUG') as logs:
+            self.PoolImpl(host, HostDistance.LOCAL, session)
+
+        shard_logs = [r.getMessage() for r in logs.records
+                      if "First connection created" in r.getMessage()]
+        self.assertTrue(shard_logs, "no connection initialization log was emitted")
+        self.assertTrue(all(m.endswith("for shard_id=None") for m in shard_logs), shard_logs)
+
     def test_failed_wait_for_connection(self):
         host = Mock(spec=Host, address='ip1')
         session = self.make_session()
