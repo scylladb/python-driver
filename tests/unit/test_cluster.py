@@ -281,6 +281,115 @@ class ClusterTest(unittest.TestCase):
         assert set(cluster.control_connection._application_sessions) == set()
         assert cluster.control_connection._get_application_keyspace() is _NOT_SET
 
+    def test_on_add_waits_until_every_session_pool_is_scheduled(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster._prepare_all_queries = Mock()
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        def make_session():
+            session = Session.__new__(Session)
+            session.cluster = cluster
+            session._profile_manager = cluster.profile_manager
+            session._pools = {}
+            session.shutdown = Mock()
+            session.update_created_pools = Mock(
+                wraps=session.update_created_pools)
+            return session
+
+        first_session = make_session()
+        second_session = make_session()
+        first_pool = Mock(
+            host=host, is_shutdown=False, host_distance=HostDistance.LOCAL)
+        second_pool = Mock(
+            host=host, is_shutdown=False, host_distance=HostDistance.LOCAL)
+
+        first_future = Future()
+        first_future.set_result(True)
+        second_future = Future()
+        reconciliation_future = Future()
+
+        def add_first_pool(pool_host, is_host_addition):
+            first_session._pools[pool_host] = first_pool
+            return first_future
+
+        def add_second_pool(pool_host, is_host_addition):
+            return second_future if is_host_addition else reconciliation_future
+
+        first_session.add_or_renew_pool = Mock(side_effect=add_first_pool)
+        second_session.add_or_renew_pool = Mock(side_effect=add_second_pool)
+        cluster.sessions = (first_session, second_session)
+
+        listener = Mock()
+        cluster.register_listener(listener)
+
+        cluster.on_add(host, refresh_nodes=False)
+
+        first_session.add_or_renew_pool.assert_called_once_with(
+            host, is_host_addition=True)
+        second_session.add_or_renew_pool.assert_called_once_with(
+            host, is_host_addition=True)
+        listener.on_add.assert_not_called()
+        assert host.is_up is None
+
+        # Model the pending task publishing its pool before completing.
+        second_session._pools[host] = second_pool
+        second_future.set_result(True)
+
+        listener.on_add.assert_called_once_with(host)
+        assert host.is_up is True
+        first_session.update_created_pools.assert_called_once_with()
+        second_session.update_created_pools.assert_called_once_with()
+
+    def test_on_up_waits_until_every_session_pool_is_scheduled(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_up = Mock()
+        cluster._prepare_all_queries = Mock()
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        host.set_down()
+
+        first_future = Future()
+        first_future.set_result(True)
+        second_future = Future()
+        first_session = Mock()
+        first_session.add_or_renew_pool.return_value = first_future
+        second_session = Mock()
+        second_session.add_or_renew_pool.return_value = second_future
+        cluster.sessions = (first_session, second_session)
+
+        listener = Mock()
+        cluster.register_listener(listener)
+
+        cluster.on_up(host)
+
+        first_session.add_or_renew_pool.assert_called_once_with(
+            host, is_host_addition=False)
+        second_session.add_or_renew_pool.assert_called_once_with(
+            host, is_host_addition=False)
+        assert host.is_up is False
+        assert host._currently_handling_node_up
+        listener.on_up.assert_not_called()
+
+        second_future.set_result(True)
+
+        assert host.is_up is True
+        assert not host._currently_handling_node_up
+        listener.on_up.assert_called_once_with(host)
+        first_session.update_created_pools.assert_called_once_with()
+        second_session.update_created_pools.assert_called_once_with()
+
     def test_compression_autodisabled_without_libraries(self):
         with patch.dict('cassandra.cluster.locally_supported_compressions', {}, clear=True):
             with patch('cassandra.cluster.log') as patched_logger:

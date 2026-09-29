@@ -2230,8 +2230,14 @@ class Cluster(object):
                 future = session.add_or_renew_pool(host, is_host_addition=False)
                 if future is not None:
                     have_future = True
-                    future.add_done_callback(callback)
                     futures.add(future)
+
+            # Future.add_done_callback() invokes the callback inline when the
+            # future is already complete. Register only after every session's
+            # pool has been scheduled so completion cannot finalize the host
+            # while later pools are still absent from the aggregate.
+            for future in tuple(futures):
+                future.add_done_callback(callback)
         except Exception:
             log.exception("Unexpected failure handling node %s being marked up:", host)
             for future in futures:
@@ -2453,16 +2459,21 @@ class Cluster(object):
 
             self._finalize_add(host)
 
-        have_future = False
         for session in tuple(self.sessions):
             future = session.add_or_renew_pool(host, is_host_addition=True)
             if future is not None:
-                have_future = True
                 futures.add(future)
-                future.add_done_callback(future_completed)
 
-        if not have_future:
+        if not futures:
             self._finalize_add(host)
+            return
+
+        # Register callbacks only after every session has had its pool
+        # scheduled. Future.add_done_callback() invokes the callback inline
+        # when the future is already complete, so registering inside the loop
+        # can finalize the host while later sessions are still unscheduled.
+        for future in tuple(futures):
+            future.add_done_callback(future_completed)
 
     def _finalize_add(self, host, set_up=True):
         with host.lock:
