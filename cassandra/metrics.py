@@ -441,7 +441,9 @@ class Metrics(object):
             Stat('known_hosts',
                 lambda: len(cluster_proxy.metadata.all_hosts())),
             Stat('connected_to',
-                lambda: len(set(chain.from_iterable(list(s._pools.keys()) for s in cluster_proxy.sessions)))),
+                lambda: len(set(chain.from_iterable(
+                    (pool.host for pool in list(s._pools.values()))
+                    for s in cluster_proxy.sessions)))),
             Stat('open_connections',
                 lambda: sum(sum(p.open_count for p in list(s._pools.values())) for s in cluster_proxy.sessions)))
 

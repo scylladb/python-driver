@@ -2607,6 +2607,61 @@ class SessionTest(unittest.TestCase):
         callback.assert_called_once()
         assert callback.call_args.args[0] == {'host1': [keyspace_error]}
 
+    def test_remove_pool_after_host_endpoint_changes(self):
+        session = Session.__new__(Session)
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        pool = Mock(host=host)
+        shutdown_future = Future()
+        session._pools = {host: pool}
+        session.cluster = Mock()
+        session.cluster.executor.submit.return_value = shutdown_future
+        session.is_shutdown = False
+
+        host.endpoint = DefaultEndPoint("127.0.0.2")
+        same_host_at_another_endpoint = Host(
+            "127.0.0.3", SimpleConvictionPolicy, host_id=host.host_id)
+
+        assert session._pools[host] is pool
+        assert session._pools[same_host_at_another_endpoint] is pool
+        assert session.remove_pool(same_host_at_another_endpoint) is shutdown_future
+        assert session._pools == {}
+        session.cluster.executor.submit.assert_called_once_with(pool.shutdown)
+
+    def test_pool_renewal_uses_pool_host_not_retained_dict_key(self):
+        session = Session.__new__(Session)
+        host_id = uuid.uuid4()
+        original_host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=host_id)
+        current_host = Host(
+            "127.0.0.2", SimpleConvictionPolicy, host_id=host_id)
+        old_pool = Mock(host=original_host)
+        pool_state = {"open_count": 1}
+        new_pool = Mock(host=current_host, _keyspace=None)
+        new_pool.get_state.return_value = pool_state
+        session._pools = {original_host: old_pool}
+        session._lock = RLock()
+        session.keyspace = None
+        session.is_shutdown = False
+        session.cluster = Mock(
+            allow_control_connection_query_fallback=ControlConnectionQueryFallback.Disabled)
+        session._profile_manager = Mock()
+        session._profile_manager.distance.return_value = HostDistance.LOCAL
+        session.submit = lambda fn, *args, **kwargs: fn(*args, **kwargs)
+
+        with patch('cassandra.cluster.HostConnection', return_value=new_pool):
+            assert session.add_or_renew_pool(
+                current_host, is_host_addition=False)
+
+        old_pool.shutdown.assert_called_once_with()
+        assert len(session._pools) == 1
+        assert session._pools[current_host] is new_pool
+        # Assigning through the equal current Host retains the original key
+        # object, so public state must take its Host from the replacement pool.
+        assert next(iter(session._pools)) is original_host
+        state = session.get_pool_state()
+        assert next(iter(state)) is current_host
+        assert state[current_host] == pool_state
+
 
 class ClusterDownHandlingTest(unittest.TestCase):
 

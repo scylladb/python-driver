@@ -3823,7 +3823,8 @@ class Session(object):
         Intended for internal use only.
         """
         futures = []
-        for host in tuple(self._pools.keys()):
+        for pool in tuple(self._pools.values()):
+            host = pool.host
             if host != excluded_host and host.is_up:
                 future = ResponseFuture(self, PrepareMessage(query=query, keyspace=keyspace),
                                             None, self.default_timeout)
@@ -4218,11 +4219,14 @@ class Session(object):
         else:
             allowed_distances = (HostDistance.LOCAL_RACK, HostDistance.LOCAL, HostDistance.REMOTE)
 
-        return tuple(
-            host for host, pool in tuple(self._pools.items())
-            if host.is_up
-            and not pool.is_shutdown
-            and self._profile_manager.distance(host) in allowed_distances)
+        hosts = []
+        for pool in tuple(self._pools.values()):
+            host = pool.host
+            if (host.is_up
+                    and not pool.is_shutdown
+                    and self._profile_manager.distance(host) in allowed_distances):
+                hosts.append(host)
+        return tuple(hosts)
 
     def _query_local_schema_version(self, host: Host, query: str, deadline: float) -> Future:
         remaining = max(0.0, deadline - time.time())
@@ -4307,7 +4311,7 @@ class Session(object):
             return self.cluster.executor.submit(fn, *args, **kwargs)
 
     def get_pool_state(self):
-        return dict((host, pool.get_state()) for host, pool in tuple(self._pools.items()))
+        return dict((pool.host, pool.get_state()) for pool in tuple(self._pools.values()))
 
     def get_pools(self):
         return self._pools.values()
@@ -5228,9 +5232,8 @@ class ControlConnection(object):
             found_endpoints.add(factory_endpoint)
             existing_host = self._cluster.metadata.get_host_by_host_id(host_id)
 
-            # Host hashes depend on their endpoint, so never replace the route
-            # of an existing Host with or from a Unix socket. A newly discovered
-            # local Host keeps the socket which actually reached the node.
+            # Preserve an existing Host's Unix route. A newly discovered local
+            # Host keeps the socket which actually reached the node.
             if (existing_host is not None and
                     isinstance(existing_host.endpoint, UnixSocketEndPoint)):
                 endpoint = existing_host.endpoint

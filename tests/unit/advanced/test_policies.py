@@ -79,7 +79,7 @@ class DSELoadBalancingPolicyTest(unittest.TestCase):
         policy = DSELoadBalancingPolicy(RoundRobinPolicy())
         policy.populate(Mock(metadata=ClusterMetaMock({'127.0.0.1': target_host})), hosts)
         query_plan = list(policy.make_query_plan(None, Mock(target_host='127.0.0.1')))
-        assert sorted(query_plan) == hosts
+        assert sorted(query_plan) == sorted(hosts)
 
         target_host.is_up = False
         policy.on_down(target_host)
@@ -96,5 +96,5 @@ class DSELoadBalancingPolicyTest(unittest.TestCase):
         policy.populate(Mock(metadata=ClusterMetaMock({'127.0.0.1': target_host})), hosts)
         for _ in range(10):
             query_plan = list(policy.make_query_plan(None, Mock(target_host='127.0.0.1')))
-            assert sorted(query_plan) == hosts
+            assert sorted(query_plan) == sorted(hosts)
             assert query_plan[0] == target_host

@@ -154,6 +154,11 @@ Bug Fixes
 
 Others
 ------
+* ``Host.host_id`` is now the immutable identity of a node. Constructing a
+  ``Host`` requires a non-nil ``uuid.UUID``; equality, hashing, and ordering use
+  only that ID, and comparing a ``Host`` with an address no longer reports them
+  as equal. Because hashing is stable, existing Host-keyed session pool
+  lookups and removals remain valid across endpoint changes (issue #867).
 * ``Connection.max_request_id`` and ``Connection.orphaned_threshold`` now follow the
   ``max_in_flight`` actually in force. Both were computed in the class body, which runs
   once, so a subclass that set its own ``max_in_flight`` inherited values derived from the
