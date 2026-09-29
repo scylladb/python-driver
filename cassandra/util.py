@@ -723,19 +723,19 @@ class OrderedMap(Mapping):
 
     def __getitem__(self, key):
         try:
-            index = self._index[self._lookup_key(key)]
+            index = self._index[self._serialize_key(key)]
             return self._items[index][1]
         except KeyError:
-            raise KeyError(key) from None
+            raise KeyError(str(key))
 
     def __delitem__(self, key):
         # not efficient -- for convenience only
         try:
-            index = self._index.pop(self._lookup_key(key))
+            index = self._index.pop(self._serialize_key(key))
             self._index = dict((k, i if i < index else i - 1) for k, i in self._index.items())
             self._items.pop(index)
         except KeyError:
-            raise KeyError(key) from None
+            raise KeyError(str(key))
 
     def __iter__(self):
         for i in self._items:
@@ -775,9 +775,6 @@ class OrderedMap(Mapping):
     def _serialize_key(self, key):
         return pickle.dumps(key)
 
-    def _lookup_key(self, key):
-        return self._serialize_key(key)
-
 
 class OrderedMapSerializedKey(OrderedMap):
 
@@ -793,13 +790,38 @@ class OrderedMapSerializedKey(OrderedMap):
     def _serialize_key(self, key):
         return self.cass_key_type.serialize(key, self.protocol_version)
 
-    def _lookup_key(self, key):
-        # Translate expected type/value rejections, not unexpected serializer
-        # failures. Inserts still call _serialize_key directly.
+    # Serializer errors for a key of the wrong type or out of range. A key
+    # rejected this way cannot be in the map, so lookups treat it as missing.
+    # Anything else raised by the serializer propagates unchanged.
+    _REJECTED_KEY_ERRORS = (TypeError, AttributeError, ValueError, struct.error)
+
+    def _lookup_index(self, key):
         try:
-            return self._serialize_key(key)
-        except (TypeError, AttributeError, ValueError, struct.error):
-            raise KeyError(key) from None
+            flat_key = self._serialize_key(key)
+        except self._REJECTED_KEY_ERRORS:
+            return None, -1
+        return flat_key, self._index.get(flat_key, -1)
+
+    def __getitem__(self, key):
+        _, index = self._lookup_index(key)
+        if index < 0:
+            raise KeyError(key)
+        return self._items[index][1]
+
+    def __delitem__(self, key):
+        flat_key, index = self._lookup_index(key)
+        if index < 0:
+            raise KeyError(key)
+        del self._index[flat_key]
+        self._index = dict((k, i if i < index else i - 1) for k, i in self._index.items())
+        self._items.pop(index)
+
+    def __contains__(self, key):
+        return self._lookup_index(key)[1] >= 0
+
+    def get(self, key, default=None):
+        _, index = self._lookup_index(key)
+        return self._items[index][1] if index >= 0 else default
 
 
 @total_ordering

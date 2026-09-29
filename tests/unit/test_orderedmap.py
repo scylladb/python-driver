@@ -156,8 +156,12 @@ class OrderedMapTest(unittest.TestCase):
     def test_delitem(self):
         om = OrderedMap({1: 1, 2: 2})
 
-        with pytest.raises(KeyError):
+        with pytest.raises(KeyError) as excinfo:
             om.__delitem__(3)
+        assert excinfo.value.args == ('3',)
+        with pytest.raises(KeyError) as excinfo:
+            om[3]
+        assert excinfo.value.args == ('3',)
 
         del om[1]
         assert om == {2: 2}
@@ -201,13 +205,11 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
         with pytest.raises(KeyError) as excinfo:
             om[None]
         assert excinfo.value.args == (None,)
-        assert excinfo.value.__cause__ is None
-        assert excinfo.value.__suppress_context__
+        assert excinfo.value.__context__ is None
         with pytest.raises(KeyError) as excinfo:
             del om[None]
         assert excinfo.value.args == (None,)
-        assert excinfo.value.__cause__ is None
-        assert excinfo.value.__suppress_context__
+        assert excinfo.value.__context__ is None
         assert list(om.items()) == [('one', 1)]
 
         # the missing-key error must not depend on the key's __str__
@@ -257,7 +259,7 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
         class Boom(Exception):
             pass
 
-        for error_type in (RuntimeError, OSError, MemoryError, Boom):
+        for error_type in (RuntimeError, OSError, MemoryError, KeyError, Boom):
             with self.subTest(error_type=error_type):
                 error = error_type('serializer failed')
 
