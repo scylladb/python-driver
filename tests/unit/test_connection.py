@@ -21,7 +21,7 @@ import time
 from threading import Lock
 from unittest.mock import Mock, ANY, call, patch
 
-from cassandra import OperationTimedOut
+from cassandra import AuthenticationFailed, OperationTimedOut
 from cassandra.application_info import ApplicationInfoBase
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
@@ -34,7 +34,8 @@ from cassandra.marshal import uint8_pack, uint32_pack, int32_pack
 from cassandra.protocol import (write_stringmultimap, write_int, write_string,
                                 read_stringmap, AuthSuccessMessage, ReadyMessage,
                                 SupportedMessage, ProtocolHandler,
-                                ResultMessage, RESULT_KIND_SET_KEYSPACE)
+                                ResultMessage, RESULT_KIND_SET_KEYSPACE,
+                                BadCredentials, OverloadedErrorMessage)
 
 from tests.unit.utils import StubReporter, ThrowingReporter
 from tests.util import wait_until, assertRegex
@@ -908,6 +909,67 @@ class TimerTest(unittest.TestCase):
         tm.add_timer(t2)
         # Prior to #466: "TypeError: unorderable types: Timer() < Timer()"
         tm.service_timeouts()
+
+
+class AuthenticationTest(unittest.TestCase):
+
+    def make_connection(self):
+        connection = Connection(DefaultEndPoint('1.2.3.4'))
+        connection._socket = Mock()
+        connection.defunct = Mock()
+        return connection
+
+    def test_credentials_authentication_preserves_overloaded_error(self):
+        connection = self.make_connection()
+        overloaded = OverloadedErrorMessage(
+            code=OverloadedErrorMessage.error_code,
+            message='Too many authentication requests', info=None)
+
+        connection._handle_startup_response(
+            overloaded, did_authenticate=True)
+
+        connection.defunct.assert_called_once()
+        error = connection.defunct.call_args.args[0]
+        assert error is overloaded
+        assert not isinstance(error, AuthenticationFailed)
+
+    def test_credentials_authentication_wraps_bad_credentials(self):
+        connection = self.make_connection()
+        bad_credentials = BadCredentials(
+            code=BadCredentials.error_code, message='Bad credentials', info=None)
+
+        connection._handle_startup_response(
+            bad_credentials, did_authenticate=True)
+
+        connection.defunct.assert_called_once()
+        error = connection.defunct.call_args.args[0]
+        assert isinstance(error, AuthenticationFailed)
+        assert error is not bad_credentials
+
+    def test_sasl_authentication_preserves_overloaded_error(self):
+        connection = self.make_connection()
+        overloaded = OverloadedErrorMessage(
+            code=OverloadedErrorMessage.error_code,
+            message='Too many authentication requests', info=None)
+
+        connection._handle_auth_response(overloaded)
+
+        connection.defunct.assert_called_once()
+        error = connection.defunct.call_args.args[0]
+        assert error is overloaded
+        assert not isinstance(error, AuthenticationFailed)
+
+    def test_sasl_authentication_wraps_bad_credentials(self):
+        connection = self.make_connection()
+        bad_credentials = BadCredentials(
+            code=BadCredentials.error_code, message='Bad credentials', info=None)
+
+        connection._handle_auth_response(bad_credentials)
+
+        connection.defunct.assert_called_once()
+        error = connection.defunct.call_args.args[0]
+        assert isinstance(error, AuthenticationFailed)
+        assert error is not bad_credentials
 
 
 class TlsSessionResumptionTest(unittest.TestCase):
