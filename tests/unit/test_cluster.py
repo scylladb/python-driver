@@ -719,6 +719,40 @@ class ClusterTest(unittest.TestCase):
         assert session.add_or_renew_pool.call_args_list[-1] == \
             call(host, False)
 
+    def test_removed_ignored_replacement_retry_is_not_finalized(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        cluster._prepare_all_queries = Mock()
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        session = Mock()
+        cluster.sessions = (session,)
+        listener = Mock()
+        cluster.register_listener(listener)
+
+        def remove_during_refresh(added_host, refresh_nodes):
+            assert added_host is host
+            assert refresh_nodes
+            cluster.remove_host(host, trigger_reconciliation=False)
+
+        cluster.control_connection.on_add = Mock(
+            side_effect=remove_during_refresh)
+
+        cluster.on_add(
+            host, refresh_nodes=True, reconcile_pools_on_failure=True,
+            set_up_if_ignored=True)
+
+        assert host._is_removed
+        assert host.is_up is False
+        listener.on_remove.assert_called_once_with(host)
+        listener.on_add.assert_not_called()
+        session.update_created_pools.assert_not_called()
+
     def test_unconvicted_replacement_retry_keeps_reconnecting(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)

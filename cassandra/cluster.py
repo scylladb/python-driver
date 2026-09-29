@@ -2627,6 +2627,8 @@ class Cluster(object):
 
     def _finalize_add(self, host, set_up=True):
         with host.lock:
+            if host._is_removed:
+                return
             if set_up:
                 host.set_up()
             host._pending_host_addition = False

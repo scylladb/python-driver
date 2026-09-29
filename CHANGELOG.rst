@@ -158,7 +158,14 @@ Others
   ``Host`` requires a non-nil ``uuid.UUID``; equality, hashing, and ordering use
   only that ID, and comparing a ``Host`` with an address no longer reports them
   as equal. Because hashing is stable, existing Host-keyed session pool
-  lookups and removals remain valid across endpoint changes (issue #867).
+  lookups and removals remain valid across endpoint changes (issue #867). When
+  topology reports a different host ID at an existing endpoint, the driver
+  replaces the ``Host`` instead of changing its ID in place: listeners receive
+  ``on_remove(old_host)`` and, after the replacement pools are ready,
+  ``on_add(new_host)``. A ``Host`` retained from ``Metadata.all_hosts()`` before
+  replacement is stale; using it with ``Session.execute(host=...)`` fails with
+  ``NoHostAvailable``, whose per-host error is ``Host has been marked down or
+  removed``.
 * ``Connection.max_request_id`` and ``Connection.orphaned_threshold`` now follow the
   ``max_in_flight`` actually in force. Both were computed in the class body, which runs
   once, so a subclass that set its own ``max_in_flight`` inherited values derived from the

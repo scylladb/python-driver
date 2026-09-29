@@ -517,7 +517,7 @@ class ControlConnectionTest(unittest.TestCase):
             .format(nt_col_name='rpc_address')
 
     def test_defunct_tcp_control_reconnects_when_open_pool_discounts_down(self):
-        host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
         host.set_up()
         session = Mock()
         session.get_pool_state.return_value = {
@@ -536,7 +536,7 @@ class ControlConnectionTest(unittest.TestCase):
             self.control_connection._reconnect)
 
     def test_defunct_control_reconnects_when_conviction_is_rejected(self):
-        host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
         host.set_up()
         self._use_cluster_down_handling()
         self.connection.is_defunct = True
@@ -551,7 +551,7 @@ class ControlConnectionTest(unittest.TestCase):
             self.control_connection._reconnect)
 
     def test_defunct_control_reconnects_when_host_is_already_down(self):
-        host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
         host.set_down()
         self._use_cluster_down_handling()
         self.connection.is_defunct = True
@@ -566,7 +566,7 @@ class ControlConnectionTest(unittest.TestCase):
             self.control_connection._reconnect)
 
     def test_defunct_control_reconnects_when_host_reconnector_is_active(self):
-        host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
         host.set_down()
         host.get_and_set_reconnection_handler(Mock())
         self._use_cluster_down_handling()
@@ -583,7 +583,7 @@ class ControlConnectionTest(unittest.TestCase):
             self.control_connection._reconnect)
 
     def test_defunct_control_reconnects_when_pool_creation_is_disabled(self):
-        host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
         host.set_up()
         self._use_cluster_down_handling(
             fallback=ControlConnectionQueryFallback.SkipPoolCreation)
@@ -600,7 +600,7 @@ class ControlConnectionTest(unittest.TestCase):
             self.control_connection._reconnect)
 
     def test_defunct_control_waits_for_dispatched_down_callback(self):
-        host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
         host.set_up()
         self._use_cluster_down_handling()
         self.connection.is_defunct = True
@@ -653,7 +653,7 @@ class ControlConnectionTest(unittest.TestCase):
     def test_signal_error_leaves_an_in_flight_reconnection_alone(self):
         # _reconnect() cancels the handler and restarts its schedule from the
         # initial delay, so repeated errors must not keep resetting the backoff.
-        host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
         host.set_down()
         self._use_cluster_down_handling()
         self.control_connection._reconnection_handler = Mock()
@@ -792,7 +792,7 @@ class ControlConnectionTest(unittest.TestCase):
         assert self.control_connection._connection is self.connection
 
     def test_signal_error_reconnects_once_a_reconnection_has_given_up(self):
-        host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
         host.set_down()
         self._use_cluster_down_handling()
         handler = self._make_reconnection_handler()
@@ -1204,7 +1204,7 @@ class ControlConnectionTest(unittest.TestCase):
     def test_exhausted_replacement_does_not_suppress_a_later_failure(self):
         self.cluster.reconnection_policy = ConstantReconnectionPolicy(
             0, max_attempts=1)
-        host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
 
         # Removing the connected host starts a proactive replacement while
         # the existing control connection is still healthy.
@@ -1232,7 +1232,7 @@ class ControlConnectionTest(unittest.TestCase):
     def test_failure_between_proactive_retries_starts_a_fresh_schedule(self):
         self.cluster.reconnection_policy = ConstantReconnectionPolicy(
             0, max_attempts=1)
-        host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
 
         # Start a proactive replacement while the existing control connection
         # is healthy, then park the handler between its scheduled attempts.
@@ -1296,7 +1296,7 @@ class ControlConnectionTest(unittest.TestCase):
     def test_defunct_control_reconnects_when_down_dispatch_is_dropped(self):
         # on_down() marks the host down but the executor refuses the DOWN
         # callback, so nothing else will reconnect the control connection.
-        host = self.cluster.metadata.get_host_by_host_id('uuid1')
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
         host.set_up()
         self._use_cluster_down_handling()
         self.cluster.on_down_potentially_blocking = \
