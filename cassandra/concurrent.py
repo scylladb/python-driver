@@ -14,9 +14,8 @@
 
 
 from collections import namedtuple
-from heapq import heappush, heappop
 from itertools import cycle
-from threading import Condition
+from queue import Empty, SimpleQueue
 
 from cassandra.cluster import ResultSet, EXEC_PROFILE_DEFAULT
 
@@ -74,9 +73,9 @@ def execute_concurrent(session, statements_and_parameters, concurrency=100, rais
             else:
                 process_user(result[0])  # result will be a list of rows
 
-    Note: in the case that `generators` are used, it is important to ensure the consumers do not
-    block or attempt further synchronous requests, because no further IO will be processed until
-    the consumer returns. This may also produce a deadlock in the IO event thread.
+    Requests are submitted from the calling thread, never from the IO event thread. With
+    `results_generator`, new requests are only submitted while the consumer is asking for the
+    next result, so a slow consumer lowers the effective concurrency.
     """
     if concurrency <= 0:
         raise ValueError("concurrency must be greater than 0")
@@ -90,131 +89,101 @@ def execute_concurrent(session, statements_and_parameters, concurrency=100, rais
 
 
 class _ConcurrentExecutor(object):
+    # All submission happens on the calling thread. IO-thread callbacks only
+    # store the result and enqueue its index, so they never block on the caller.
 
     def __init__(self, session, statements_and_params, execution_profile):
         self.session = session
-        self._enum_statements = enumerate(iter(statements_and_params))
+        self._statements = iter(statements_and_params)
         self._execution_profile = execution_profile
-        self._condition = Condition()
+        self._done = SimpleQueue()
+        self._results = {}
+        self._submitted = 0
+        self._in_flight = 0
+        self._exhausted = False
         self._fail_fast = False
-        self._results_queue = []
-        self._current = 0
-        self._exec_count = 0
-        self._executing = False
+        self._first_error = None
 
-    def execute(self, concurrency, fail_fast):
-        self._fail_fast = fail_fast
-        self._results_queue = []
-        self._current = 0
-        self._exec_count = 0
-        with self._condition:
-            for n in range(concurrency):
-                if not self._execute_next():
-                    break
-        return self._results()
+    def _submit(self, concurrency):
+        while self._in_flight < concurrency and not self._exhausted \
+                and not (self._fail_fast and self._first_error is not None):
+            try:
+                statement, params = next(self._statements)
+            except StopIteration:
+                self._exhausted = True
+                return
+            idx = self._submitted
+            self._submitted += 1
+            self._in_flight += 1
+            try:
+                future = self.session.execute_async(statement, params, timeout=None, execution_profile=self._execution_profile)
+                future.add_callbacks(
+                    callback=self._on_success, callback_args=(future, idx),
+                    errback=self._on_error, errback_args=(idx,))
+            except Exception as exc:
+                self._on_error(exc, idx)
 
-    def _execute_next(self):
-        # lock must be held
+    def _reap(self, concurrency, block):
         try:
-            (idx, (statement, params)) = next(self._enum_statements)
-            self._exec_count += 1
-            self._execute(idx, statement, params)
-            return True
-        except StopIteration:
+            self._done.get(block)
+            self._in_flight -= 1
+            while True:
+                self._done.get_nowait()
+                self._in_flight -= 1
+        except Empty:
             pass
-
-    def _execute(self, idx, statement, params):
-        # When execute_async completes synchronously (e.g. immediate timeout),
-        # the errback fires inline: _on_error -> _put_result -> _execute_next
-        # -> _execute.  Without protection this recurses once per remaining
-        # statement and blows the stack.
-        #
-        # ``_executing`` marks that we are already inside this method higher up
-        # the call stack.  When a synchronous callback re-enters, we just stash
-        # the pending work in ``_pending_executions`` and let the outermost
-        # invocation drain it in a loop -- no recursion.
-        if self._executing:
-            self._pending_executions.append((idx, statement, params))
-            return
-
-        self._executing = True
-        self._pending_executions = [(idx, statement, params)]
-        try:
-            while self._pending_executions:
-                p_idx, p_statement, p_params = self._pending_executions.pop(0)
-                try:
-                    future = self.session.execute_async(p_statement, p_params, timeout=None, execution_profile=self._execution_profile)
-                    args = (future, p_idx)
-                    future.add_callbacks(
-                        callback=self._on_success, callback_args=args,
-                        errback=self._on_error, errback_args=args)
-                except Exception as exc:
-                    self._put_result(exc, p_idx, False)
-        finally:
-            self._executing = False
+        self._submit(concurrency)
 
     def _on_success(self, result, future, idx):
         future.clear_callbacks()
-        self._put_result(ResultSet(future, result), idx, True)
+        self._complete(idx, ExecutionResult(True, ResultSet(future, result)))
 
-    def _on_error(self, result, future, idx):
-        self._put_result(result, idx, False)
+    def _on_error(self, exc, idx):
+        if self._first_error is None:
+            self._first_error = exc
+        self._complete(idx, ExecutionResult(False, exc))
+
+    def _complete(self, idx, result):
+        # Count each statement once even if its future reports twice.
+        if idx not in self._results:
+            self._results[idx] = result
+            self._done.put(idx)
 
 
 class ConcurrentExecutorGenResults(_ConcurrentExecutor):
 
-    def _put_result(self, result, idx, success):
-        with self._condition:
-            heappush(self._results_queue, (idx, ExecutionResult(success, result)))
-            self._execute_next()
-            self._condition.notify()
+    def execute(self, concurrency, fail_fast):
+        self._fail_fast = fail_fast
+        self._submit(concurrency)
+        return self._results_gen(concurrency)
 
-    def _results(self):
-        with self._condition:
-            while self._current < self._exec_count:
-                while not self._results_queue or self._results_queue[0][0] != self._current:
-                    self._condition.wait()
-                while self._results_queue and self._results_queue[0][0] == self._current:
-                    _, res = heappop(self._results_queue)
-                    try:
-                        self._condition.release()
-                        if self._fail_fast and not res[0]:
-                            raise res[1]
-                        yield res
-                    finally:
-                        self._condition.acquire()
-                    self._current += 1
+    def _results_gen(self, concurrency):
+        results = self._results
+        current = 0
+        while current < self._submitted:
+            while current not in results:
+                self._reap(concurrency, block=True)
+            res = results.pop(current)
+            current += 1
+            if self._fail_fast and not res.success:
+                raise res.result_or_exc
+            # Keep the window full while the consumer works on this result.
+            self._reap(concurrency, block=False)
+            yield res
 
 
 class ConcurrentExecutorListResults(_ConcurrentExecutor):
 
-    _exception = None
-
     def execute(self, concurrency, fail_fast):
-        self._exception = None
-        return super(ConcurrentExecutorListResults, self).execute(concurrency, fail_fast)
-
-    def _put_result(self, result, idx, success):
-        self._results_queue.append((idx, ExecutionResult(success, result)))
-        with self._condition:
-            self._current += 1
-            if not success and self._fail_fast:
-                if not self._exception:
-                    self._exception = result
-                self._condition.notify()
-            elif not self._execute_next() and self._current == self._exec_count:
-                self._condition.notify()
-
-    def _results(self):
-        with self._condition:
-            while self._current < self._exec_count:
-                self._condition.wait()
-                if self._exception and self._fail_fast:
-                    raise self._exception
-        if self._exception and self._fail_fast:  # raise the exception even if there was no wait
-            raise self._exception
-        return [r[1] for r in sorted(self._results_queue)]
-
+        self._fail_fast = fail_fast
+        self._submit(concurrency)
+        while True:
+            if fail_fast and self._first_error is not None:
+                raise self._first_error
+            if not self._in_flight:
+                break
+            self._reap(concurrency, block=True)
+        return [self._results[i] for i in range(self._submitted)]
 
 
 def execute_concurrent_with_args(session, statement, parameters, *args, **kwargs):

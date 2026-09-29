@@ -24,6 +24,7 @@ import sys
 import platform
 import uuid
 
+from cassandra import OperationTimedOut
 from cassandra.cluster import Cluster, Session
 from cassandra.concurrent import execute_concurrent, execute_concurrent_with_args
 from cassandra.pool import Host
@@ -307,3 +308,168 @@ class ConcurrencyTest((unittest.TestCase)):
         for success, result in results:
             assert not success
             assert result is error
+
+
+class _ManualFuture(object):
+    """Future completed explicitly by the test, from any thread."""
+    _query_trace = None
+    _col_names = None
+    _col_types = None
+    has_more_pages = False
+
+    def __init__(self, params, on_registered):
+        self.params = params
+        self._on_registered = on_registered
+
+    def add_callbacks(self, callback, errback, callback_args=(), callback_kwargs=None,
+                      errback_args=(), errback_kwargs=None):
+        self.callback = lambda rows: callback(rows, *callback_args)
+        self.errback = lambda exc: errback(exc, *errback_args)
+        self._on_registered(self)
+
+    def clear_callbacks(self):
+        pass
+
+
+def _session_with(on_registered):
+    # on_registered(future) runs once execute_concurrent has attached its callbacks
+    session = Mock()
+    session.execute_async.side_effect = lambda stmt, params, **kw: _ManualFuture(params, on_registered)
+    return session
+
+
+class ConcurrentExecutorTest(unittest.TestCase):
+
+    def _run(self, fn, *args, **kwargs):
+        # Fail instead of hanging the suite on a deadlock regression.
+        out = {}
+
+        def target():
+            try:
+                out['result'] = fn(*args, **kwargs)
+            except BaseException as exc:
+                out['exc'] = exc
+        t = threading.Thread(target=target, daemon=True)
+        t.start()
+        t.join(10)
+        assert not t.is_alive(), "execute_concurrent hung"
+        if 'exc' in out:
+            raise out['exc']
+        return out['result']
+
+    def test_callbacks_do_not_block_on_submitting_thread(self):
+        # Completions arriving while the caller is still submitting must not wait for it.
+        for results_generator in (False, True):
+            futures = []
+
+            def on_execute(future):
+                futures.append(future)
+                if len(futures) == 2:
+                    t = threading.Thread(target=futures[0].callback, args=(['r'],))
+                    t.start()
+                    t.join(2)
+                    assert not t.is_alive(), "IO-thread callback blocked on the submitter"
+                    future.callback(['r'])
+                elif len(futures) > 2:
+                    future.callback(['r'])
+                return future
+
+            results = self._run(lambda: list(execute_concurrent(
+                _session_with(on_execute), [("q", (i,)) for i in range(10)],
+                concurrency=10, results_generator=results_generator)))
+            assert [r.success for r in results] == [True] * 10
+
+    def test_no_helper_threads(self):
+        before = threading.active_count()
+
+        def on_execute(future):
+            assert threading.active_count() == before
+            future.callback(['r'])
+            return future
+
+        results = execute_concurrent(_session_with(on_execute), [("q", (i,)) for i in range(50)], concurrency=5)
+        assert len(results) == 50
+
+    def test_results_in_order_with_out_of_order_completion(self):
+        for results_generator in (False, True):
+            pending = []
+
+            def on_execute(future):
+                pending.append(future)
+                if len(pending) == 4:  # complete the window in reverse
+                    while pending:
+                        f = pending.pop()
+                        f.callback([f.params[0]])
+                return future
+
+            results = self._run(lambda: list(execute_concurrent(
+                _session_with(on_execute), [("q", (i,)) for i in range(40)],
+                concurrency=4, results_generator=results_generator)))
+            assert [r.result_or_exc.current_rows for r in results] == [[i] for i in range(40)]
+
+    def test_duplicate_completion_counted_once(self):
+        # e.g. a speculative response arriving after a client timeout
+        futures = []
+
+        def on_execute(future):
+            futures.append(future)
+            if future.params[0] == 0:
+                future.errback(OperationTimedOut())
+                future.callback(['late'])
+            return future
+
+        out = []
+        t = threading.Thread(target=lambda: out.append(execute_concurrent(
+            _session_with(on_execute), [("q", (i,)) for i in range(2)], raise_on_first_error=False)))
+        t.start()
+        t.join(0.5)
+        assert not out, "returned before the second request completed"
+        futures[1].callback(['r'])
+        t.join(5)
+        assert [r.success for r in out[0]] == [False, True]
+
+    def test_iterable_errors_propagate(self):
+        def broken(exc):
+            for i in range(5):
+                yield ("q", (i,))
+            raise exc
+
+        def on_execute(future):
+            future.callback(['r'])
+            return future
+
+        for results_generator in (False, True):
+            for exc in (ValueError("boom"), GeneratorExit()):
+                with pytest.raises(type(exc)):
+                    self._run(lambda: list(execute_concurrent(
+                        _session_with(on_execute), broken(exc), concurrency=2,
+                        raise_on_first_error=False, results_generator=results_generator)))
+
+    def test_fail_fast_stops_consuming_input(self):
+        consumed = []
+
+        def statements():
+            for i in range(20000):
+                consumed.append(i)
+                yield ("q", (i,))
+
+        def on_execute(future):
+            if future.params[0] == 0:
+                future.errback(ValueError("first"))
+            else:
+                future.callback(['r'])
+            return future
+
+        for results_generator in (False, True):
+            del consumed[:]
+            with pytest.raises(ValueError, match="first"):
+                self._run(lambda: list(execute_concurrent(
+                    _session_with(on_execute), statements(), concurrency=5,
+                    raise_on_first_error=True, results_generator=results_generator)))
+            assert len(consumed) <= 5
+
+    def test_execute_async_raising_is_recorded(self):
+        session = Mock()
+        session.execute_async.side_effect = RuntimeError("no hosts")
+        results = execute_concurrent(session, [("q", ())] * 3, raise_on_first_error=False)
+        assert [(r.success, type(r.result_or_exc)) for r in results] == [(False, RuntimeError)] * 3
