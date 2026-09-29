@@ -30,7 +30,7 @@ import weakref
 from threading import Event, Lock, RLock, Thread
 from types import SimpleNamespace
 
-from unittest.mock import patch, Mock
+from unittest.mock import ANY, Mock, call, patch
 import uuid
 
 from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, RequestExecutionException, ReadTimeout, WriteTimeout, CoordinationFailure, ReadFailure, WriteFailure, FunctionFailure, AlreadyExists,\
@@ -353,12 +353,19 @@ class ClusterTest(unittest.TestCase):
         cluster.profile_manager = Mock()
         cluster.profile_manager.distance.return_value = HostDistance.LOCAL
         cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_down = Mock()
         cluster._prepare_all_queries = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock())
+        cluster.scheduler.schedule = Mock()
 
         host = Host(
             "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
         cluster.metadata.add_or_return_host(host)
         host.set_down()
+        replacement_callback = Mock()
+        with host.lock:
+            host._pending_host_addition = True
+            host._pending_host_addition_callback = replacement_callback
 
         first_future = Future()
         first_future.set_result(True)
@@ -380,15 +387,522 @@ class ClusterTest(unittest.TestCase):
             host, is_host_addition=False)
         assert host.is_up is False
         assert host._currently_handling_node_up
+        assert host._pending_host_addition_callback is replacement_callback
         listener.on_up.assert_not_called()
 
-        second_future.set_result(True)
+        second_future.set_result(False)
+
+        replacement_handler = host._reconnection_handler
+        assert replacement_handler is not None
+        assert replacement_handler.is_host_addition
+        assert replacement_handler.on_add is replacement_callback
+        assert host.is_up is False
+        assert not host._currently_handling_node_up
+        assert host._pending_host_addition_callback is replacement_callback
+        listener.on_up.assert_not_called()
+        first_session.remove_pool.assert_has_calls([call(host), call(host)])
+        second_session.remove_pool.assert_has_calls([call(host), call(host)])
+
+    def test_failed_replacement_add_removes_partial_pools_and_reconnects(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster._start_reconnector = Mock()
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        def make_session(pool_future):
+            session = Session.__new__(Session)
+            session.cluster = cluster
+            session._profile_manager = cluster.profile_manager
+            session._pools = {}
+            session.is_shutdown = False
+            session.submit = lambda fn, *args, **kwargs: fn(*args, **kwargs)
+            session.add_or_renew_pool = Mock(return_value=pool_future)
+            session.update_created_pools = Mock(
+                wraps=session.update_created_pools)
+            session.shutdown = Mock()
+            return session
+
+        successful_future = Future()
+        failed_future = Future()
+        successful_session = make_session(successful_future)
+        failed_session = make_session(failed_future)
+        cluster.sessions = (successful_session, failed_session)
+
+        listener = Mock()
+        cluster.register_listener(listener)
+
+        cluster.on_add(
+            host, refresh_nodes=False, reconcile_pools_on_failure=True)
+
+        partial_pool = Mock(host=host, is_shutdown=False)
+        partial_pool.get_state.return_value = {"open_count": 1}
+        successful_session._pools[host] = partial_pool
+        successful_future.set_result(True)
+
+        # The healthy pool makes the failing session's DOWN signal look like
+        # an isolated connection failure, so Cluster.on_down() discounts it.
+        cluster.signal_connection_failure(
+            host, ConnectionException("pool creation failed"),
+            is_host_addition=True, expect_host_to_be_down=True)
+        assert host.is_up is None
+        cluster._start_reconnector.assert_not_called()
+
+        failed_future.set_result(False)
+
+        assert host.is_up is False
+        assert successful_session._pools == {}
+        partial_pool.shutdown.assert_called_once_with()
+        successful_session.update_created_pools.assert_called_once_with(
+            excluded_host=host, hosts=ANY)
+        failed_session.update_created_pools.assert_called_once_with(
+            excluded_host=host, hosts=ANY)
+        cluster._start_reconnector.assert_called_once_with(
+            host, is_host_addition=True,
+            on_add_reconnection=ANY, start=False)
+        listener.on_add.assert_not_called()
+
+    def test_replacement_auth_failure_invalidates_queued_restart(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        cluster.executor.submit.return_value = Future()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock())
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        session = Session.__new__(Session)
+        session.cluster = cluster
+        session._profile_manager = cluster.profile_manager
+        session._pools = {}
+        session._lock = RLock()
+        session.keyspace = None
+        session.is_shutdown = False
+        session.shutdown = Mock()
+        session.update_created_pools = Mock(return_value=set())
+
+        def submit(fn, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except Exception as exc:
+                future.set_exception(exc)
+            return future
+
+        session.submit = submit
+        cluster.sessions.add(session)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=AuthenticationFailed('bad credentials')):
+            cluster.on_add(
+                host, refresh_nodes=False,
+                reconcile_pools_on_failure=True)
+
+        replacement_callback = host._pending_host_addition_callback
+        assert replacement_callback is not None
+        cluster.executor.submit.assert_called_once()
+        restart_task, *restart_args = cluster.executor.submit.call_args.args
+        restart_task(*restart_args)
+
+        assert not host.is_currently_reconnecting()
+        assert not host._currently_handling_node_down
+        cluster.scheduler.schedule.assert_not_called()
+
+        cluster.on_down(host, is_host_addition=False)
+
+        assert cluster.executor.submit.call_count == 2
+        assert host._currently_handling_node_down
+
+        restart_task, *restart_args = cluster.executor.submit.call_args.args
+        restart_task(*restart_args)
+
+        replacement_handler = host._reconnection_handler
+        assert replacement_handler is not None
+        assert replacement_handler.is_host_addition
+        assert replacement_handler.on_add is replacement_callback
+        assert not host._currently_handling_node_down
+
+    def test_stale_down_worker_does_not_install_reconnector(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._start_reconnector = Mock()
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host.set_down()
+        host._currently_handling_node_down = True
+        host._down_event_generation = 1
+
+        session = Mock()
+
+        def invalidate_down_generation(_host):
+            with host.lock:
+                host._down_event_generation += 1
+                host._currently_handling_node_down = False
+
+        session.on_down.side_effect = invalidate_down_generation
+        cluster.sessions.add(session)
+
+        Cluster.on_down_potentially_blocking.__wrapped__(
+            cluster, host, is_host_addition=True,
+            down_event_generation=1)
+
+        cluster.profile_manager.on_down.assert_called_once_with(host)
+        cluster.control_connection.on_down.assert_called_once_with(host)
+        session.on_down.assert_called_once_with(host)
+        cluster._start_reconnector.assert_not_called()
+        assert not host._currently_handling_node_down
+
+    def test_replacement_reconnector_preserves_recovery_context(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster._prepare_all_queries = Mock()
+        cluster.control_connection.refresh_node_list_and_token_map = Mock()
+        cluster.control_connection.on_add = Mock(
+            wraps=cluster.control_connection.on_add)
+        cluster.scheduler.schedule = Mock()
+
+        probe_connections = [Mock(), Mock()]
+        connection_factory = Mock(side_effect=probe_connections)
+        cluster._make_connection_factory = Mock(
+            return_value=connection_factory)
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        def submit(fn, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except Exception as exc:
+                future.set_exception(exc)
+            return future
+
+        def make_session():
+            session = Session.__new__(Session)
+            session.cluster = cluster
+            session._profile_manager = cluster.profile_manager
+            session._pools = {}
+            session._lock = RLock()
+            session.keyspace = None
+            session.is_shutdown = False
+            session.submit = submit
+            session.update_created_pools = Mock(
+                wraps=session.update_created_pools)
+            session.shutdown = Mock()
+            return session
+
+        successful_session = make_session()
+        failing_session = make_session()
+        cluster.sessions = (successful_session, failing_session)
+
+        created_pools = []
+
+        def create_pool(pool_host, distance, session):
+            if session is failing_session:
+                raise ConnectionException("pool creation failed")
+
+            pool = Mock(
+                host=pool_host, host_distance=distance,
+                is_shutdown=False, _keyspace=None)
+            pool.get_state.return_value = {"open_count": 1}
+            created_pools.append(pool)
+            return pool
+
+        listener = Mock()
+        cluster.register_listener(listener)
+
+        with patch('cassandra.cluster.HostConnection', side_effect=create_pool):
+            cluster.on_add(
+                host, refresh_nodes=False,
+                reconcile_pools_on_failure=True)
+
+            # Exercise two complete reconnector handoffs. On each attempt, the
+            # first session's open pool makes the second session's DOWN signal
+            # get discounted, so replacement-aware aggregate recovery is the
+            # only owner that can install the successor.
+            cluster.scheduler.schedule.call_args_list[0].args[1]()
+            cluster.scheduler.schedule.call_args_list[1].args[1]()
+
+        assert cluster.scheduler.schedule.call_count == 3
+        pending_run = cluster.scheduler.schedule.call_args_list[2].args[1]
+        assert host._reconnection_handler is pending_run.__self__
+        assert host.is_up is False
+        assert len(created_pools) == 3
+        for pool in created_pools:
+            pool.shutdown.assert_called_once_with()
+        expected_reconciliation = [
+            call(excluded_host=host, hosts=ANY)] * 3
+        assert successful_session.update_created_pools.call_args_list == \
+            expected_reconciliation
+        assert failing_session.update_created_pools.call_args_list == \
+            expected_reconciliation
+        assert cluster.control_connection.on_add.call_args_list == \
+            [call(host, False), call(host, True), call(host, True)]
+        assert cluster.control_connection.refresh_node_list_and_token_map \
+            .call_args_list == [
+                call(force_token_rebuild=True),
+                call(force_token_rebuild=True),
+            ]
+        listener.on_add.assert_not_called()
+
+    def test_ignored_replacement_recovery_remains_pool_eligible(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster._prepare_all_queries = Mock()
+        cluster.control_connection.on_add = Mock()
+        cluster.scheduler.schedule = Mock()
+
+        probe = Mock()
+        cluster._make_connection_factory = Mock(
+            return_value=Mock(return_value=probe))
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        pool_future = Future()
+        session = Session.__new__(Session)
+        session.cluster = cluster
+        session._profile_manager = cluster.profile_manager
+        session._pools = {}
+        session.add_or_renew_pool = Mock(return_value=pool_future)
+        session.update_created_pools = Mock(
+            wraps=session.update_created_pools)
+        session.shutdown = Mock()
+        cluster.sessions = (session,)
+
+        cluster.on_add(
+            host, refresh_nodes=False, reconcile_pools_on_failure=True)
+        pool_future.set_result(False)
+
+        assert host.is_up is False
+        assert host.is_currently_reconnecting()
+
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        pending_run = cluster.scheduler.schedule.call_args.args[1]
+        pending_run()
 
         assert host.is_up is True
-        assert not host._currently_handling_node_up
-        listener.on_up.assert_called_once_with(host)
-        first_session.update_created_pools.assert_called_once_with()
-        second_session.update_created_pools.assert_called_once_with()
+        assert not host.is_currently_reconnecting()
+        assert not host._pending_host_addition
+        assert host._pending_host_addition_callback is None
+        session.add_or_renew_pool.assert_called_once_with(
+            host, is_host_addition=True, on_add_reconnection=ANY)
+        probe.close.assert_called_once_with()
+
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        session.update_created_pools()
+
+        assert session.add_or_renew_pool.call_args_list[-1] == \
+            call(host, False)
+
+    def test_unconvicted_replacement_retry_keeps_reconnecting(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster._prepare_all_queries = Mock()
+        cluster.control_connection.on_add = Mock()
+        cluster.scheduler.schedule = Mock()
+        probe = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock(
+            return_value=probe))
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        session = Session.__new__(Session)
+        session.cluster = cluster
+        session._profile_manager = cluster.profile_manager
+        session._pools = {}
+        session._lock = RLock()
+        session.keyspace = None
+        session.is_shutdown = False
+        session.shutdown = Mock()
+        session.update_created_pools = Mock(return_value=set())
+
+        def submit(fn, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except Exception as exc:
+                future.set_exception(exc)
+            return future
+
+        session.submit = submit
+        cluster.sessions.add(session)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=OperationTimedOut()):
+            cluster.on_add(
+                host, refresh_nodes=False,
+                reconcile_pools_on_failure=True)
+            first_handler = host._reconnection_handler
+            first_handler.run()
+
+        assert cluster.scheduler.schedule.call_count == 2
+        assert host.is_currently_reconnecting()
+        assert host._reconnection_handler is not first_handler
+        probe.close.assert_called_once_with()
+
+    def test_failed_replacement_keyspace_sync_starts_reconnector(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster._start_reconnector = Mock()
+
+        existing_reconnector = Mock()
+        aggregate_reconnector = Mock()
+
+        def install_reconnector(host, is_host_addition,
+                                on_add_reconnection=None, start=True):
+            old_reconnector = host.get_and_set_reconnection_handler(
+                aggregate_reconnector)
+            if old_reconnector:
+                old_reconnector.cancel()
+            return aggregate_reconnector
+
+        cluster._start_reconnector.side_effect = install_reconnector
+
+        def handle_down(host, is_host_addition, down_event_generation,
+                        on_add_reconnection=None):
+            host.get_and_set_reconnection_handler(existing_reconnector)
+
+        cluster.on_down_potentially_blocking = Mock(
+            side_effect=handle_down)
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        session = Session.__new__(Session)
+        session.cluster = cluster
+        session._profile_manager = cluster.profile_manager
+        session._pools = {}
+        session._lock = RLock()
+        session.keyspace = "new_keyspace"
+        session.is_shutdown = False
+        session.update_created_pools = Mock(return_value=set())
+        session.shutdown = Mock()
+
+        def submit(fn, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except Exception as exc:
+                future.set_exception(exc)
+            return future
+
+        session.submit = submit
+        cluster.sessions.add(session)
+
+        new_pool = Mock(
+            host=host, host_distance=HostDistance.LOCAL,
+            is_shutdown=False, _keyspace="old_keyspace")
+        keyspace_error = ConnectionException("keyspace update failed")
+
+        def fail_keyspace_update(_keyspace, callback):
+            callback(new_pool, [keyspace_error])
+
+        new_pool._set_keyspace_for_all_conns.side_effect = \
+            fail_keyspace_update
+
+        with patch('cassandra.cluster.HostConnection', return_value=new_pool):
+            cluster.on_add(
+                host, refresh_nodes=False,
+                reconcile_pools_on_failure=True)
+
+        assert host.is_up is False
+        assert session._pools == {}
+        new_pool.shutdown.assert_called_once_with()
+        new_pool._set_keyspace_for_all_conns.assert_called_once_with(
+            "new_keyspace", ANY)
+        cluster.on_down_potentially_blocking.assert_called_once_with(
+            host, True, ANY, on_add_reconnection=ANY)
+        cluster._start_reconnector.assert_called_once_with(
+            host, is_host_addition=True,
+            on_add_reconnection=ANY, start=False)
+        existing_reconnector.cancel.assert_called_once_with()
+        aggregate_reconnector.start.assert_called_once_with()
+        assert host._reconnection_handler is aggregate_reconnector
+
+    def test_unconvicted_replacement_failure_starts_reconnector(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster._start_reconnector = Mock()
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        session = Session.__new__(Session)
+        session.cluster = cluster
+        session._profile_manager = cluster.profile_manager
+        session._pools = {}
+        session._lock = RLock()
+        session.keyspace = None
+        session.is_shutdown = False
+        session.shutdown = Mock()
+        session.update_created_pools = Mock(return_value=set())
+
+        def submit(fn, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except Exception as exc:
+                future.set_exception(exc)
+            return future
+
+        session.submit = submit
+        cluster.sessions.add(session)
+
+        # SimpleConvictionPolicy deliberately does not convict a host for an
+        # OperationTimedOut. Aggregate replacement handling must still own the
+        # retry after pool creation fails.
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=OperationTimedOut()):
+            cluster.on_add(
+                host, refresh_nodes=False,
+                reconcile_pools_on_failure=True)
+
+        assert host.is_up is False
+        assert session._pools == {}
+        session.update_created_pools.assert_called_once_with(
+            excluded_host=host, hosts=ANY)
+        cluster._start_reconnector.assert_called_once_with(
+            host, is_host_addition=True,
+            on_add_reconnection=ANY, start=False)
 
     def test_pool_creation_cannot_publish_after_host_removal(self):
         cluster = Cluster()
@@ -426,7 +940,7 @@ class ClusterTest(unittest.TestCase):
             is_shutdown=False, _keyspace=None)
 
         def create_pool(*args, **kwargs):
-            cluster.remove_host(host)
+            cluster.remove_host(host, trigger_reconciliation=False)
             return new_pool
 
         with patch('cassandra.cluster.HostConnection', side_effect=create_pool):
@@ -436,6 +950,72 @@ class ClusterTest(unittest.TestCase):
         assert future.result() is False
         assert session._pools == {}
         new_pool.shutdown.assert_called_once_with()
+
+    def test_removed_replacement_failure_does_not_reconcile(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster._start_reconnector = Mock()
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        pool_future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = pool_future
+        cluster.sessions = (session,)
+
+        cluster.on_add(
+            host, refresh_nodes=False, reconcile_pools_on_failure=True)
+        assert host._pending_host_addition_callback is not None
+        cluster.remove_host(host, trigger_reconciliation=False)
+        assert host._pending_host_addition_callback is None
+        session.reset_mock()
+
+        pool_future.set_result(False)
+
+        session.remove_pool.assert_not_called()
+        session.update_created_pools.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
+
+    def test_replacement_removed_during_failure_cleanup_does_not_reconcile(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster.control_connection.on_remove = Mock()
+        cluster._prepare_all_queries = Mock()
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        pool_future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = pool_future
+        cluster.sessions = (session,)
+
+        cluster.on_add(
+            host, refresh_nodes=False, reconcile_pools_on_failure=True)
+
+        replacement_id = uuid.uuid4()
+
+        def remove_and_replace(_host):
+            cluster.remove_host(host, trigger_reconciliation=False)
+            cluster.add_host(
+                host.endpoint, signal=False, host_id=replacement_id)
+
+        session.remove_pool.side_effect = remove_and_replace
+        pool_future.set_result(False)
+
+        replacement = cluster.metadata.get_host_by_host_id(replacement_id)
+        assert replacement is not None
+        assert replacement.endpoint == host.endpoint
+        session.update_created_pools.assert_not_called()
+        assert not host.is_currently_reconnecting()
 
     def test_reconnector_cannot_be_installed_after_host_removal(self):
         cluster = Cluster()
@@ -448,14 +1028,15 @@ class ClusterTest(unittest.TestCase):
         cluster.metadata.add_or_return_host(host)
 
         def remove_during_setup(_host):
-            cluster.remove_host(host)
+            cluster.remove_host(host, trigger_reconciliation=False)
             return Mock()
 
         cluster._make_connection_factory = Mock(
             side_effect=remove_during_setup)
 
         result = cluster._start_reconnector(
-            host, is_host_addition=True)
+            host, is_host_addition=True,
+            on_add_reconnection=Mock())
 
         assert result is None
         assert host._is_removed
@@ -789,6 +1370,48 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         assert self.host.is_up
         assert not self.host._pending_host_addition
 
+    def test_later_down_preserves_exhausted_replacement_callback(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.reconnection_policy = Mock()
+        cluster.reconnection_policy.new_schedule.side_effect = (
+            iter((0,)), iter((0, 1.0)))
+        connection_factory = Mock(
+            side_effect=ConnectionException('refused'))
+        cluster._make_connection_factory = Mock(
+            return_value=connection_factory)
+        cluster.profile_manager.distance = Mock(
+            return_value=HostDistance.LOCAL)
+        cluster.metadata.add_or_return_host(self.host)
+        self.host.set_down()
+
+        replacement_callback = Mock()
+        cluster._start_reconnector(
+            self.host, is_host_addition=True,
+            on_add_reconnection=replacement_callback)
+        stopped_handler = self.host._reconnection_handler
+        stopped_handler.run()
+
+        assert not self.host.is_currently_reconnecting()
+        assert self.host._pending_host_addition_callback is \
+            replacement_callback
+
+        cluster.executor.submit.return_value = Future()
+        cluster.on_down(self.host, is_host_addition=False)
+        restart_task, *args = cluster.executor.submit.call_args.args
+        restart_task(*args)
+
+        replacement_handler = self.host._reconnection_handler
+        assert replacement_handler is not stopped_handler
+        assert replacement_handler.is_host_addition
+        assert replacement_handler.on_add is replacement_callback
+        assert not self.host._currently_handling_node_down
+
     def test_queued_reconnector_restart_skips_recovered_host(self):
         cluster = Cluster()
         cluster.executor.shutdown()
@@ -961,9 +1584,11 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         cluster.sessions.add(session)
         cluster.executor.submit.return_value = Future()
 
-        cluster.on_add(self.host)
+        cluster.on_add(
+            self.host, reconcile_pools_on_failure=True)
         failed_add_future.set_result(False)
         assert self.host._pending_host_addition
+        assert self.host._pending_host_addition_callback is not None
         listener.on_add.assert_not_called()
 
         cluster.on_up(self.host)
@@ -971,6 +1596,7 @@ class HostReconnectionHandlerTest(unittest.TestCase):
 
         assert self.host.is_up
         assert not self.host._pending_host_addition
+        assert self.host._pending_host_addition_callback is None
         listener.on_up.assert_called_once_with(self.host)
 
         cluster.on_down(self.host, is_host_addition=False)

@@ -164,6 +164,7 @@ class Host(object):
     _currently_handling_node_down = False
     _down_event_generation = 0
     _pending_host_addition = False
+    _pending_host_addition_callback = None
 
     sharding_info = None
 
@@ -234,6 +235,13 @@ class Host(object):
             self._reconnection_handler = new_handler
             return old
 
+    def _clear_reconnection_handler(self, handler):
+        with self.lock:
+            if self._reconnection_handler is not handler:
+                return False
+            self._reconnection_handler = None
+            return not self._is_removed
+
     def __eq__(self, other):
         if isinstance(other, Host):
             return self.endpoint == other.endpoint
@@ -267,6 +275,7 @@ class _ReconnectionHandler(object):
     """
 
     _cancelled = False
+    _clear_handler_before_reconnection = False
 
     # Whether on_reconnection() keeps the connection it is handed. A handler
     # that only uses it to probe the host leaves this False and run() closes
@@ -319,14 +328,22 @@ class _ReconnectionHandler(object):
                 # the flag were set afterwards, that raise would leave us
                 # closing a connection the subclass is already using.
                 handed_off = self._keeps_connection
+                if (self._clear_handler_before_reconnection and
+                        not self._release_reconnection_handler()):
+                    return
                 self.on_reconnection(conn)
-                self.callback(*(self.callback_args), **(self.callback_kwargs))
+                if not self._clear_handler_before_reconnection:
+                    self._release_reconnection_handler()
         finally:
             if conn and not handed_off:
                 conn.close()
 
     def cancel(self):
         self._cancelled = True
+
+    def _release_reconnection_handler(self):
+        self.callback(*(self.callback_args), **(self.callback_kwargs))
+        return True
 
     def try_reconnect(self):
         """
@@ -363,6 +380,12 @@ class _ReconnectionHandler(object):
 
 class _HostReconnectionHandler(_ReconnectionHandler):
 
+    # Host reconnection callbacks can synchronously start another reconnector
+    # when rebuilding pools fails. Clear this handler first so that failure is
+    # not suppressed as already reconnecting and post-callback cleanup cannot
+    # clear the successor.
+    _clear_handler_before_reconnection = True
+
     def __init__(self, host, connection_factory, is_host_addition, on_add, on_up, *args, **kwargs):
         _ReconnectionHandler.__init__(self, *args, **kwargs)
         self.is_host_addition = is_host_addition
@@ -385,6 +408,9 @@ class _HostReconnectionHandler(_ReconnectionHandler):
 
     def try_reconnect(self):
         return self.connection_factory()
+
+    def _release_reconnection_handler(self):
+        return self.host._clear_reconnection_handler(self)
 
     def on_reconnection(self, connection):
         log.info("Successful reconnection to %s, marking node up if it isn't already", self.host)
