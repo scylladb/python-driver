@@ -39,6 +39,7 @@ from cassandra.cluster import _Scheduler, Session, Cluster, ResultSet, SchemaAgr
     ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT, _NOT_SET
 from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
                                   DefaultEndPoint)
+from cassandra.protocol import OverloadedErrorMessage
 from cassandra.ssl_session_cache import SSLSessionCache
 from cassandra.driver_config import DriverConfigReporter
 from cassandra.pool import Host, _HostReconnectionHandler
@@ -493,16 +494,24 @@ class HostReconnectionHandlerTest(unittest.TestCase):
                 assert not self.host.is_currently_reconnecting()
 
     def test_keeps_slot_while_retrying(self):
-        scheduler = Mock()
-        handler = self.make_handler(
-            connection_factory=Mock(side_effect=ConnectionException('refused')),
-            schedule=iter((0, 1.0)), scheduler=scheduler)
+        cases = (
+            ConnectionException('refused'),
+            OverloadedErrorMessage(
+                code=OverloadedErrorMessage.error_code,
+                message='Too many authentication requests', info=None),
+        )
+        for exc in cases:
+            with self.subTest(exc=exc):
+                scheduler = Mock()
+                handler = self.make_handler(
+                    connection_factory=Mock(side_effect=exc),
+                    schedule=iter((0, 1.0)), scheduler=scheduler)
 
-        handler.start()
-        handler.run()
+                handler.start()
+                handler.run()
 
-        assert self.host._reconnection_handler is handler
-        assert scheduler.schedule.call_count == 2
+                assert self.host._reconnection_handler is handler
+                assert scheduler.schedule.call_count == 2
 
     def test_releases_slot_when_initial_schedule_is_empty(self):
         scheduler = Mock()
