@@ -174,6 +174,7 @@ class Host(object):
             raise ValueError("conviction_policy_factory may not be None")
 
         self.endpoint = endpoint if isinstance(endpoint, EndPoint) else DefaultEndPoint(endpoint)
+        self._is_removed = False
         self.conviction_policy = conviction_policy_factory(self)
         if not host_id:
             raise ValueError("host_id may not be None")

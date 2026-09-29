@@ -27,7 +27,7 @@ import tempfile
 import threading
 import time
 import weakref
-from threading import Event, Lock, Thread
+from threading import Event, Lock, RLock, Thread
 from types import SimpleNamespace
 
 from unittest.mock import patch, Mock
@@ -389,6 +389,77 @@ class ClusterTest(unittest.TestCase):
         listener.on_up.assert_called_once_with(host)
         first_session.update_created_pools.assert_called_once_with()
         second_session.update_created_pools.assert_called_once_with()
+
+    def test_pool_creation_cannot_publish_after_host_removal(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_remove = Mock()
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        session = Session.__new__(Session)
+        session.cluster = cluster
+        session._profile_manager = cluster.profile_manager
+        session._pools = {}
+        session._lock = RLock()
+        session.keyspace = None
+        session.is_shutdown = False
+        session.shutdown = Mock()
+
+        def submit(fn, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except Exception as exc:
+                future.set_exception(exc)
+            return future
+
+        session.submit = submit
+        cluster.sessions.add(session)
+
+        new_pool = Mock(
+            host=host, host_distance=HostDistance.LOCAL,
+            is_shutdown=False, _keyspace=None)
+
+        def create_pool(*args, **kwargs):
+            cluster.remove_host(host)
+            return new_pool
+
+        with patch('cassandra.cluster.HostConnection', side_effect=create_pool):
+            future = session.add_or_renew_pool(
+                host, is_host_addition=True)
+
+        assert future.result() is False
+        assert session._pools == {}
+        new_pool.shutdown.assert_called_once_with()
+
+    def test_reconnector_cannot_be_installed_after_host_removal(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+
+        def remove_during_setup(_host):
+            cluster.remove_host(host)
+            return Mock()
+
+        cluster._make_connection_factory = Mock(
+            side_effect=remove_during_setup)
+
+        result = cluster._start_reconnector(
+            host, is_host_addition=True)
+
+        assert result is None
+        assert host._is_removed
+        assert not host.is_currently_reconnecting()
 
     def test_compression_autodisabled_without_libraries(self):
         with patch.dict('cassandra.cluster.locally_supported_compressions', {}, clear=True):

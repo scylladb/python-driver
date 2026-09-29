@@ -2269,7 +2269,12 @@ class Cluster(object):
         # of the current Cluster attributes to create new Connections with
         conn_factory = self._make_connection_factory(host)
 
+        # Pair installation with lifecycle removal. If installation wins,
+        # on_remove() will clear and cancel this handler; if removal wins, do
+        # not leave retry work attached to a terminal Host object.
         with host.lock:
+            if host._is_removed:
+                return None
             if is_host_addition:
                 host._pending_host_addition = True
             is_host_addition = host._pending_host_addition
@@ -2277,7 +2282,8 @@ class Cluster(object):
                 host, conn_factory, is_host_addition, self.on_add, self.on_up,
                 self.scheduler, schedule,
                 host.get_and_set_reconnection_handler, new_handler=None)
-            old_reconnector = host.get_and_set_reconnection_handler(reconnector)
+            old_reconnector = host._reconnection_handler
+            host._reconnection_handler = reconnector
         if old_reconnector:
             log.debug("Old host reconnector found for %s, cancelling", host)
             old_reconnector.cancel()
@@ -2493,7 +2499,12 @@ class Cluster(object):
             return
 
         log.debug("[cluster] Removing host %s", host)
-        host.set_down()
+        # A Host object is never re-added after lifecycle removal. Mark this
+        # instance before removing its pools so work already in flight cannot
+        # publish after removal has passed it.
+        with host.lock:
+            host._is_removed = True
+            host.set_down()
         self.profile_manager.on_remove(host)
         for session in tuple(self.sessions):
             session.on_remove(host)
@@ -3735,6 +3746,7 @@ class Session(object):
                 return False
 
             previous = self._pools.get(host)
+            publish_pool = True
             with self._lock:
                 while new_pool._keyspace != self.keyspace:
                     self._lock.release()
@@ -3754,7 +3766,19 @@ class Session(object):
                         self._lock.acquire()
                         return False
                     self._lock.acquire()
-                self._pools[host] = new_pool
+                # Pair this check with Cluster.on_remove() marking the Host
+                # under the same lock. If publication wins, removal will pop
+                # the pool; if removal wins, discard the obsolete result.
+                with host.lock:
+                    if host._is_removed:
+                        publish_pool = False
+                    else:
+                        self._pools[host] = new_pool
+
+            if not publish_pool:
+                log.debug("Discarding pool created for removed host %s", host)
+                new_pool.shutdown()
+                return False
 
             log.debug("Added pool for host %s to session", host)
             if previous:
