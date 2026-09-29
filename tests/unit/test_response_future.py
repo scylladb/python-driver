@@ -312,7 +312,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(host, None, None, result)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, True, host)
+            ANY, ANY, rf._retry_task, True, host, 0)
         assert 1 == rf._query_retries
 
         connection = Mock(spec=Connection)
@@ -348,7 +348,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(host, None, None, result)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, host)
+            ANY, ANY, rf._retry_task, False, host, 0)
         # query_retries does get incremented for Overloaded/Bootstrapping errors (since 3.18)
         assert 1 == rf._query_retries
 
@@ -381,7 +381,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         # simulate the executor running this
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, host)
+            ANY, ANY, rf._retry_task, False, host, 0)
 
         rf._retry_task(False, host)
 
@@ -393,7 +393,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         # simulate the executor running this
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_with(
-            ANY, ANY, rf._retry_task, False, host)
+            ANY, ANY, rf._retry_task, False, host, 0)
         rf._retry_task(False, host)
 
         with pytest.raises(NoHostAvailable):
@@ -417,7 +417,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         # simulate the executor running this
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, host)
+            ANY, ANY, rf._retry_task, False, host, 0)
 
         delay = rf.session.cluster.scheduler.schedule_with_shutdown.mock_calls[-1][1][0]
         assert delay > 0.05
@@ -1234,7 +1234,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection.send_msg.call_args[1]['cb'](first_response)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, control_host)
+            ANY, ANY, rf._retry_task, False, control_host, 0)
 
         # The retry decision must come from the future state, not the live connection reference.
         rf._connection = Mock(is_control_connection=False)
@@ -1635,7 +1635,7 @@ class ResponseFutureTests(unittest.TestCase):
         pool_shutdown = self.make_pool()
         pool_shutdown.is_shutdown = True
         pool_ok = self.make_pool()
-        pool_ok.is_shutdown = True
+        pool_ok.is_shutdown = False
         session._pools.get.side_effect = [pool_shutdown, pool_ok]
 
         rf = self.make_response_future(session)
@@ -2023,7 +2023,7 @@ class ResponseFutureTests(unittest.TestCase):
         
         # The retry should be scheduled
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, specific_host)
+            ANY, ANY, rf._retry_task, False, specific_host, 0)
         assert 1 == rf._query_retries
         
         # Reset mocks to track next calls
@@ -2299,32 +2299,35 @@ class ResponseFutureTests(unittest.TestCase):
         old_meta = [('ks', 'tb', 'col', Mock())]
         ps = self._make_prepared_statement(old_meta, b'old_id')
 
-        rf = self.make_response_future(session)
-        rf.prepared_statement = ps
-        rf.send_request()
+        def new_rf():
+            # _set_result completes the future, and later responses are ignored.
+            rf = self.make_response_future(session)
+            rf.prepared_statement = ps
+            rf.send_request()
+            return rf
 
         anomalous = self._make_rows_response(result_metadata_id=b'new_id', column_metadata=[])
 
         # First anomalous response: warns once.
         with self.assertLogs('cassandra.cluster', level='WARNING') as first:
-            rf._set_result(None, None, None, anomalous)
+            new_rf()._set_result(None, None, None, anomalous)
         assert sum('result_metadata_id' in msg for msg in first.output) == 1
 
         # Second identical anomalous response: no new warning (deduped).
         with patch('cassandra.cluster.log.warning') as warning:
-            rf._set_result(None, None, None, anomalous)
+            new_rf()._set_result(None, None, None, anomalous)
         warning.assert_not_called()
         assert ps.result_metadata_and_id == (old_meta, b'old_id')
 
         # A genuine METADATA_CHANGED recovers the metadata and re-arms the warning.
         new_meta = [('ks', 'tb', 'new_col', Mock())]
-        rf._set_result(None, None, None,
+        new_rf()._set_result(None, None, None,
                        self._make_rows_response(result_metadata_id=b'new_id', column_metadata=new_meta))
         assert ps.result_metadata_and_id == (new_meta, b'new_id')
 
         # After recovery, the anomaly warns again.
         with self.assertLogs('cassandra.cluster', level='WARNING') as after:
-            rf._set_result(None, None, None, anomalous)
+            new_rf()._set_result(None, None, None, anomalous)
         assert sum('result_metadata_id' in msg for msg in after.output) == 1
 
     def test_create_execute_message_with_metadata_and_id(self):
@@ -2399,6 +2402,74 @@ class ResponseFutureTests(unittest.TestCase):
 
         assert rf.message.skip_meta is False
         assert rf.message.result_metadata_id == b'meta_hash'
+
+    def test_late_response_after_final_is_ignored(self):
+        # e.g. a speculative response arriving after a client timeout or after another speculative response won
+        for first, second in ((OperationTimedOut(), ['late']),
+                              (['first'], ['late']),
+                              (['first'], OperationTimedOut())):
+            rf = self.make_response_future(self.make_session())
+            callback, errback = Mock(), Mock()
+            rf.add_callbacks(callback, errback)
+            for outcome in (first, second):
+                if isinstance(outcome, Exception):
+                    rf._set_final_exception(outcome)
+                else:
+                    rf._set_final_result(outcome)
+            assert callback.call_count + errback.call_count == 1
+            if isinstance(first, Exception):
+                with pytest.raises(OperationTimedOut):
+                    rf.result()
+            else:
+                assert rf.result().current_rows == first
+
+    def test_late_response_does_not_touch_state_or_retry(self):
+        # A late response (e.g. speculative) must not change paging state or schedule a retry.
+        session = self.make_session()
+        rf = self.make_response_future(session)
+        rf.send_request()
+        rf._set_final_result(['first'])
+        rf._paging_state = b'first-page'
+        rf.coordinator_host = 'winner'
+        schedule = session.cluster.scheduler.schedule_with_shutdown
+        schedule.reset_mock()
+
+        rows = self.make_mock_response(['x'], [(1,)])
+        rows.paging_state = b'late-page'
+        rf._set_result('late-host', None, None, rows)
+        rf._set_result('late-host', None, None, ConnectionException("late", 'late-host'))
+
+        assert rf._paging_state == b'first-page'
+        assert rf.coordinator_host == 'winner'
+        assert schedule.call_count == 0
+
+        rf.send_request = Mock()
+        rf._retry_task(False, 'late-host')
+        assert rf.send_request.call_count == 0
+
+    def test_previous_page_response_does_not_complete_next_page(self):
+        # A late speculative reply or retry for page N must not complete page N+1.
+        session = self.make_session()
+        connection = session._pools.get.return_value.borrow_connection.return_value[0]
+        rf = self.make_response_future(session)
+        rf.send_request()
+        rf.send_request()  # speculative execution of page 1
+        winner_cb, late_cb = [c.kwargs['cb'] for c in connection.send_msg.call_args_list]
+        page1 = self.make_mock_response(['x'], [(1,)])
+        page1.paging_state = b'page-2'
+        page1.custom_payload = None
+        winner_cb(page1)
+        rf._retry(False, None, 'late-host', 0)
+        retry_task, *retry_args = session.cluster.scheduler.schedule_with_shutdown.call_args.args[2:]
+
+        rf.start_fetching_next_page()
+        rf.send_request = Mock()
+        late_cb(page1)
+        retry_task(*retry_args)
+
+        assert not rf._event.is_set()
+        assert rf._paging_state == b'page-2'
+        assert rf.send_request.call_count == 0
 
     def test_query_does_not_mutate_execute_message(self):
         """

@@ -1244,3 +1244,35 @@ class ConcurrencyTest((unittest.TestCase)):
         for success, result in results:
             assert not success
             assert result is error
+
+    def test_late_response_does_not_complete_twice(self):
+        """A timed-out future that later gets a (speculative) success must count once."""
+        from cassandra import OperationTimedOut
+        from tests.unit.test_response_future import ResponseFutureTests
+        helper = ResponseFutureTests()
+        futures = []
+
+        def execute_async(*args, **kwargs):
+            futures.append(helper.make_response_future(helper.make_session()))
+            return futures[-1]
+
+        mock_session = Mock()
+        mock_session.execute_async = execute_async
+        out = []
+        t = threading.Thread(target=lambda: out.append(execute_concurrent(
+            mock_session, [("q", ())] * 2, raise_on_first_error=False)), daemon=True)
+        t.start()
+        try:
+            deadline = time.time() + 5
+            while len(futures) < 2:
+                assert t.is_alive() and time.time() < deadline, "execute_concurrent did not submit two requests"
+                time.sleep(0.01)
+            futures[0]._set_final_exception(OperationTimedOut())
+            futures[0]._set_final_result([])
+            t.join(0.5)
+            assert not out, "returned before the second request completed"
+        finally:
+            for f in futures[1:]:
+                f._set_final_result([])  # release the worker even if an assertion failed
+            t.join(5)
+        assert [r.success for r in out[0]] == [False, True]

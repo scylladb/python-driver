@@ -7194,7 +7194,8 @@ class ResponseFuture(object):
                 request_id = self._borrow_control_connection(connection)
             result_meta = self._bound_result_metadata
             if cb is None:
-                cb = partial(self._set_result, host, connection, None)
+                cb = partial(self._set_result, host, connection, None,
+                             page_generation=self._page_generation)
             cb = partial(self._handle_control_connection_response, connection,
                          request_id, cb)
 
@@ -7346,7 +7347,8 @@ class ResponseFuture(object):
             result_meta = self._bound_result_metadata
 
             if cb is None:
-                cb = partial(self._set_result, host, connection, pool)
+                cb = partial(self._set_result, host, connection, pool,
+                             page_generation=self._page_generation)
 
             # Record the stream before send_msg() starts. Encoding or pushing a
             # message can overlap the deadline timer; the timeout must be able
@@ -7489,8 +7491,15 @@ class ResponseFuture(object):
         if tablet and keyspace and table:
             self.session.cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
 
-    def _set_result(self, host, connection, pool, response):
+    def _set_result(self, host, connection, pool, response, page_generation=None):
         try:
+            if self._is_final() or (page_generation is not None and
+                                    page_generation != self._page_generation):
+                # Late (e.g. speculative) or previous-page response: only give the connection back.
+                if pool and not pool.is_shutdown:
+                    pool.return_connection(connection)
+                return
+
             self.coordinator_host = host
             if pool and not pool.is_shutdown:
                 pool.return_connection(connection)
@@ -7771,10 +7780,14 @@ class ResponseFuture(object):
                 "Got unexpected response type when preparing "
                 "statement on host %s: %s" % (host, response)))
 
+    def _is_final(self):
+        # A late response (e.g. speculative, or after client timeout) must not re-fire callbacks.
+        return self._final_result is not _NOT_SET or self._final_exception is not None
+
     def _set_final_result(self, response):
         self._cancel_timer()
         with self._callback_lock:
-            if self._retry_aborted:
+            if self._retry_aborted or self._is_final():
                 return
             self._final_result = response
             # save off current callbacks inside lock for execution outside it
@@ -7809,6 +7822,8 @@ class ResponseFuture(object):
                         self._final_exception is not None:
                     return
                 self._retry_aborted = True
+            elif self._is_final():
+                return
             self._final_exception = response
             # save off current errbacks inside lock for execution outside it --
             # prevents case where _final_exception is set, then an errback is
@@ -7881,15 +7896,16 @@ class ResponseFuture(object):
         # don't retry on the event loop thread
         self.session.cluster.scheduler.schedule_with_shutdown(
             delay, partial(self._abort_retry, page_generation),
-            self._retry_task, reuse_connection, host)
+            self._retry_task, reuse_connection, host, page_generation)
 
     def _abort_retry(self, page_generation):
         self._set_final_exception(ConnectionShutdown(
             "Cluster scheduler was shut down before the retry could run"),
             retry_abort_generation=page_generation)
 
-    def _retry_task(self, reuse_connection, host):
-        if self._final_exception:
+    def _retry_task(self, reuse_connection, host, page_generation=None):
+        if self._is_final() or (page_generation is not None and
+                                page_generation != self._page_generation):
             # the connection probably broke while we were waiting
             # to retry the operation
             return
