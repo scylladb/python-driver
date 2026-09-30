@@ -105,8 +105,13 @@ class _ConcurrentExecutor(object):
         self._fail_fast = False
         self._first_error = None
 
+    def _window(self):
+        # Outstanding work that counts against `concurrency`. List mode
+        # consumes every completion, so only in-flight requests count.
+        return self._in_flight
+
     def _submit(self, concurrency):
-        while self._in_flight < concurrency and not self._exhausted \
+        while self._window() < concurrency and not self._exhausted \
                 and not (self._fail_fast and self._first_error is not None):
             try:
                 statement, params = next(self._statements)
@@ -158,6 +163,15 @@ class _ConcurrentExecutor(object):
 
 class ConcurrentExecutorGenResults(_ConcurrentExecutor):
 
+    def __init__(self, session, statements_and_params, execution_profile):
+        super(ConcurrentExecutorGenResults, self).__init__(session, statements_and_params, execution_profile)
+        self._current = 0
+
+    def _window(self):
+        # Completed-but-unyielded results also occupy the window, so a stalled
+        # head can't let the whole iterable be pulled into memory.
+        return self._submitted - self._current
+
     def execute(self, concurrency, fail_fast):
         self._fail_fast = fail_fast
         self._submit(concurrency)
@@ -165,12 +179,11 @@ class ConcurrentExecutorGenResults(_ConcurrentExecutor):
 
     def _results_gen(self, concurrency):
         results = self._results
-        current = 0
-        while current < self._submitted:
-            while current not in results:
+        while self._current < self._submitted:
+            while self._current not in results:
                 self._reap(concurrency, block=True)
-            res = results.pop(current)
-            current += 1
+            res = results.pop(self._current)
+            self._current += 1
             if self._fail_fast and not res.success:
                 raise res.result_or_exc
             # Keep the window full while the consumer works on this result.

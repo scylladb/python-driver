@@ -453,9 +453,40 @@ class ConcurrentExecutorTest(unittest.TestCase):
         time.sleep(0.05)
         assert len(submitted) == 3
 
-        # Consuming a result tops the window back up.
+        # Consuming a result tops the window back up (one new request).
         assert next(gen).success
-        assert len(submitted) == 6
+        assert len(submitted) == 4
+
+    def test_generator_window_bounded_when_head_stalls(self):
+        # If the head request is slow while later ones complete, the completed
+        # results already occupy the window and must not let the whole iterable
+        # be submitted and buffered.
+        submitted = []
+        pending = []
+
+        def on_execute(future):
+            submitted.append(future.params[0])
+            pending.append(future)
+            return future
+
+        gen = execute_concurrent(_session_with(on_execute),
+                                 [("q", (i,)) for i in range(1000)],
+                                 concurrency=3, results_generator=True)
+        assert len(submitted) == 3
+        pending[1].callback(['r'])
+        pending[2].callback(['r'])
+
+        out = []
+        t = threading.Thread(target=lambda: out.append(next(gen)), daemon=True)
+        t.start()
+        t.join(0.2)
+        assert not out
+        assert len(submitted) == 3, "submitted past the window while the head stalled"
+
+        pending[0].callback(['r'])
+        t.join(5)
+        assert not t.is_alive()
+        assert out and out[0].success
 
     def test_duplicate_completion_counted_once(self):
         # e.g. a speculative response arriving after a client timeout
