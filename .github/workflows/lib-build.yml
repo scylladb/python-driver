@@ -128,7 +128,7 @@ jobs:
       - name: Configure libev for Windows
         if: runner.os == 'Windows'
         run: |
-          conan profile detect
+          conan profile detect --force
           conan install conanfile.py
 
       - name: Install libev and lz4 for MacOS
