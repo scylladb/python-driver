@@ -209,6 +209,26 @@ Three small, independent wins:
   test or stalled download can burn the default 300-minute job limit. Put a
   realistic cap on each job (e.g. tests 60–90 min, wheel build 120 min, sdist 15 min, docs 15-20 min).
 
+## 11. Use the runner's full CPU count when building wheels
+
+**Where:** `pyproject.toml` (`CASS_DRIVER_BUILD_CONCURRENCY = "2"`), `setup.py:205,294-300`.
+
+**Why:** the wheel build compiled the C/Cython extensions with only two
+threads. The runners have 3 vCPUs (`macos-14`) or 4 (`ubuntu-24.04`), so a core
+sat idle, and on a smoke-test PR run the build block is the majority of the job
+(e.g. ~6m15s of 8m43s on macos-arm). The build is CPU-bound, so RAM disk /
+tmpfs would buy ~nothing.
+
+**Change (done):** drop the hard-coded `2`; `lib-build.yml` now computes
+`nproc` (falling back to `getconf`, then `%NUMBER_OF_PROCESSORS%`) and exports
+`CASS_DRIVER_BUILD_CONCURRENCY`, which `setup.py` already reads. The global
+`[tool.cibuildwheel] environment` and the Windows `environment` table no longer
+pin it, and `environment-pass = ["CASS_DRIVER_BUILD_CONCURRENCY"]` forwards the
+host value into the Linux build container. Deliberately *not* done (to keep PR
+wheels representative of production): trimming the built ABIs, switching `-O3`
+to `-O1`, or splitting ABIs into separate matrix jobs (more runners, not less
+wall-clock).
+
 ---
 
 ## Suggested order of work
