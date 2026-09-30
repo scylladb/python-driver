@@ -299,9 +299,9 @@ class DefaultEndPointFactory(EndPointFactory):
 class SniEndPoint(EndPoint):
     """SNI Proxy EndPoint implementation."""
 
-    def __init__(self, proxy_address, server_name, port=9042):
+    def __init__(self, proxy_address, server_name, port=9042, init_index=0):
         self._proxy_address = proxy_address
-        self._index = 0
+        self._index = init_index
         self._resolved_address = None  # resolved address
         self._port = port
         self._server_name = server_name
@@ -326,8 +326,7 @@ class SniEndPoint(EndPoint):
 
     def resolve(self):
         try:
-            resolved_addresses = socket.getaddrinfo(self._proxy_address, self._port,
-                                                    socket.AF_UNSPEC, socket.SOCK_STREAM)
+            resolved_addresses = self._resolve_proxy_addresses()
         except socket.gaierror:
             log.debug('Could not resolve sni proxy hostname "%s" '
                       'with port %d' % (self._proxy_address, self._port))
@@ -338,6 +337,10 @@ class SniEndPoint(EndPoint):
         self._index += 1
 
         return self._resolved_address, self._port
+
+    def _resolve_proxy_addresses(self):
+        return socket.getaddrinfo(self._proxy_address, self._port,
+                                  socket.AF_UNSPEC, socket.SOCK_STREAM)
 
     def __eq__(self, other):
         return (isinstance(other, SniEndPoint) and
@@ -365,16 +368,23 @@ class SniEndPointFactory(EndPointFactory):
         self._proxy_address = proxy_address
         self._port = port
         self._node_domain = node_domain
+        # Distribute endpoints across all proxy addresses on their first DNS
+        # resolution instead of making every endpoint try the first address.
+        self._init_index = itertools.count()
+
+    def _create_endpoint(self, server_name):
+        return SniEndPoint(self._proxy_address, server_name, self._port,
+                           next(self._init_index))
 
     def create(self, row):
         host_id = row.get("host_id")
         if host_id is None:
             raise ValueError("No host_id to create the SniEndPoint")
         address = "{}.{}".format(host_id, self._node_domain) if self._node_domain else str(host_id)
-        return SniEndPoint(self._proxy_address, str(address), self._port)
+        return self._create_endpoint(str(address))
 
     def create_from_sni(self, sni):
-        return SniEndPoint(self._proxy_address, sni, self._port)
+        return self._create_endpoint(sni)
 
 
 class ClientRoutesEndPointFactory(EndPointFactory):

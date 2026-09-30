@@ -25,10 +25,13 @@ def socket_getaddrinfo(*args):
     ]
 
 
-@patch('socket.getaddrinfo', socket_getaddrinfo)
 class SniEndPointTest(unittest.TestCase):
 
-    endpoint_factory = SniEndPointFactory("proxy.datastax.com", 30002)
+    def setUp(self):
+        getaddrinfo_patcher = patch('socket.getaddrinfo', socket_getaddrinfo)
+        getaddrinfo_patcher.start()
+        self.addCleanup(getaddrinfo_patcher.stop)
+        self.endpoint_factory = SniEndPointFactory("proxy.datastax.com", 30002)
 
     def test_sni_endpoint_properties(self):
 
@@ -55,6 +58,38 @@ class SniEndPointTest(unittest.TestCase):
         for i in range(10):
             (address, _) = endpoint.resolve()
             assert address == next(it)
+
+    def test_create_from_sni_distributes_initial_resolution(self):
+        endpoints = [self.endpoint_factory.create_from_sni('node{}'.format(i))
+                     for i in range(3)]
+
+        assert [endpoint.resolve()[0] for endpoint in endpoints] == [
+            '127.0.0.1', '127.0.0.2', '127.0.0.3']
+        # Each endpoint continues round-robin from its own initial address.
+        assert [endpoint.resolve()[0] for endpoint in endpoints] == [
+            '127.0.0.2', '127.0.0.3', '127.0.0.1']
+
+    def test_create_distributes_initial_resolution_and_preserves_node_domain(self):
+        factory = SniEndPointFactory(
+            "proxy.datastax.com", 30002, node_domain='nodes.example.com')
+        endpoints = [factory.create({'host_id': 'host{}'.format(i)})
+                     for i in range(3)]
+
+        assert [endpoint._server_name for endpoint in endpoints] == [
+            'host0.nodes.example.com',
+            'host1.nodes.example.com',
+            'host2.nodes.example.com']
+        assert [endpoint.resolve()[0] for endpoint in endpoints] == [
+            '127.0.0.1', '127.0.0.2', '127.0.0.3']
+
+    def test_initial_resolution_index_does_not_change_tls_cache_identity(self):
+        first = self.endpoint_factory.create_from_sni('node1')
+        self.endpoint_factory.create_from_sni('other-node')
+        same_node = self.endpoint_factory.create_from_sni('node1')
+
+        assert first._index != same_node._index
+        assert first.tls_session_cache_key == same_node.tls_session_cache_key
+        assert first == same_node
 
     def test_tls_session_cache_key_distinguishes_server_names(self):
         # All SNI endpoints behind a proxy share an address and port, so the
