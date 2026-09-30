@@ -135,6 +135,10 @@ class ImmediateFailedResponseFuture(object):
         errback(self.error, *errback_args, **(errback_kwargs or {}))
 
 
+class PumpFailure(BaseException):
+    pass
+
+
 class TimedCallableInvoker(threading.Thread):
     """
     This is a local thread which is runs and invokes all the callbacks on the pending callback queue.
@@ -428,6 +432,32 @@ class ConcurrencyTest((unittest.TestCase)):
         response_futures[1].succeed(["late success"])
         assert completions == [error]
         assert result_future.exception() is error
+
+    def test_async_forwards_base_exception_from_iterator(self):
+        session = Mock()
+        self.enable_async_submit(session)
+        error = PumpFailure("broken input")
+
+        def statements():
+            raise error
+            yield
+
+        result_future = execute_concurrent_async(session, statements())
+
+        assert result_future.exception(timeout=1.0) is error
+        session.execute_async.assert_not_called()
+
+    def test_async_forwards_base_exception_from_execute_async(self):
+        session = Mock()
+        self.enable_async_submit(session)
+        error = PumpFailure("execute failed")
+        session.execute_async.side_effect = error
+
+        result_future = execute_concurrent_async(
+            session, [("SELECT value FROM test", None)])
+
+        assert result_future.exception(timeout=1.0) is error
+        session.execute_async.assert_called_once()
 
     def test_async_aggregate_future_cannot_be_cancelled(self):
         session, response_futures = self.deferred_session()

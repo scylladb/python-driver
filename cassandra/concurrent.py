@@ -315,7 +315,7 @@ class ConcurrentExecutorFutureResults(_ConcurrentExecutor):
                     reschedule = True
 
                 self._pump_scheduled = False
-        except Exception as exc:
+        except BaseException as exc:
             with self._condition:
                 self._pump_scheduled = False
                 if not self._finished:
