@@ -10,8 +10,8 @@ on:
 
       target:
         type: string
-        description: "JSON array of {os,target} matrix entries"
-        default: '[{"os":"ubuntu-24.04","target":"linux"},{"os":"macos-15-intel","target":"macos-x86"},{"os":"macos-14","target":"macos-arm"},{"os":"windows-2022","target":"windows"},{"os":"ubuntu-24.04-arm","target":"linux-aarch64"}]'
+        description: "target os to build for: linux,macos-x86,macos-arm,windows,linux-aarch64"
+        default: "linux,macos-x86,macos-arm,windows,linux-aarch64"
 
 jobs:
   build-and-publish:
