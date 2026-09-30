@@ -176,6 +176,8 @@ asyncore from the runtime but this event loop can still be used in newer version
 The ``asyncio`` event loop is generally functional but still somewhat experimental and not recommended
 for production systems.
 
+.. _libev-support:
+
 libev support
 ^^^^^^^^^^^^^
 If you're on Linux, you should be able to install libev

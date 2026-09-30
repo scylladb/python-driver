@@ -1959,7 +1959,7 @@ class Cluster(object):
 
         log.warning("Downgrading core protocol version from %d to %d for %s. "
                     "To avoid this, it is best practice to explicitly set Cluster(protocol_version) to the version supported by your cluster. "
-                    "http://datastax.github.io/python-driver/api/cassandra/cluster.html#cassandra.cluster.Cluster.protocol_version", self.protocol_version, new_version, host_endpoint)
+                    "https://python-driver.docs.scylladb.com/stable/api/cassandra/cluster.html#cassandra.cluster.Cluster.protocol_version", self.protocol_version, new_version, host_endpoint)
         self.protocol_version = new_version
 
     def _populate_hosts(self):
