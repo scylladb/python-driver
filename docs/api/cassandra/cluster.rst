@@ -171,6 +171,12 @@ Clusters and Sessions
 
    .. automethod:: execute_async(statement[, parameters][, trace][, custom_payload][, paging_state][, host][, execute_as])
 
+   .. automethod:: execute_concurrent(statements_and_parameters[, concurrency][, raise_on_first_error][, results_generator][, execution_profile])
+
+   .. automethod:: execute_concurrent_with_args(statement, parameters, *args, **kwargs)
+
+   .. automethod:: execute_concurrent_async(statements_and_parameters[, concurrency][, raise_on_first_error][, execution_profile])
+
    .. automethod:: execute_graph(statement[, parameters][, trace][, execution_profile=EXEC_PROFILE_GRAPH_DEFAULT][, execute_as])
 
    .. automethod:: execute_graph_async(statement[, parameters][, trace][, execution_profile=EXEC_PROFILE_GRAPH_DEFAULT][, execute_as])

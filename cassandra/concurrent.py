@@ -14,9 +14,11 @@
 
 
 from collections import namedtuple
+from concurrent.futures import Future
 from heapq import heappush, heappop
 from itertools import cycle
-from threading import Condition
+from operator import index
+from threading import Condition, Thread
 
 from cassandra.cluster import ResultSet, EXEC_PROFILE_DEFAULT
 
@@ -101,12 +103,14 @@ class _ConcurrentExecutor(object):
         self._current = 0
         self._exec_count = 0
         self._executing = False
+        self._stopped = False
 
     def execute(self, concurrency, fail_fast):
         self._fail_fast = fail_fast
         self._results_queue = []
         self._current = 0
         self._exec_count = 0
+        self._stopped = False
         with self._condition:
             for n in range(concurrency):
                 if not self._execute_next():
@@ -115,6 +119,8 @@ class _ConcurrentExecutor(object):
 
     def _execute_next(self):
         # lock must be held
+        if self._stopped:
+            return False
         try:
             (idx, (statement, params)) = next(self._enum_statements)
             self._exec_count += 1
@@ -166,7 +172,10 @@ class ConcurrentExecutorGenResults(_ConcurrentExecutor):
     def _put_result(self, result, idx, success):
         with self._condition:
             heappush(self._results_queue, (idx, ExecutionResult(success, result)))
-            self._execute_next()
+            if not success and self._fail_fast:
+                self._stopped = True
+            else:
+                self._execute_next()
             self._condition.notify()
 
     def _results(self):
@@ -199,6 +208,7 @@ class ConcurrentExecutorListResults(_ConcurrentExecutor):
         with self._condition:
             self._current += 1
             if not success and self._fail_fast:
+                self._stopped = True
                 if not self._exception:
                     self._exception = result
                 self._condition.notify()
@@ -230,3 +240,169 @@ def execute_concurrent_with_args(session, statement, parameters, *args, **kwargs
         execute_concurrent_with_args(session, statement, parameters, concurrency=50)
     """
     return execute_concurrent(session, zip(cycle((statement,)), parameters), *args, **kwargs)
+
+
+class ConcurrentExecutorFutureResults(_ConcurrentExecutor):
+
+    _pump_budget = 100
+
+    def __init__(self, session, statements_and_params, execution_profile, future):
+        # Iterating user input belongs on the session executor. Pass a harmless
+        # placeholder to the base initializer and retain the real iterable.
+        super(ConcurrentExecutorFutureResults, self).__init__(
+            session, (), execution_profile)
+        self._statements_and_params = statements_and_params
+        self._future = future
+        self._finished = False
+        self._completion = None
+        self._pump_scheduled = False
+        self._iterator_initialized = False
+        self._exhausted = False
+        self._concurrency = 0
+
+    def execute(self, concurrency, fail_fast):
+        self._fail_fast = fail_fast
+        self._concurrency = concurrency
+        self._schedule_pump()
+        return self._future
+
+    def _schedule_pump(self):
+        with self._condition:
+            if self._pump_scheduled or self._future.done():
+                return
+            self._pump_scheduled = True
+
+        try:
+            submitted = self.session.submit(self._pump)
+            if submitted is None:
+                raise RuntimeError(
+                    "cannot execute concurrent statements on a shut down session")
+        except Exception as exc:
+            self._fail_submission(exc)
+
+    def _pump(self):
+        completion = None
+        reschedule = False
+
+        try:
+            with self._condition:
+                if not self._iterator_initialized:
+                    self._enum_statements = enumerate(
+                        iter(self._statements_and_params))
+                    self._iterator_initialized = True
+
+                budget = self._pump_budget
+                while (not self._finished and not self._exhausted and
+                       self._exec_count - self._current < self._concurrency and
+                       budget > 0):
+                    self._exhausted = not self._execute_next()
+                    if not self._exhausted:
+                        budget -= 1
+
+                if self._finished:
+                    completion = self._take_completion()
+                elif self._exhausted and self._current == self._exec_count:
+                    self._finished = True
+                    ordered_results = [
+                        result for _, result in sorted(self._results_queue)]
+                    completion = (True, ordered_results)
+                elif (not self._exhausted and
+                      self._exec_count - self._current < self._concurrency):
+                    # Synchronous callbacks left capacity available. Yield to
+                    # other cluster-executor work before consuming more input.
+                    reschedule = True
+
+                self._pump_scheduled = False
+        except Exception as exc:
+            with self._condition:
+                self._pump_scheduled = False
+                if not self._finished:
+                    self._finished = True
+                    self._completion = (False, exc)
+                completion = self._take_completion()
+
+        self._complete(completion)
+        if reschedule:
+            self._schedule_pump()
+
+    def _put_result(self, result, idx, success):
+        with self._condition:
+            # Requests already in flight may finish after fail-fast completion.
+            # They must neither enqueue more work nor complete the Future again.
+            if self._finished:
+                return
+
+            self._results_queue.append((idx, ExecutionResult(success, result)))
+            self._current += 1
+
+            if not success and self._fail_fast:
+                self._finished = True
+                self._completion = (False, result)
+
+        # Submission and aggregate completion stay off the response callback
+        # thread. This also coalesces callbacks that arrive close together.
+        self._schedule_pump()
+
+    def _take_completion(self):
+        completion = self._completion
+        self._completion = None
+        return completion
+
+    def _fail_submission(self, exc):
+        with self._condition:
+            self._pump_scheduled = False
+            if not self._finished:
+                self._finished = True
+                if self._exhausted and self._current == self._exec_count:
+                    ordered_results = [
+                        result for _, result in sorted(self._results_queue)]
+                    self._completion = (True, ordered_results)
+                else:
+                    self._completion = (False, exc)
+            completion = self._take_completion()
+
+        # Submission failure commonly means Session shutdown has stopped its
+        # executor. Never run user Future callbacks inline on the response
+        # callback/reactor thread; use a short-lived fallback thread instead.
+        completion_thread = Thread(
+            target=self._complete,
+            args=(completion,),
+            name="cassandra-concurrent-completion",
+            daemon=True)
+        completion_thread.start()
+
+    def _complete(self, completion):
+        if completion is None or self._future.done():
+            return
+
+        success, result = completion
+        if success:
+            self._future.set_result(result)
+        else:
+            self._future.set_exception(result)
+
+
+def execute_concurrent_async(session, statements_and_parameters, concurrency=100,
+                             raise_on_first_error=False,
+                             execution_profile=EXEC_PROFILE_DEFAULT):
+    """
+    Asynchronously execute statements, returning a Future immediately.
+
+    See :meth:`.Session.execute_concurrent_async`.
+    """
+    concurrency = index(concurrency)
+    if concurrency <= 0:
+        raise ValueError("concurrency must be greater than 0")
+
+    future = Future()
+    # Aggregate work starts before this function returns. Marking the Future
+    # running makes its cancellation contract explicit and prevents completion
+    # racing with a successful cancel().
+    future.set_running_or_notify_cancel()
+    try:
+        executor = ConcurrentExecutorFutureResults(
+            session, statements_and_parameters, execution_profile, future)
+        executor.execute(concurrency, raise_on_first_error)
+    except Exception as exc:
+        future.set_exception(exc)
+    return future

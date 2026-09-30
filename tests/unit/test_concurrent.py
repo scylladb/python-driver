@@ -15,8 +15,9 @@
 
 import unittest
 
+from concurrent.futures import ThreadPoolExecutor
 from itertools import cycle
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import time
 import threading
 from queue import PriorityQueue
@@ -25,7 +26,9 @@ import platform
 import uuid
 
 from cassandra.cluster import Cluster, Session
-from cassandra.concurrent import execute_concurrent, execute_concurrent_with_args
+from cassandra.concurrent import (execute_concurrent,
+                                  execute_concurrent_async,
+                                  execute_concurrent_with_args)
 from cassandra.pool import Host
 from cassandra.policies import SimpleConvictionPolicy
 from tests.unit.utils import mock_session_pools
@@ -88,6 +91,50 @@ class MockResponseResponseFuture():
         return
 
 
+class DeferredResponseFuture(object):
+    """Minimal ResponseFuture whose outcome is controlled by a test."""
+
+    _query_trace = None
+    _col_names = None
+    _col_types = None
+    has_more_pages = False
+
+    def __init__(self):
+        self._callback = None
+        self._errback = None
+
+    def add_callbacks(self, callback, errback,
+                      callback_args=(), callback_kwargs=None,
+                      errback_args=(), errback_kwargs=None):
+        self._callback = (
+            callback, callback_args, callback_kwargs or {})
+        self._errback = (
+            errback, errback_args, errback_kwargs or {})
+
+    def succeed(self, result):
+        callback, args, kwargs = self._callback
+        callback(result, *args, **kwargs)
+
+    def fail(self, exc):
+        errback, args, kwargs = self._errback
+        errback(exc, *args, **kwargs)
+
+    def clear_callbacks(self):
+        self._callback = None
+        self._errback = None
+
+
+class ImmediateFailedResponseFuture(object):
+
+    def __init__(self, error):
+        self.error = error
+
+    def add_callbacks(self, callback, errback,
+                      callback_args=(), callback_kwargs=None,
+                      errback_args=(), errback_kwargs=None):
+        errback(self.error, *errback_args, **(errback_kwargs or {}))
+
+
 class TimedCallableInvoker(threading.Thread):
     """
     This is a local thread which is runs and invokes all the callbacks on the pending callback queue.
@@ -119,6 +166,430 @@ class TimedCallableInvoker(threading.Thread):
         return
 
 class ConcurrencyTest((unittest.TestCase)):
+
+    def enable_async_submit(self, session, max_workers=2):
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.addCleanup(executor.shutdown, wait=True)
+        session.submit.side_effect = executor.submit
+        return executor
+
+    @staticmethod
+    def wait_for_response_futures(response_futures, count, timeout=1.0):
+        deadline = time.monotonic() + timeout
+        while len(response_futures) < count and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert len(response_futures) == count
+
+    def deferred_session(self):
+        response_futures = []
+
+        def execute_async(*args, **kwargs):
+            response_future = DeferredResponseFuture()
+            response_futures.append(response_future)
+            return response_future
+
+        session = Mock()
+        session.execute_async.side_effect = execute_async
+        self.enable_async_submit(session)
+        return session, response_futures
+
+    def test_async_returns_before_requests_complete(self):
+        session, response_futures = self.deferred_session()
+
+        result_future = execute_concurrent_async(
+            session, [("SELECT value FROM test WHERE key=?", (1,))])
+
+        self.wait_for_response_futures(response_futures, 1)
+        assert len(response_futures) == 1
+        assert not result_future.done()
+
+        response_futures[0].succeed(["value"])
+        results = result_future.result(timeout=1.0)
+        assert len(results) == 1
+        assert results[0].success
+        assert results[0].result_or_exc.one() == "value"
+
+    def test_async_results_retain_input_order(self):
+        session, response_futures = self.deferred_session()
+        statements_and_params = [
+            ("SELECT value FROM test WHERE key=?", (i,)) for i in range(3)
+        ]
+
+        result_future = execute_concurrent_async(
+            session, statements_and_params, concurrency=3)
+        self.wait_for_response_futures(response_futures, 3)
+        assert len(response_futures) == 3
+
+        response_futures[2].succeed(["two"])
+        response_futures[0].succeed(["zero"])
+        assert not result_future.done()
+        response_futures[1].succeed(["one"])
+
+        results = result_future.result(timeout=1.0)
+        assert [result.success for result in results] == [True, True, True]
+        assert [result.result_or_exc.one() for result in results] == [
+            "zero", "one", "two"]
+
+    def test_async_empty_input_returns_completed_future(self):
+        session = Mock()
+        self.enable_async_submit(session)
+
+        result_future = execute_concurrent_async(session, iter(()))
+
+        assert result_future.result(timeout=1.0) == []
+        assert result_future.done()
+        session.execute_async.assert_not_called()
+
+    def test_async_rejects_non_positive_concurrency(self):
+        session = Mock()
+
+        for concurrency in (0, -1):
+            with self.subTest(concurrency=concurrency):
+                with pytest.raises(ValueError, match="greater than 0"):
+                    execute_concurrent_async(
+                        session, [("SELECT value FROM test", None)],
+                        concurrency=concurrency)
+
+        session.execute_async.assert_not_called()
+
+    def test_async_rejects_non_integer_concurrency(self):
+        session = Mock()
+
+        for concurrency in (1.5, float('nan'), "1"):
+            with self.subTest(concurrency=concurrency):
+                with pytest.raises(TypeError):
+                    execute_concurrent_async(
+                        session, [("SELECT value FROM test", None)],
+                        concurrency=concurrency)
+
+        session.submit.assert_not_called()
+        session.execute_async.assert_not_called()
+
+    def test_async_rejects_shutdown_session(self):
+        session = Mock()
+        session.submit.return_value = None
+
+        result_future = execute_concurrent_async(
+            session, [("SELECT value FROM test", None)])
+
+        with pytest.raises(RuntimeError, match="shut down session"):
+            result_future.result(timeout=1.0)
+        session.execute_async.assert_not_called()
+
+    def test_async_preserves_success_when_session_shuts_down_after_dispatch(self):
+        session, response_futures = self.deferred_session()
+        result_future = execute_concurrent_async(
+            session, [("SELECT value FROM test", None)])
+        self.wait_for_response_futures(response_futures, 1)
+
+        completion_thread = []
+        callback_done = threading.Event()
+
+        def on_done(completed):
+            completion_thread.append(threading.get_ident())
+            callback_done.set()
+
+        result_future.add_done_callback(on_done)
+        session.submit.side_effect = None
+        session.submit.return_value = None
+
+        response_thread = threading.get_ident()
+        response_futures[0].succeed(["value"])
+
+        assert result_future.result(timeout=1.0)[0].success
+        assert callback_done.wait(1.0)
+        assert completion_thread != [response_thread]
+
+    def test_async_reports_shutdown_off_response_thread_when_work_remains(self):
+        session, response_futures = self.deferred_session()
+        result_future = execute_concurrent_async(
+            session,
+            [("SELECT value FROM test", None)] * 2,
+            concurrency=1)
+        self.wait_for_response_futures(response_futures, 1)
+
+        completion_thread = []
+        callback_done = threading.Event()
+
+        def on_done(completed):
+            completion_thread.append(threading.get_ident())
+            callback_done.set()
+
+        result_future.add_done_callback(on_done)
+        session.submit.side_effect = None
+        session.submit.return_value = None
+
+        response_thread = threading.get_ident()
+        response_futures[0].succeed(["value"])
+
+        with pytest.raises(RuntimeError, match="shut down session"):
+            result_future.result(timeout=1.0)
+        assert callback_done.wait(1.0)
+        assert completion_thread != [response_thread]
+
+    def test_async_fail_fast_completes_once(self):
+        session, response_futures = self.deferred_session()
+        statements_and_params = [
+            ("SELECT value FROM test WHERE key=?", (i,)) for i in range(4)
+        ]
+        error = RuntimeError("first failure")
+        late_error = RuntimeError("late failure")
+
+        result_future = execute_concurrent_async(
+            session, statements_and_params, concurrency=3,
+            raise_on_first_error=True)
+        self.wait_for_response_futures(response_futures, 3)
+        completions = []
+        callback_threads = []
+        callback_done = threading.Event()
+
+        def on_done(completed):
+            completions.append(completed.exception())
+            callback_threads.append(threading.get_ident())
+            callback_done.set()
+
+        result_future.add_done_callback(on_done)
+
+        response_thread = threading.get_ident()
+        response_futures[0].fail(error)
+        assert result_future.exception(timeout=1.0) is error
+        assert callback_done.wait(1.0)
+        assert completions == [error]
+        assert callback_threads != [response_thread]
+
+        # In-flight callbacks are allowed to finish, but cannot complete the
+        # aggregate Future again or schedule the remaining statement.
+        response_futures[1].succeed(["late success"])
+        response_futures[2].fail(late_error)
+        assert completions == [error]
+        assert result_future.exception() is error
+        assert session.execute_async.call_count == 3
+
+    def test_async_broken_iterator_during_initial_fill(self):
+        session, response_futures = self.deferred_session()
+        error = RuntimeError("broken input")
+
+        def statements():
+            yield "SELECT value FROM test", None
+            raise error
+
+        result_future = execute_concurrent_async(
+            session, statements(), concurrency=2)
+        completions = []
+        result_future.add_done_callback(
+            lambda completed: completions.append(completed.exception()))
+
+        assert result_future.exception(timeout=1.0) is error
+        assert completions == [error]
+
+        # Request scheduled before iteration failed may still finish.
+        response_futures[0].succeed(["late success"])
+        assert completions == [error]
+        assert result_future.exception() is error
+
+    def test_async_broken_iterator_while_replenishing(self):
+        session, response_futures = self.deferred_session()
+        error = RuntimeError("broken input")
+
+        def statements():
+            yield "SELECT value FROM test WHERE key=?", (0,)
+            yield "SELECT value FROM test WHERE key=?", (1,)
+            raise error
+
+        result_future = execute_concurrent_async(
+            session, statements(), concurrency=2)
+        self.wait_for_response_futures(response_futures, 2)
+        completions = []
+        result_future.add_done_callback(
+            lambda completed: completions.append(completed.exception()))
+        assert not result_future.done()
+
+        response_futures[0].succeed(["zero"])
+        assert result_future.exception(timeout=1.0) is error
+        assert completions == [error]
+
+        # Second request was already in flight when iteration failed.
+        response_futures[1].succeed(["late success"])
+        assert completions == [error]
+        assert result_future.exception() is error
+
+    def test_async_aggregate_future_cannot_be_cancelled(self):
+        session, response_futures = self.deferred_session()
+
+        result_future = execute_concurrent_async(
+            session, [("SELECT value FROM test", None)])
+
+        assert result_future.running()
+        assert not result_future.cancel()
+        self.wait_for_response_futures(response_futures, 1)
+        response_futures[0].succeed(["value"])
+        assert result_future.result(timeout=1.0)[0].success
+
+    def test_async_no_recursion_on_synchronous_errback(self):
+        error = RuntimeError("immediate failure")
+
+        class AlreadyFailedFuture(object):
+            def add_callbacks(self, callback, errback,
+                              callback_args=(), callback_kwargs=None,
+                              errback_args=(), errback_kwargs=None):
+                errback(error, *errback_args, **(errback_kwargs or {}))
+
+        session = Mock()
+        session.execute_async.return_value = AlreadyFailedFuture()
+        self.enable_async_submit(session)
+        count = sys.getrecursionlimit()
+
+        result_future = execute_concurrent_async(
+            session, [("SELECT value FROM test", None)] * count,
+            concurrency=1, raise_on_first_error=False)
+
+        results = result_future.result(timeout=2.0)
+        assert len(results) == count
+        assert all(not result.success for result in results)
+        assert all(result.result_or_exc is error for result in results)
+
+    def test_async_returns_before_input_iterator_unblocks(self):
+        iterator_blocked = threading.Event()
+        release_iterator = threading.Event()
+        call_returned = threading.Event()
+        error = RuntimeError("immediate failure")
+        stopped = RuntimeError("input stopped")
+        result_holder = {}
+
+        def statements():
+            yield "SELECT value FROM test", None
+            iterator_blocked.set()
+            release_iterator.wait(2.0)
+            raise stopped
+
+        session = Mock()
+        session.execute_async.return_value = ImmediateFailedResponseFuture(error)
+        self.enable_async_submit(session, max_workers=1)
+
+        def invoke():
+            result_holder['future'] = execute_concurrent_async(
+                session, statements(), concurrency=1,
+                raise_on_first_error=False)
+            call_returned.set()
+
+        caller = threading.Thread(target=invoke)
+        caller.start()
+        try:
+            assert call_returned.wait(1.0)
+            assert iterator_blocked.wait(1.0)
+        finally:
+            release_iterator.set()
+            caller.join(1.0)
+
+        assert not caller.is_alive()
+        assert result_holder['future'].exception(timeout=1.0) is stopped
+
+    def test_async_pump_yields_during_unbounded_synchronous_failures(self):
+        stop = threading.Event()
+        marker = threading.Event()
+        call_returned = threading.Event()
+        error = RuntimeError("immediate failure")
+        stopped = RuntimeError("input stopped")
+        result_holder = {}
+
+        def statements():
+            while not stop.is_set():
+                yield "SELECT value FROM test", None
+            raise stopped
+
+        session = Mock()
+        session.execute_async.return_value = ImmediateFailedResponseFuture(error)
+        executor = self.enable_async_submit(session, max_workers=1)
+
+        def invoke():
+            result_holder['future'] = execute_concurrent_async(
+                session, statements(), concurrency=1,
+                raise_on_first_error=False)
+            call_returned.set()
+
+        caller = threading.Thread(target=invoke)
+        caller.start()
+        try:
+            assert call_returned.wait(1.0)
+            executor.submit(marker.set)
+            # A bounded pump turn lets unrelated cluster-executor work run
+            # even when every child request completes synchronously.
+            assert marker.wait(1.0)
+        finally:
+            stop.set()
+            caller.join(1.0)
+
+        assert not caller.is_alive()
+        assert result_holder['future'].exception(timeout=1.0) is stopped
+
+    def test_session_concurrent_methods_delegate(self):
+        session = Mock()
+        statements_and_params = [("SELECT value FROM test", None)]
+        profile = object()
+        expected = object()
+
+        with patch("cassandra.concurrent.execute_concurrent",
+                   return_value=expected) as execute:
+            result = Session.execute_concurrent(
+                session, statements_and_params, 7, False, True, profile)
+            assert result is expected
+            execute.assert_called_once_with(
+                session, statements_and_params, 7, False, True, profile)
+
+        with patch("cassandra.concurrent.execute_concurrent_with_args",
+                   return_value=expected) as execute_with_args:
+            result = Session.execute_concurrent_with_args(
+                session, "statement", [(1,)], concurrency=7)
+            assert result is expected
+            execute_with_args.assert_called_once_with(
+                session, "statement", [(1,)], concurrency=7)
+
+        with patch("cassandra.concurrent.execute_concurrent_async",
+                   return_value=expected) as execute_async:
+            result = Session.execute_concurrent_async(
+                session, statements_and_params, 7, True, profile)
+            assert result is expected
+            execute_async.assert_called_once_with(
+                session, statements_and_params, 7, True, profile)
+
+    def test_fail_fast_stops_scheduling_after_late_in_flight_success(self):
+        for results_generator in (False, True):
+            with self.subTest(results_generator=results_generator):
+                session, response_futures = self.deferred_session()
+                error = RuntimeError("first failure")
+                completed = threading.Event()
+                observed = []
+
+                def invoke():
+                    try:
+                        results = execute_concurrent(
+                            session,
+                            [("INSERT INTO test (key) VALUES (?)", (i,))
+                             for i in range(5)],
+                            concurrency=2,
+                            raise_on_first_error=True,
+                            results_generator=results_generator)
+                        if results_generator:
+                            list(results)
+                    except Exception as exc:
+                        observed.append(exc)
+                    finally:
+                        completed.set()
+
+                caller = threading.Thread(target=invoke)
+                caller.start()
+                self.wait_for_response_futures(response_futures, 2)
+
+                response_futures[0].fail(error)
+                assert completed.wait(1.0)
+                assert observed == [error]
+
+                # A request already in flight may still complete, but it must
+                # not schedule another statement after fail-fast termination.
+                response_futures[1].succeed(["late success"])
+                assert session.execute_async.call_count == 2
+                caller.join(1.0)
+                assert not caller.is_alive()
 
     def test_results_ordering_forward(self):
         """

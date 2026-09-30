@@ -3322,6 +3322,104 @@ class Session(object):
         future.send_request()
         return future
 
+    def execute_concurrent(self, statements_and_parameters, concurrency=100,
+                           raise_on_first_error=True, results_generator=False,
+                           execution_profile=EXEC_PROFILE_DEFAULT):
+        """
+        Execute a sequence of ``(statement, parameters)`` pairs concurrently.
+        Each ``parameters`` item must be a sequence or :const:`None`.
+
+        `concurrency` limits the number of requests in flight. It must be
+        greater than zero. All protocol versions supported by this driver use
+        multiplexed connections; tune this value for the workload and cluster.
+
+        If `raise_on_first_error` is :const:`True`, execution stops scheduling
+        new statements after the first failed request and raises its exception.
+
+        If `results_generator` is :const:`False`, results are returned after
+        all requests finish. If it is :const:`True`, an iterator yields results
+        in input order as they become available, reducing peak memory use.
+
+        `execution_profile` is passed to :meth:`execute_async` for every
+        request.
+
+        Returns ``ExecutionResult(success, result_or_exc)`` namedtuples in the
+        same order as the input. A failed result contains its exception; a
+        successful result contains its query result.
+
+        Example usage::
+
+            select_statement = session.prepare("SELECT * FROM users WHERE id=?")
+            statements_and_params = [
+                (select_statement, (user_id,)) for user_id in user_ids
+            ]
+            results = session.execute_concurrent(
+                statements_and_params, raise_on_first_error=False)
+
+            for success, result in results:
+                if not success:
+                    handle_error(result)
+                else:
+                    process_user(result[0])
+
+        Consumers of a results iterator must not block or issue synchronous
+        requests from the I/O event thread, because doing so can deadlock.
+
+        """
+        from cassandra.concurrent import execute_concurrent
+        return execute_concurrent(
+            self, statements_and_parameters, concurrency,
+            raise_on_first_error, results_generator, execution_profile)
+
+    def execute_concurrent_with_args(self, statement, parameters, *args, **kwargs):
+        """
+        Execute one statement concurrently with a sequence of parameter sets.
+
+        Each item in `parameters` must be a sequence or :const:`None`.
+        Additional arguments are passed to :meth:`execute_concurrent`.
+
+        Example usage::
+
+            statement = session.prepare(
+                "INSERT INTO mytable (a, b) VALUES (1, ?)")
+            parameters = [(x,) for x in range(1000)]
+            session.execute_concurrent_with_args(
+                statement, parameters, concurrency=50)
+
+        """
+        from cassandra.concurrent import execute_concurrent_with_args
+        return execute_concurrent_with_args(
+            self, statement, parameters, *args, **kwargs)
+
+    def execute_concurrent_async(self, statements_and_parameters,
+                                 concurrency=100,
+                                 raise_on_first_error=False,
+                                 execution_profile=EXEC_PROFILE_DEFAULT):
+        """
+        Start a sequence of ``(statement, parameters)`` pairs concurrently.
+
+        This method returns a :class:`concurrent.futures.Future` immediately.
+        `concurrency` limits the number of requests in flight and must be
+        greater than zero. `execution_profile` is passed to
+        :meth:`execute_async` for every request.
+
+        With the default `raise_on_first_error` value of :const:`False`, the
+        future resolves to an input-ordered list of
+        ``ExecutionResult(success, result_or_exc)`` namedtuples after every
+        request finishes. If `raise_on_first_error` is :const:`True`, the
+        future is completed with the first request exception and no new
+        statements are scheduled.
+
+        An empty input resolves to an empty list. Under normal operation,
+        completion callbacks run on the session's executor rather than an I/O
+        reactor thread.
+
+        """
+        from cassandra.concurrent import execute_concurrent_async
+        return execute_concurrent_async(
+            self, statements_and_parameters, concurrency,
+            raise_on_first_error, execution_profile)
+
     def execute_graph(self, query, parameters=None, trace=False, execution_profile=EXEC_PROFILE_GRAPH_DEFAULT, execute_as=None):
         """
         Executes a Gremlin query string or GraphStatement synchronously,
