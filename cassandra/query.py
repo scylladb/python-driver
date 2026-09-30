@@ -19,10 +19,10 @@ queries.
 """
 
 from collections import namedtuple
-import functools
 from datetime import datetime, timedelta, timezone
 import re
 import struct
+import threading
 import time
 
 from cassandra import ConsistencyLevel, OperationTimedOut
@@ -110,16 +110,17 @@ class PseudoNamedTupleRow(object):
 
 def pseudo_namedtuple_factory(colnames, rows):
     """
-    Returns each row as a :class:`.PseudoNamedTupleRow`. This is the fallback
-    factory for cases where :meth:`.named_tuple_factory` fails to create rows.
+    Returns each row as a :class:`.PseudoNamedTupleRow`. Not used as an
+    automatic fallback by :meth:`.named_tuple_factory`.
     """
     return [PseudoNamedTupleRow(od)
             for od in ordered_dict_factory(colnames, rows)]
 
 
-# Keyed on the raw column-name tuple; bounded so ad hoc schemas can't grow it forever.
-@functools.lru_cache(maxsize=10000)
-def _named_tuple_row_class(colnames):
+_NAMED_TUPLE_ROW_CLASS_CACHE_SIZE = 1024
+
+
+def _build_named_tuple_row_class(colnames):
     clean_column_names = [_clean_column_name(c) for c in colnames]
     try:
         return namedtuple('Row', clean_column_names)
@@ -131,6 +132,43 @@ def _named_tuple_row_class(colnames):
                     "or specifying a different row_factory on your Session" %
                     (list(colnames), clean_column_names))
         return namedtuple('Row', _sanitize_identifiers(clean_column_names))
+
+
+class _NamedTupleRowClassCache(object):
+    """
+    Bounded FIFO cache of ``Row`` classes keyed on the raw column-name tuple.
+
+    Hits are lock-free (LRU reordering would need the lock). Builds run outside
+    the lock and the first insert wins, so concurrent misses share one class.
+    """
+
+    def __init__(self, maxsize):
+        self._maxsize = maxsize
+        self._lock = threading.RLock()
+        self._cache = OrderedDict()
+
+    def __call__(self, colnames):
+        try:
+            return self._cache[colnames]
+        except KeyError:
+            pass
+        # Build outside the lock so unrelated cold schemas don't queue; first insert wins.
+        row_class = _build_named_tuple_row_class(colnames)
+        with self._lock:
+            existing = self._cache.get(colnames)
+            if existing is not None:
+                return existing
+            self._cache[colnames] = row_class
+            if len(self._cache) > self._maxsize:
+                self._cache.popitem(last=False)
+            return row_class
+
+    def cache_clear(self):
+        with self._lock:
+            self._cache.clear()
+
+
+_named_tuple_row_class = _NamedTupleRowClassCache(_NAMED_TUPLE_ROW_CLASS_CACHE_SIZE)
 
 
 def named_tuple_factory(colnames, rows):
@@ -158,6 +196,10 @@ def named_tuple_factory(colnames, rows):
         >>> age = user[1]
         >>> print("name: %s, age: %d" % (name, age))
         name: Bob, age: 42
+
+    Invalid identifiers, duplicates and keywords among the column names are
+    sanitized to positional names (``field_0_``, ...), with a warning logged
+    each time the schema's class is built (again after FIFO eviction).
 
     .. versionchanged:: 2.0.0
         moved from ``cassandra.decoder`` to ``cassandra.query``

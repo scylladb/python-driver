@@ -46,7 +46,6 @@ dev = [
     # Keep the patched 9.x range without a literal "<": cibuildwheel runs
     # test-group installs through cmd.exe, where "<" is input redirection.
     "pytest~=9.1",
-    "pytest-benchmark",
     "PyYAML",
     "pure-sasl",
     "cryptography>=42.0",
