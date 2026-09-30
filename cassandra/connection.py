@@ -46,7 +46,8 @@ from cassandra.protocol import (ReadyMessage, AuthenticateMessage, OptionsMessag
                                 InvalidRequestException, SupportedMessage,
                                 AuthResponseMessage, AuthChallengeMessage,
                                 AuthSuccessMessage, ProtocolException,
-                                RegisterMessage, ReviseRequestMessage)
+                                RegisterMessage, ReviseRequestMessage,
+                                OverloadedErrorMessage)
 from cassandra.segment import SegmentCodec, CrcException
 from cassandra.util import OrderedDict
 from cassandra.shard_info import ShardingInfo  # noqa: F401  # re-exported for cassandra.connection.ShardingInfo
@@ -2049,6 +2050,8 @@ class Connection(object):
             log.debug("Received ErrorMessage on new connection (%s) from %s: %s",
                       id(self), self.endpoint, startup_response.summary_msg())
             if did_authenticate:
+                if isinstance(startup_response, OverloadedErrorMessage):
+                    raise startup_response
                 raise AuthenticationFailed(
                     "Failed to authenticate to %s: %s" %
                     (self.endpoint, startup_response.summary_msg()))
@@ -2084,6 +2087,8 @@ class Connection(object):
         elif isinstance(auth_response, ErrorMessage):
             log.debug("Received ErrorMessage on new connection (%s) from %s: %s",
                       id(self), self.endpoint, auth_response.summary_msg())
+            if isinstance(auth_response, OverloadedErrorMessage):
+                raise auth_response
             raise AuthenticationFailed(
                 "Failed to authenticate to %s: %s" %
                 (self.endpoint, auth_response.summary_msg()))

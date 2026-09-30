@@ -1,3 +1,12 @@
+Unreleased
+==========
+
+Bug Fixes
+---------
+* Preserve ``OVERLOADED`` errors received during authentication so reconnection can
+  retry the transient failure instead of treating it as invalid credentials
+  (DRIVER-1122, #1054).
+
 3.29.12
 ========
 Sep 26, 2026
