@@ -352,7 +352,7 @@ class TestAbstractModelClasses(BaseCassEngTestCase):
     def test_attempting_query_on_abstract_model_fails(self):
         """ Tests attempting to execute query with an abstract model fails """
         with pytest.raises(CQLEngineException):
-            iter(AbstractModelWithFullCols.objects(pkey=5)).next()
+            next(iter(AbstractModelWithFullCols.objects(pkey=5)))
 
     def test_abstract_columns_are_inherited(self):
         """ Tests that columns defined in the abstract class are inherited into the concrete class """

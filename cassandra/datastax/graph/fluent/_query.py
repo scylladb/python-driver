@@ -179,7 +179,7 @@ class TraversalBatch(object):
         raise NotImplementedError()
 
     def __str__(self):
-        return u'<TraversalBatch traversals={0}>'.format(len(self))
+        return '<TraversalBatch traversals={0}>'.format(len(self))
     __repr__ = __str__
 
 
@@ -204,7 +204,7 @@ class _DefaultTraversalBatch(TraversalBatch):
 
     def as_graph_statement(self, graph_protocol=GraphProtocol.GRAPHSON_2_0, context=None):
         statements = [_query_from_traversal(t, graph_protocol, context) for t in self._traversals]
-        query = u"[{0}]".format(','.join(statements))
+        query = "[{0}]".format(','.join(statements))
         return SimpleGraphStatement(query)
 
     def execute(self):

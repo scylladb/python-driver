@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from cassandra.cqlengine import UnicodeMixin
 
 
 class QueryOperatorException(Exception):
     pass
 
 
-class BaseQueryOperator(UnicodeMixin):
+class BaseQueryOperator:
     # The symbol that identifies this operator in kwargs
     # ie: colname__<symbol>
     symbol = None
@@ -27,7 +26,7 @@ class BaseQueryOperator(UnicodeMixin):
     # The comparator symbol this operator uses in cql
     cql_symbol = None
 
-    def __unicode__(self):
+    def __str__(self):
         if self.cql_symbol is None:
             raise QueryOperatorException("cql symbol is None")
         return self.cql_symbol
