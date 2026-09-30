@@ -5,14 +5,21 @@ on:
     branches:
       - master
     paths-ignore:
-     - docs/*
-     - examples/*
-     - .gitignore
-     - '*.rst'
-     - '*.ini'
-     - LICENSE
-     - .github/dependabot.yml
-     - .github/pull_request_template.md
+      - docs/**
+      - examples/**
+      - scripts/**
+      - .gitignore
+      - '**/*.rst'
+      - '**/*.md'
+      - '*.ini'
+      - LICENSE
+      - .github/dependabot.yml
+      - .github/pull_request_template.md
+      - .github/workflows/docs-*
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test-wheels-build:

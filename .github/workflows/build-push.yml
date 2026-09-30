@@ -21,6 +21,7 @@ jobs:
     if: ${{ endsWith(github.event.ref, 'scylla') }}
     needs: build-and-publish
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       id-token: write
     steps:
