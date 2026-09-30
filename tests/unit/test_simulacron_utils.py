@@ -13,18 +13,15 @@
 # limitations under the License.
 
 import os
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
 from packaging.version import Version
 
-if not (os.environ.get("CASSANDRA_VERSION") or os.environ.get("SCYLLA_VERSION")):
-    with mock.patch.dict(os.environ, {"CASSANDRA_VERSION": "3.11.4"}):
-        from tests.integration import CASSANDRA_VERSION
-        from tests.integration.simulacron import utils
-else:
-    from tests.integration import CASSANDRA_VERSION
-    from tests.integration.simulacron import utils
+from tests.integration import CASSANDRA_VERSION
+from tests.integration.simulacron import utils
 
 
 class PrimeServerVersionsTests(unittest.TestCase):
@@ -56,8 +53,9 @@ class StartAndPrimeClusterDefaultsTests(unittest.TestCase):
 
     def _start_and_prime(self, **kwargs):
         """Run start_and_prime with only Simulacron itself mocked out."""
-        submit_request = mock.patch.object(utils.SimulacronClient, "submit_request").start()
-        self.addCleanup(submit_request.stop)
+        patcher = mock.patch.object(utils.SimulacronClient, "submit_request")
+        submit_request = patcher.start()
+        self.addCleanup(patcher.stop)
         with mock.patch.object(utils, "start_simulacron"), \
                 mock.patch.object(utils, "prime_cluster") as prime_cluster:
             utils.start_and_prime_cluster_defaults(**kwargs)
@@ -89,6 +87,36 @@ class StartAndPrimeClusterDefaultsTests(unittest.TestCase):
         self.assertEqual(self._system_local_prime(submit_request).rows,
                          [{"cql_version": utils.CQL_VERSION,
                            "release_version": CASSANDRA_VERSION.base_version + "-SNAPSHOT"}])
+
+
+class IntegrationImportTests(unittest.TestCase):
+    """Run in a subprocess so the result is independent of the installed ccm and env."""
+
+    def _run(self, code, **env):
+        e = {k: v for k, v in os.environ.items()
+             if k not in ("CASSANDRA_VERSION", "SCYLLA_VERSION",
+                          "MAPPED_CASSANDRA_VERSION", "MAPPED_SCYLLA_VERSION")}
+        e.update(env)
+        # cibuildwheel runs from a temp dir, so the child can't find `tests` on its own.
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        code = "import sys; sys.path.append(%r)\n" % root + code
+        return subprocess.run([sys.executable, "-c", code], env=e,
+                              capture_output=True, text=True)
+
+    def test_imports_without_ccmlib_or_version(self):
+        """The Windows-wheel contract: no ccmlib and no version still imports."""
+        r = self._run("import sys; sys.modules['ccmlib'] = None\n"
+                      "import tests.integration as i\n"
+                      "assert i.CCMClusterFactory is None\n"
+                      "assert i.CCMCluster is object\n"
+                      "assert str(i.CASSANDRA_VERSION) == '3.11.4'")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_malformed_version_is_an_error(self):
+        """An explicit malformed version must not silently fall back."""
+        r = self._run("import tests.integration", CASSANDRA_VERSION="not-a-version")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("InvalidVersion", r.stderr)
 
 
 if __name__ == "__main__":
