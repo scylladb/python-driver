@@ -1,11 +1,20 @@
 Unreleased
 ==========
 
+Features
+--------
+* Expose concurrent execution through ``Session.execute_concurrent()`` and
+  ``Session.execute_concurrent_with_args()``, and add
+  ``Session.execute_concurrent_async()``, which returns a
+  ``concurrent.futures.Future`` without blocking the caller.
+
 Bug Fixes
 ---------
 * Preserve ``OVERLOADED`` errors received during authentication so reconnection can
   retry the transient failure instead of treating it as invalid credentials
   (DRIVER-1122, #1054).
+* Distribute SNI endpoints across resolved proxy addresses so one unavailable DNS
+  answer does not prevent every cloud endpoint from connecting (PYTHON-1419).
 
 3.29.12
 ========
