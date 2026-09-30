@@ -19,10 +19,10 @@ on:
         default: "3.13"
 
       target:
-        description: "Target os to build for: linux,macos,windows"
+        description: "JSON array of {os,target} matrix entries"
         type: string
         required: false
-        default: "linux,macos-x86,macos-arm,windows,linux-aarch64"
+        default: '[{"os":"ubuntu-24.04","target":"linux"},{"os":"macos-15-intel","target":"macos-x86"},{"os":"macos-14","target":"macos-arm"},{"os":"windows-2022","target":"windows"},{"os":"ubuntu-24.04-arm","target":"linux-aarch64"}]'
 
       target_tag:
         description: "Publish particular tag"

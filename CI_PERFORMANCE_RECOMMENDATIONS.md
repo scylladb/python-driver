@@ -2,14 +2,14 @@
 
 Branch: `ci/gha-speedups` (worktree of `origin/master`).
 
-Status: implemented **#1, #4, #5, #7, #10** in this branch, plus the PR-side
+Status: implemented **#1, #4, #5, #7, #9, #10** in this branch, plus the PR-side
 test change of **#8** (a per-wheel import smoke test instead of the full unit
 suite). **#3 was evaluated and dropped**: Cython extensions are ABI-specific,
 so a single shared wheel is impossible (it would need one build job per Python
 version), that restructure does not reduce wall-clock (build and test are
 already sequential within a job), and `[tool.uv] cache-keys` plus `setup-uv`'s
 default uv cache already reuse the compiled build across runs. The remaining
-items (#2, #6, #9, and #8's matrix-trimming half) are not yet implemented.
+items (#2, #6, and #8's matrix-trimming half) are not yet implemented.
 
 Scope: every workflow under `.github/workflows/`. Findings are ordered by
 expected impact (wall-clock and runner-minutes), highest first. The two
@@ -182,12 +182,16 @@ workflow.
 `build-sdist` spins up another runner to run `uv build --sdist` for a few
 seconds. Each runner has fixed queue+startup overhead.
 
-**Change:** replace `prepare-matrix` with a static matrix literal (or a
-`fromJSON` input) and fold the sdist into an existing Linux job (e.g. append it
-to the `linux` matrix leg) or into the publish job. Also right-size the docs
-jobs: they are pure Python and can run on the cheaper ARM runner
-(`ubuntu-24.04-arm`), and `runs-on` should be consistent (`ubuntu-latest` vs
-`ubuntu-24.04`).
+**Change (done):** the `prepare-matrix` job is gone — `target` is now a JSON
+array of `{os,target}` matrix entries (default is the full 5-target list) and
+`build-wheels` consumes it directly via `fromJson(inputs.target)`, so no runner
+is spun up just to emit JSON. The `build-sdist` job is gone too: the Linux
+matrix leg now builds the sdist (`uv build --sdist`, `if: matrix.target ==
+'linux'`) and uploads it alongside its wheels, so the `source-dist` artifact is
+unchanged but its dedicated runner is removed. This drops two runner
+allocations (queue + startup) per wheel run. Not done: right-sizing the docs
+jobs (pure Python, could be `ubuntu-24.04-arm`) and making `runs-on` consistent
+(`ubuntu-latest` vs `ubuntu-24.04`) — cosmetic, those jobs do ~25s of real work.
 
 ## 10. Caching, checkouts and timeouts
 

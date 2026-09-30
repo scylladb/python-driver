@@ -10,10 +10,10 @@ on:
         default: "3.13"
 
       target:
-        description: "Target os to build for: linux,macos,windows"
+        description: "JSON array of {os,target} matrix entries to build"
         type: string
         required: false
-        default: "linux,macos-x86,macos-arm,windows,linux-aarch64"
+        default: '[{"os":"ubuntu-24.04","target":"linux"},{"os":"macos-15-intel","target":"macos-x86"},{"os":"macos-14","target":"macos-arm"},{"os":"windows-2022","target":"windows"},{"os":"ubuntu-24.04-arm","target":"linux-aarch64"}]'
 
       target_tag:
         description: "Publish particular tag"
@@ -34,55 +34,15 @@ on:
         default: false
 
 jobs:
-  prepare-matrix:
-    name: "Prepare matrix to run for ${{ inputs.python-version }} on `${{ inputs.target }}`"
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    outputs:
-      matrix: ${{ steps.prepare.outputs.matrix }}
-    steps:
-      - name: Prepare matrix json from input matrix list
-        id: prepare
-        run: |
-          echo -n "[" > /tmp/matrix.json
-          was_added=""
-          for target in $(echo "${{ inputs.target }}" | tr -d " " | tr "," "\n")
-          do
-           if [[ "${target}" == "linux" ]]; then
-             [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n '{"os":"ubuntu-24.04", "target": "linux"}' >> /tmp/matrix.json
-             was_added=1
-           elif [[ "${target}" == "linux-aarch64" ]]; then
-             [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n  '{"os":"ubuntu-24.04-arm", "target": "linux-aarch64"}' >> /tmp/matrix.json
-             was_added=1
-           elif [[ "${target}" == "windows" ]]; then
-             [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n  '{"os":"windows-2022", "target": "windows"}' >> /tmp/matrix.json
-             was_added=1
-           elif [[ "${target}" == "macos-x86" ]]; then
-             [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n  '{"os":"macos-15-intel", "target": "macos-x86"}' >> /tmp/matrix.json
-             was_added=1
-           elif [[ "${target}" == "macos-arm" ]]; then
-             [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n  '{"os":"macos-14", "target": "macos-arm"}' >> /tmp/matrix.json
-             was_added=1
-           fi
-          done
-          echo -n "]" >> /tmp/matrix.json
-          echo -e "Resulted matrix json:\n$(cat /tmp/matrix.json)"
-          echo "matrix=$(cat /tmp/matrix.json)" >> $GITHUB_OUTPUT
-
   build-wheels:
     name: Build wheels for ${{ matrix.target }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
-    needs: prepare-matrix
+    if: inputs.target != ''
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+        include: ${{ fromJson(inputs.target) }}
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -176,30 +136,17 @@ jobs:
         run: |
           CIBW_BUILD="cp3*" cibuildwheel --archs aarch64 --output-dir wheelhouse
 
+      - name: Build source distribution
+        if: matrix.target == 'linux'
+        run: uv build --sdist
+
+      - if: matrix.target == 'linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: source-dist
+          path: dist/*.tar.gz
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-${{ matrix.target }}-${{ matrix.os }}
           path: ./wheelhouse/*.whl
-
-  build-sdist:
-    name: Build source distribution
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ inputs.target_tag || github.sha }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-        with:
-          python-version: ${{ inputs.python-version }}
-          enable-cache: true
-
-      - name: Build sdist
-        run: uv build --sdist
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: source-dist
-          path: dist/*.tar.gz
