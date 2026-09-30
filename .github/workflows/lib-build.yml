@@ -89,6 +89,13 @@ jobs:
         with:
           ref: ${{ inputs.target_tag || github.sha }}
 
+      - name: Set build concurrency to the runner's CPU count
+        shell: bash
+        run: |
+          cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-2}")
+          echo "CASS_DRIVER_BUILD_CONCURRENCY=$cpus" >> "$GITHUB_ENV"
+          echo "Building extensions with concurrency: $cpus"
+
       - name: Disable tests
         if: inputs.ignore_tests
         shell: bash

@@ -154,7 +154,10 @@ directory = "htmlcov"
 
 [tool.cibuildwheel]
 build-frontend = "build[uv]"
-environment = { CASS_DRIVER_BUILD_CONCURRENCY = "2", CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "yes", CFLAGS = "-g0 -O3" }
+environment = { CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "yes", CFLAGS = "-g0 -O3" }
+# CASS_DRIVER_BUILD_CONCURRENCY is set by the workflow to the runner's CPU
+# count (see lib-build.yml); pass it through to the Linux build container.
+environment-pass = ["CASS_DRIVER_BUILD_CONCURRENCY"]
 skip = [
     "cp39*",
     "cp3*t-*",
@@ -215,7 +218,7 @@ test-command = [
 ]
 
 # TODO: set CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST to yes when https://github.com/scylladb/python-driver/issues/429 is fixed
-environment = { CASS_DRIVER_BUILD_CONCURRENCY = "2", CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "no" }
+environment = { CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "no" }
 
 # PyPy never builds the libev/cmurmur3/Cython C extensions (setup.py forces
 # is_pypy to skip them even when CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST=yes), so
