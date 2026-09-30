@@ -52,6 +52,8 @@ try:
 except ImportError as e:
     CCMClusterFactory = None
 
+    CCMCluster = object  # importable without ccmlib (Windows wheel unit tests)
+
 log = logging.getLogger(__name__)
 
 CLUSTER_NAME = 'test_cluster'
@@ -135,9 +137,11 @@ else:
     mcv_string = os.getenv('MAPPED_CASSANDRA_VERSION', None)
 try:
     cassandra_version = Version(cv_string)  # env var is set to test-dse for DDAC
-except:
-    # fallback to MAPPED_CASSANDRA_VERSION
-    cassandra_version = Version(mcv_string)
+except Exception:
+    if cv_string and not mcv_string:
+        raise  # a malformed explicit version must not silently become 3.11.4
+    # mapped version (DDAC), else 3.11.4 so the module imports with nothing set
+    cassandra_version = Version(mcv_string or '3.11.4')
 
 CASSANDRA_VERSION = Version(mcv_string) if mcv_string else cassandra_version
 CCM_VERSION = mcv_string if mcv_string else cv_string
