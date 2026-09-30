@@ -26,3 +26,5 @@ jobs:
     name: "Test wheels building"
     if: "!contains(github.event.pull_request.labels.*.name, 'disable-test-build')"
     uses: ./.github/workflows/lib-build.yml
+    with:
+      smoke_tests: true

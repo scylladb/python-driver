@@ -27,6 +27,12 @@ on:
         required: false
         default: false
 
+      smoke_tests:
+        description: "Minimal import check per wheel instead of the full test suite"
+        type: boolean
+        required: false
+        default: false
+
 jobs:
   prepare-matrix:
     name: "Prepare matrix to run for ${{ inputs.python-version }} on `${{ inputs.target }}`"
@@ -92,6 +98,20 @@ jobs:
           echo "CIBW_TEST_SKIP=*" >> $GITHUB_ENV;
           echo "CIBW_BEFORE_TEST=true" >> $GITHUB_ENV;
           echo "CIBW_BEFORE_TEST_WINDOWS=(exit 0)" >> $GITHUB_ENV;
+
+      - name: Import smoke test only
+        if: inputs.smoke_tests
+        shell: bash
+        env:
+          SMOKE_IMPORT: >-
+            import cassandra, cassandra.cluster, cassandra.protocol,
+            cassandra.connection, cassandra.cqltypes, cassandra.metadata,
+            cassandra.pool, cassandra.query, cassandra.util
+        run: |
+          echo "CIBW_TEST_COMMAND=python -c \"$SMOKE_IMPORT\"" >> $GITHUB_ENV
+          echo "CIBW_TEST_COMMAND_WINDOWS=python -c \"$SMOKE_IMPORT\"" >> $GITHUB_ENV
+          echo "CIBW_TEST_GROUPS=" >> $GITHUB_ENV
+          echo "CIBW_TEST_EXTRAS=" >> $GITHUB_ENV
 
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
