@@ -90,6 +90,13 @@ The simulacron Java helper lives in `tests/integration/simulacron/`, which
 these jobs do not run (they run `tests/integration/standard` and
 `tests/integration/cqlengine`).
 
+**Caveat (verified):** ccm would start a JVM-based `scylla-jmx` whenever the
+relocatable package contains a `jmx/` directory, which would require a JDK at
+cluster startup. The pinned `release:2026.1.13` package has no `jmx/`
+directory, so `scylla-jmx` is never started and the native `scylla nodetool` is
+used. The removal is safe for this pinned version; moving to a version that
+bundles `jmx/` would reintroduce the JDK requirement.
+
 **Change:** delete both `setup-java` steps (and the single-element
 `java-version: [8]` matrix axis in `integration-tests.yml:45`). Saves a
 download+install per job ×16.
@@ -99,16 +106,19 @@ download+install per job ×16.
 **Where:** `integration-tests.yml:92-95`, `coverage.yml:74-77`.
 
 **Why:** the step actually creates a full 1-node Scylla cluster and then tears
-it down, in every job, purely to populate `~/.ccm/repository`. Its own comment
+it down, in every job. The stated purpose was to pre-populate the Scylla
+download cache, but that cache has never worked: ccm writes downloaded
+relocatable packages to `~/.ccm/scylla-repository`
+(`ccmlib/scylla_repository.py:607`), while the workflow cached
+`~/.ccm/repository`. Its own comment
 says it is "not strictly necessary for running tests", and the timing-accounting
 rationale does not apply to hosted CI. It runs on cache hits too and is a large
 chunk of each job's non-test time.
 
-**Change:** either drop the warm-up entirely (the real test run populates the
-cache) or fetch the cluster binary without creating a cluster. Keep the
-`actions/cache` step (`integration-tests.yml:84-91`) and add a
-`restore-keys: scylla-${{ env.SCYLLA_VERSION }}-` fallback so a version bump
-still reuses the previous download.
+**Change:** drop the warm-up entirely (the real test run populates the cache)
+and fix the cache path to `~/.ccm/scylla-repository`, with
+`restore-keys: scylla-${{ env.SCYLLA_VERSION }}-` so a version bump still
+reuses the previous download.
 
 ## 6. Shrink the integration matrix on PRs
 
@@ -191,7 +201,7 @@ Three small, independent wins:
   checkout.
 - **Add `timeout-minutes`.** No job in any workflow sets a timeout, so a hung
   test or stalled download can burn the default 300-minute job limit. Put a
-  realistic cap on each job (e.g. tests 60–90 min, build 60 min, docs 15 min).
+  realistic cap on each job (e.g. tests 60–90 min, wheel build 120 min, sdist 15 min, docs 15-20 min).
 
 ---
 
