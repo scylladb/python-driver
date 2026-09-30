@@ -143,7 +143,7 @@ class _ConcurrentExecutor(object):
             while self._pending_executions:
                 p_idx, p_statement, p_params = self._pending_executions.pop(0)
                 try:
-                    future = self.session.execute_async(p_statement, p_params, timeout=None, execution_profile=self._execution_profile)
+                    future = self.session.execute_async(p_statement, p_params, execution_profile=self._execution_profile)
                     args = (future, p_idx)
                     future.add_callbacks(
                         callback=self._on_success, callback_args=args,
