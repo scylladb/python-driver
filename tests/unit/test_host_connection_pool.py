@@ -23,7 +23,7 @@ from threading import Thread, Event, Lock
 from unittest.mock import Mock, NonCallableMagicMock, MagicMock
 
 from cassandra.cluster import Session, ShardAwareOptions
-from cassandra.connection import Connection
+from cassandra.connection import Connection, DefaultEndPoint
 from cassandra.pool import HostConnection
 from cassandra.pool import Host, NoConnectionsAvailable
 from cassandra.policies import HostDistance, SimpleConvictionPolicy
@@ -211,18 +211,70 @@ class _PoolTests(unittest.TestCase):
         with pytest.raises(ValueError):
             Host(None, SimpleConvictionPolicy, host_id=uuid.uuid4())
 
+        for host_id in (None, "not-a-uuid", object()):
+            with pytest.raises(
+                    TypeError, match=r"^host_id must be a uuid\.UUID$"):
+                Host('127.0.0.1', SimpleConvictionPolicy, host_id=host_id)
+
+        with pytest.raises(ValueError):
+            Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.UUID(int=0))
+
+        with pytest.raises(
+                TypeError, match=r"^host_id must be a uuid\.UUID$"):
+            Host('127.0.0.1', SimpleConvictionPolicy)
+
     def test_host_equality(self):
         """
         Test host equality has correct logic
         """
 
-        a = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
-        b = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
-        c = Host('127.0.0.2', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        shared_id = uuid.uuid4()
+        a = Host('127.0.0.1', SimpleConvictionPolicy, host_id=shared_id)
+        b = Host('127.0.0.2', SimpleConvictionPolicy, host_id=shared_id)
+        c = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
 
-        assert a == b, 'Two Host instances should be equal when sharing.'
-        assert a != c, 'Two Host instances should NOT be equal when using two different addresses.'
-        assert b != c, 'Two Host instances should NOT be equal when using two different addresses.'
+        assert a == b, 'Two Host instances with the same host ID should be equal.'
+        assert a != c, 'Two Host instances with different host IDs should not be equal.'
+        assert a != a.address, 'A Host should not compare equal to its address.'
+
+    def test_host_id_is_read_only(self):
+        host_id = uuid.uuid4()
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=host_id)
+
+        with pytest.raises(AttributeError):
+            host.host_id = uuid.uuid4()
+
+        assert host.host_id == host_id
+
+    def test_host_hash_is_stable_when_endpoint_changes(self):
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        hosts_by_id = {host: "pool"}
+        hosts = {host}
+
+        host.endpoint = DefaultEndPoint('127.0.0.2')
+
+        assert hosts_by_id[host] == "pool"
+        assert host in hosts
+
+    def test_host_ordering_uses_host_id(self):
+        first = Host('127.0.0.2', SimpleConvictionPolicy, host_id=uuid.UUID(int=1))
+        second = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.UUID(int=2))
+
+        assert first < second
+
+    def test_host_id_is_set_before_conviction_policy_is_created(self):
+        host_id = uuid.UUID(int=1)
+        hosts = set()
+
+        def conviction_policy_factory(host):
+            assert host.host_id == host_id
+            hosts.add(host)
+            return SimpleConvictionPolicy(host)
+
+        host = Host(
+            '127.0.0.1', conviction_policy_factory, host_id=host_id)
+
+        assert host in hosts
 
 
 class HostConnectionTests(_PoolTests):

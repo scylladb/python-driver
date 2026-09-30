@@ -152,7 +152,8 @@ class TestShardAwareIntegration(unittest.TestCase):
             assert active_control_connection.is_closed or active_control_connection.is_defunct
 
         pools = getattr(self.session, '_pools', None) or {}
-        for host, pool in pools.items():
+        for pool in pools.values():
+            host = pool.host
             if host.endpoint.address != node_ip_address or host.endpoint.port != node_port:
                 continue
 
