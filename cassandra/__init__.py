@@ -29,7 +29,7 @@ __version__ = '.'.join(map(str, __version_info__))
 
 class ConsistencyLevel(object):
     """
-    Spcifies how many replicas must respond for an operation to be considered
+    Specifies how many replicas must respond for an operation to be considered
     a success.  By default, ``ONE`` is used for all operations.
     """
 
@@ -230,7 +230,7 @@ class ProtocolVersion(object):
 
 class WriteType(object):
     """
-    For usage with :class:`.RetryPolicy`, this describe a type
+    For usage with :class:`.RetryPolicy`, this describes a type
     of write operation.
     """
 
@@ -255,7 +255,7 @@ class WriteType(object):
     COUNTER = 3
     """
     A counter write (for one or multiple partition keys). Such writes should
-    not be replayed in order to avoid overcount.
+    not be replayed in order to avoid overcounting.
     """
 
     BATCH_LOG = 4
@@ -266,7 +266,7 @@ class WriteType(object):
 
     CAS = 5
     """
-    A lighweight-transaction write, such as "DELETE ... IF EXISTS".
+    A lightweight-transaction write, such as "DELETE ... IF EXISTS".
     """
 
     VIEW = 6

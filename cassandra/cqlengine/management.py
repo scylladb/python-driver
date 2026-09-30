@@ -537,7 +537,7 @@ def _drop_table(model, connection=None):
 
     connection = connection or model._get_connection()
 
-    # don't try to delete non existant tables
+    # don't try to delete nonexistent tables
     meta = get_cluster(connection).metadata
 
     ks_name = model._get_keyspace()

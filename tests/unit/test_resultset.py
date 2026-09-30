@@ -123,7 +123,7 @@ class ResultSetTests(unittest.TestCase):
         # index access before iteration causes list to be materialized
         assert rs[0] == expected[0]
 
-        # resusable iteration
+        # reusable iteration
         assertListEqual(list(rs), expected)
         assertListEqual(list(rs), expected)
 
@@ -138,7 +138,7 @@ class ResultSetTests(unittest.TestCase):
         # index access before iteration causes list to be materialized
         assert rs[0] == expected[0]
         assert rs[9] == expected[9]
-        # resusable iteration
+        # reusable iteration
         assertListEqual(list(rs), expected)
         assertListEqual(list(rs), expected)
 
