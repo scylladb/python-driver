@@ -71,7 +71,7 @@ jobs:
   build-wheels:
     name: Build wheels for ${{ matrix.target }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 120
     needs: prepare-matrix
     strategy:
       fail-fast: false
@@ -119,6 +119,7 @@ jobs:
         with:
           path: ~/.conan2
           key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py') }}
+          restore-keys: conan-${{ runner.os }}-
 
       - name: Install Conan
         if: runner.os == 'Windows'
@@ -169,6 +170,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.target_tag || github.sha }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
