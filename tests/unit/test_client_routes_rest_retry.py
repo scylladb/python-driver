@@ -13,18 +13,13 @@
 # limitations under the License.
 """Cluster-free tests for the 5xx retry in the client-routes REST helper."""
 
-import importlib
 import io
-import os
 import unittest
 import urllib.error
 import uuid
 from unittest import mock
 
-# tests.integration reads CASSANDRA_VERSION at import time and fails without
-# it. Scope the fallback to the import so it does not leak into later tests.
-with mock.patch.dict(os.environ, {"CASSANDRA_VERSION": "4.0.0"}):
-    tcr = importlib.import_module("tests.integration.standard.test_client_routes")
+import tests.client_routes_rest as tcr
 
 ROUTES = [{"connection_id": uuid.uuid4(), "host_id": uuid.uuid4(),
            "address": "127.0.0.1", "port": 9042}]
@@ -45,12 +40,20 @@ class PostClientRoutesRetryTest(unittest.TestCase):
 
     def _run(self, side_effect, **kw):
         with mock.patch("urllib.request.urlopen", side_effect=side_effect) as up, \
-                mock.patch("time.sleep") as sleep:
+                mock.patch("tests.client_routes_rest._sleep") as sleep:
             try:
                 tcr.post_client_routes("127.0.0.1", ROUTES, **kw)
             except Exception as e:
                 return up, sleep, e
         return up, sleep, None
+
+    def test_retry_contract_values(self):
+        # Pinned literals: a change to the retry/timeout contract must be
+        # intentional and visible in review, not silently absorbed.
+        self.assertEqual(tcr.MAX_ATTEMPTS, 5)
+        self.assertEqual(tcr.RETRY_DELAY, 1)
+        self.assertEqual(tcr.REST_TIMEOUT, 30)
+        self.assertEqual(tcr.MAX_ERROR_BODY_BYTES, 4096)
 
     def test_retries_5xx_then_succeeds(self):
         up, sleep, err = self._run([_http_error(500), _http_error(503), _ok()],
@@ -58,15 +61,14 @@ class PostClientRoutesRetryTest(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual(up.call_count, 3)
         # a delay between attempts, none after success
-        self.assertEqual(sleep.call_args_list, [mock.call(tcr.RETRY_DELAY)] * 2)
-        self.assertGreater(tcr.RETRY_DELAY, 0)
+        self.assertEqual(sleep.call_args_list, [mock.call(1)] * 2)
 
     def test_exhaustion_raises_without_trailing_sleep(self):
-        up, sleep, err = self._run([_http_error(500) for _ in range(tcr.MAX_ATTEMPTS)],
+        up, sleep, err = self._run([_http_error(500) for _ in range(5)],
                                    )
         self.assertIsInstance(err, urllib.error.HTTPError)
-        self.assertEqual(up.call_count, tcr.MAX_ATTEMPTS)
-        self.assertEqual(sleep.call_count, tcr.MAX_ATTEMPTS - 1)
+        self.assertEqual(up.call_count, 5)
+        self.assertEqual(sleep.call_count, 4)
 
     def test_non_retryable_fail_immediately(self):
         for exc in (_http_error(400), _http_error(404), _http_error(600),
@@ -87,24 +89,33 @@ class PostClientRoutesRetryTest(unittest.TestCase):
         self.assertEqual(up.call_count, 2)
 
         with self.assertLogs(tcr.log, "ERROR") as cm:
-            _, _, err = self._run([bad() for _ in range(tcr.MAX_ATTEMPTS)])
+            _, _, err = self._run([bad() for _ in range(5)])
         self.assertEqual(err.code, 500)
         self.assertIn("<unreadable body>", "\n".join(cm.output))
+
+    def test_error_body_read_is_capped(self):
+        err = _http_error(500)
+        err.read = mock.Mock(wraps=err.read)
+        self._run([err, _ok()])
+        err.read.assert_called_once_with(tcr.MAX_ERROR_BODY_BYTES)
 
     def test_timeout_passed_on_every_attempt(self):
         up, _, err = self._run([_http_error(500), _http_error(503), _ok()])
         self.assertIsNone(err)
         self.assertEqual(up.call_count, 3)
         for call in up.call_args_list:
-            self.assertEqual(call.kwargs["timeout"], tcr.REST_TIMEOUT)
+            self.assertEqual(call.kwargs["timeout"], 30)
 
     def test_retryable_and_terminal_responses_closed(self):
         retryable = _http_error(500)
         retryable.close = mock.Mock(wraps=retryable.close)
-        self._run([retryable, _ok()])
+        ok = _ok()
+        self._run([retryable, ok])
         retryable.close.assert_called_once()
+        # the successful response is closed by its context manager
+        ok.__exit__.assert_called_once()
 
-        exhausted = [_http_error(500) for _ in range(tcr.MAX_ATTEMPTS)]
+        exhausted = [_http_error(500) for _ in range(5)]
         for e in exhausted:
             e.close = mock.Mock(wraps=e.close)
         self._run(exhausted)
@@ -123,3 +134,12 @@ class PostClientRoutesRetryTest(unittest.TestCase):
         with self.assertLogs(tcr.log, "ERROR") as cm:
             self._run([_http_error(404, b"nope")])
         self.assertIn("nope", "\n".join(cm.output))
+
+    def test_error_body_is_sanitized_in_logs(self):
+        # A server-supplied body must not be able to inject newlines or
+        # terminal control sequences into CI logs.
+        with self.assertLogs(tcr.log, "ERROR") as cm:
+            self._run([_http_error(404, b"boom\nFORGED\x1b[31m")])
+        out = "\n".join(cm.output)
+        self.assertIn(r"boom\nFORGED\x1b[31m", out)
+        self.assertNotIn("boom\nFORGED", out)

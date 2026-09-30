@@ -33,14 +33,11 @@ import time
 import unittest
 import uuid
 
-import json as _json
-import urllib.error
-import urllib.request
-
 from cassandra.cluster import Cluster
 from cassandra.client_routes import ClientRoutesConfig, ClientRouteProxy
 from cassandra.connection import ClientRoutesEndPoint
 from cassandra.policies import RoundRobinPolicy
+from tests.client_routes_rest import post_client_routes
 from tests.integration import (
     TestCluster,
     get_cluster,
@@ -209,66 +206,6 @@ class NLBEmulator:
         """
         with self._lock:
             return [p.target_host for p in self._node_proxies.values()]
-
-REST_TIMEOUT = 30  # bounds connect and each body read
-RETRY_DELAY = 1
-MAX_ATTEMPTS = 5
-
-
-def post_client_routes(contact_point, routes):
-    """
-    Post client routes to Scylla's REST API.
-
-    :param contact_point: IP/hostname of a Scylla node (e.g. "127.0.0.1")
-    :param routes: List of route dicts with keys: connection_id, host_id, address, port
-                   and optionally tls_port
-    """
-    payload = []
-    for route in routes:
-        entry = {
-            "connection_id": str(route["connection_id"]),
-            "host_id": str(route["host_id"]),
-            "address": route["address"],
-            "port": route["port"],
-        }
-        if route.get("tls_port") is not None:
-            entry["tls_port"] = route["tls_port"]
-        payload.append(entry)
-
-    url = "http://%s:10000/v2/client-routes" % contact_point
-    log.info("Posting %d routes to %s", len(payload), url)
-    data = _json.dumps(payload).encode("utf-8")
-
-    # Right after a decommission the REST API can briefly answer 5xx. Retry
-    # those (logged); 4xx and connection errors always raise.
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST",
-    )
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=REST_TIMEOUT) as response:
-                log.info("Routes posted successfully (status %d)", response.status)
-                return
-        except urllib.error.HTTPError as e:
-            try:
-                body = e.read().decode("utf-8", "replace")
-            except Exception:
-                body = "<unreadable body>"
-            e.close()
-            if 500 <= e.code < 600 and attempt < MAX_ATTEMPTS:
-                log.warning(
-                    "POST %s -> HTTP %d (attempt %d/%d), retrying: %s",
-                    url, e.code, attempt, MAX_ATTEMPTS, body)
-                time.sleep(RETRY_DELAY)
-                continue
-            log.error("POST %s -> HTTP %d: %s", url, e.code, body)
-            raise
 
 
 def get_host_ids_from_cluster(session):
