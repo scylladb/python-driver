@@ -2,8 +2,9 @@
     :target: https://opensource.org/licenses/Apache-2.0
 .. |version| image:: https://badge.fury.io/py/scylla-driver.svg
     :target: https://badge.fury.io/py/scylla-driver
+.. |pyversion| image:: https://img.shields.io/pypi/pyversions/scylla-driver.svg
 
-|license| |version|
+|license| |version| |pyversion|
 
 Scylla Python Driver
 ====================
