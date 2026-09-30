@@ -2,13 +2,14 @@
 
 Branch: `ci/gha-speedups` (worktree of `origin/master`).
 
-Status: implemented **#1, #4, #5, #7, #10** in this branch. **#3 was evaluated
-and dropped**: Cython extensions are ABI-specific, so a single shared wheel is
-impossible (it would need one build job per Python version), that restructure
-does not reduce wall-clock (build and test are already sequential within a job),
-and `[tool.uv] cache-keys` plus `setup-uv`'s default uv cache already reuse the
-compiled build across runs. The remaining items (#2, #6, #8, #9) are not yet
-implemented.
+Status: implemented **#1, #4, #5, #7, #10** in this branch, plus the PR-side
+test change of **#8** (a per-wheel import smoke test instead of the full unit
+suite). **#3 was evaluated and dropped**: Cython extensions are ABI-specific,
+so a single shared wheel is impossible (it would need one build job per Python
+version), that restructure does not reduce wall-clock (build and test are
+already sequential within a job), and `[tool.uv] cache-keys` plus `setup-uv`'s
+default uv cache already reuse the compiled build across runs. The remaining
+items (#2, #6, #9, and #8's matrix-trimming half) are not yet implemented.
 
 Scope: every workflow under `.github/workflows/`. Findings are ordered by
 expected impact (wall-clock and runner-minutes), highest first. The two
@@ -161,11 +162,16 @@ version on every platform; `test-groups = ["dev"]` makes cibuildwheel install
 the dev extra and run the project's tests inside every wheel build. Wheel-build
 tests overlap heavily with the dedicated integration suite.
 
-**Change:** pin the built versions to the actually-supported range (and the
-oldest one you still support) instead of `cp3*`/`pp3*`, and/or set
-`CIBW_TEST_SKIP=*` for PR build-test runs (the `ignore_tests` input already
-exists in `lib-build.yml:83-93`). This is a large multiplier on the most
-expensive workflow.
+**Change (tests: done):** PR build-test runs now pass `smoke_tests: true`
+(`build-test.yml`). `lib-build.yml` then overrides cibuildwheel's per-platform
+`test-command` with a one-line import check (`python -c "import cassandra,
+…"`) and clears `test-groups`/`test-extras` (`CIBW_TEST_GROUPS=`,
+`CIBW_TEST_EXTRAS=`). This keeps a wheel-installs-and-imports guarantee while
+dropping the per-wheel full unit suite — and with it the `dev` extra install
+that was failing on Windows/PyPy. Release/publish callers still run the full
+suite. Building every ABI (`cp3*`/`pp3*`) is left unchanged (recommendation #2
+covers trimming the matrix). This is a large multiplier on the most expensive
+workflow.
 
 ## 9. Collapse the small one-purpose jobs
 
