@@ -209,6 +209,22 @@ class ConcurrencyTest((unittest.TestCase)):
         assert results[0].success
         assert results[0].result_or_exc.one() == "value"
 
+    def test_async_uses_execution_profile_request_timeout(self):
+        session, response_futures = self.deferred_session()
+        statement = "SELECT value FROM test WHERE key=?"
+        params = (1,)
+        profile = object()
+
+        result_future = execute_concurrent_async(
+            session, [(statement, params)], execution_profile=profile)
+
+        self.wait_for_response_futures(response_futures, 1)
+        session.execute_async.assert_called_once_with(
+            statement, params, execution_profile=profile)
+
+        response_futures[0].succeed(["value"])
+        assert result_future.result(timeout=1.0)[0].success
+
     def test_async_results_retain_input_order(self):
         session, response_futures = self.deferred_session()
         statements_and_params = [
