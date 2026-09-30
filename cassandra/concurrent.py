@@ -41,10 +41,9 @@ def execute_concurrent(session, statements_and_parameters, concurrency=100, rais
 
     * If :const:`False`, the results are returned only after all requests have completed.
     * If :const:`True`, a generator expression is returned. Using a generator results in a constrained
-      memory footprint when the results set will be large -- results are yielded
-      as they return instead of materializing the entire list at once. The trade for lower memory
-      footprint is marginal CPU overhead (more thread coordination and sorting out-of-order results
-      on-the-fly).
+      memory footprint when the results set will be large -- results are yielded as they return
+      instead of materializing the entire list at once. Results are still returned in the order the
+      statements were passed in, so out-of-order completions are held until their turn.
 
     `execution_profile` argument is the execution profile to use for this
     request, it is passed directly to :meth:`Session.execute_async`.
@@ -77,6 +76,8 @@ def execute_concurrent(session, statements_and_parameters, concurrency=100, rais
     `results_generator`, new requests are only submitted while the consumer is asking for the
     next result, so a slow consumer lowers the effective concurrency.
     """
+    if not isinstance(concurrency, int):
+        raise TypeError("concurrency must be an integer")
     if concurrency <= 0:
         raise ValueError("concurrency must be greater than 0")
 
@@ -90,7 +91,7 @@ def execute_concurrent(session, statements_and_parameters, concurrency=100, rais
 
 class _ConcurrentExecutor(object):
     # All submission happens on the calling thread. IO-thread callbacks only
-    # store the result and enqueue its index, so they never block on the caller.
+    # enqueue the completed result, so they never block on the caller.
 
     def __init__(self, session, statements_and_params, execution_profile):
         self.session = session
@@ -124,14 +125,22 @@ class _ConcurrentExecutor(object):
                 self._on_error(exc, idx)
 
     def _reap(self, concurrency, block):
-        try:
-            self._done.get(block)
+        # Runs on the calling thread. Each statement is recorded and counted
+        # exactly once, so a future that reports twice (e.g. a late speculative
+        # response) can neither advance the window nor fail fast on a result
+        # that was already superseded.
+        while True:
+            try:
+                idx, result = self._done.get(block)
+            except Empty:
+                break
+            block = False
+            if idx in self._results:
+                continue
+            self._results[idx] = result
             self._in_flight -= 1
-            while True:
-                self._done.get_nowait()
-                self._in_flight -= 1
-        except Empty:
-            pass
+            if self._fail_fast and not result.success and self._first_error is None:
+                self._first_error = result.result_or_exc
         self._submit(concurrency)
 
     def _on_success(self, result, future, idx):
@@ -139,15 +148,12 @@ class _ConcurrentExecutor(object):
         self._complete(idx, ExecutionResult(True, ResultSet(future, result)))
 
     def _on_error(self, exc, idx):
-        if self._first_error is None:
-            self._first_error = exc
         self._complete(idx, ExecutionResult(False, exc))
 
     def _complete(self, idx, result):
-        # Count each statement once even if its future reports twice.
-        if idx not in self._results:
-            self._results[idx] = result
-            self._done.put(idx)
+        # Runs on an IO thread. Only enqueue the completion; the calling thread
+        # does the bookkeeping (dedup, fail-fast) when it reaps.
+        self._done.put((idx, result))
 
 
 class ConcurrentExecutorGenResults(_ConcurrentExecutor):
