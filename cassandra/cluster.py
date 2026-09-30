@@ -3330,18 +3330,20 @@ class Session(object):
         Each ``parameters`` item must be a sequence or :const:`None`.
 
         `concurrency` limits the number of requests in flight. It must be
-        greater than zero. All protocol versions supported by this driver use
-        multiplexed connections; tune this value for the workload and cluster.
+        an integer greater than zero.
 
         If `raise_on_first_error` is :const:`True`, execution stops scheduling
-        new statements after the first failed request and raises its exception.
+        new statements after the first failed request. Without
+        `results_generator`, that request's exception is raised. With
+        `results_generator`, earlier results are yielded first and the
+        exception is raised when iteration reaches the failed statement.
 
         If `results_generator` is :const:`False`, results are returned after
         all requests finish. If it is :const:`True`, an iterator yields results
         in input order as they become available, reducing peak memory use.
 
         `execution_profile` is passed to :meth:`execute_async` for every
-        request.
+        request, and its ``request_timeout`` applies to each request.
 
         Returns ``ExecutionResult(success, result_or_exc)`` namedtuples in the
         same order as the input. A failed result contains its exception; a
@@ -3365,6 +3367,7 @@ class Session(object):
         Consumers of a results iterator must not block or issue synchronous
         requests from the I/O event thread, because doing so can deadlock.
 
+        .. versionadded:: 3.29.13
         """
         from cassandra.concurrent import execute_concurrent
         return execute_concurrent(
@@ -3386,6 +3389,7 @@ class Session(object):
             session.execute_concurrent_with_args(
                 statement, parameters, concurrency=50)
 
+        .. versionadded:: 3.29.13
         """
         from cassandra.concurrent import execute_concurrent_with_args
         return execute_concurrent_with_args(
@@ -3398,22 +3402,37 @@ class Session(object):
         """
         Start a sequence of ``(statement, parameters)`` pairs concurrently.
 
-        This method returns a :class:`concurrent.futures.Future` immediately.
-        `concurrency` limits the number of requests in flight and must be
-        greater than zero. `execution_profile` is passed to
-        :meth:`execute_async` for every request.
+        This method returns a :class:`concurrent.futures.Future` without
+        blocking the caller. `concurrency` limits the number of requests in
+        flight and must be an integer greater than zero; invalid values raise
+        immediately instead of through the future. `execution_profile` is
+        passed to :meth:`execute_async` for every request, and its
+        ``request_timeout`` applies to each request.
 
-        With the default `raise_on_first_error` value of :const:`False`, the
-        future resolves to an input-ordered list of
+        Unlike :meth:`execute_concurrent`, `raise_on_first_error` defaults to
+        :const:`False`. The future then resolves to an input-ordered list of
         ``ExecutionResult(success, result_or_exc)`` namedtuples after every
         request finishes. If `raise_on_first_error` is :const:`True`, the
         future is completed with the first request exception and no new
-        statements are scheduled.
+        statements are scheduled. Requests already in flight are not
+        cancelled; their results are discarded.
 
-        An empty input resolves to an empty list. Under normal operation,
-        completion callbacks run on the session's executor rather than an I/O
-        reactor thread.
+        The input is consumed on the session's executor threads, one item
+        ahead of submission, so iterating it must not block. The future fails
+        regardless of `raise_on_first_error` if iterating the input raises or
+        yields an item that is not a ``(statement, parameters)`` pair, or if
+        the session shuts down before the input is consumed. Results collected
+        before such a failure are discarded.
 
+        The future is already running when returned, so :meth:`cancel()
+        <concurrent.futures.Future.cancel>` returns :const:`False`.
+
+        An empty input resolves to an empty list. The aggregate future is
+        completed on a short-lived daemon thread rather than the session's
+        executor or an I/O reactor thread. Callbacks registered before
+        completion run on that thread.
+
+        .. versionadded:: 3.29.13
         """
         from cassandra.concurrent import execute_concurrent_async
         return execute_concurrent_async(

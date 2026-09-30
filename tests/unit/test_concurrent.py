@@ -20,12 +20,12 @@ from itertools import cycle
 from unittest.mock import Mock, patch
 import time
 import threading
-from queue import PriorityQueue
+from queue import Empty, PriorityQueue, Queue
 import sys
 import platform
 import uuid
 
-from cassandra.cluster import Cluster, Session
+from cassandra.cluster import Cluster, EXEC_PROFILE_DEFAULT, Session
 from cassandra.concurrent import (execute_concurrent,
                                   execute_concurrent_async,
                                   execute_concurrent_with_args)
@@ -124,6 +124,22 @@ class DeferredResponseFuture(object):
         self._errback = None
 
 
+class ReadyDeferredResponseFuture(DeferredResponseFuture):
+    """DeferredResponseFuture that other threads may complete safely."""
+
+    def __init__(self):
+        super(ReadyDeferredResponseFuture, self).__init__()
+        self.callbacks_added = threading.Event()
+
+    def add_callbacks(self, *args, **kwargs):
+        super(ReadyDeferredResponseFuture, self).add_callbacks(*args, **kwargs)
+        self.callbacks_added.set()
+
+    def succeed(self, result):
+        assert self.callbacks_added.wait(1.0)
+        super(ReadyDeferredResponseFuture, self).succeed(result)
+
+
 class ImmediateFailedResponseFuture(object):
 
     def __init__(self, error):
@@ -137,6 +153,12 @@ class ImmediateFailedResponseFuture(object):
 
 class PumpFailure(BaseException):
     pass
+
+
+class FalseyException(Exception):
+
+    def __bool__(self):
+        return False
 
 
 class TimedCallableInvoker(threading.Thread):
@@ -194,8 +216,13 @@ class ConcurrencyTest((unittest.TestCase)):
 
         session = Mock()
         session.execute_async.side_effect = execute_async
-        self.enable_async_submit(session)
+        self.executor = self.enable_async_submit(session)
         return session, response_futures
+
+    def drain_executor(self):
+        # Pumps scheduled by callbacks are queued before shutdown and run to
+        # completion; later scheduling attempts are rejected.
+        self.executor.shutdown(wait=True)
 
     def test_async_returns_before_requests_complete(self):
         session, response_futures = self.deferred_session()
@@ -213,7 +240,7 @@ class ConcurrencyTest((unittest.TestCase)):
         assert results[0].success
         assert results[0].result_or_exc.one() == "value"
 
-    def test_async_uses_execution_profile_request_timeout(self):
+    def test_async_does_not_override_request_timeout(self):
         session, response_futures = self.deferred_session()
         statement = "SELECT value FROM test WHERE key=?"
         params = (1,)
@@ -347,6 +374,56 @@ class ConcurrencyTest((unittest.TestCase)):
         assert callback_done.wait(1.0)
         assert completion_thread != [response_thread]
 
+    def test_async_done_callback_can_shut_down_cluster(self):
+        for success in (True, False):
+            with self.subTest(success=success):
+                cluster = Cluster(idle_heartbeat_interval=0)
+                response_futures = []
+
+                def execute_async(*args, **kwargs):
+                    response_future = DeferredResponseFuture()
+                    response_futures.append(response_future)
+                    return response_future
+
+                session = Mock()
+                session.cluster = cluster
+                session.submit.side_effect = cluster.executor.submit
+                session.execute_async.side_effect = execute_async
+
+                error = RuntimeError("request failed")
+                result_future = execute_concurrent_async(
+                    session, [("SELECT value FROM test", None)],
+                    raise_on_first_error=True)
+                self.wait_for_response_futures(response_futures, 1)
+
+                callback_errors = []
+                callback_done = threading.Event()
+
+                def shutdown_cluster(completed):
+                    try:
+                        session.cluster.shutdown()
+                    except BaseException as exc:
+                        callback_errors.append(exc)
+                    finally:
+                        callback_done.set()
+
+                try:
+                    result_future.add_done_callback(shutdown_cluster)
+                    if success:
+                        response_futures[0].succeed(["value"])
+                    else:
+                        response_futures[0].fail(error)
+
+                    assert callback_done.wait(1.0)
+                    assert callback_errors == []
+                    assert cluster.is_shutdown
+                    if success:
+                        assert result_future.result(timeout=1.0)[0].success
+                    else:
+                        assert result_future.exception(timeout=1.0) is error
+                finally:
+                    cluster.shutdown()
+
     def test_async_fail_fast_completes_once(self):
         session, response_futures = self.deferred_session()
         statements_and_params = [
@@ -381,6 +458,7 @@ class ConcurrencyTest((unittest.TestCase)):
         # aggregate Future again or schedule the remaining statement.
         response_futures[1].succeed(["late success"])
         response_futures[2].fail(late_error)
+        self.drain_executor()
         assert completions == [error]
         assert result_future.exception() is error
         assert session.execute_async.call_count == 3
@@ -416,9 +494,11 @@ class ConcurrencyTest((unittest.TestCase)):
             yield "SELECT value FROM test WHERE key=?", (1,)
             raise error
 
+        # With all capacity in use, the pump reads one item ahead and then
+        # waits, so the failure surfaces only once a response frees capacity.
         result_future = execute_concurrent_async(
-            session, statements(), concurrency=2)
-        self.wait_for_response_futures(response_futures, 2)
+            session, statements(), concurrency=1)
+        self.wait_for_response_futures(response_futures, 1)
         completions = []
         result_future.add_done_callback(
             lambda completed: completions.append(completed.exception()))
@@ -458,6 +538,187 @@ class ConcurrencyTest((unittest.TestCase)):
 
         assert result_future.exception(timeout=1.0) is error
         session.execute_async.assert_called_once()
+
+    def test_async_reports_exception_from_execute_async_as_result(self):
+        session, response_futures = self.deferred_session()
+        error = RuntimeError("cannot execute")
+        execute_deferred = session.execute_async.side_effect
+
+        def execute_async(*args, **kwargs):
+            if session.execute_async.call_count == 1:
+                raise error
+            return execute_deferred(*args, **kwargs)
+
+        session.execute_async.side_effect = execute_async
+
+        result_future = execute_concurrent_async(
+            session, [("SELECT value FROM test", None)] * 2, concurrency=2)
+        self.wait_for_response_futures(response_futures, 1)
+        response_futures[0].succeed(["value"])
+
+        results = result_future.result(timeout=1.0)
+        assert results[0].success is False
+        assert results[0].result_or_exc is error
+        assert results[1].success
+        assert results[1].result_or_exc.one() == "value"
+
+    def test_async_fail_fast_on_exception_from_execute_async(self):
+        session, response_futures = self.deferred_session()
+        error = RuntimeError("cannot execute")
+        session.execute_async.side_effect = error
+
+        result_future = execute_concurrent_async(
+            session, [("SELECT value FROM test", None)] * 3, concurrency=1,
+            raise_on_first_error=True)
+
+        assert result_future.exception(timeout=1.0) is error
+        self.drain_executor()
+        assert session.execute_async.call_count == 1
+
+    def test_async_preserves_success_on_shutdown_at_full_concurrency(self):
+        for count in (1, 3):
+            with self.subTest(count=count):
+                session, response_futures = self.deferred_session()
+                result_future = execute_concurrent_async(
+                    session, [("SELECT value FROM test", None)] * count,
+                    concurrency=count)
+                self.wait_for_response_futures(response_futures, count)
+
+                session.submit.side_effect = None
+                session.submit.return_value = None
+                for response_future in response_futures:
+                    response_future.succeed(["value"])
+
+                results = result_future.result(timeout=1.0)
+                assert [result.success for result in results] == [True] * count
+
+    def test_async_fail_fast_on_shutdown_after_input_exhausted(self):
+        session, response_futures = self.deferred_session()
+        error = RuntimeError("request failed")
+        result_future = execute_concurrent_async(
+            session, [("SELECT value FROM test", None)] * 3,
+            concurrency=3, raise_on_first_error=True)
+        self.wait_for_response_futures(response_futures, 3)
+        self.drain_executor()
+
+        session.submit.side_effect = None
+        session.submit.return_value = None
+        response_futures[1].fail(error)
+
+        assert result_future.exception(timeout=1.0) is error
+
+    def test_async_completes_inline_when_completion_thread_cannot_start(self):
+        session = Mock()
+        self.enable_async_submit(session)
+
+        with patch("cassandra.concurrent.Thread") as thread_class:
+            thread_class.return_value.start.side_effect = RuntimeError(
+                "can't start new thread")
+            result_future = execute_concurrent_async(session, [])
+            assert result_future.result(timeout=1.0) == []
+            thread_class.return_value.start.assert_called_once()
+
+    def test_async_iterates_input_without_holding_lock(self):
+        session, response_futures = self.deferred_session()
+        delivered = threading.Event()
+
+        def deliver():
+            response_futures[0].succeed(["zero"])
+            delivered.set()
+
+        def statements():
+            yield "SELECT value FROM test WHERE key=?", (0,)
+            # A response delivered while user input is being read must not
+            # wait for the pump to release the executor lock.
+            threading.Thread(target=deliver, daemon=True).start()
+            assert delivered.wait(1.0)
+            yield "SELECT value FROM test WHERE key=?", (1,)
+
+        result_future = execute_concurrent_async(
+            session, statements(), concurrency=2)
+        self.wait_for_response_futures(response_futures, 2)
+        response_futures[1].succeed(["one"])
+
+        results = result_future.result(timeout=1.0)
+        assert [result.result_or_exc.one() for result in results] == [
+            "zero", "one"]
+
+    def test_async_replenishes_after_successes_from_other_thread(self):
+        concurrency = 2
+        count = 5
+        session, response_futures = self.deferred_session()
+        in_flight_violations = []
+
+        def respond():
+            for i in range(count):
+                deadline = time.monotonic() + 1.0
+                while (len(response_futures) <= i and
+                       time.monotonic() < deadline):
+                    time.sleep(0.001)
+                # Requests created so far never exceed completed + concurrency.
+                if len(response_futures) > i + concurrency:
+                    in_flight_violations.append(len(response_futures))
+                response_futures[i].succeed([i])
+
+        result_future = execute_concurrent_async(
+            session,
+            [("SELECT value FROM test WHERE key=?", (i,))
+             for i in range(count)],
+            concurrency=concurrency)
+        responder = threading.Thread(target=respond, daemon=True)
+        responder.start()
+
+        results = result_future.result(timeout=2.0)
+        responder.join(1.0)
+        assert in_flight_violations == []
+        assert [result.result_or_exc.one() for result in results] == list(
+            range(count))
+
+    def test_async_stress_concurrent_response_threads(self):
+        count = 1000
+        pending = Queue()
+        completions = []
+        stop = threading.Event()
+
+        def execute_async(statement, params, **kwargs):
+            response_future = ReadyDeferredResponseFuture()
+            pending.put((response_future, params[0]))
+            return response_future
+
+        def respond():
+            while not stop.is_set():
+                try:
+                    response_future, value = pending.get(timeout=0.01)
+                except Empty:
+                    continue
+                response_future.succeed([value])
+
+        session = Mock()
+        session.execute_async.side_effect = execute_async
+        self.enable_async_submit(session)
+        responders = [threading.Thread(target=respond, daemon=True)
+                      for _ in range(4)]
+        for responder in responders:
+            responder.start()
+        try:
+            result_future = execute_concurrent_async(
+                session,
+                [("SELECT value FROM test WHERE key=?", (i,))
+                 for i in range(count)],
+                concurrency=50)
+            result_future.add_done_callback(completions.append)
+            results = result_future.result(timeout=10.0)
+        finally:
+            stop.set()
+            for responder in responders:
+                responder.join(1.0)
+
+        assert [result.result_or_exc.one() for result in results] == list(
+            range(count))
+        deadline = time.monotonic() + 1.0
+        while not completions and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert completions == [result_future]
 
     def test_async_aggregate_future_cannot_be_cancelled(self):
         session, response_futures = self.deferred_session()
@@ -598,6 +859,30 @@ class ConcurrencyTest((unittest.TestCase)):
             execute_async.assert_called_once_with(
                 session, statements_and_params, 7, True, profile)
 
+    def test_session_concurrent_method_defaults(self):
+        session = Mock()
+        statements_and_params = [("SELECT value FROM test", None)]
+
+        with patch("cassandra.concurrent.execute_concurrent") as execute:
+            Session.execute_concurrent(session, statements_and_params)
+            execute.assert_called_once_with(
+                session, statements_and_params, 100, True, False,
+                EXEC_PROFILE_DEFAULT)
+
+        with patch("cassandra.concurrent.execute_concurrent_async") as execute_async:
+            Session.execute_concurrent_async(session, statements_and_params)
+            execute_async.assert_called_once_with(
+                session, statements_and_params, 100, False,
+                EXEC_PROFILE_DEFAULT)
+
+    def test_sync_rejects_non_integer_concurrency(self):
+        session = Mock()
+
+        with pytest.raises(TypeError):
+            execute_concurrent(
+                session, [("SELECT value FROM test", None)], concurrency=2.5)
+        session.execute_async.assert_not_called()
+
     def test_fail_fast_stops_scheduling_after_late_in_flight_success(self):
         for results_generator in (False, True):
             with self.subTest(results_generator=results_generator):
@@ -636,6 +921,42 @@ class ConcurrencyTest((unittest.TestCase)):
                 assert session.execute_async.call_count == 2
                 caller.join(1.0)
                 assert not caller.is_alive()
+
+    def test_list_results_fail_fast_raises_falsey_exception(self):
+        session, response_futures = self.deferred_session()
+        error = FalseyException("first failure")
+        completed = threading.Event()
+        outcome = {}
+
+        def invoke():
+            try:
+                outcome['results'] = execute_concurrent(
+                    session,
+                    [("INSERT INTO test (key) VALUES (?)", (i,))
+                     for i in range(5)],
+                    concurrency=2,
+                    raise_on_first_error=True)
+            except Exception as exc:
+                outcome['exception'] = exc
+            finally:
+                completed.set()
+
+        caller = threading.Thread(target=invoke)
+        caller.start()
+        self.wait_for_response_futures(response_futures, 2)
+
+        try:
+            response_futures[0].fail(error)
+            assert completed.wait(1.0)
+            assert outcome.get('exception') is error
+            assert 'results' not in outcome
+        finally:
+            # The other request was already in flight and may still finish.
+            response_futures[1].succeed(["late success"])
+            caller.join(1.0)
+
+        assert not caller.is_alive()
+        assert session.execute_async.call_count == 2
 
     def test_results_ordering_forward(self):
         """
