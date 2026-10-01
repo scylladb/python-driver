@@ -35,10 +35,14 @@ import os
 from socket import error as socket_error
 import ssl
 import time
-import pytest
 
 
 log = logging.getLogger(__name__)
+
+# Early firing is a timer bug and is bounded only by clock granularity; late
+# firing is scheduling jitter on loaded CI runners, so it gets a wide margin.
+EARLY_TOLERANCE = 0.05
+LATE_TOLERANCE = 1.0
 
 
 class TimerCallback(object):
@@ -50,11 +54,12 @@ class TimerCallback(object):
 
     def __init__(self, expected_wait):
         self.invoked = False
-        self.created_time = time.time()
+        # monotonic: the reactors' timers are not affected by wall-clock steps
+        self.created_time = time.monotonic()
         self.expected_wait = expected_wait
 
     def invoke(self):
-        self.invoked_time = time.time()
+        self.invoked_time = time.monotonic()
         self.invoked = True
 
     def was_invoked(self):
@@ -126,11 +131,15 @@ def submit_and_wait_for_completion(unit_test, create_timer, start, end, incremen
                 completed_callbacks.append(callback)
         time.sleep(.1)
 
-    # ensure they are all called back in a timely fashion
-    # Use a generous tolerance (500ms) to account for CI environments under heavy load,
-    # especially Windows during wheel building where timing can be significantly less precise
+    # A timer must never fire early; firing late is tolerated (loaded CI).
     for callback in completed_callbacks:
-        assert callback.expected_wait == pytest.approx(callback.get_wait_time(), abs=.5)
+        wait = callback.get_wait_time()
+        assert wait >= callback.expected_wait - EARLY_TOLERANCE, \
+            "timer fired early: expected %r, waited %r" % (
+                callback.expected_wait, wait)
+        assert wait <= callback.expected_wait + LATE_TOLERANCE, \
+            "timer fired far too late: expected %r, waited %r" % (
+                callback.expected_wait, wait)
 
 class TimerTestMixin(object):
 
