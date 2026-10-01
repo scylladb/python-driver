@@ -32,7 +32,9 @@ from cassandra.metadata import (Murmur3Token, MD5Token,
                                 _UnknownStrategy, ColumnMetadata, TableMetadata,
                                 IndexMetadata, Function, Aggregate,
                                 Metadata, TokenMap, ReplicationFactor,
-                                SchemaParserDSE68, SchemaParserV3,
+                                SchemaParserDSE60, SchemaParserDSE67, SchemaParserDSE68,
+                                SchemaParserV22, SchemaParserV3,
+                                SchemaParserV4,
                                 _ConsistencyMode, _consistency_mode_from_string)
 from cassandra.policies import SimpleConvictionPolicy
 from cassandra.pool import Host
@@ -829,6 +831,62 @@ class IndexTest(unittest.TestCase):
 
 
 class SchemaParserLookupTests(unittest.TestCase):
+
+    def test_cassandra_4_versions_use_v4_parser(self):
+        for server_version in (
+                '4.0-SNAPSHOT',
+                '4.0.0-SNAPSHOT',
+                '4.0-alpha',
+                '4.0.0'):
+            with self.subTest(server_version=server_version):
+                parser = get_schema_parser(
+                    Mock(), server_version, None, 0.1, None)
+
+                assert isinstance(parser, SchemaParserV4)
+
+    def test_cassandra_3_prereleases_use_v3_parser(self):
+        for server_version in ('3.0-SNAPSHOT', '3.0.0-SNAPSHOT'):
+            with self.subTest(server_version=server_version):
+                parser = get_schema_parser(
+                    Mock(), server_version, None, 0.1, None)
+
+                assert isinstance(parser, SchemaParserV3)
+
+    def test_scylla_release_versions_use_matching_parser(self):
+        for server_version, parser_class in (
+                ('3.0.8', SchemaParserV3),
+                ('2.2.19', SchemaParserV22),
+                ('2025.1.0', SchemaParserV4)):
+            with self.subTest(server_version=server_version):
+                parser = get_schema_parser(
+                    Mock(), server_version, None, 0.1, None)
+
+                assert isinstance(parser, parser_class)
+
+    def test_dse_versions_use_matching_parser(self):
+        for dse_version, parser_class in (
+                ('6.8.0', SchemaParserDSE68),
+                ('6.8.0-SNAPSHOT', SchemaParserDSE68),
+                ('6.8.0.rc1', SchemaParserDSE68),
+                ('6.7.0', SchemaParserDSE67),
+                ('6.7.0-SNAPSHOT', SchemaParserDSE67),
+                ('6.0.0', SchemaParserDSE60),
+                ('5.1.20', SchemaParserV4)):
+            with self.subTest(dse_version=dse_version):
+                parser = get_schema_parser(
+                    Mock(), '4.0.0', dse_version, 0.1, None)
+
+                assert type(parser) is parser_class
+
+    def test_missing_versions_fall_back_to_v22_parser(self):
+        connection = Mock()
+        connection.wait_for_response.return_value = (False, None)
+
+        with self.assertLogs('cassandra.metadata', level='WARNING') as logs:
+            parser = get_schema_parser(connection, None, None, 0.1, None)
+
+        assert isinstance(parser, SchemaParserV22)
+        assert 'release_version' in logs.output[0]
 
     def test_refresh_uses_control_connection_host_id_for_versions(self):
         metadata = Metadata()

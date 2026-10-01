@@ -3620,20 +3620,25 @@ def get_schema_parser(connection, server_version, dse_version, timeout, metadata
     if server_version is None and dse_version is None:
         server_version = get_column_from_system_local(connection, "release_version", timeout, metadata_request_timeout)
         dse_version = get_column_from_system_local(connection, "dse_version", timeout, metadata_request_timeout)
+        if not server_version:
+            log.warning(
+                "Could not read release_version from system.local; "
+                "falling back to the oldest schema parser")
 
     version = Version(server_version or "0")
     if dse_version:
         v = Version(dse_version)
-        if v >= Version('6.8.0'):
+        dse_release = (v.major, v.minor)
+        if dse_release >= (6, 8):
             return SchemaParserDSE68(connection, timeout, fetch_size, metadata_request_timeout)
-        elif v >= Version('6.7.0'):
+        elif dse_release >= (6, 7):
             return SchemaParserDSE67(connection, timeout, fetch_size, metadata_request_timeout)
-        elif v >= Version('6.0.0'):
+        elif dse_release >= (6, 0):
             return SchemaParserDSE60(connection, timeout, fetch_size, metadata_request_timeout)
 
-    if version >= Version('4-a'):
+    if version.major >= 4:
         return SchemaParserV4(connection, timeout, fetch_size, metadata_request_timeout)
-    elif version >= Version('3.0.0'):
+    elif version.major >= 3:
         return SchemaParserV3(connection, timeout, fetch_size, metadata_request_timeout)
     else:
         # we could further specialize by version. Right now just refactoring the
