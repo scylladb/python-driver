@@ -36,10 +36,12 @@ import uuid
 import json as _json
 import urllib.request
 
+from cassandra import ConsistencyLevel
 from cassandra.cluster import Cluster
 from cassandra.client_routes import ClientRoutesConfig, ClientRouteProxy
 from cassandra.connection import ClientRoutesEndPoint
 from cassandra.policies import RoundRobinPolicy
+from cassandra.query import SimpleStatement
 from tests.integration import (
     TestCluster,
     get_cluster,
@@ -624,8 +626,33 @@ class TestPrivateLinkConnectivity(unittest.TestCase):
             session.execute(
                 "CREATE TABLE IF NOT EXISTS test_cr_ks.t (k int PRIMARY KEY, v text)"
             )
-            session.execute("INSERT INTO test_cr_ks.t (k, v) VALUES (1, 'hello')")
-            row = session.execute("SELECT v FROM test_cr_ks.t WHERE k = 1").one()
+            # The session load-balances round-robin over all nodes behind the
+            # NLB. With the default CL=ONE a write and a subsequent read can
+            # touch different replicas, so the read may miss the just-written
+            # row and .one() returns None (the test then failed with
+            # AttributeError on `None.v`). Write and read at QUORUM so that
+            # R + W > N guarantees the read observes the write.
+            session.execute(
+                SimpleStatement(
+                    "INSERT INTO test_cr_ks.t (k, v) VALUES (1, 'hello')",
+                    consistency_level=ConsistencyLevel.QUORUM,
+                )
+            )
+
+            # Schema changes propagate asynchronously, so retry the read briefly
+            # rather than asserting on the very first attempt.
+            def read_row():
+                row = session.execute(
+                    SimpleStatement(
+                        "SELECT v FROM test_cr_ks.t WHERE k = 1",
+                        consistency_level=ConsistencyLevel.QUORUM,
+                    )
+                ).one()
+                if row is None:
+                    raise AssertionError("row not yet visible")
+                return row
+
+            row = wait_until_not_raised(read_row, 0.5, 20)
             self.assertEqual(row.v, "hello")
 
             assert_routes_via_nlb(self, cluster, self.nlb,
