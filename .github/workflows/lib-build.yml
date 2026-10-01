@@ -101,8 +101,18 @@ jobs:
           python-version: ${{ inputs.python-version }}
 
       - name: Install cibuildwheel
+        if: runner.os != 'Windows'
         run: |
           uv tool install 'cibuildwheel==4.2.1'
+
+      - name: Install cibuildwheel with PyPy 8 support
+        if: runner.os == 'Windows'
+        run: |
+          # Pin pypa/cibuildwheel#2998 until it reaches a release after 4.2.1.
+          uv tool install 'cibuildwheel @ git+https://github.com/pypa/cibuildwheel.git@088b48b1989e2aa802b5ca7889f85892f2280428'
+          # The upstream pin also adds PyPy 3.12, whose dependencies do not
+          # publish compatible Windows wheels yet. Preserve the current set.
+          echo "CIBW_BUILD=cp3* pp311*" >> "$env:GITHUB_ENV"
 
       - name: Install Conan
         if: runner.os == 'Windows'
