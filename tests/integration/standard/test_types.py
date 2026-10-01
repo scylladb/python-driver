@@ -1044,11 +1044,11 @@ class TypeTestsVector(BasicSharedKeyspaceUnitTestCase):
             test_fn(observed2[idx], expected2[idx])
 
     def test_round_trip_integers(self):
-        self._round_trip_test("int", partial(random.randint, 0, 2 ** 31), assertEqual)
-        self._round_trip_test("bigint", partial(random.randint, 0, 2 ** 63), assertEqual)
-        self._round_trip_test("smallint", partial(random.randint, 0, 2 ** 15), assertEqual)
+        self._round_trip_test("int", partial(random.randint, 0, (2 ** 31) - 1), assertEqual)
+        self._round_trip_test("bigint", partial(random.randint, 0, (2 ** 63) - 1), assertEqual)
+        self._round_trip_test("smallint", partial(random.randint, 0, (2 ** 15) - 1), assertEqual)
         self._round_trip_test("tinyint", partial(random.randint, 0, (2 ** 7) - 1), assertEqual)
-        self._round_trip_test("varint", partial(random.randint, 0, 2 ** 63), assertEqual)
+        self._round_trip_test("varint", partial(random.randint, 0, (2 ** 63) - 1), assertEqual)
 
     def test_round_trip_floating_point(self):
         _almost_equal_test_fn = partial(pytest.approx, abs=1e-5)
