@@ -112,7 +112,7 @@ jobs:
           uv tool install 'cibuildwheel @ git+https://github.com/pypa/cibuildwheel.git@088b48b1989e2aa802b5ca7889f85892f2280428'
           # The upstream pin also adds PyPy 3.12, whose dependencies do not
           # publish compatible Windows wheels yet. Preserve the current set.
-          echo "CIBW_BUILD=cp3* pp311*" >> "$GITHUB_ENV"
+          echo "CIBW_BUILD=cp3* pp311*" >> "$env:GITHUB_ENV"
 
       - name: Install Conan
         if: runner.os == 'Windows'
