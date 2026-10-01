@@ -176,6 +176,8 @@ asyncore from the runtime but this event loop can still be used in newer version
 The ``asyncio`` event loop is generally functional but still somewhat experimental and not recommended
 for production systems.
 
+.. _libev-support:
+
 libev support
 ^^^^^^^^^^^^^
 If you're on Linux, you should be able to install libev
@@ -193,7 +195,7 @@ through `Homebrew <http://brew.sh/>`_. For example, on Mac OS X::
     $ brew install libev
 
 The libev extension can now be built for Windows as of Python driver version 3.29.11.  You can
-install libev using any Windows package manager.  For example, to install using `vcpkg <https://vcpkg.io>`_:
+install libev using any Windows package manager.  For example, to install using `vcpkg <https://vcpkg.io>`_::
 
     $ vcpkg install libev
 

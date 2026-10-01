@@ -8,3 +8,5 @@ Utilities for Concurrent Statement Execution
 .. autofunction:: execute_concurrent
 
 .. autofunction:: execute_concurrent_with_args
+
+.. autofunction:: execute_concurrent_async

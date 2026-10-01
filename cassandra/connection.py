@@ -299,9 +299,9 @@ class DefaultEndPointFactory(EndPointFactory):
 class SniEndPoint(EndPoint):
     """SNI Proxy EndPoint implementation."""
 
-    def __init__(self, proxy_address, server_name, port=9042):
+    def __init__(self, proxy_address, server_name, port=9042, init_index=0):
         self._proxy_address = proxy_address
-        self._index = 0
+        self._index = init_index
         self._resolved_address = None  # resolved address
         self._port = port
         self._server_name = server_name
@@ -326,8 +326,7 @@ class SniEndPoint(EndPoint):
 
     def resolve(self):
         try:
-            resolved_addresses = socket.getaddrinfo(self._proxy_address, self._port,
-                                                    socket.AF_UNSPEC, socket.SOCK_STREAM)
+            resolved_addresses = self._resolve_proxy_addresses()
         except socket.gaierror:
             log.debug('Could not resolve sni proxy hostname "%s" '
                       'with port %d' % (self._proxy_address, self._port))
@@ -338,6 +337,10 @@ class SniEndPoint(EndPoint):
         self._index += 1
 
         return self._resolved_address, self._port
+
+    def _resolve_proxy_addresses(self):
+        return socket.getaddrinfo(self._proxy_address, self._port,
+                                  socket.AF_UNSPEC, socket.SOCK_STREAM)
 
     def __eq__(self, other):
         return (isinstance(other, SniEndPoint) and
@@ -365,16 +368,23 @@ class SniEndPointFactory(EndPointFactory):
         self._proxy_address = proxy_address
         self._port = port
         self._node_domain = node_domain
+        # Distribute endpoints across all proxy addresses on their first DNS
+        # resolution instead of making every endpoint try the first address.
+        self._init_index = itertools.count()
+
+    def _create_endpoint(self, server_name):
+        return SniEndPoint(self._proxy_address, server_name, self._port,
+                           next(self._init_index))
 
     def create(self, row):
         host_id = row.get("host_id")
         if host_id is None:
             raise ValueError("No host_id to create the SniEndPoint")
         address = "{}.{}".format(host_id, self._node_domain) if self._node_domain else str(host_id)
-        return SniEndPoint(self._proxy_address, str(address), self._port)
+        return self._create_endpoint(str(address))
 
     def create_from_sni(self, sni):
-        return SniEndPoint(self._proxy_address, sni, self._port)
+        return self._create_endpoint(sni)
 
 
 class ClientRoutesEndPointFactory(EndPointFactory):
@@ -1097,7 +1107,7 @@ class Connection(object):
     @classmethod
     def handle_fork(cls):
         """
-        Called after a forking.  This should cleanup any remaining reactor state
+        Called after a fork.  This should clean up any remaining reactor state
         from the parent process.
         """
         pass
@@ -1141,7 +1151,7 @@ class Connection(object):
         ssl_context_opt_names = ['ssl_version', 'cert_reqs', 'check_hostname', 'keyfile', 'certfile', 'ca_certs', 'ciphers']
         opts = {k:self.ssl_options.get(k, None) for k in ssl_context_opt_names if k in self.ssl_options}
 
-        # Python >= 3.10 requires either PROTOCOL_TLS_CLIENT or PROTOCOL_TLS_SERVER so we'll get ahead of things by always
+        # Python >= 3.10 requires either PROTOCOL_TLS_CLIENT or PROTOCOL_TLS_SERVER, so we'll get ahead of things by always
         # being explicit
         ssl_version = opts.get('ssl_version', None) or ssl.PROTOCOL_TLS_CLIENT
         cert_reqs = opts.get('cert_reqs', None) or ssl.CERT_REQUIRED
@@ -1763,11 +1773,11 @@ class Connection(object):
 
             if not self._current_frame or pos < self._current_frame.end_pos:
                 if self._is_checksumming_enabled and self._io_buffer.readable_io_bytes():
-                    # We have a multi-segments message and we need to read more
+                    # We have a multi-segment message and we need to read more
                     # data to complete the current cql frame
                     continue
 
-                # we don't have a complete header yet or we
+                # we don't have a complete header yet, or we
                 # already saw a header, but we don't have a
                 # complete message yet
                 return
@@ -2347,7 +2357,7 @@ class ConnectionHeartbeat(Thread):
                         else:
                             log.debug("Cannot send heartbeat message on connection (%s) to %s",
                                       id(connection), connection.endpoint)
-                            # make sure the owner sees this defunt/closed connection
+                            # make sure the owner sees this defunct/closed connection
                             owner.return_connection(connection)
                     self._raise_if_stopped()
 

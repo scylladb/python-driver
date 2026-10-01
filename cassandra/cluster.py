@@ -143,7 +143,7 @@ if not conn_class:
 DefaultConnection = conn_class
 
 # Forces load of utf8 encoding module to avoid deadlock that occurs
-# if code that is being imported tries to import the module in a seperate
+# if code that is being imported tries to import the module in a separate
 # thread.
 # See http://bugs.python.org/issue10923
 "".encode('utf8')
@@ -1324,7 +1324,7 @@ class Cluster(object):
                  ):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
-        extablishing connection pools or refreshing metadata.
+        establishing connection pools or refreshing metadata.
 
         Any of the mutable Cluster attributes may be set as keyword arguments to the constructor.
         """
@@ -1691,7 +1691,7 @@ class Cluster(object):
         for.
 
         `klass` should be a class with attributes whose names match the
-        fields of the user-defined type.  The constructor must accepts kwargs
+        fields of the user-defined type.  The constructor must accept kwargs
         for each of the fields in the UDT.
 
         This method should only be called after the type has been created
@@ -1959,7 +1959,7 @@ class Cluster(object):
 
         log.warning("Downgrading core protocol version from %d to %d for %s. "
                     "To avoid this, it is best practice to explicitly set Cluster(protocol_version) to the version supported by your cluster. "
-                    "http://datastax.github.io/python-driver/api/cassandra/cluster.html#cassandra.cluster.Cluster.protocol_version", self.protocol_version, new_version, host_endpoint)
+                    "https://python-driver.docs.scylladb.com/stable/api/cassandra/cluster.html#cassandra.cluster.Cluster.protocol_version", self.protocol_version, new_version, host_endpoint)
         self.protocol_version = new_version
 
     def _populate_hosts(self):
@@ -3322,6 +3322,127 @@ class Session(object):
         future.send_request()
         return future
 
+    def execute_concurrent(self, statements_and_parameters, concurrency=100,
+                           raise_on_first_error=True, results_generator=False,
+                           execution_profile=EXEC_PROFILE_DEFAULT):
+        """
+        Execute a sequence of ``(statement, parameters)`` pairs concurrently.
+        Each ``parameters`` item must be a sequence or :const:`None`.
+
+        `concurrency` limits the number of requests in flight. It must be
+        an integer greater than zero.
+
+        If `raise_on_first_error` is :const:`True`, execution stops scheduling
+        new statements after the first failed request. Without
+        `results_generator`, that request's exception is raised. With
+        `results_generator`, earlier results are yielded first and the
+        exception is raised when iteration reaches the failed statement.
+
+        If `results_generator` is :const:`False`, results are returned after
+        all requests finish. If it is :const:`True`, an iterator yields results
+        in input order as they become available, reducing peak memory use.
+
+        `execution_profile` is passed to :meth:`execute_async` for every
+        request. In legacy configuration mode, each request uses
+        :attr:`default_timeout`; otherwise it uses the selected execution
+        profile's ``request_timeout``.
+
+        Returns ``ExecutionResult(success, result_or_exc)`` namedtuples in the
+        same order as the input. A failed result contains its exception; a
+        successful result contains its query result.
+
+        Example usage::
+
+            select_statement = session.prepare("SELECT * FROM users WHERE id=?")
+            statements_and_params = [
+                (select_statement, (user_id,)) for user_id in user_ids
+            ]
+            results = session.execute_concurrent(
+                statements_and_params, raise_on_first_error=False)
+
+            for success, result in results:
+                if not success:
+                    handle_error(result)
+                else:
+                    process_user(result[0])
+
+        Consumers of a results iterator must not block or issue synchronous
+        requests from the I/O event thread, because doing so can deadlock.
+
+        .. versionadded:: 3.29.13
+        """
+        from cassandra.concurrent import execute_concurrent
+        return execute_concurrent(
+            self, statements_and_parameters, concurrency,
+            raise_on_first_error, results_generator, execution_profile)
+
+    def execute_concurrent_with_args(self, statement, parameters, *args, **kwargs):
+        """
+        Execute one statement concurrently with a sequence of parameter sets.
+
+        Each item in `parameters` must be a sequence or :const:`None`.
+        Additional arguments are passed to :meth:`execute_concurrent`.
+
+        Example usage::
+
+            statement = session.prepare(
+                "INSERT INTO mytable (a, b) VALUES (1, ?)")
+            parameters = [(x,) for x in range(1000)]
+            session.execute_concurrent_with_args(
+                statement, parameters, concurrency=50)
+
+        .. versionadded:: 3.29.13
+        """
+        from cassandra.concurrent import execute_concurrent_with_args
+        return execute_concurrent_with_args(
+            self, statement, parameters, *args, **kwargs)
+
+    def execute_concurrent_async(self, statements_and_parameters,
+                                 concurrency=100,
+                                 raise_on_first_error=False,
+                                 execution_profile=EXEC_PROFILE_DEFAULT):
+        """
+        Start a sequence of ``(statement, parameters)`` pairs concurrently.
+
+        This method returns a :class:`concurrent.futures.Future` without
+        blocking the caller. `concurrency` limits the number of requests in
+        flight and must be an integer greater than zero; invalid values raise
+        immediately instead of through the future. `execution_profile` is
+        passed to :meth:`execute_async` for every request. In legacy
+        configuration mode, each request uses :attr:`default_timeout`;
+        otherwise it uses the selected execution profile's
+        ``request_timeout``.
+
+        Unlike :meth:`execute_concurrent`, `raise_on_first_error` defaults to
+        :const:`False`. The future then resolves to an input-ordered list of
+        ``ExecutionResult(success, result_or_exc)`` namedtuples after every
+        request finishes. If `raise_on_first_error` is :const:`True`, the
+        future is completed with the first request exception and no new
+        statements are scheduled. Requests already in flight are not
+        cancelled; their results are discarded.
+
+        The input is consumed on the session's executor threads, one item
+        ahead of submission, so iterating it must not block. The future fails
+        regardless of `raise_on_first_error` if iterating the input raises or
+        yields an item that is not a ``(statement, parameters)`` pair, or if
+        the session shuts down before the input is consumed. Results collected
+        before such a failure are discarded.
+
+        The future is already running when returned, so :meth:`cancel()
+        <concurrent.futures.Future.cancel>` returns :const:`False`.
+
+        An empty input resolves to an empty list. The aggregate future is
+        completed on a short-lived daemon thread rather than the session's
+        executor or an I/O reactor thread. Callbacks registered before
+        completion run on that thread.
+
+        .. versionadded:: 3.29.13
+        """
+        from cassandra.concurrent import execute_concurrent_async
+        return execute_concurrent_async(
+            self, statements_and_parameters, concurrency,
+            raise_on_first_error, execution_profile)
+
     def execute_graph(self, query, parameters=None, trace=False, execution_profile=EXEC_PROFILE_GRAPH_DEFAULT, execute_as=None):
         """
         Executes a Gremlin query string or GraphStatement synchronously,
@@ -3841,7 +3962,7 @@ class Session(object):
                     continue
 
                 if request_id is None:
-                    # the error has already been logged by ResponsFuture
+                    # the error has already been logged by ResponseFuture
                     log.debug("Failed to prepare query for host %s: %r",
                               host, future._errors.get(host))
                     continue
@@ -5421,7 +5542,7 @@ class ControlConnection(object):
         elif change_type == "DOWN":
             # Note that there is a slight risk we can receive the event late and thus
             # mark the host down even though we already had reconnected successfully.
-            # But it is unlikely, and don't have too much consequence since we'll try reconnecting
+            # This is unlikely and will not have much consequence because we'll try reconnecting
             # right away, so we favor the detection to make the Host.is_up more accurate.
             if host is not None:
                 # this will be run by the scheduler
@@ -6162,7 +6283,7 @@ class ResponseFuture(object):
             # PYTHON-836, the speculative queries must be after
             # the query is sent from the main thread, otherwise the
             # query from the main thread may raise NoHostAvailable
-            # if the _query_plan has been exhausted by the specualtive queries.
+            # if the _query_plan has been exhausted by the speculative queries.
             # This also prevents a race condition accessing the iterator.
             # We reschedule this call until the main thread has succeeded
             # making a query
@@ -6618,7 +6739,7 @@ class ResponseFuture(object):
 
         Ensure the future is complete before trying to access this property
         (call :meth:`.result()`, or after callback is invoked).
-        Otherwise it may throw if the response has not been received.
+        Otherwise, it may throw if the response has not been received.
         """
         # TODO: When timers are introduced, just make this wait
         if not self._event.is_set():
@@ -6634,7 +6755,7 @@ class ResponseFuture(object):
 
         Ensure the future is complete before trying to access this property
         (call :meth:`.result()`, or after callback is invoked).
-        Otherwise it may throw if the response has not been received.
+        Otherwise, it may throw if the response has not been received.
 
         :return: :ref:`custom_payload`.
         """
@@ -7483,7 +7604,7 @@ class ResultSet(object):
         try:
             self.response_future._continuous_paging_session.cancel()
         except AttributeError:
-            raise DriverException("Attempted to cancel paging with no active session. This is only for requests with ContinuousdPagingOptions.")
+            raise DriverException("Attempted to cancel paging with no active session. This is only for requests with ContinuousPagingOptions.")
 
     batch_regex = re.compile(r'^\s*BEGIN\s+[a-zA-Z]*\s*BATCH')
 
@@ -7496,7 +7617,7 @@ class ResultSet(object):
         a :class:`.query.BatchStatement` containing LWT. In the latter case either all the batch
         succeeds or fails.
 
-        Only valid when one of the of the internal row factories is in use.
+        Only valid when one of the internal row factories is in use.
         """
         if self.response_future.row_factory not in (named_tuple_factory, dict_factory, tuple_factory):
             raise RuntimeError("Cannot determine LWT result with row factory %s" % (self.response_future.row_factory,))
