@@ -31,7 +31,24 @@ Behavior Changes
   separator when comparing and hashing, so ``5.4.0-rc1 == 5.4.0~rc1``; dotted
   prereleases such as ``3.0.0.rc1`` now sort before their release instead of
   after it; ``Version.prerelease`` defaults to ``""`` instead of ``0``; and
-  ``Version`` attributes are now read-only (CASSPYTHON-10).
+  ``Version`` attributes are now read-only and instances no longer accept
+  new attributes (CASSPYTHON-10).
+* ``cassandra.util.Version`` ordering changes (CASSPYTHON-10):
+
+  * Digit runs in prerelease tags compare numerically, so ``rc9 < rc10``.
+  * Numeric builds always sort before string builds, so
+    ``1.2.3.10 < 1.2.3.11x``.
+  * A dotted suffix is a prerelease only for ``alpha``, ``beta``, ``rc`` and
+    ``dev`` tags: ``4.0.0.rc1 < 4.0.0 < 4.0.0.devel``.
+  * Scylla package release suffixes such as ``-0.20250101.abcdef`` are
+    treated as build metadata, so ``2025.1.0-0.20250101.abcdef == 2025.1.0``
+    and sorts after ``2025.1.0~rc2-0.20250101.abcdef``.
+  * Versions the parser does not recognize keep a numeric component's
+    trailing text as the prerelease (``4.0.0 beta`` is ``4.0.0-beta``), and
+    every such version logs a warning with the assumed version.
+* ``get_schema_parser()`` also reads ``release_version`` from
+  ``system.local`` when the known version is empty, and includes the query
+  error in the warning logged when it cannot be read.
 * Requests issued by ``execute_concurrent()`` and
   ``execute_concurrent_with_args()`` now honor ``Session.default_timeout`` in
   legacy configuration mode or the selected execution profile's

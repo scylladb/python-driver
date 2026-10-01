@@ -888,6 +888,58 @@ class SchemaParserLookupTests(unittest.TestCase):
         assert isinstance(parser, SchemaParserV22)
         assert 'release_version' in logs.output[0]
 
+    @staticmethod
+    def _system_local_connection(release_version):
+        def response(column_name, value):
+            result = Mock()
+            result.column_names = [column_name]
+            result.parsed_rows = [[value]]
+            return result
+
+        def mock_system_local(query, *args, **kwargs):
+            if "release_version" in query.query:
+                return (True, response("release_version", release_version))
+            # Scylla and Cassandra reject the unknown dse_version column
+            return (False, Exception("Undefined column name dse_version"))
+
+        connection = Mock()
+        connection.wait_for_response.side_effect = mock_system_local
+        return connection
+
+    def test_null_release_version_falls_back_to_v22_parser(self):
+        connection = self._system_local_connection(None)
+
+        with self.assertLogs('cassandra.metadata', level='WARNING') as logs:
+            parser = get_schema_parser(connection, None, None, 0.1, None)
+
+        assert type(parser) is SchemaParserV22
+        assert 'empty value' in logs.output[0]
+
+    def test_failed_release_version_query_logs_error(self):
+        connection = Mock()
+        connection.wait_for_response.return_value = (False, Exception("timed out"))
+
+        with self.assertLogs('cassandra.metadata', level='WARNING') as logs:
+            get_schema_parser(connection, None, None, 0.1, None)
+
+        assert 'timed out' in logs.output[0]
+
+    def test_scylla_release_version_from_system_local_uses_v3_parser(self):
+        connection = self._system_local_connection('3.0.8')
+
+        with self.assertNoLogs('cassandra.metadata', level='WARNING'):
+            parser = get_schema_parser(connection, None, None, 0.1, None)
+
+        assert type(parser) is SchemaParserV3
+
+    def test_empty_release_version_is_read_from_system_local(self):
+        connection = self._system_local_connection('3.0.8')
+
+        parser = get_schema_parser(connection, '', None, 0.1, None)
+
+        assert type(parser) is SchemaParserV3
+        assert connection.wait_for_response.called
+
     def test_refresh_uses_control_connection_host_id_for_versions(self):
         metadata = Metadata()
         host_id = uuid.uuid4()

@@ -1713,10 +1713,15 @@ VERSION_REGEX = re.compile(
 DOTTED_PRERELEASE_REGEX = re.compile(
     r"(?P<major>\d+)\."
     r"(?P<minor>\d+)\."
-    r"(?:(?P<patch>\d+)\.)?"
+    r"(?:(?P<patch>\d+)\.(?:(?P<build>\d+)\.)?)?"
     r"(?P<prerelease>(?:alpha|beta|rc|dev)\d*(?:[.-]\w+)*)"
     r"(?:\+[.\w]+)?",
     re.IGNORECASE)
+
+# Scylla package release suffix, e.g. the "-0.20250101.abcdef" in
+# "2025.1.0~rc1-0.20250101.abcdef"; it identifies the build, not a prerelease.
+SCYLLA_PACKAGE_SUFFIX_REGEX = re.compile(
+    r"-\d+\.\d{8}\.[0-9a-f]+(?=\+|$)", re.IGNORECASE)
 
 
 @total_ordering
@@ -1727,18 +1732,28 @@ class Version(object):
     Versions normally contain one to three numeric release components, an
     optional fourth build component (numeric or alphanumeric), an optional
     prerelease introduced by ``-``, ``~`` or, for ``alpha``, ``beta``, ``rc``
-    and ``dev`` tags, ``.`` (e.g. ``4.0.rc1``), and optional ``+`` build
+    and ``dev`` tags following a numeric component after the minor one,
+    ``.`` (e.g. ``4.0.rc1``), and optional ``+`` build metadata. Scylla
+    package release suffixes (``-0.20250101.abcdef``) are treated as build
     metadata. Surrounding whitespace and empty trailing suffixes (``1.2-``) are
-    ignored. Other forms are parsed best effort by the driver's historical
-    tolerant parser. Both cases log a warning.
+    ignored with a warning. Other forms are parsed best effort by the driver's
+    historical tolerant parser, which also logs a warning.
 
-    Instances are immutable; the parsed components are read-only.
+    The parsed components (``major``, ``minor``, ``patch``, ``build`` and
+    ``prerelease``) are read-only properties.
 
-    Comparison ignores ``+`` build metadata and the prerelease separator,
-    treats missing release components as ``0``, sorts a prerelease before its
-    release, sorts string builds after numeric ones, and compares digit runs
-    in prerelease tags numerically.
+    Comparison ignores build metadata and the separator that introduces the
+    prerelease, treats missing release components as ``0``, sorts a
+    prerelease before its release, sorts string builds after numeric ones,
+    and compares digit runs in prerelease tags numerically; tags that are
+    still equal compare as strings, so ``rc01`` sorts before ``rc1``. As in
+    SemVer, other prerelease characters compare case-sensitively in ASCII
+    order, so ``RC1`` sorts before ``rc1`` and ``beta1``.
     """
+
+    __slots__ = (
+        '_version', '_major', '_minor', '_patch', '_build', '_prerelease',
+        '_ordering_key')
 
     def __init__(self, version):
         self._version = version
@@ -1754,7 +1769,7 @@ class Version(object):
                 "Unrecognized version %r. Ignoring surrounding whitespace and empty "
                 "version suffix, assuming version as %s",
                 version, normalized_version)
-        version = normalized_version
+        version = SCYLLA_PACKAGE_SUFFIX_REGEX.sub('', normalized_version, count=1)
 
         dotted_prerelease_match = DOTTED_PRERELEASE_REGEX.fullmatch(version)
         match = dotted_prerelease_match or VERSION_REGEX.fullmatch(version)
@@ -1762,6 +1777,7 @@ class Version(object):
             self._major = int(match.group('major'))
             self._minor = int(match.group('minor'))
             self._patch = self._cleanup_int(match.group('patch'))
+            self._build = self._cleanup_int(match.group('build'))
             self._prerelease = match.group('prerelease')
         elif match:
             self._major = int(match.group('major'))
@@ -1840,36 +1856,47 @@ class Version(object):
         if separators:
             separator_index = min(separators)
             version_without_prerelease = version_without_metadata[:separator_index]
-            self._prerelease = version_without_metadata[separator_index + 1:]
+            prerelease = version_without_metadata[separator_index + 1:]
         else:
             version_without_prerelease = version_without_metadata
+            prerelease = ""
 
+        # Components are read until one does not start with a number. A
+        # number followed by other characters ("0 beta") ends the release
+        # components, and the rest becomes part of the prerelease.
         parts = version_without_prerelease.split('.')
-        if len(parts) > 4:
-            prerelease_string = "-{}".format(self.prerelease) if self.prerelease else ""
-            log.warning(
-                "Unrecognized version: %s. Only 4 components plus prerelease are supported. "
-                "Assuming version as %s%s",
-                version, '.'.join(parts[:4]), prerelease_string)
-            parts = parts[:4]
+        components = []
+        for index, part in enumerate(parts[:4]):
+            digits = re.match(r'\d*', part).group()
+            tail = '.'.join([part[len(digits):]] + parts[index + 1:]).strip(' _.')
+            if not digits:
+                if index == 3:
+                    components.append(part)
+                break
+            components.append(int(digits))
+            if tail and not part.isdigit():
+                prerelease = '-'.join(filter(None, (tail, prerelease)))
+                break
 
-        try:
-            self._major = int(parts[0])
-        except (IndexError, ValueError) as exc:
+        if not components:
             raise ValueError(
-                "Couldn't parse version {}. Version should start with a number".format(version)) \
-                from exc
+                "Couldn't parse version {!r}. Version should start with a number".format(
+                    self._version))
+        self._major = components[0]
+        self._minor, self._patch, self._build = (components[1:] + [0, 0, 0])[:3]
+        self._prerelease = prerelease
 
-        try:
-            self._minor = int(parts[1]) if len(parts) > 1 else 0
-            self._patch = int(parts[2]) if len(parts) > 2 else 0
-            self._build = self._cleanup_build(parts[3]) if len(parts) > 3 else 0
-        except ValueError:
-            assumed_version = "{}.{}.{}.{}-{}".format(
-                self.major, self.minor, self.patch, self.build, self.prerelease)
-            log.warning(
-                "Unrecognized version %s. Assuming version as %s",
-                version, assumed_version)
+        log.warning(
+            "Unrecognized version %r. Assuming version as %s",
+            self._version, self._format_components())
+
+    def _format_components(self):
+        version_string = "{}.{}.{}".format(self.major, self.minor, self.patch)
+        if self.build:
+            version_string += ".{}".format(self.build)
+        if self.prerelease:
+            version_string += "-{}".format(self.prerelease)
+        return version_string
 
     def __hash__(self):
         return hash(self._ordering_key)
@@ -1877,9 +1904,9 @@ class Version(object):
     def __repr__(self):
         version_string = "Version({0}, {1}, {2}".format(self.major, self.minor, self.patch)
         if self.build:
-            version_string += ", {}".format(self.build)
+            version_string += ", build={!r}".format(self.build)
         if self.prerelease:
-            version_string += ", {}".format(self.prerelease)
+            version_string += ", prerelease={!r}".format(self.prerelease)
         version_string += ")"
 
         return version_string
