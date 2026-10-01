@@ -220,10 +220,8 @@ class VersionTests(unittest.TestCase):
             ('3.55.1.20190429-TEST', (3, 55, 1, 20190429, 'TEST')),
             ('4.0-SNAPSHOT', (4, 0, 0, 0, 'SNAPSHOT')),
             ('1.0.5.4.3', (1, 0, 5, 4, '')),
-            ('1-SNAPSHOT', (1, 0, 0, 0, 'SNAPSHOT')),
             ('4.0.1.2.3.4.5-ABC-123-SNAP-TEST.blah', (4, 0, 1, 2, 'ABC-123-SNAP-TEST.blah')),
             ('2.1.hello', (2, 1, 0, 0, '')),
-            ('2.test.1', (2, 0, 0, 0, '')),
             ('1.2-beta1-SNAPSHOT', (1, 2, 0, 0, 'beta1-SNAPSHOT')),
             ('1.2~beta1-SNAPSHOT', (1, 2, 0, 0, 'beta1-SNAPSHOT')),
             ('1.2.19.2-SNAPSHOT', (1, 2, 19, 2, 'SNAPSHOT')),
@@ -238,8 +236,6 @@ class VersionTests(unittest.TestCase):
             ('3.1.0.development', (3, 1, 0, 'development', '')),
             ('1.0-²', (1, 0, 0, 0, '²')),
             ('5.4.0+build.1', (5, 4, 0, 0, '')),
-            ('0', (0, 0, 0, 0, '')),
-            ('2019', (2019, 0, 0, 0, '')),
             ('3.0.0.rc1', (3, 0, 0, 0, 'rc1')),
             ('4.0.RC1', (4, 0, 0, 0, 'RC1')),
             ('3.1.0.RC8', (3, 1, 0, 0, 'RC8')),
@@ -255,7 +251,9 @@ class VersionTests(unittest.TestCase):
                 assert (v.major, v.minor, v.patch, v.build, v.prerelease) == expected_result
 
         # not supported version formats
-        for invalid_version in ('', ' ', '-', 'v4', 'test.1.0', '²'):
+        for invalid_version in (
+                '', ' ', '-', '0', '4', '2019', 'v4', '4-a', '1-SNAPSHOT',
+                '2.test.1', 'test.1.0', '²'):
             with self.subTest(version=invalid_version):
                 with pytest.raises(ValueError):
                     Version(invalid_version)
@@ -315,9 +313,9 @@ class VersionTests(unittest.TestCase):
         assert Version('2.3.0.build0') > Version('2.3.0.1')  # 4th part fallback to str cmp
         assert Version('2.3.0') < Version('2.3.0.build')
 
-        assert Version('4-a') <= Version('4.0.0')
-        assert Version('4-a') <= Version('4.0-alpha1')
-        assert Version('4-a') <= Version('4.0-beta1')
+        assert Version('4.0-a') <= Version('4.0.0')
+        assert Version('4.0-a') <= Version('4.0-alpha1')
+        assert Version('4.0-a') <= Version('4.0-beta1')
         assert Version('4.0.0') >= Version('4.0.0')
         assert Version('4.0.0.421') >= Version('4.0.0')
         assert Version('4.0.1') >= Version('4.0.0')
@@ -326,7 +324,6 @@ class VersionTests(unittest.TestCase):
         assert Version('2.3.32') == Version('2.3.32.0')
         assert Version('2.3.0.build') == Version('2.3.0.build')
 
-        assert Version('4') == Version('4.0.0')
         assert Version('4.0') == Version('4.0.0.0')
         assert Version('4.0') > Version('3.9.3')
 
@@ -414,7 +411,7 @@ class VersionTests(unittest.TestCase):
     def test_version_ordering_is_consistent(self):
         versions = [Version(v) for v in (
             '2.2.19', '3.0-SNAPSHOT', '3.0.0.rc1', '3.0.0', '3.0.8', '3.1.0.rcbuild',
-            '4-a', '4.0-SNAPSHOT', '4.0.RC1', '4.0~rc1', '4.0.0', '4.0.0.0',
+            '4.0-a', '4.0-SNAPSHOT', '4.0.RC1', '4.0~rc1', '4.0.0', '4.0.0.0',
             '5.4.0+build.1', '1.2.3.10', '1.2.3.11x', '1.0-beta9', '1.0-beta10',
             '2024.1.0-0.20240101.abcdef', '2025.2.0~dev', '2025.2.0',
             '2025.1.0~rc2-0.20250101.abcdef', '4.0.beta1', '5.0-RC1', '5.0-rc1',

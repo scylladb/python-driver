@@ -1702,18 +1702,22 @@ class DateRange(object):
         )
 
 
+_VERSION_COMPONENTS_PATTERN = (
+    r"(?P<major>\d+)\."
+    r"(?P<minor>\d+)"
+    r"(?:\.(?P<patch>\d+))?"
+)
+
 VERSION_REGEX = re.compile(
-    r"(?P<major>\d+)"
-    r"(?:\.(?P<minor>\d+)"
-    r"(?:\.(?P<patch>\d+)"
-    r"(?:\.(?P<build>\w+))?)?)?"
+    _VERSION_COMPONENTS_PATTERN +
+    r"(?(patch)(?:\.(?P<build>\w+))?)"
     r"(?P<prerelease>[~-]\w[.\w]*(?:-\w[.\w]*)*)?"
     r"(?:\+[.\w]+)?")
 
 DOTTED_PRERELEASE_REGEX = re.compile(
-    r"(?P<major>\d+)\."
-    r"(?P<minor>\d+)\."
-    r"(?:(?P<patch>\d+)\.(?:(?P<build>\d+)\.)?)?"
+    _VERSION_COMPONENTS_PATTERN +
+    r"\."
+    r"(?(patch)(?:(?P<build>\d+)\.)?)"
     r"(?P<prerelease>(?:alpha|beta|rc|dev)\d*(?:[.-]\w+)*)"
     r"(?:\+[.\w]+)?",
     re.IGNORECASE)
@@ -1729,7 +1733,7 @@ class Version(object):
     """
     Representation of a Cassandra or Scylla server version.
 
-    Versions normally contain one to three numeric release components, an
+    Versions normally contain two or three numeric release components, an
     optional fourth build component (numeric or alphanumeric), an optional
     prerelease introduced by ``-``, ``~`` or, for ``alpha``, ``beta``, ``rc``
     and ``dev`` tags following a numeric component after the minor one,
@@ -1771,21 +1775,19 @@ class Version(object):
                 version, normalized_version)
         version = SCYLLA_PACKAGE_SUFFIX_REGEX.sub('', normalized_version, count=1)
 
-        dotted_prerelease_match = DOTTED_PRERELEASE_REGEX.fullmatch(version)
-        match = dotted_prerelease_match or VERSION_REGEX.fullmatch(version)
-        if dotted_prerelease_match:
+        # Check dotted prereleases first so a suffix such as ``.rc1`` is not
+        # interpreted as the optional string build component.
+        match = (DOTTED_PRERELEASE_REGEX.fullmatch(version) or
+                 VERSION_REGEX.fullmatch(version))
+        if match:
             self._major = int(match.group('major'))
             self._minor = int(match.group('minor'))
             self._patch = self._cleanup_int(match.group('patch'))
-            self._build = self._cleanup_int(match.group('build'))
-            self._prerelease = match.group('prerelease')
-        elif match:
-            self._major = int(match.group('major'))
-            self._minor = self._cleanup_int(match.group('minor'))
-            self._patch = self._cleanup_int(match.group('patch'))
             self._build = self._cleanup_build(match.group('build'))
             prerelease = match.group('prerelease')
-            self._prerelease = prerelease[1:] if prerelease else ""
+            if prerelease and prerelease[0] in '-~':
+                prerelease = prerelease[1:]
+            self._prerelease = prerelease or ""
         else:
             self._parse_legacy_version(version)
 
@@ -1843,11 +1845,6 @@ class Version(object):
             if part)
 
     def _parse_legacy_version(self, version):
-        if not version or not version[0].isdigit():
-            raise ValueError(
-                "Couldn't parse version {!r}. Version should start with a number".format(
-                    self._version))
-
         version_without_metadata = version.split('+', 1)[0]
         separators = [
             version_without_metadata.find(separator)
@@ -1878,9 +1875,10 @@ class Version(object):
                 prerelease = '-'.join(filter(None, (tail, prerelease)))
                 break
 
-        if not components:
+        if len(components) < 2:
             raise ValueError(
-                "Couldn't parse version {!r}. Version should start with a number".format(
+                "Couldn't parse version {!r}. Version should start with numeric "
+                "major.minor components".format(
                     self._version))
         self._major = components[0]
         self._minor, self._patch, self._build = (components[1:] + [0, 0, 0])[:3]

@@ -3634,7 +3634,7 @@ def get_schema_parser(connection, server_version, dse_version, timeout, metadata
                 "falling back to the oldest schema parser",
                 error or "empty value")
 
-    version = Version(server_version or "0")
+    version = Version(server_version or "0.0")
     if dse_version:
         v = Version(dse_version)
         dse_release = (v.major, v.minor)

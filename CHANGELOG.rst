@@ -33,8 +33,10 @@ Behavior Changes
   after it; ``Version.prerelease`` defaults to ``""`` instead of ``0``; and
   ``Version`` attributes are now read-only and instances no longer accept
   new attributes (CASSPYTHON-10).
-* ``cassandra.util.Version`` ordering changes (CASSPYTHON-10):
+* ``cassandra.util.Version`` parsing and ordering changes (CASSPYTHON-10):
 
+  * Version strings must contain numeric major and minor components; bare
+    major versions and nonnumeric minor components now raise ``ValueError``.
   * Digit runs in prerelease tags compare numerically, so ``rc9 < rc10``.
   * Numeric builds always sort before string builds, so
     ``1.2.3.10 < 1.2.3.11x``.
