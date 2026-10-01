@@ -37,7 +37,7 @@ from cassandra.cluster import Cluster
 from cassandra.client_routes import ClientRoutesConfig, ClientRouteProxy
 from cassandra.connection import ClientRoutesEndPoint
 from cassandra.policies import RoundRobinPolicy
-from tests.client_routes_rest import post_client_routes
+from tests.client_routes_rest import MAX_ATTEMPTS, post_client_routes
 from tests.integration import (
     TestCluster,
     get_cluster,
@@ -245,10 +245,10 @@ def build_routes_for_nlb(connection_id, host_id_map, nlb):
     return routes
 
 
-def post_routes_for_nlb(contact_point, connection_id, host_id_map, nlb):
+def post_routes_for_nlb(contact_point, connection_id, host_id_map, nlb, retries=1):
     """Build routes for the NLB and POST them via the REST API."""
     routes = build_routes_for_nlb(connection_id, host_id_map, nlb)
-    post_client_routes(contact_point, routes)
+    post_client_routes(contact_point, routes, retries=retries)
     return routes
 
 def wait_for_routes_visible(session, connection_id, expected_count, timeout=10, poll_interval=0.1):
@@ -1085,9 +1085,13 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
 
                     surviving_ips = list(remaining_host_ids.keys())
                     if surviving_ips:
+                        # The REST API can briefly answer 5xx right after a
+                        # decommission; this is the only path with evidence of
+                        # that transient failure, so it opts into retrying.
                         post_routes_for_nlb(
                             surviving_ips[0], self.connection_id,
                             remaining_host_ids, nlb,
+                            retries=MAX_ATTEMPTS,
                         )
 
                     expected_remaining = expected_total - (original_node_ids.index(node_id) + 1)
