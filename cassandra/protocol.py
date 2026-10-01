@@ -15,6 +15,7 @@
 from collections import namedtuple
 import logging
 import socket
+from threading import Lock as _Lock
 from uuid import UUID
 
 import io
@@ -42,10 +43,12 @@ from cassandra.marshal import (int32_pack, int32_unpack, uint16_pack, uint16_unp
                                v3_header_pack, uint32_pack, uint32_le_unpack, uint32_le_pack)
 from cassandra.policies import ColDesc
 from cassandra import WriteType
-from cassandra.cython_deps import HAVE_CYTHON, HAVE_NUMPY
+from cassandra.cython_deps import HAVE_CYTHON
 from cassandra import util
 
 log = logging.getLogger(__name__)
+
+_numpy_protocol_handler_lock = _Lock()
 
 
 class NotSupportedError(Exception):
@@ -1304,11 +1307,30 @@ else:
     LazyProtocolHandler = None
 
 
-if HAVE_CYTHON and HAVE_NUMPY:
-    from cassandra.numpy_parser import NumpyParser
-    NumpyProtocolHandler = cython_protocol_handler(NumpyParser())
-else:
-    NumpyProtocolHandler = None
+def __getattr__(name):
+    """Build the optional NumPy handler only when it is explicitly requested."""
+    if name != 'NumpyProtocolHandler':
+        raise AttributeError("module %r has no attribute %r" % (__name__, name))
+
+    with _numpy_protocol_handler_lock:
+        try:
+            return globals()[name]
+        except KeyError:
+            pass
+
+        numpy_protocol_handler = None
+        if HAVE_CYTHON:
+            from cassandra.cython_deps import HAVE_NUMPY
+            if HAVE_NUMPY:
+                from cassandra.numpy_parser import NumpyParser
+                numpy_protocol_handler = cython_protocol_handler(NumpyParser())
+
+        globals()[name] = numpy_protocol_handler
+        return numpy_protocol_handler
+
+
+def __dir__():
+    return sorted(set(globals()) | {'NumpyProtocolHandler'})
 
 
 def read_byte(f):
