@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import threading
 import unittest
 
 from unittest.mock import patch, Mock
@@ -20,9 +21,10 @@ from cassandra import DependencyException
 
 try:
     from cassandra.io.libevreactor import _cleanup as libev__cleanup
-    from cassandra.io.libevreactor import LibevConnection
+    from cassandra.io.libevreactor import LibevConnection, LibevLoop
 except (ImportError, DependencyException):
     LibevConnection = None  # noqa
+    LibevLoop = None  # noqa
 
 from tests.unit.io.utils import ReactorTestMixin, TimerTestMixin
 
@@ -93,6 +95,178 @@ class LibevConnectionTest(ReactorTestMixin, unittest.TestCase):
                 # singleton loop is left in a working state for subsequent tests
                 # (otherwise timers would never be scheduled and tests would hang).
                 _global_loop._preparer.start()
+
+
+class _InstrumentedLock(object):
+    """
+    Wraps a real threading.Lock and calls a hook the first time it is
+    acquired. Used to pause a thread *while it holds the lock* so a second
+    thread's attempt to acquire the same lock can be observed as blocking
+    (or not).
+    """
+
+    def __init__(self, on_first_acquire):
+        self._real_lock = threading.Lock()
+        self._on_first_acquire = on_first_acquire
+        self._acquire_count = 0
+        self._count_lock = threading.Lock()
+
+    def acquire(self, *args, **kwargs):
+        got = self._real_lock.acquire(*args, **kwargs)
+        if got:
+            with self._count_lock:
+                self._acquire_count += 1
+                first = self._acquire_count == 1
+            if first:
+                self._on_first_acquire()
+        return got
+
+    def release(self):
+        self._real_lock.release()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+
+
+class LibevLoopRaceTest(unittest.TestCase):
+    """
+    Regression tests for GH-980: LibevLoop._run_loop()'s decision to exit
+    the reactor thread (based on _live_conns being empty) must be atomic
+    with connection_created() registering a new connection. If it isn't,
+    a connection can be added in the instant after the exit check reads an
+    empty _live_conns but before the reactor commits to exiting -- and
+    since maybe_start() (called right after connection_created()) also
+    sees the stale "already started" state, nobody ever starts a new
+    reactor thread for that connection. It is silently orphaned forever.
+    """
+
+    def setUp(self):
+        if LibevLoop is None:
+            raise unittest.SkipTest('libev does not appear to be installed correctly')
+
+    def test_connection_created_cannot_race_the_exit_check(self):
+        """
+        Force the exact interleaving that produces the hang: pause the
+        reactor thread right after it enters the critical section that
+        decides whether to exit (i.e. right after it acquires the lock
+        that must guard both _live_conns and the started/shutdown state),
+        then try to register a new connection from another thread. With
+        the fix, connection_created() must block until the reactor
+        finishes its decision, so the two operations can never interleave.
+
+        @jira_ticket GH-980
+        """
+        loop = LibevLoop()
+
+        # No real watchers are involved in this test; make each pass of
+        # the reactor loop return immediately.
+        loop._loop = Mock()
+        loop._shutdown = False
+        loop._live_conns = set()  # nothing live -> the reactor wants to exit
+        loop._started = True  # simulate an already-running reactor thread
+
+        reactor_in_critical_section = threading.Event()
+        release_reactor = threading.Event()
+
+        def pause_reactor():
+            reactor_in_critical_section.set()
+            # Hold the lock open long enough to give connection_created()
+            # a real chance to race in while we're "deciding".
+            release_reactor.wait(timeout=5)
+
+        loop._lock = _InstrumentedLock(pause_reactor)
+
+        reactor_thread = threading.Thread(target=loop._run_loop, name="test_reactor", daemon=True)
+        reactor_thread.start()
+        self.addCleanup(reactor_thread.join, 5)
+
+        self.assertTrue(
+            reactor_in_critical_section.wait(timeout=5),
+            "reactor thread never entered its exit-check critical section")
+
+        conn = Mock()
+        connection_created_done = threading.Event()
+
+        def create_connection():
+            loop.connection_created(conn)
+            connection_created_done.set()
+
+        creator_thread = threading.Thread(target=create_connection, name="test_creator", daemon=True)
+        creator_thread.start()
+        self.addCleanup(creator_thread.join, 5)
+
+        # While the reactor is still deciding, connection_created() must
+        # NOT be able to complete -- if it does, the exit decision and the
+        # connection registration were not atomic (the bug from GH-980:
+        # a two-lock split where a writer could slip a connection in
+        # between the reactor's read of _live_conns and its commit to
+        # exit/started=False).
+        raced_in = connection_created_done.wait(timeout=0.5)
+        self.assertFalse(
+            raced_in,
+            "connection_created() completed while the reactor thread was "
+            "still deciding whether to exit -- the exit check and "
+            "connection registration are not atomic, reproducing GH-980")
+
+        # Let the reactor finish its decision (it will see the pre-race
+        # empty _live_conns, and exit).
+        release_reactor.set()
+        creator_thread.join(timeout=5)
+        reactor_thread.join(timeout=5)
+
+        self.assertFalse(reactor_thread.is_alive())
+        self.assertTrue(connection_created_done.is_set())
+        # The connection was registered (never lost)...
+        self.assertIn(conn, loop._live_conns)
+        # ...and because it landed strictly after the reactor committed to
+        # exiting, _started correctly reflects "not running": a
+        # subsequent maybe_start() (as LibevConnection.__init__ always
+        # calls right after connection_created()) will see this and spin
+        # up a fresh thread instead of stranding the connection.
+        self.assertFalse(loop._started)
+
+        with patch('cassandra.io.libevreactor.Thread') as mock_thread_cls:
+            loop.maybe_start()
+        mock_thread_cls.assert_called_once()
+        self.assertTrue(loop._started)
+
+    def test_live_connection_prevents_exit(self):
+        """
+        Sanity check for the other side of the same critical section: if
+        connection_created() completes (and is visible) before the
+        reactor's exit check runs, the reactor must see the connection and
+        keep the loop running rather than exit.
+        """
+        loop = LibevLoop()
+
+        conn = Mock()
+        loop.connection_created(conn)
+        loop._shutdown = False
+
+        calls = {'n': 0}
+
+        def fake_start():
+            calls['n'] += 1
+            if calls['n'] == 1:
+                return
+            # Second pass: simulate the connection being closed so the
+            # loop can actually terminate instead of spinning forever.
+            loop.connection_destroyed(conn)
+
+        loop._loop = Mock()
+        loop._loop.start = fake_start
+
+        reactor_thread = threading.Thread(target=loop._run_loop, name="test_reactor", daemon=True)
+        reactor_thread.start()
+        reactor_thread.join(timeout=5)
+
+        self.assertFalse(reactor_thread.is_alive())
+        self.assertEqual(calls['n'], 2)
+        self.assertFalse(loop._started)
 
 
 class LibevTimerPatcher(unittest.TestCase):
