@@ -10,12 +10,43 @@ on:
 
       target:
         type: string
-        description: "JSON array of {os,target} matrix entries"
-        default: '[{"os":"ubuntu-24.04","target":"linux"},{"os":"macos-15-intel","target":"macos-x86"},{"os":"macos-14","target":"macos-arm"},{"os":"windows-2022","target":"windows"},{"os":"ubuntu-24.04-arm","target":"linux-aarch64"}]'
+        description: "Comma-separated targets to build for: linux, macos-x86, macos-arm, windows, linux-aarch64"
+        default: "linux,macos-x86,macos-arm,windows,linux-aarch64"
 
 jobs:
+  prepare-matrix:
+    name: "Prepare matrix from target list"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.prepare.outputs.matrix }}
+    steps:
+      - name: Convert target list to a JSON matrix
+        id: prepare
+        run: |
+          declare -A os_for=(
+            [linux]=ubuntu-24.04
+            [linux-aarch64]=ubuntu-24.04-arm
+            [windows]=windows-2022
+            [macos-x86]=macos-15-intel
+            [macos-arm]=macos-14
+          )
+          json="["
+          sep=""
+          for t in $(echo "${{ inputs.target }}" | tr -d " " | tr "," "\n"); do
+            if [[ -z "${os_for[$t]+x}" ]]; then
+              echo "::error::Unknown target '$t'. Valid: linux, macos-x86, macos-arm, windows, linux-aarch64" >&2
+              exit 1
+            fi
+            json+="${sep}{\"os\":\"${os_for[$t]}\",\"target\":\"$t\"}"
+            sep=","
+          done
+          json+="]"
+          echo "matrix=$json" >> "$GITHUB_OUTPUT"
+
   build-and-publish:
+    needs: prepare-matrix
     uses: ./.github/workflows/lib-build.yml
     with:
       python-version: ${{ inputs.python-version }}
-      target: ${{ inputs.target }}
+      target: ${{ needs.prepare-matrix.outputs.matrix }}

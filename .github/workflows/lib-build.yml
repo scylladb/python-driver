@@ -10,7 +10,7 @@ on:
         default: "3.13"
 
       target:
-        description: "JSON array of {os,target} matrix entries to build"
+        description: "JSON array of {os,target} matrix entries (callers convert a friendly target list to this)"
         type: string
         required: false
         default: '[{"os":"ubuntu-24.04","target":"linux"},{"os":"macos-15-intel","target":"macos-x86"},{"os":"macos-14","target":"macos-arm"},{"os":"windows-2022","target":"windows"},{"os":"ubuntu-24.04-arm","target":"linux-aarch64"}]'
