@@ -12,6 +12,10 @@ Bug Fixes
 ---------
 * Avoid loading optional NumPy during ordinary driver imports. NumPy is now
   loaded only when ``NumpyProtocolHandler`` is explicitly requested (#1067).
+* Improve ``cassandra.util.Version`` parsing, ordering, and hashing for Cassandra
+  and Scylla server version strings, including ``-``, ``~`` and dotted
+  (``4.0.rc1``) prerelease forms, and fix ``hash(Version(...))`` raising
+  ``TypeError`` (CASSPYTHON-10).
 * Preserve ``OVERLOADED`` errors received during authentication so reconnection can
   retry the transient failure instead of treating it as invalid credentials
   (DRIVER-1122, #1054).
@@ -20,6 +24,14 @@ Bug Fixes
 
 Behavior Changes
 ----------------
+* Schema parser selection now uses the server's major version (and DSE's
+  major and minor version), so prereleases such as ``4.0-SNAPSHOT`` or
+  ``6.8.0-SNAPSHOT`` select the parser of their release line (CASSPYTHON-10).
+* ``cassandra.util.Version`` ignores ``+`` build metadata and the prerelease
+  separator when comparing and hashing, so ``5.4.0-rc1 == 5.4.0~rc1``; dotted
+  prereleases such as ``3.0.0.rc1`` now sort before their release instead of
+  after it; ``Version.prerelease`` defaults to ``""`` instead of ``0``; and
+  ``Version`` attributes are now read-only (CASSPYTHON-10).
 * Requests issued by ``execute_concurrent()`` and
   ``execute_concurrent_with_args()`` now honor ``Session.default_timeout`` in
   legacy configuration mode or the selected execution profile's
