@@ -52,8 +52,9 @@ def execute_concurrent(session, statements_and_parameters, concurrency=100, rais
       on-the-fly).
 
     `execution_profile` argument is the execution profile to use for this
-    request, it is passed directly to :meth:`Session.execute_async`. Its
-    ``request_timeout`` applies to each request.
+    request, and is passed directly to :meth:`Session.execute_async`. In
+    legacy configuration mode, each request uses ``Session.default_timeout``;
+    otherwise it uses the selected execution profile's ``request_timeout``.
 
     A sequence of ``ExecutionResult(success, result_or_exc)`` namedtuples is returned
     in the same order that the statements were passed in.  If ``success`` is :const:`False`,
@@ -229,9 +230,9 @@ class ConcurrentExecutorListResults(_ConcurrentExecutor):
     def _results(self):
         with self._condition:
             while self._current < self._exec_count:
-                self._condition.wait()
                 if self._exception is not None and self._fail_fast:
                     raise self._exception
+                self._condition.wait()
         if self._exception is not None and self._fail_fast:  # raise the exception even if there was no wait
             raise self._exception
         return [r[1] for r in sorted(self._results_queue)]
@@ -309,7 +310,7 @@ class ConcurrentExecutorFutureResults(_ConcurrentExecutor):
             budget = self._pump_budget
             while True:
                 with self._condition:
-                    if self._finished:
+                    if self._finished or self._exhausted:
                         break
 
                 # Read one item ahead so exhaustion is known even when all

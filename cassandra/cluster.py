@@ -3343,7 +3343,9 @@ class Session(object):
         in input order as they become available, reducing peak memory use.
 
         `execution_profile` is passed to :meth:`execute_async` for every
-        request, and its ``request_timeout`` applies to each request.
+        request. In legacy configuration mode, each request uses
+        :attr:`default_timeout`; otherwise it uses the selected execution
+        profile's ``request_timeout``.
 
         Returns ``ExecutionResult(success, result_or_exc)`` namedtuples in the
         same order as the input. A failed result contains its exception; a
@@ -3406,8 +3408,10 @@ class Session(object):
         blocking the caller. `concurrency` limits the number of requests in
         flight and must be an integer greater than zero; invalid values raise
         immediately instead of through the future. `execution_profile` is
-        passed to :meth:`execute_async` for every request, and its
-        ``request_timeout`` applies to each request.
+        passed to :meth:`execute_async` for every request. In legacy
+        configuration mode, each request uses :attr:`default_timeout`;
+        otherwise it uses the selected execution profile's
+        ``request_timeout``.
 
         Unlike :meth:`execute_concurrent`, `raise_on_first_error` defaults to
         :const:`False`. The future then resolves to an input-ordered list of

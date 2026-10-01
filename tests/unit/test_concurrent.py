@@ -206,7 +206,7 @@ class ConcurrencyTest((unittest.TestCase)):
             time.sleep(0.001)
         assert len(response_futures) == count
 
-    def deferred_session(self):
+    def deferred_session(self, max_workers=2):
         response_futures = []
 
         def execute_async(*args, **kwargs):
@@ -216,7 +216,7 @@ class ConcurrencyTest((unittest.TestCase)):
 
         session = Mock()
         session.execute_async.side_effect = execute_async
-        self.executor = self.enable_async_submit(session)
+        self.executor = self.enable_async_submit(session, max_workers)
         return session, response_futures
 
     def drain_executor(self):
@@ -674,6 +674,49 @@ class ConcurrencyTest((unittest.TestCase)):
         assert [result.result_or_exc.one() for result in results] == list(
             range(count))
 
+    def test_async_does_not_resume_iterator_after_exhaustion(self):
+        class ResumingIterator(object):
+            def __init__(self):
+                self.calls = 0
+                self.exhausted = threading.Event()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                self.calls += 1
+                if self.calls == 1:
+                    return "SELECT value FROM test WHERE key=?", (0,)
+                if self.calls == 2:
+                    self.exhausted.set()
+                    raise StopIteration
+                if self.calls == 3:
+                    return "SELECT value FROM test WHERE key=?", (1,)
+                raise StopIteration
+
+        session, response_futures = self.deferred_session(max_workers=1)
+        statements = ResumingIterator()
+        result_future = execute_concurrent_async(
+            session, statements, concurrency=1)
+        self.wait_for_response_futures(response_futures, 1)
+        assert statements.exhausted.wait(1.0)
+        pump_finished = threading.Event()
+        self.executor.submit(pump_finished.set)
+        assert pump_finished.wait(1.0)
+
+        response_futures[0].succeed(["zero"])
+        try:
+            results = result_future.result(timeout=1.0)
+        finally:
+            # Let the buggy implementation finish if it submitted the item
+            # exposed by calling next() again after StopIteration.
+            if len(response_futures) > 1:
+                response_futures[1].succeed(["late"])
+
+        assert [result.result_or_exc.one() for result in results] == ["zero"]
+        assert statements.calls == 2
+        assert session.execute_async.call_count == 1
+
     def test_async_stress_concurrent_response_threads(self):
         count = 1000
         pending = Queue()
@@ -953,6 +996,41 @@ class ConcurrencyTest((unittest.TestCase)):
         finally:
             # The other request was already in flight and may still finish.
             response_futures[1].succeed(["late success"])
+            caller.join(1.0)
+
+        assert not caller.is_alive()
+        assert session.execute_async.call_count == 2
+
+    def test_list_results_fail_fast_raises_during_initial_fill(self):
+        pending = ReadyDeferredResponseFuture()
+        error = RuntimeError("cannot execute")
+        session = Mock()
+        session.execute_async.side_effect = [pending, error]
+        completed = threading.Event()
+        outcome = {}
+
+        def invoke():
+            try:
+                outcome['results'] = execute_concurrent(
+                    session,
+                    [("INSERT INTO test (key) VALUES (?)", (i,))
+                     for i in range(2)],
+                    concurrency=2,
+                    raise_on_first_error=True)
+            except Exception as exc:
+                outcome['exception'] = exc
+            finally:
+                completed.set()
+
+        caller = threading.Thread(target=invoke)
+        caller.start()
+        try:
+            assert pending.callbacks_added.wait(1.0)
+            assert completed.wait(1.0)
+            assert outcome.get('exception') is error
+            assert 'results' not in outcome
+        finally:
+            pending.succeed(["late success"])
             caller.join(1.0)
 
         assert not caller.is_alive()

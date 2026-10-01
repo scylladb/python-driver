@@ -19,10 +19,11 @@ Bug Fixes
 Behavior Changes
 ----------------
 * Requests issued by ``execute_concurrent()`` and
-  ``execute_concurrent_with_args()`` now honor the execution profile's
-  ``request_timeout`` (10 seconds by default) instead of never timing out on
-  the client. With ``raise_on_first_error=True``, both result modes now stop
-  scheduling new statements after the first failure.
+  ``execute_concurrent_with_args()`` now honor ``Session.default_timeout`` in
+  legacy configuration mode or the selected execution profile's
+  ``request_timeout`` otherwise (10 seconds by default), instead of never
+  timing out on the client. With ``raise_on_first_error=True``, both result
+  modes now stop scheduling new statements after the first failure.
 
 3.29.12
 ========
