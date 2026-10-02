@@ -212,32 +212,80 @@ class VersionTests(unittest.TestCase):
 
     def test_version_parsing(self):
         versions = [
-            ('2.0.0', (2, 0, 0, 0, 0)),
-            ('3.1.0', (3, 1, 0, 0, 0)),
-            ('2.4.54', (2, 4, 54, 0, 0)),
-            ('3.1.1.12', (3, 1, 1, 12, 0)),
-            ('3.55.1.build12', (3, 55, 1, 'build12', 0)),
+            ('2.0.0', (2, 0, 0, 0, '')),
+            ('3.1.0', (3, 1, 0, 0, '')),
+            ('2.4.54', (2, 4, 54, 0, '')),
+            ('3.1.1.12', (3, 1, 1, 12, '')),
+            ('3.55.1.build12', (3, 55, 1, 'build12', '')),
             ('3.55.1.20190429-TEST', (3, 55, 1, 20190429, 'TEST')),
             ('4.0-SNAPSHOT', (4, 0, 0, 0, 'SNAPSHOT')),
-            ('1.0.5.4.3', (1, 0, 5, 4, 0)),
-            ('1-SNAPSHOT', (1, 0, 0, 0, 'SNAPSHOT')),
+            ('1.0.5.4.3', (1, 0, 5, 4, '')),
             ('4.0.1.2.3.4.5-ABC-123-SNAP-TEST.blah', (4, 0, 1, 2, 'ABC-123-SNAP-TEST.blah')),
-            ('2.1.hello', (2, 1, 0, 0, 0)),
-            ('2.test.1', (2, 0, 0, 0, 0)),
+            ('2.1.hello', (2, 1, 0, 0, '')),
+            ('1.2-beta1-SNAPSHOT', (1, 2, 0, 0, 'beta1-SNAPSHOT')),
+            ('1.2~beta1-SNAPSHOT', (1, 2, 0, 0, 'beta1-SNAPSHOT')),
+            ('1.2.19.2-SNAPSHOT', (1, 2, 19, 2, 'SNAPSHOT')),
+            ('2025.1.0~rc1-0.20250101.abcdef', (2025, 1, 0, 0, 'rc1-0.20250101.abcdef')),
+            ('6.2.0-0.20241015.abcdef', (6, 2, 0, 0, '0.20241015.abcdef')),
+            ('6.0.0.5.rc1', (6, 0, 0, 5, 'rc1')),
+            ('4.3.rc5', (4, 3, 0, 0, 'rc5')),
+            ('3.1.0.rc8', (3, 1, 0, 0, 'rc8')),
+            ('2024.2.0.dev.0.20231219.hash.1', (2024, 2, 0, 0, 'dev.0.20231219.hash.1')),
+            ('3.1.0.rcbuild', (3, 1, 0, 'rcbuild', '')),
+            ('3.1.0.alphafoo', (3, 1, 0, 'alphafoo', '')),
+            ('3.1.0.development', (3, 1, 0, 'development', '')),
+            ('1.0-²', (1, 0, 0, 0, '²')),
+            ('5.4.0+build.1', (5, 4, 0, 0, '')),
+            ('3.0.0.rc1', (3, 0, 0, 0, 'rc1')),
+            ('4.0.RC1', (4, 0, 0, 0, 'RC1')),
+            ('3.1.0.RC8', (3, 1, 0, 0, 'RC8')),
+            ('6.0.0~dev', (6, 0, 0, 0, 'dev')),
+            ('5.4.0-rc1', (5, 4, 0, 0, 'rc1')),
+            ('2025.2.0', (2025, 2, 0, 0, '')),
         ]
 
         for str_version, expected_result in versions:
-            v = Version(str_version)
-            assert str_version == str(v)
-            assert v.major == expected_result[0]
-            assert v.minor == expected_result[1]
-            assert v.patch == expected_result[2]
-            assert v.build == expected_result[3]
-            assert v.prerelease == expected_result[4]
+            with self.subTest(version=str_version):
+                v = Version(str_version)
+                assert str_version == str(v)
+                assert (v.major, v.minor, v.patch, v.build, v.prerelease) == expected_result
 
         # not supported version formats
-        with pytest.raises(ValueError):
-            Version('test.1.0')
+        for invalid_version in (
+                '', ' ', '-', '0', '4', '2019', 'v4', '4-a', '1-SNAPSHOT',
+                '2.test.1', 'test.1.0', '²'):
+            with self.subTest(version=invalid_version):
+                with pytest.raises(ValueError):
+                    Version(invalid_version)
+
+    def test_legacy_version_parsing_warns(self):
+        for str_version, expected_result in (
+                ('1.0.5.4.3', (1, 0, 5, 4, '')),
+                ('2.1.hello', (2, 1, 0, 0, '')),
+                ('1.2\n', (1, 2, 0, 0, '')),
+                (' 3.0.0', (3, 0, 0, 0, '')),
+                ('3.0.0.', (3, 0, 0, 0, '')),
+                ('1.2-', (1, 2, 0, 0, '')),
+                ('1.2~', (1, 2, 0, 0, '')),
+                ('6.0.0+', (6, 0, 0, 0, '')),
+                ('1.0-a b', (1, 0, 0, 0, 'a b')),
+                ('4.0.0 beta', (4, 0, 0, 0, 'beta')),
+                ('4.0.1_beta.2', (4, 0, 1, 0, 'beta.2')),
+                ('4.0 beta-SNAPSHOT', (4, 0, 0, 0, 'beta-SNAPSHOT')),
+        ):
+            with self.subTest(version=str_version):
+                with self.assertLogs('cassandra.util', level='WARNING'):
+                    v = Version(str_version)
+                assert (v.major, v.minor, v.patch, v.build, v.prerelease) == expected_result
+
+    def test_legacy_version_warning_shows_assumed_version(self):
+        with self.assertLogs('cassandra.util', level='WARNING') as logs:
+            Version('2.1.hello')
+        assert logs.output[-1].endswith('Assuming version as 2.1.0')
+
+        with self.assertLogs('cassandra.util', level='WARNING') as logs:
+            Version('4.0.0 beta')
+        assert logs.output[-1].endswith('Assuming version as 4.0.0-beta')
 
     def test_version_compare(self):
         # just tests a bunch of versions
@@ -265,9 +313,9 @@ class VersionTests(unittest.TestCase):
         assert Version('2.3.0.build0') > Version('2.3.0.1')  # 4th part fallback to str cmp
         assert Version('2.3.0') < Version('2.3.0.build')
 
-        assert Version('4-a') <= Version('4.0.0')
-        assert Version('4-a') <= Version('4.0-alpha1')
-        assert Version('4-a') <= Version('4.0-beta1')
+        assert Version('4.0-a') <= Version('4.0.0')
+        assert Version('4.0-a') <= Version('4.0-alpha1')
+        assert Version('4.0-a') <= Version('4.0-beta1')
         assert Version('4.0.0') >= Version('4.0.0')
         assert Version('4.0.0.421') >= Version('4.0.0')
         assert Version('4.0.1') >= Version('4.0.0')
@@ -276,7 +324,6 @@ class VersionTests(unittest.TestCase):
         assert Version('2.3.32') == Version('2.3.32.0')
         assert Version('2.3.0.build') == Version('2.3.0.build')
 
-        assert Version('4') == Version('4.0.0')
         assert Version('4.0') == Version('4.0.0.0')
         assert Version('4.0') > Version('3.9.3')
 
@@ -292,6 +339,120 @@ class VersionTests(unittest.TestCase):
         assert Version('4.0-SNAPSHOT2') > Version('4.0.0-SNAPSHOT1')
 
         assert Version('4.0.0-alpha1-SNAPSHOT') > Version('4.0.0-SNAPSHOT')
+
+        equal_versions = [
+            (Version('4.0'), Version('4.0.0.0')),
+            (Version('4.0-SNAPSHOT'), Version('4.0.0-SNAPSHOT')),
+            (Version('5.4.0+build.1'), Version('5.4.0+build.2')),
+            (Version('4.3.rc5'), Version('4.3.0-rc5')),
+        ]
+        for left, right in equal_versions:
+            assert left == right
+            assert hash(left) == hash(right)
+
+        assert Version('2.3.0.1-SNAPSHOT') < Version('2.3.0.1')
+        assert Version('4.0-0') < Version('4.0')
+        assert Version('4.0-0') != Version('4.0')
+        assert Version('4.0-0') < Version('4.0-alpha') < Version('4.0')
+        assert Version('4.0-alpha') <= Version('4.0.0')
+        assert Version('4.0-alpha') <= Version('4.0-alpha1')
+        assert Version('4.0-alpha') <= Version('4.0-beta1')
+        assert Version('4.3.rc4') < Version('4.3.rc9') < Version('4.3.rc10') < Version('4.3')
+        assert Version('4.3.rc01') < Version('4.3.rc1')
+        assert Version('4.3.rc01') != Version('4.3.rc1')
+        assert Version('3.1.0.rc8') < Version('3.1.0')
+        assert Version('1.0-²') < Version('1.0')
+
+        ordered_builds = [
+            Version('1.2.3.2'),
+            Version('1.2.3.10'),
+            Version('1.2.3.11x'),
+        ]
+        assert ordered_builds == sorted(ordered_builds)
+
+        version_lookup = {Version('4.0'): 'release'}
+        assert version_lookup[Version('4.0.0.0')] == 'release'
+
+        assert Version('3.0.0.rc1') < Version('3.0.0')
+        assert Version('4.0.RC1') < Version('4.0.0')
+        assert Version('2025.2.0~dev') < Version('2025.2.0~rc1') < Version('2025.2.0')
+        assert Version('5.4.0-rc1') < Version('5.4.0')
+        assert Version('5.4.0-rc1') == Version('5.4.0~rc1')
+        assert Version('5.0-beta1') < Version('5.0-rc1') < Version('5.0')
+        assert Version('2025.2.0~dev-0.20250301.abcdef') < Version('2025.2.0~rc1-0.20250401.abcdef')
+
+        # Non-digit prerelease runs compare case-sensitively and lexicographically.
+        assert Version('5.0-RC1') != Version('5.0-rc1')
+        assert Version('5.0-RC1') < Version('5.0-rc1')
+        assert Version('4.0.RC1') < Version('4.0.beta1') < Version('4.0.rc2')
+
+        assert Version('4.0.0.rc1') < Version('4.0.0') < Version('4.0.0.devel')
+        assert Version('6.0.0.5.rc1') < Version('6.0.0.5')
+        assert Version('4.0') != '4.0'
+
+    def test_prerelease_natural_ordering(self):
+        assert Version('1.0-rc9') < Version('1.0-rc10')
+        assert Version('1.0-rc1') < Version('1.0-rc-1') < Version('1.0-rc.1')
+        assert Version('1.0-rc01') < Version('1.0-rc1')
+
+    def test_package_shaped_suffixes_are_prereleases(self):
+        for version, base_version, prerelease in (
+                ('2.0.0-0.20250101.deadbeef', '2.0.0', '0.20250101.deadbeef'),
+                ('2025.1.0~rc1-0.20250101.abcdef', '2025.1.0',
+                 'rc1-0.20250101.abcdef')):
+            with self.subTest(version=version):
+                parsed_version = Version(version)
+                base_version = Version(base_version)
+
+                assert parsed_version.prerelease == prerelease
+                assert parsed_version < base_version
+
+    def test_hyphenated_build_metadata_is_ignored(self):
+        for version_with_metadata, version_without_metadata in (
+                ('5.4.0+build-1', '5.4.0'),
+                ('4.3.rc5+build-1', '4.3.rc5'),
+                ('3.1.0.rc8+build-1', '3.1.0.rc8')):
+            with self.subTest(version=version_with_metadata):
+                with self.assertNoLogs('cassandra.util', level='WARNING'):
+                    parsed_version = Version(version_with_metadata)
+                    expected_version = Version(version_without_metadata)
+
+                assert parsed_version == expected_version
+                assert hash(parsed_version) == hash(expected_version)
+                assert parsed_version.prerelease == expected_version.prerelease
+
+        assert Version('4.3.rc5+build-1') < Version('4.3')
+
+    def test_version_is_immutable(self):
+        v = Version('1.0')
+        for attribute in ('major', 'minor', 'patch', 'build', 'prerelease'):
+            with self.subTest(attribute=attribute):
+                with pytest.raises(AttributeError):
+                    setattr(v, attribute, 9)
+        with pytest.raises(AttributeError):
+            v.extra = 9
+        assert v < Version('2.0')
+
+    def test_version_repr(self):
+        assert repr(Version('4.0')) == "Version(4, 0, 0)"
+        assert repr(Version('3.0.0.1')) == "Version(3, 0, 0, build=1)"
+        assert repr(Version('3.55.1.build12')) == "Version(3, 55, 1, build='build12')"
+        assert repr(Version('4.0.0-rc1')) == "Version(4, 0, 0, prerelease='rc1')"
+
+    def test_version_ordering_is_consistent(self):
+        versions = [Version(v) for v in (
+            '2.2.19', '3.0-SNAPSHOT', '3.0.0.rc1', '3.0.0', '3.0.8', '3.1.0.rcbuild',
+            '4.0-a', '4.0-SNAPSHOT', '4.0.RC1', '4.0~rc1', '4.0.0', '4.0.0.0',
+            '5.4.0+build.1', '1.2.3.10', '1.2.3.11x', '1.0-beta9', '1.0-beta10',
+            '2024.1.0-0.20240101.abcdef', '2025.2.0~dev', '2025.2.0',
+            '2025.1.0~rc2-0.20250101.abcdef', '4.0.beta1', '5.0-RC1', '5.0-rc1',
+            '4.0.0.devel', '6.0.0.5.rc1')]
+        for left in versions:
+            for right in versions:
+                with self.subTest(left=str(left), right=str(right)):
+                    assert [left < right, left == right, left > right].count(True) == 1
+                    if left == right:
+                        assert hash(left) == hash(right)
 
 
 class FunctionTests(unittest.TestCase):

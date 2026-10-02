@@ -1702,63 +1702,208 @@ class DateRange(object):
         )
 
 
+_VERSION_COMPONENTS_PATTERN = (
+    r"(?P<major>\d+)\."
+    r"(?P<minor>\d+)"
+    r"(?:\.(?P<patch>\d+))?"
+)
+
+_BUILD_METADATA_PATTERN = r"(?:\+[.\w-]+)?"
+
+VERSION_REGEX = re.compile(
+    _VERSION_COMPONENTS_PATTERN
+    + r"(?(patch)(?:\.(?P<build>\w+))?)"
+    + r"(?P<prerelease>[~-]\w[.\w]*(?:-\w[.\w]*)*)?"
+    + _BUILD_METADATA_PATTERN)
+
+DOTTED_PRERELEASE_REGEX = re.compile(
+    _VERSION_COMPONENTS_PATTERN
+    + r"\."
+    + r"(?(patch)(?:(?P<build>\d+)\.)?)"
+    + r"(?P<prerelease>(?:alpha|beta|rc|dev)\d*(?:[.-]\w+)*)"
+    + _BUILD_METADATA_PATTERN,
+    re.IGNORECASE)
+
+
 @total_ordering
 class Version(object):
     """
-    Internal minimalist class to compare versions.
-    A valid version is: <int>.<int>.<int>.<int or str>.
+    Representation of a Cassandra or Scylla server version.
 
-    TODO: when python2 support is removed, use packaging.version.
+    Versions normally contain two or three numeric release components, an
+    optional fourth build component (numeric or alphanumeric), an optional
+    prerelease introduced by ``-``, ``~`` or, for ``alpha``, ``beta``, ``rc``
+    and ``dev`` tags following the minor or a later numeric component, ``.``
+    (e.g. ``4.0.rc1``), and optional ``+`` build metadata. Surrounding
+    whitespace and empty trailing suffixes (``1.2-``) are ignored with a
+    warning. Other forms are parsed best effort by the driver's historical
+    tolerant parser, which also logs a warning. Suffixes introduced by ``-``
+    are interpreted vendor-neutrally as prereleases, so a package-shaped
+    suffix such as ``-0.20250101.deadbeef`` remains in ``prerelease``.
+
+    The parsed components (``major``, ``minor``, ``patch``, ``build`` and
+    ``prerelease``) are read-only properties.
+
+    Comparison ignores ``+`` build metadata and the separator that introduces
+    the prerelease, treats missing release components as ``0``, sorts a
+    prerelease before its release, sorts string builds after numeric ones,
+    and uses driver-specific natural ordering for prerelease tags. Digit runs
+    compare numerically, non-digit runs (including punctuation) compare
+    case-sensitively and lexicographically, and the original tag breaks tied
+    natural keys. Thus ``rc9 < rc10``, ``rc1 < rc-1 < rc.1``, and
+    ``rc01 < rc1``.
     """
 
-    _version = None
-    major = None
-    minor = 0
-    patch = 0
-    build = 0
-    prerelease = 0
+    __slots__ = (
+        '_version', '_major', '_minor', '_patch', '_build', '_prerelease',
+        '_ordering_key')
 
     def __init__(self, version):
         self._version = version
-        if '-' in version:
-            version_without_prerelease, self.prerelease = version.split('-', 1)
+        self._major = None
+        self._minor = 0
+        self._patch = 0
+        self._build = 0
+        self._prerelease = ""
+
+        normalized_version = version.strip().rstrip('-~+.')
+        if normalized_version != version and normalized_version:
+            log.warning(
+                "Unrecognized version %r. Ignoring surrounding whitespace and empty "
+                "version suffix, assuming version as %s",
+                version, normalized_version)
+        version = normalized_version
+
+        # Check dotted prereleases first so a suffix such as ``.rc1`` is not
+        # interpreted as the optional string build component.
+        match = (DOTTED_PRERELEASE_REGEX.fullmatch(version) or
+                 VERSION_REGEX.fullmatch(version))
+        if match:
+            self._major = int(match.group('major'))
+            self._minor = int(match.group('minor'))
+            self._patch = self._cleanup_int(match.group('patch'))
+            self._build = self._cleanup_build(match.group('build'))
+            prerelease = match.group('prerelease')
+            if prerelease and prerelease[0] in '-~':
+                prerelease = prerelease[1:]
+            self._prerelease = prerelease or ""
         else:
-            version_without_prerelease = version
-        parts = list(reversed(version_without_prerelease.split('.')))
-        if len(parts) > 4:
-            prerelease_string = "-{}".format(self.prerelease) if self.prerelease else ""
-            log.warning("Unrecognized version: {}. Only 4 components plus prerelease are supported. "
-                        "Assuming version as {}{}".format(version, '.'.join(parts[:-5:-1]), prerelease_string))
+            self._parse_legacy_version(version)
 
-        try:
-            self.major = int(parts.pop())
-        except ValueError as e:
-            raise ValueError(
-                "Couldn't parse version {}. Version should start with a number".format(version))\
-                .with_traceback(e.__traceback__)
-        try:
-            self.minor = int(parts.pop()) if parts else 0
-            self.patch = int(parts.pop()) if parts else 0
+        build_key = (
+            0, self.build) if isinstance(self.build, int) else (1, self.build)
+        prerelease_key = (
+            not bool(self.prerelease),
+            self._prerelease_ordering_key(self.prerelease),
+            self.prerelease)
+        self._ordering_key = (
+            self.major,
+            self.minor,
+            self.patch,
+            build_key,
+            prerelease_key)
 
-            if parts:  # we have a build version
-                build = parts.pop()
-                try:
-                    self.build = int(build)
-                except ValueError:
-                    self.build = build
+    @property
+    def major(self):
+        return self._major
+
+    @property
+    def minor(self):
+        return self._minor
+
+    @property
+    def patch(self):
+        return self._patch
+
+    @property
+    def build(self):
+        return self._build
+
+    @property
+    def prerelease(self):
+        return self._prerelease
+
+    @staticmethod
+    def _cleanup_int(value):
+        return int(value) if value else 0
+
+    @staticmethod
+    def _cleanup_build(value):
+        if not value:
+            return 0
+        try:
+            return int(value)
         except ValueError:
-            assumed_version = "{}.{}.{}.{}-{}".format(self.major, self.minor, self.patch, self.build, self.prerelease)
-            log.warning("Unrecognized version {}. Assuming version as {}".format(version, assumed_version))
+            return value
+
+    @staticmethod
+    def _prerelease_ordering_key(value):
+        return tuple(
+            (0, int(part)) if part.isdecimal() else (1, part)
+            for part in re.split(r'(\d+)', value)
+            if part)
+
+    def _parse_legacy_version(self, version):
+        version_without_metadata = version.split('+', 1)[0]
+        separators = [
+            version_without_metadata.find(separator)
+            for separator in ('-', '~')
+            if separator in version_without_metadata]
+        if separators:
+            separator_index = min(separators)
+            version_without_prerelease = version_without_metadata[:separator_index]
+            prerelease = version_without_metadata[separator_index + 1:]
+        else:
+            version_without_prerelease = version_without_metadata
+            prerelease = ""
+
+        # Components are read until one does not start with a number. A
+        # number followed by other characters ("0 beta") ends the release
+        # components, and the rest becomes part of the prerelease.
+        parts = version_without_prerelease.split('.')
+        components = []
+        for index, part in enumerate(parts[:4]):
+            digits = re.match(r'\d*', part).group()
+            tail = '.'.join([part[len(digits):]] + parts[index + 1:]).strip(' _.')
+            if not digits:
+                if index == 3:
+                    components.append(part)
+                break
+            components.append(int(digits))
+            if tail and not part.isdigit():
+                prerelease = '-'.join(filter(None, (tail, prerelease)))
+                break
+
+        if len(components) < 2:
+            raise ValueError(
+                "Couldn't parse version {!r}. Version should start with numeric "
+                "major.minor components".format(
+                    self._version))
+        self._major = components[0]
+        self._minor, self._patch, self._build = (components[1:] + [0, 0, 0])[:3]
+        self._prerelease = prerelease
+
+        log.warning(
+            "Unrecognized version %r. Assuming version as %s",
+            self._version, self._format_components())
+
+    def _format_components(self):
+        version_string = "{}.{}.{}".format(self.major, self.minor, self.patch)
+        if self.build:
+            version_string += ".{}".format(self.build)
+        if self.prerelease:
+            version_string += "-{}".format(self.prerelease)
+        return version_string
 
     def __hash__(self):
-        return self._version
+        return hash(self._ordering_key)
 
     def __repr__(self):
         version_string = "Version({0}, {1}, {2}".format(self.major, self.minor, self.patch)
         if self.build:
-            version_string += ", {}".format(self.build)
+            version_string += ", build={!r}".format(self.build)
         if self.prerelease:
-            version_string += ", {}".format(self.prerelease)
+            version_string += ", prerelease={!r}".format(self.prerelease)
         version_string += ")"
 
         return version_string
@@ -1766,51 +1911,17 @@ class Version(object):
     def __str__(self):
         return self._version
 
-    @staticmethod
-    def _compare_version_part(version, other_version, cmp):
-        if not (isinstance(version, int) and
-                isinstance(other_version, int)):
-            version = str(version)
-            other_version = str(other_version)
-
-        return cmp(version, other_version)
-
     def __eq__(self, other):
         if not isinstance(other, Version):
             return NotImplemented
 
-        return (self.major == other.major and
-                self.minor == other.minor and
-                self.patch == other.patch and
-                self._compare_version_part(self.build, other.build, lambda s, o: s == o) and
-                self._compare_version_part(self.prerelease, other.prerelease, lambda s, o: s == o)
-                )
+        return self._ordering_key == other._ordering_key
 
     def __gt__(self, other):
         if not isinstance(other, Version):
             return NotImplemented
 
-        is_major_ge = self.major >= other.major
-        is_minor_ge = self.minor >= other.minor
-        is_patch_ge = self.patch >= other.patch
-        is_build_gt = self._compare_version_part(self.build, other.build, lambda s, o: s > o)
-        is_build_ge = self._compare_version_part(self.build, other.build, lambda s, o: s >= o)
-
-        # By definition, a prerelease comes BEFORE the actual release, so if a version
-        # doesn't have a prerelease, it's automatically greater than anything that does
-        if self.prerelease and not other.prerelease:
-            is_prerelease_gt = False
-        elif other.prerelease and not self.prerelease:
-            is_prerelease_gt = True
-        else:
-            is_prerelease_gt = self._compare_version_part(self.prerelease, other.prerelease, lambda s, o: s > o) \
-
-        return (self.major > other.major or
-                (is_major_ge and self.minor > other.minor) or
-                (is_major_ge and is_minor_ge and self.patch > other.patch) or
-                (is_major_ge and is_minor_ge and is_patch_ge and is_build_gt) or
-                (is_major_ge and is_minor_ge and is_patch_ge and is_build_ge and is_prerelease_gt)
-                )
+        return self._ordering_key > other._ordering_key
 
 
 def maybe_add_timeout_to_query(stmt: str, metadata_request_timeout: Optional[datetime.timedelta]) -> str:

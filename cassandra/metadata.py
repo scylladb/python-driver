@@ -3601,7 +3601,7 @@ class EdgeMetadata(object):
         self.to_clustering_columns = to_clustering_columns
 
 
-def get_column_from_system_local(connection, column_name: str, timeout, metadata_request_timeout) -> str:
+def _query_column_from_system_local(connection, column_name, timeout, metadata_request_timeout):
     success, local_result = connection.wait_for_response(
         QueryMessage(
             query=maybe_add_timeout_to_query(
@@ -3609,35 +3609,59 @@ def get_column_from_system_local(connection, column_name: str, timeout, metadata
                 metadata_request_timeout),
             consistency_level=ConsistencyLevel.ONE)
         , timeout=timeout, fail_on_error=False)
-    if not success or not local_result.parsed_rows:
-        return ""
+    if not success:
+        return "", local_result
+    if not local_result.parsed_rows:
+        return "", "no row returned"
     local_rows = dict_factory(local_result.column_names, local_result.parsed_rows)
     local_row = local_rows[0]
-    return local_row.get(column_name)
+    return local_row.get(column_name), None
+
+
+def get_column_from_system_local(connection, column_name: str, timeout, metadata_request_timeout) -> str:
+    return _query_column_from_system_local(
+        connection, column_name, timeout, metadata_request_timeout)[0]
 
 
 def get_schema_parser(connection, server_version, dse_version, timeout, metadata_request_timeout, fetch_size=None):
-    if server_version is None and dse_version is None:
-        server_version = get_column_from_system_local(connection, "release_version", timeout, metadata_request_timeout)
-        dse_version = get_column_from_system_local(connection, "dse_version", timeout, metadata_request_timeout)
+    """Select the schema parser for the server's release line.
 
-    version = Version(server_version or "0")
+    Cassandra and Scylla schema families are selected by major version; DSE
+    families are selected by major and minor version. Prerelease maturity does
+    not imply the preceding schema family, so versions such as
+    ``6.8.0-SNAPSHOT`` and ``6.8.0.rc1`` correctly select DSE68.
+    """
+    missing_release_version_reason = None
+    if not server_version and not dse_version:
+        server_version, error = _query_column_from_system_local(
+            connection, "release_version", timeout, metadata_request_timeout)
+        dse_version = get_column_from_system_local(connection, "dse_version", timeout, metadata_request_timeout)
+        if not server_version:
+            missing_release_version_reason = error or "empty value"
+
+    version = Version(server_version or "0.0")
     if dse_version:
         v = Version(dse_version)
-        if v >= Version('6.8.0'):
+        dse_release = (v.major, v.minor)
+        if dse_release >= (6, 8):
             return SchemaParserDSE68(connection, timeout, fetch_size, metadata_request_timeout)
-        elif v >= Version('6.7.0'):
+        elif dse_release >= (6, 7):
             return SchemaParserDSE67(connection, timeout, fetch_size, metadata_request_timeout)
-        elif v >= Version('6.0.0'):
+        elif dse_release >= (6, 0):
             return SchemaParserDSE60(connection, timeout, fetch_size, metadata_request_timeout)
 
-    if version >= Version('4-a'):
+    if version.major >= 4:
         return SchemaParserV4(connection, timeout, fetch_size, metadata_request_timeout)
-    elif version >= Version('3.0.0'):
+    elif version.major >= 3:
         return SchemaParserV3(connection, timeout, fetch_size, metadata_request_timeout)
     else:
         # we could further specialize by version. Right now just refactoring the
         # multi-version parser we have as of C* 2.2.0rc1.
+        if missing_release_version_reason is not None:
+            log.warning(
+                "Could not read release_version from system.local (%s); "
+                "falling back to the oldest schema parser",
+                missing_release_version_reason)
         return SchemaParserV22(connection, timeout, fetch_size, metadata_request_timeout)
 
 
