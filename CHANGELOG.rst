@@ -10,6 +10,8 @@ Features
 
 Bug Fixes
 ---------
+* Avoid loading optional NumPy during ordinary driver imports. NumPy is now
+  loaded only when ``NumpyProtocolHandler`` is explicitly requested (#1067).
 * Preserve ``OVERLOADED`` errors received during authentication so reconnection can
   retry the transient failure instead of treating it as invalid credentials
   (DRIVER-1122, #1054).
