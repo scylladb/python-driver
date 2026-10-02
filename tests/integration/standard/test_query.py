@@ -926,7 +926,7 @@ class LightweightTransactionTests(unittest.TestCase):
 
     @xfail_scylla_version_lt(reason='scylladb/scylladb#18068 - LWT is not yet supported with tablets',
                              scylla_version='2025.4',
-                             raises=AttributeError)
+                             raises=pytest.fail.Exception)
     def test_no_connection_refused_on_timeout(self):
         """
         Test for PYTHON-91 "Connection closed after LWT timeout"
@@ -954,13 +954,13 @@ class LightweightTransactionTests(unittest.TestCase):
                 # In this case result is an exception
                 exception_type = type(result).__name__
                 if exception_type == "NoHostAvailable":
-                    pytest.fail("PYTHON-91: Disconnected from Cassandra: %s" % result.message)
+                    pytest.fail("PYTHON-91: Disconnected from Cassandra: %s" % result)
                 if exception_type in ["WriteTimeout", "WriteFailure", "ReadTimeout", "ReadFailure", "ErrorMessageSub"]:
                     if type(result).__name__ in ["WriteTimeout", "WriteFailure"]:
                         received_timeout = True
                     continue
 
-                pytest.fail("Unexpected exception %s: %s" % (exception_type, result.message))
+                pytest.fail("Unexpected exception %s: %s" % (exception_type, result))
 
         # Make sure test passed
         assert received_timeout
