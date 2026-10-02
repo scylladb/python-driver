@@ -1708,18 +1708,20 @@ _VERSION_COMPONENTS_PATTERN = (
     r"(?:\.(?P<patch>\d+))?"
 )
 
+_BUILD_METADATA_PATTERN = r"(?:\+[.\w-]+)?"
+
 VERSION_REGEX = re.compile(
-    _VERSION_COMPONENTS_PATTERN +
-    r"(?(patch)(?:\.(?P<build>\w+))?)"
-    r"(?P<prerelease>[~-]\w[.\w]*(?:-\w[.\w]*)*)?"
-    r"(?:\+[.\w]+)?")
+    _VERSION_COMPONENTS_PATTERN
+    + r"(?(patch)(?:\.(?P<build>\w+))?)"
+    + r"(?P<prerelease>[~-]\w[.\w]*(?:-\w[.\w]*)*)?"
+    + _BUILD_METADATA_PATTERN)
 
 DOTTED_PRERELEASE_REGEX = re.compile(
-    _VERSION_COMPONENTS_PATTERN +
-    r"\."
-    r"(?(patch)(?:(?P<build>\d+)\.)?)"
-    r"(?P<prerelease>(?:alpha|beta|rc|dev)\d*(?:[.-]\w+)*)"
-    r"(?:\+[.\w]+)?",
+    _VERSION_COMPONENTS_PATTERN
+    + r"\."
+    + r"(?(patch)(?:(?P<build>\d+)\.)?)"
+    + r"(?P<prerelease>(?:alpha|beta|rc|dev)\d*(?:[.-]\w+)*)"
+    + _BUILD_METADATA_PATTERN,
     re.IGNORECASE)
 
 

@@ -408,6 +408,22 @@ class VersionTests(unittest.TestCase):
                 assert parsed_version < base_version
                 assert parsed_version != base_version
 
+    def test_hyphenated_build_metadata_is_ignored(self):
+        for version_with_metadata, version_without_metadata in (
+                ('5.4.0+build-1', '5.4.0'),
+                ('4.3.rc5+build-1', '4.3.rc5'),
+                ('3.1.0.rc8+build-1', '3.1.0.rc8')):
+            with self.subTest(version=version_with_metadata):
+                with self.assertNoLogs('cassandra.util', level='WARNING'):
+                    parsed_version = Version(version_with_metadata)
+                    expected_version = Version(version_without_metadata)
+
+                assert parsed_version == expected_version
+                assert hash(parsed_version) == hash(expected_version)
+                assert parsed_version.prerelease == expected_version.prerelease
+
+        assert Version('4.3.rc5+build-1') < Version('4.3')
+
     def test_version_is_immutable(self):
         v = Version('1.0')
         for attribute in ('major', 'minor', 'patch', 'build', 'prerelease'):
