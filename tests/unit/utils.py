@@ -13,11 +13,34 @@
 # limitations under the License.
 
 from functools import wraps
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
 from unittest.mock import Mock, patch
 
 from concurrent.futures import Future
 from cassandra.cluster import Session
 from cassandra.driver_config import DriverConfigReporter
+
+
+def run_isolated_subprocess(script, timeout=5):
+    """Run a script in a temporary working directory with the driver available."""
+    driver_path = str(Path(__file__).parents[2])
+    script = "import sys\nsys.path.append({!r})\n".format(driver_path) + script
+    with tempfile.TemporaryDirectory() as temp_dir:
+        result = subprocess.run(
+            [sys.executable, '-c', script],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=temp_dir,
+        )
+
+    assert result.returncode == 0, (
+        "Subprocess failed\nstdout:\n{}\nstderr:\n{}".format(
+            result.stdout, result.stderr))
+    return result
 
 
 def mock_session_pools(f):

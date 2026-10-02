@@ -17,13 +17,9 @@ from concurrent.futures import Future
 import gc
 import logging
 import multiprocessing
-from pathlib import Path
 from queue import PriorityQueue
 import socket
 import ssl
-import subprocess
-import sys
-import tempfile
 import threading
 import time
 import weakref
@@ -45,31 +41,12 @@ from cassandra.driver_config import DriverConfigReporter
 from cassandra.pool import Host, _HostReconnectionHandler
 from cassandra.policies import ExponentialReconnectionPolicy, HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
-from tests.unit.utils import mock_session_pools
+from tests.unit.utils import mock_session_pools, run_isolated_subprocess
 from tests import connection_class
 import pytest
 
 
 log = logging.getLogger(__name__)
-
-
-def _run_shutdown_subprocess(script):
-    """Run shutdown code without letting the source tree shadow an installed wheel."""
-    driver_path = str(Path(__file__).parents[2])
-    script = "import sys\nsys.path.append({!r})\n".format(driver_path) + script
-    with tempfile.TemporaryDirectory() as temp_dir:
-        result = subprocess.run(
-            [sys.executable, '-c', script],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            cwd=temp_dir,
-        )
-
-    assert result.returncode == 0, (
-        "Subprocess failed\nstdout:\n{}\nstderr:\n{}".format(
-            result.stdout, result.stderr))
-    return result
 
 
 class ExceptionTypeTest(unittest.TestCase):
@@ -1802,7 +1779,7 @@ finally:
     _discard_cluster_shutdown(parent_cluster)
 '''
 
-        result = _run_shutdown_subprocess(script)
+        result = run_isolated_subprocess(script)
 
         assert 'child exited: True' in result.stdout
         assert 'child exitcode: 0' in result.stdout
@@ -1832,7 +1809,7 @@ cluster.executor.submit(time.sleep, 0.5)
 cluster.scheduler.schedule(0.1, lambda: None)
 '''
 
-        result = _run_shutdown_subprocess(script)
+        result = run_isolated_subprocess(script)
 
         assert 'scheduler cleanup ran' in result.stdout
         assert 'Exception in thread Task Scheduler' not in result.stderr
@@ -1873,7 +1850,7 @@ print('cluster is shutdown:', cluster.is_shutdown)
 print('scheduler is shutdown:', cluster.scheduler.is_shutdown)
 '''
 
-        result = _run_shutdown_subprocess(script)
+        result = run_isolated_subprocess(script)
 
         assert 'late connect rejected' in result.stdout
         assert 'cluster is shutdown: True' in result.stdout
@@ -1928,7 +1905,7 @@ print('cluster is shutdown:', cluster.is_shutdown)
 print('scheduler is shutdown:', cluster.scheduler.is_shutdown)
 '''
 
-        result = _run_shutdown_subprocess(script)
+        result = run_isolated_subprocess(script)
 
         assert ('late connect rejected: '
                 'Cannot connect a Cluster during interpreter shutdown'
@@ -2000,7 +1977,7 @@ future.result(timeout=2)
 print('reentrant shutdown completed')
 '''
 
-        result = _run_shutdown_subprocess(script)
+        result = run_isolated_subprocess(script)
 
         assert 'main connect rejected' in result.stdout
         assert 'executor shutdown completed' in result.stdout
@@ -2027,7 +2004,7 @@ def run_query():
 ThreadPoolExecutor(max_workers=1).submit(run_query)
 '''
 
-        result = _run_shutdown_subprocess(script)
+        result = run_isolated_subprocess(script)
 
         assert 'cluster is active: True' in result.stdout
 
@@ -2071,7 +2048,7 @@ def wait_for_retry():
 Thread(target=wait_for_retry).start()
 '''
 
-        result = _run_shutdown_subprocess(script)
+        result = run_isolated_subprocess(script)
 
         assert 'pending retry failed' in result.stdout
         assert 'cannot schedule new futures' not in result.stderr
@@ -2264,7 +2241,7 @@ def fail_first_shutdown():
 cluster.scheduler.shutdown = fail_first_shutdown
 '''
 
-        result = _run_shutdown_subprocess(script)
+        result = run_isolated_subprocess(script)
 
         assert 'remaining callback ran' in result.stdout
         assert 'Failed to shut down Cluster scheduler' in result.stderr
@@ -2296,7 +2273,7 @@ except DriverException as exc:
 print('cluster is shutdown:', cluster.is_shutdown)
 '''
 
-        result = _run_shutdown_subprocess(script)
+        result = run_isolated_subprocess(script)
 
         assert 'Could not register Cluster scheduler shutdown' in result.stderr
         assert ('late connect rejected: Cannot connect a Cluster during interpreter shutdown'

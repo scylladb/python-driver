@@ -15,7 +15,7 @@
 from collections import namedtuple
 import logging
 import socket
-from threading import Lock as _Lock
+import sys as _sys
 from uuid import UUID
 
 import io
@@ -47,8 +47,6 @@ from cassandra.cython_deps import HAVE_CYTHON
 from cassandra import util
 
 log = logging.getLogger(__name__)
-
-_numpy_protocol_handler_lock = _Lock()
 
 
 class NotSupportedError(Exception):
@@ -1312,25 +1310,25 @@ def __getattr__(name):
     if name != 'NumpyProtocolHandler':
         raise AttributeError("module %r has no attribute %r" % (__name__, name))
 
-    with _numpy_protocol_handler_lock:
-        try:
-            return globals()[name]
-        except KeyError:
-            pass
+    module_dict = _sys.modules[__name__].__dict__
+    try:
+        return module_dict[name]
+    except KeyError:
+        pass
 
-        numpy_protocol_handler = None
-        if HAVE_CYTHON:
-            from cassandra.cython_deps import HAVE_NUMPY
-            if HAVE_NUMPY:
-                from cassandra.numpy_parser import NumpyParser
-                numpy_protocol_handler = cython_protocol_handler(NumpyParser())
+    numpy_protocol_handler = None
+    if HAVE_CYTHON:
+        from cassandra.cython_deps import HAVE_NUMPY
+        if HAVE_NUMPY:
+            from cassandra.numpy_parser import NumpyParser
+            numpy_protocol_handler = cython_protocol_handler(NumpyParser())
 
-        globals()[name] = numpy_protocol_handler
-        return numpy_protocol_handler
+    return module_dict.setdefault(name, numpy_protocol_handler)
 
 
 def __dir__():
-    return sorted(set(globals()) | {'NumpyProtocolHandler'})
+    module_dict = _sys.modules[__name__].__dict__
+    return sorted(set(module_dict) | {'NumpyProtocolHandler'})
 
 
 def read_byte(f):
