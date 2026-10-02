@@ -225,8 +225,8 @@ class VersionTests(unittest.TestCase):
             ('1.2-beta1-SNAPSHOT', (1, 2, 0, 0, 'beta1-SNAPSHOT')),
             ('1.2~beta1-SNAPSHOT', (1, 2, 0, 0, 'beta1-SNAPSHOT')),
             ('1.2.19.2-SNAPSHOT', (1, 2, 19, 2, 'SNAPSHOT')),
-            ('2025.1.0~rc1-0.20250101.abcdef', (2025, 1, 0, 0, 'rc1')),
-            ('6.2.0-0.20241015.abcdef', (6, 2, 0, 0, '')),
+            ('2025.1.0~rc1-0.20250101.abcdef', (2025, 1, 0, 0, 'rc1-0.20250101.abcdef')),
+            ('6.2.0-0.20241015.abcdef', (6, 2, 0, 0, '0.20241015.abcdef')),
             ('6.0.0.5.rc1', (6, 0, 0, 5, 'rc1')),
             ('4.3.rc5', (4, 3, 0, 0, 'rc5')),
             ('3.1.0.rc8', (3, 1, 0, 0, 'rc8')),
@@ -379,11 +379,9 @@ class VersionTests(unittest.TestCase):
         assert Version('5.4.0-rc1') < Version('5.4.0')
         assert Version('5.4.0-rc1') == Version('5.4.0~rc1')
         assert Version('5.0-beta1') < Version('5.0-rc1') < Version('5.0')
-        assert Version('2024.1.0-0.20240101.abcdef') == Version('2024.1.0')
-        assert Version('2025.1.0~rc2-0.20250101.abcdef') < Version('2025.1.0-0.20250201.abcdef')
         assert Version('2025.2.0~dev-0.20250301.abcdef') < Version('2025.2.0~rc1-0.20250401.abcdef')
 
-        # prerelease tags compare case-sensitively, in ASCII order as in SemVer
+        # Non-digit prerelease runs compare case-sensitively and lexicographically.
         assert Version('5.0-RC1') != Version('5.0-rc1')
         assert Version('5.0-RC1') < Version('5.0-rc1')
         assert Version('4.0.RC1') < Version('4.0.beta1') < Version('4.0.rc2')
@@ -391,6 +389,24 @@ class VersionTests(unittest.TestCase):
         assert Version('4.0.0.rc1') < Version('4.0.0') < Version('4.0.0.devel')
         assert Version('6.0.0.5.rc1') < Version('6.0.0.5')
         assert Version('4.0') != '4.0'
+
+    def test_prerelease_natural_ordering(self):
+        assert Version('1.0-rc9') < Version('1.0-rc10')
+        assert Version('1.0-rc1') < Version('1.0-rc-1') < Version('1.0-rc.1')
+        assert Version('1.0-rc01') < Version('1.0-rc1')
+
+    def test_package_shaped_suffixes_are_prereleases(self):
+        for version, base_version, prerelease in (
+                ('2.0.0-0.20250101.deadbeef', '2.0.0', '0.20250101.deadbeef'),
+                ('2025.1.0~rc1-0.20250101.abcdef', '2025.1.0',
+                 'rc1-0.20250101.abcdef')):
+            with self.subTest(version=version):
+                parsed_version = Version(version)
+                base_version = Version(base_version)
+
+                assert parsed_version.prerelease == prerelease
+                assert parsed_version < base_version
+                assert parsed_version != base_version
 
     def test_version_is_immutable(self):
         v = Version('1.0')

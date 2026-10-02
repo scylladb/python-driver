@@ -3624,15 +3624,20 @@ def get_column_from_system_local(connection, column_name: str, timeout, metadata
 
 
 def get_schema_parser(connection, server_version, dse_version, timeout, metadata_request_timeout, fetch_size=None):
+    """Select the schema parser for the server's release line.
+
+    Cassandra and Scylla schema families are selected by major version; DSE
+    families are selected by major and minor version. Prerelease maturity does
+    not imply the preceding schema family, so versions such as
+    ``6.8.0-SNAPSHOT`` and ``6.8.0.rc1`` correctly select DSE68.
+    """
+    missing_release_version_reason = None
     if not server_version and not dse_version:
         server_version, error = _query_column_from_system_local(
             connection, "release_version", timeout, metadata_request_timeout)
         dse_version = get_column_from_system_local(connection, "dse_version", timeout, metadata_request_timeout)
         if not server_version:
-            log.warning(
-                "Could not read release_version from system.local (%s); "
-                "falling back to the oldest schema parser",
-                error or "empty value")
+            missing_release_version_reason = error or "empty value"
 
     version = Version(server_version or "0.0")
     if dse_version:
@@ -3652,6 +3657,11 @@ def get_schema_parser(connection, server_version, dse_version, timeout, metadata
     else:
         # we could further specialize by version. Right now just refactoring the
         # multi-version parser we have as of C* 2.2.0rc1.
+        if missing_release_version_reason is not None:
+            log.warning(
+                "Could not read release_version from system.local (%s); "
+                "falling back to the oldest schema parser",
+                missing_release_version_reason)
         return SchemaParserV22(connection, timeout, fetch_size, metadata_request_timeout)
 
 

@@ -25,8 +25,10 @@ Bug Fixes
 Behavior Changes
 ----------------
 * Schema parser selection now uses the server's major version (and DSE's
-  major and minor version), so prereleases such as ``4.0-SNAPSHOT`` or
-  ``6.8.0-SNAPSHOT`` select the parser of their release line (CASSPYTHON-10).
+  major and minor version), so prereleases such as ``4.0-SNAPSHOT``,
+  ``6.8.0-SNAPSHOT``, and ``6.8.0.rc1`` select the parser of their release
+  line. Prerelease maturity does not imply the preceding schema family
+  (CASSPYTHON-10).
 * ``cassandra.util.Version`` ignores ``+`` build metadata and the prerelease
   separator when comparing and hashing, so ``5.4.0-rc1 == 5.4.0~rc1``; dotted
   prereleases such as ``3.0.0.rc1`` now sort before their release instead of
@@ -37,20 +39,27 @@ Behavior Changes
 
   * Version strings must contain numeric major and minor components; bare
     major versions and nonnumeric minor components now raise ``ValueError``.
-  * Digit runs in prerelease tags compare numerically, so ``rc9 < rc10``.
+  * Prerelease tags use driver-specific natural ordering: digit runs compare
+    numerically, non-digit runs (including punctuation) compare
+    case-sensitively and lexicographically, and the original tag breaks tied
+    natural keys. Thus ``rc9 < rc10``, ``rc1 < rc-1 < rc.1``, and
+    ``rc01 < rc1``.
   * Numeric builds always sort before string builds, so
     ``1.2.3.10 < 1.2.3.11x``.
   * A dotted suffix is a prerelease only for ``alpha``, ``beta``, ``rc`` and
     ``dev`` tags: ``4.0.0.rc1 < 4.0.0 < 4.0.0.devel``.
-  * Scylla package release suffixes such as ``-0.20250101.abcdef`` are
-    treated as build metadata, so ``2025.1.0-0.20250101.abcdef == 2025.1.0``
-    and sorts after ``2025.1.0~rc2-0.20250101.abcdef``.
+  * Ambiguous hyphenated suffixes such as ``-0.20250101.abcdef`` are treated
+    vendor-neutrally as prereleases, not inferred to be Scylla package build
+    metadata. The complete suffix is retained in ``Version.prerelease``, so
+    ``2.0.0-0.20250101.deadbeef < 2.0.0`` and the versions are unequal.
   * Versions the parser does not recognize keep a numeric component's
     trailing text as the prerelease (``4.0.0 beta`` is ``4.0.0-beta``), and
     every such version logs a warning with the assumed version.
 * ``get_schema_parser()`` also reads ``release_version`` from
   ``system.local`` when the known version is empty, and includes the query
-  error in the warning logged when it cannot be read.
+  error in the warning logged when it cannot be read and parser selection
+  actually falls back to V22. A valid DSE version selects its DSE parser
+  without a spurious missing-``release_version`` warning.
 * Requests issued by ``execute_concurrent()`` and
   ``execute_concurrent_with_args()`` now honor ``Session.default_timeout`` in
   legacy configuration mode or the selected execution profile's

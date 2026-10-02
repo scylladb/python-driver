@@ -870,7 +870,10 @@ class SchemaParserLookupTests(unittest.TestCase):
                 ('6.8.0.rc1', SchemaParserDSE68),
                 ('6.7.0', SchemaParserDSE67),
                 ('6.7.0-SNAPSHOT', SchemaParserDSE67),
+                ('6.7.0.rc1', SchemaParserDSE67),
                 ('6.0.0', SchemaParserDSE60),
+                ('6.0.0-SNAPSHOT', SchemaParserDSE60),
+                ('6.0.0.rc1', SchemaParserDSE60),
                 ('5.1.20', SchemaParserV4)):
             with self.subTest(dse_version=dse_version):
                 parser = get_schema_parser(
@@ -920,8 +923,9 @@ class SchemaParserLookupTests(unittest.TestCase):
         connection.wait_for_response.return_value = (False, Exception("timed out"))
 
         with self.assertLogs('cassandra.metadata', level='WARNING') as logs:
-            get_schema_parser(connection, None, None, 0.1, None)
+            parser = get_schema_parser(connection, None, None, 0.1, None)
 
+        assert type(parser) is SchemaParserV22
         assert 'timed out' in logs.output[0]
 
     def test_scylla_release_version_from_system_local_uses_v3_parser(self):
@@ -964,12 +968,12 @@ class SchemaParserLookupTests(unittest.TestCase):
         get_parser.assert_called_once_with(
             connection, '3.11.0', None, 0.1, None, None)
 
-    def test_reads_versions_from_system_local_when_missing(self):
+    def test_missing_release_version_with_dse_version_uses_dse_parser_without_warning(self):
         connection = Mock()
 
         release_version_resp = Mock()
         release_version_resp.column_names = ["release_version"]
-        release_version_resp.parsed_rows = [["4.0.0"]]
+        release_version_resp.parsed_rows = [[None]]
 
         dse_version_resp = Mock()
         dse_version_resp.column_names = ["dse_version"]
@@ -986,7 +990,8 @@ class SchemaParserLookupTests(unittest.TestCase):
 
         connection.wait_for_response.side_effect = mock_system_local
 
-        parser = get_schema_parser(connection, None, None, 0.1, None)
+        with self.assertNoLogs('cassandra.metadata', level='WARNING'):
+            parser = get_schema_parser(connection, None, None, 0.1, None)
 
         assert isinstance(parser, SchemaParserDSE68)
         message = connection.wait_for_response.call_args[0][0]

@@ -1722,11 +1722,6 @@ DOTTED_PRERELEASE_REGEX = re.compile(
     r"(?:\+[.\w]+)?",
     re.IGNORECASE)
 
-# Scylla package release suffix, e.g. the "-0.20250101.abcdef" in
-# "2025.1.0~rc1-0.20250101.abcdef"; it identifies the build, not a prerelease.
-SCYLLA_PACKAGE_SUFFIX_REGEX = re.compile(
-    r"-\d+\.\d{8}\.[0-9a-f]+(?=\+|$)", re.IGNORECASE)
-
 
 @total_ordering
 class Version(object):
@@ -1737,22 +1732,24 @@ class Version(object):
     optional fourth build component (numeric or alphanumeric), an optional
     prerelease introduced by ``-``, ``~`` or, for ``alpha``, ``beta``, ``rc``
     and ``dev`` tags following a numeric component after the minor one,
-    ``.`` (e.g. ``4.0.rc1``), and optional ``+`` build metadata. Scylla
-    package release suffixes (``-0.20250101.abcdef``) are treated as build
-    metadata. Surrounding whitespace and empty trailing suffixes (``1.2-``) are
-    ignored with a warning. Other forms are parsed best effort by the driver's
-    historical tolerant parser, which also logs a warning.
+    ``.`` (e.g. ``4.0.rc1``), and optional ``+`` build metadata. Surrounding
+    whitespace and empty trailing suffixes (``1.2-``) are ignored with a
+    warning. Other forms are parsed best effort by the driver's historical
+    tolerant parser, which also logs a warning. Suffixes introduced by ``-``
+    are interpreted vendor-neutrally as prereleases, so a package-shaped
+    suffix such as ``-0.20250101.deadbeef`` remains in ``prerelease``.
 
     The parsed components (``major``, ``minor``, ``patch``, ``build`` and
     ``prerelease``) are read-only properties.
 
-    Comparison ignores build metadata and the separator that introduces the
-    prerelease, treats missing release components as ``0``, sorts a
+    Comparison ignores ``+`` build metadata and the separator that introduces
+    the prerelease, treats missing release components as ``0``, sorts a
     prerelease before its release, sorts string builds after numeric ones,
-    and compares digit runs in prerelease tags numerically; tags that are
-    still equal compare as strings, so ``rc01`` sorts before ``rc1``. As in
-    SemVer, other prerelease characters compare case-sensitively in ASCII
-    order, so ``RC1`` sorts before ``rc1`` and ``beta1``.
+    and uses driver-specific natural ordering for prerelease tags. Digit runs
+    compare numerically, non-digit runs (including punctuation) compare
+    case-sensitively and lexicographically, and the original tag breaks tied
+    natural keys. Thus ``rc9 < rc10``, ``rc1 < rc-1 < rc.1``, and
+    ``rc01 < rc1``.
     """
 
     __slots__ = (
@@ -1773,7 +1770,7 @@ class Version(object):
                 "Unrecognized version %r. Ignoring surrounding whitespace and empty "
                 "version suffix, assuming version as %s",
                 version, normalized_version)
-        version = SCYLLA_PACKAGE_SUFFIX_REGEX.sub('', normalized_version, count=1)
+        version = normalized_version
 
         # Check dotted prereleases first so a suffix such as ``.rc1`` is not
         # interpreted as the optional string build component.
