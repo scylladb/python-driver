@@ -27,7 +27,7 @@ import logging
 import socket
 import threading
 import uuid
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from cassandra import ConsistencyLevel
 from cassandra.protocol import QueryMessage
@@ -52,8 +52,13 @@ class ClientRoutesChangeType(enum.Enum):
 @dataclass
 class ClientRouteProxy:
     """
-    :param connection_id: String identifying the connection (required)
-    :param connection_addr_override:: Optional string address for initial connection
+    Configuration for one private-network proxy connection.
+
+    :param connection_id: String identifying the connection (required).
+    :param connection_addr_override: Optional address to use instead of the
+        addresses stored in ``system.client_routes`` for this connection ID.
+        When explicit contact points are omitted, this address is also used for
+        the initial connection.
     """
 
     connection_id: str
@@ -67,20 +72,17 @@ class ClientRoutesConfig:
     """
     Configuration for client routes (Private Link support).
 
-    :param proxies: List of :class:`ClientRouteProxy` objects
-        (REQUIRED, at least one)
+    :param proxies: Non-empty list or tuple of :class:`ClientRouteProxy`
+        objects (required).
     :param advanced_shard_awareness: Whether to enable advanced shard awareness
-        (default: ``False``)
+        through the proxy (default: ``False``).
     """
 
-    proxies: List[ClientRouteProxy]
+    proxies: Union[List[ClientRouteProxy], Tuple[ClientRouteProxy, ...]]
     advanced_shard_awareness: bool
 
-    def __init__(self, proxies: List[ClientRouteProxy], advanced_shard_awareness: bool = False):
-        """
-        :param proxies: List of ClientRouteProxy objects
-        :param advanced_shard_awareness: Enable advanced shard awareness (default False)
-        """
+    def __init__(self, proxies: Union[List[ClientRouteProxy], Tuple[ClientRouteProxy, ...]],
+                 advanced_shard_awareness: bool = False):
         if not proxies:
             raise ValueError("At least one proxy must be specified")
 
