@@ -9,8 +9,8 @@ must provide a usable path to every discovered node that the load-balancing
 configuration may use, either directly or through Client Routes. See
 :doc:`getting-started` for basic contact-point and session setup.
 
-Authentication and TLS configuration are covered in :doc:`security`. For a
-ScyllaDB Cloud connection bundle, see :doc:`scylla-cloud`.
+Authentication and TLS configuration are covered in :doc:`security`. For
+ScyllaDB Cloud, see :doc:`scylla-cloud`.
 
 Choose the connection model that matches the network:
 

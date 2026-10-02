@@ -81,8 +81,12 @@ load balancer or one seed:
 A successful TCP check proves network reachability, not authentication or TLS
 configuration. Configure those separately as described in :doc:`../security`.
 Unlike a Client Routes proxy connection, a direct connection can keep TLS
-hostname verification enabled when node certificates match their advertised
-addresses.
+hostname verification enabled. By default, certificates are verified against
+the endpoint's connection address: the resolved IP address for a DNS contact
+point, and the advertised address after applying the configured
+:class:`~cassandra.policies.AddressTranslator` for a discovered node. Node
+certificates must include those verification targets in their subject
+alternative names.
 
 Configure the driver
 --------------------

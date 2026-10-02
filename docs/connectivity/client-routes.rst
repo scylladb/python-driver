@@ -80,7 +80,12 @@ each availability zone:
         ]
     )
 
-The driver filters route-table rows to the configured IDs.
+The driver filters route-table rows to the configured IDs and stores one route
+per node. If multiple configured IDs have a row for the same node, it keeps the
+currently selected connection ID while that ID remains available; otherwise,
+it uses the first matching row returned by ScyllaDB, not the order in
+``proxies``. It does not select routes by availability zone or fail over to
+another connection ID after a connection failure.
 
 Override proxy addresses
 ------------------------
@@ -154,9 +159,9 @@ same node. For example:
       http://127.0.0.1:10000/v2/client-routes
 
 Port 10000 is ScyllaDB's default admin API port, not a driver or proxy port.
-Run this command from an authorized administration network and replace the
-address, host IDs, and ports with values for the deployment. A non-TLS driver
-uses ``port``; a TLS-enabled driver uses ``tls_port``.
+Run this command on a ScyllaDB node and replace the address, host IDs, and ports
+with values for the deployment. A non-TLS driver uses ``port``; a TLS-enabled
+driver uses ``tls_port``.
 
 Verify the stored mappings before starting a private-only client:
 
@@ -166,16 +171,20 @@ Verify the stored mappings before starting a private-only client:
       http://127.0.0.1:10000/v2/client-routes
 
 ``system.client_routes`` has a node-local view, and applying a cluster-wide
-update can lag briefly. Repeat the GET request against the admin API address of
-every node until every response contains the configured connection ID and the
-correct host ID and proxy port for every node. Starting with an incomplete map
-can make the driver fall back to node addresses that the private application
-network cannot reach.
+update can lag briefly. Run the GET request on every ScyllaDB node until every
+response contains the configured connection ID and the correct host ID and
+proxy port for every node. Starting with an incomplete map can make the driver
+fall back to node addresses that the private application network cannot reach.
 
 TLS
 ---
 
 Client Routes supports TLS and selects ``tls_port`` from each matching route.
+Every usable route row must therefore define ``tls_port``. Rows without it are
+skipped. If at least one valid route remains, a node left without a valid route
+falls back to its advertised address and ``Cluster.port``. If every returned
+route row is invalid, the control-connection attempt fails with an
+``All N route rows failed validation`` error.
 Certificate-chain validation can remain enabled, but hostname verification is
 not currently compatible with proxy addresses. Set
 ``SSLContext.check_hostname`` to ``False``; :class:`~cassandra.cluster.Cluster`
@@ -214,7 +223,9 @@ select a shard. Basic token-aware and shard-aware request routing remains
 enabled.
 
 Enable the advanced mode only when the proxy path preserves the required
-source-port behavior:
+source-port behavior and the proxy listener at each route's selected ``port``
+or ``tls_port`` forwards to that node's configured shard-aware listener
+(``19042`` without TLS or ``19142`` with TLS by default):
 
 .. code-block:: python
 
@@ -223,14 +234,21 @@ source-port behavior:
         advanced_shard_awareness=True,
     )
 
+Client Routes does not substitute the node's advertised shard-aware port for
+the route-table port. If the driver detects that a connection reached a
+different shard than requested, it disables advanced shard awareness for ten
+minutes.
+
 Fallback and compatibility
 --------------------------
 
 If a discovered node has no matching route, the driver falls back to that
-node's advertised address and port. Mixed direct and proxied nodes therefore
-work when the application network can reach every fallback address. In a
-private-only deployment, provide a route for every node to prevent connection
-failures.
+node's advertised RPC address and ``Cluster.port``. With ``port=9000`` in the
+basic example, the fallback target is the advertised address on port ``9000``.
+Mixed direct and proxied nodes therefore require ``Cluster.port`` to match the
+nodes' CQL port and the application network to reach every fallback address.
+In a private-only deployment, provide a route for every node to prevent
+connection failures.
 
 Client Routes owns endpoint resolution for discovered nodes. A
 ``client_routes_config`` cannot be combined with a custom ``endpoint_factory``,
