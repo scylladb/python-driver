@@ -1733,8 +1733,8 @@ class Version(object):
     Versions normally contain two or three numeric release components, an
     optional fourth build component (numeric or alphanumeric), an optional
     prerelease introduced by ``-``, ``~`` or, for ``alpha``, ``beta``, ``rc``
-    and ``dev`` tags following a numeric component after the minor one,
-    ``.`` (e.g. ``4.0.rc1``), and optional ``+`` build metadata. Surrounding
+    and ``dev`` tags following the minor or a later numeric component, ``.``
+    (e.g. ``4.0.rc1``), and optional ``+`` build metadata. Surrounding
     whitespace and empty trailing suffixes (``1.2-``) are ignored with a
     warning. Other forms are parsed best effort by the driver's historical
     tolerant parser, which also logs a warning. Suffixes introduced by ``-``

@@ -29,14 +29,14 @@ Behavior Changes
   ``6.8.0-SNAPSHOT``, and ``6.8.0.rc1`` select the parser of their release
   line. Prerelease maturity does not imply the preceding schema family
   (CASSPYTHON-10).
-* ``cassandra.util.Version`` ignores ``+`` build metadata and the prerelease
-  separator when comparing and hashing, so ``5.4.0-rc1 == 5.4.0~rc1``; dotted
-  prereleases such as ``3.0.0.rc1`` now sort before their release instead of
-  after it; ``Version.prerelease`` defaults to ``""`` instead of ``0``; and
-  ``Version`` attributes are now read-only and instances no longer accept
-  new attributes (CASSPYTHON-10).
 * ``cassandra.util.Version`` parsing and ordering changes (CASSPYTHON-10):
 
+  * Comparison and hashing ignore ``+`` build metadata and the prerelease
+    separator, so ``5.4.0-rc1 == 5.4.0~rc1``; dotted prereleases such as
+    ``3.0.0.rc1`` now sort before their release instead of after it;
+    ``Version.prerelease`` defaults to ``""`` instead of ``0``; and
+    ``Version`` attributes are now read-only and instances no longer accept
+    new attributes.
   * Version strings must contain numeric major and minor components; bare
     major versions and nonnumeric minor components now raise ``ValueError``.
   * Prerelease tags use driver-specific natural ordering: digit runs compare
@@ -55,11 +55,9 @@ Behavior Changes
   * Versions the parser does not recognize keep a numeric component's
     trailing text as the prerelease (``4.0.0 beta`` is ``4.0.0-beta``), and
     every such version logs a warning with the assumed version.
-* ``get_schema_parser()`` also reads ``release_version`` from
-  ``system.local`` when the known version is empty, and includes the query
-  error in the warning logged when it cannot be read and parser selection
-  actually falls back to V22. A valid DSE version selects its DSE parser
-  without a spurious missing-``release_version`` warning.
+* When the known server version is empty, ``get_schema_parser()`` reads
+  ``release_version`` from ``system.local``. If that lookup fails and parser
+  selection falls back to V22, the warning includes the query error.
 * Requests issued by ``execute_concurrent()`` and
   ``execute_concurrent_with_args()`` now honor ``Session.default_timeout`` in
   legacy configuration mode or the selected execution profile's

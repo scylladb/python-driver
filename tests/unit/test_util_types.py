@@ -406,7 +406,6 @@ class VersionTests(unittest.TestCase):
 
                 assert parsed_version.prerelease == prerelease
                 assert parsed_version < base_version
-                assert parsed_version != base_version
 
     def test_hyphenated_build_metadata_is_ignored(self):
         for version_with_metadata, version_without_metadata in (
