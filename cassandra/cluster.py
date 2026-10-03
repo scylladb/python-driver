@@ -224,6 +224,8 @@ class _PoolIntentCompletion(object):
             try:
                 waiter.set_exception(exception)
             except InvalidStateError:
+                # Cancelling a completion proxy must not affect owning work
+                # or the other waiters for that work.
                 pass
 
     @staticmethod
