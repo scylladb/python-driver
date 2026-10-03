@@ -7725,10 +7725,14 @@ class ResponseFuture(object):
                 "Got unexpected response type when preparing "
                 "statement on host %s: %s" % (host, response)))
 
+    def _is_final(self):
+        # A late response (e.g. speculative, or after client timeout) must not re-fire callbacks.
+        return self._final_result is not _NOT_SET or self._final_exception is not None
+
     def _set_final_result(self, response):
         self._cancel_timer()
         with self._callback_lock:
-            if self._retry_aborted:
+            if self._retry_aborted or self._is_final():
                 return
             self._final_result = response
             # save off current callbacks inside lock for execution outside it
@@ -7763,6 +7767,8 @@ class ResponseFuture(object):
                         self._final_exception is not None:
                     return
                 self._retry_aborted = True
+            elif self._is_final():
+                return
             self._final_exception = response
             # save off current errbacks inside lock for execution outside it --
             # prevents case where _final_exception is set, then an errback is

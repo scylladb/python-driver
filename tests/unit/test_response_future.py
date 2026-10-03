@@ -1635,7 +1635,7 @@ class ResponseFutureTests(unittest.TestCase):
         pool_shutdown = self.make_pool()
         pool_shutdown.is_shutdown = True
         pool_ok = self.make_pool()
-        pool_ok.is_shutdown = True
+        pool_ok.is_shutdown = False
         session._pools.get.side_effect = [pool_shutdown, pool_ok]
 
         rf = self.make_response_future(session)
@@ -2399,6 +2399,26 @@ class ResponseFutureTests(unittest.TestCase):
 
         assert rf.message.skip_meta is False
         assert rf.message.result_metadata_id == b'meta_hash'
+
+    def test_late_response_after_final_is_ignored(self):
+        # e.g. a speculative response arriving after a client timeout or after another speculative response won
+        for first, second in ((OperationTimedOut(), ['late']),
+                              (['first'], ['late']),
+                              (['first'], OperationTimedOut())):
+            rf = self.make_response_future(self.make_session())
+            callback, errback = Mock(), Mock()
+            rf.add_callbacks(callback, errback)
+            for outcome in (first, second):
+                if isinstance(outcome, Exception):
+                    rf._set_final_exception(outcome)
+                else:
+                    rf._set_final_result(outcome)
+            assert callback.call_count + errback.call_count == 1
+            if isinstance(first, Exception):
+                with pytest.raises(OperationTimedOut):
+                    rf.result()
+            else:
+                assert rf.result().current_rows == first
 
     def test_query_does_not_mutate_execute_message(self):
         """
