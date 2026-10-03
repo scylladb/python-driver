@@ -17,6 +17,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from threading import RLock
 from unittest.mock import Mock, patch
 
 from concurrent.futures import Future
@@ -41,6 +42,16 @@ def run_isolated_subprocess(script, timeout=5):
         "Subprocess failed\nstdout:\n{}\nstderr:\n{}".format(
             result.stdout, result.stderr))
     return result
+
+
+def new_session_with_pool_state(pools=None):
+    """Construct a bare session with only its pool lifecycle state set up."""
+    session = Session.__new__(Session)
+    session._lock = RLock()
+    session._pools = dict(pools) if pools is not None else {}
+    session._pool_generations = {}
+    session._pool_intents = {}
+    return session
 
 
 def mock_session_pools(f):

@@ -13,7 +13,7 @@
 # limitations under the License.
 import unittest
 
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 import gc
 import logging
 import multiprocessing
@@ -41,7 +41,8 @@ from cassandra.driver_config import DriverConfigReporter
 from cassandra.pool import Host, _HostReconnectionHandler
 from cassandra.policies import ExponentialReconnectionPolicy, HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
-from tests.unit.utils import mock_session_pools, run_isolated_subprocess
+from tests.unit.utils import (mock_session_pools, new_session_with_pool_state,
+                              run_isolated_subprocess)
 from tests import connection_class
 import pytest
 
@@ -272,10 +273,9 @@ class ClusterTest(unittest.TestCase):
         cluster.metadata.add_or_return_host(host)
 
         def make_session():
-            session = Session.__new__(Session)
+            session = new_session_with_pool_state()
             session.cluster = cluster
             session._profile_manager = cluster.profile_manager
-            session._pools = {}
             session.shutdown = Mock()
             session.update_created_pools = Mock(
                 wraps=session.update_created_pools)
@@ -395,10 +395,9 @@ class ClusterTest(unittest.TestCase):
         cluster.metadata.add_or_return_host(host)
 
         def make_session(pool_future):
-            session = Session.__new__(Session)
+            session = new_session_with_pool_state()
             session.cluster = cluster
             session._profile_manager = cluster.profile_manager
-            session._pools = {}
             session.is_shutdown = False
             session.submit = lambda fn, *args, **kwargs: fn(*args, **kwargs)
             session.add_or_renew_pool = Mock(return_value=pool_future)
@@ -464,11 +463,9 @@ class ClusterTest(unittest.TestCase):
             "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
         cluster.metadata.add_or_return_host(host)
 
-        session = Session.__new__(Session)
+        session = new_session_with_pool_state()
         session.cluster = cluster
         session._profile_manager = cluster.profile_manager
-        session._pools = {}
-        session._lock = RLock()
         session.keyspace = None
         session.is_shutdown = False
         session.shutdown = Mock()
@@ -577,11 +574,9 @@ class ClusterTest(unittest.TestCase):
             return future
 
         def make_session():
-            session = Session.__new__(Session)
+            session = new_session_with_pool_state()
             session.cluster = cluster
             session._profile_manager = cluster.profile_manager
-            session._pools = {}
-            session._lock = RLock()
             session.keyspace = None
             session.is_shutdown = False
             session.submit = submit
@@ -662,10 +657,9 @@ class ClusterTest(unittest.TestCase):
         cluster.metadata.add_or_return_host(host)
 
         pool_future = Future()
-        session = Session.__new__(Session)
+        session = new_session_with_pool_state()
         session.cluster = cluster
         session._profile_manager = cluster.profile_manager
-        session._pools = {}
         session.add_or_renew_pool = Mock(return_value=pool_future)
         session.update_created_pools = Mock(
             wraps=session.update_created_pools)
@@ -695,7 +689,8 @@ class ClusterTest(unittest.TestCase):
         session.update_created_pools()
 
         assert session.add_or_renew_pool.call_args_list[-1] == \
-            call(host, False)
+            call(host, False, _expected_state=ANY,
+                 _expected_intent=ANY, _distance=HostDistance.LOCAL)
 
     def test_removed_ignored_replacement_retry_is_not_finalized(self):
         cluster = Cluster()
@@ -747,11 +742,9 @@ class ClusterTest(unittest.TestCase):
             "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
         cluster.metadata.add_or_return_host(host)
 
-        session = Session.__new__(Session)
+        session = new_session_with_pool_state()
         session.cluster = cluster
         session._profile_manager = cluster.profile_manager
-        session._pools = {}
-        session._lock = RLock()
         session.keyspace = None
         session.is_shutdown = False
         session.shutdown = Mock()
@@ -814,11 +807,9 @@ class ClusterTest(unittest.TestCase):
             "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
         cluster.metadata.add_or_return_host(host)
 
-        session = Session.__new__(Session)
+        session = new_session_with_pool_state()
         session.cluster = cluster
         session._profile_manager = cluster.profile_manager
-        session._pools = {}
-        session._lock = RLock()
         session.keyspace = "new_keyspace"
         session.is_shutdown = False
         session.update_created_pools = Mock(return_value=set())
@@ -878,11 +869,9 @@ class ClusterTest(unittest.TestCase):
             "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
         cluster.metadata.add_or_return_host(host)
 
-        session = Session.__new__(Session)
+        session = new_session_with_pool_state()
         session.cluster = cluster
         session._profile_manager = cluster.profile_manager
-        session._pools = {}
-        session._lock = RLock()
         session.keyspace = None
         session.is_shutdown = False
         session.shutdown = Mock()
@@ -927,11 +916,9 @@ class ClusterTest(unittest.TestCase):
             "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
         cluster.metadata.add_or_return_host(host)
 
-        session = Session.__new__(Session)
+        session = new_session_with_pool_state()
         session.cluster = cluster
         session._profile_manager = cluster.profile_manager
-        session._pools = {}
-        session._lock = RLock()
         session.keyspace = None
         session.is_shutdown = False
         session.shutdown = Mock()
@@ -2293,6 +2280,1899 @@ print('cluster is shutdown:', cluster.is_shutdown)
         sched.schedule(0, lambda: None)  # pre-473: "TypeError: unorderable types: function() < function()"
 
 
+class _BlockingPoolFactory(object):
+
+    def __init__(self, pool):
+        self._pool = pool
+        self.creation_started = Event()
+        self.release_creation = Event()
+
+    def __call__(self, *args, **kwargs):
+        self.creation_started.set()
+        assert self.release_creation.wait(5)
+        return self._pool
+
+
+class _BlockedFailurePoolFactory(object):
+
+    def __init__(self, failure, second_pool=None, block_second=False):
+        self._failure = failure
+        self._second_pool = second_pool
+        self._block_second = block_second
+        self._creation_lock = Lock()
+        self._creation_count = 0
+        self.failure_started = Event()
+        self.release_failure = Event()
+        self.second_started = Event()
+        self.release_second = Event()
+
+    def __call__(self, *args, **kwargs):
+        with self._creation_lock:
+            self._creation_count += 1
+            creation_number = self._creation_count
+
+        if creation_number == 1:
+            self.failure_started.set()
+            assert self.release_failure.wait(5)
+            raise self._failure
+
+        assert creation_number == 2
+        assert self._second_pool is not None
+        self.second_started.set()
+        if self._block_second:
+            assert self.release_second.wait(5)
+        return self._second_pool
+
+
+class SessionPoolRaceTest(unittest.TestCase):
+
+    def _host(self, address="127.0.0.1"):
+        return Host(
+            address, SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+    def _pool(self, host, keyspace=None, distance=HostDistance.LOCAL):
+        pool = Mock(
+            host=host, host_distance=distance, is_shutdown=False,
+            _keyspace=keyspace)
+        pool.shutdown.side_effect = lambda: setattr(
+            pool, 'is_shutdown', True)
+        return pool
+
+    def _session(self, pools=None, keyspace=None, workers=2):
+        session = new_session_with_pool_state(pools)
+        session.keyspace = keyspace
+        session.is_shutdown = False
+        session._initial_connect_futures = set()
+        session._profile_manager = Mock()
+        session._profile_manager.distance.return_value = HostDistance.LOCAL
+
+        executor = ThreadPoolExecutor(max_workers=workers)
+        self.addCleanup(executor.shutdown)
+        session.cluster = Mock(
+            executor=executor, connect_timeout=5,
+            allow_control_connection_query_fallback=(
+                ControlConnectionQueryFallback.Disabled))
+        return session
+
+    def _blocking_pool_factory(self, pool):
+        factory = _BlockingPoolFactory(pool)
+        self.addCleanup(factory.release_creation.set)
+        return factory
+
+    def _blocked_failure_factory(self, failure, second_pool=None,
+                                 block_second=False):
+        factory = _BlockedFailurePoolFactory(
+            failure, second_pool=second_pool, block_second=block_second)
+        self.addCleanup(factory.release_failure.set)
+        self.addCleanup(factory.release_second.set)
+        return factory
+
+    def test_pool_intent_completion_fanout_is_nonrecursive(self):
+        host = self._host()
+        session = new_session_with_pool_state()
+        completions = []
+
+        for _ in range(2000):
+            with session._lock:
+                with host.lock:
+                    intent = session._claim_pool_intent_locked(host)
+            completions.append(intent.completion)
+
+        intent.complete_result(True)
+
+        assert all(completion.done() for completion in completions)
+        assert all(completion.result() is True
+                   for completion in completions)
+
+    def test_reconciliation_stale_observation_cannot_replace_winner(self):
+        host = self._host()
+        winner = self._pool(host)
+        session = self._session(workers=1)
+
+        real_add_or_renew_pool = session.add_or_renew_pool
+        observed_states = []
+
+        def publish_before_stale_add(
+                pool_host, is_host_addition, on_add_reconnection=None,
+                _expected_state=None, _expected_intent=None,
+                _distance=None):
+            assert _expected_state is not None
+            assert _expected_intent is not None
+            observed_states.append(_expected_state)
+            winner_future = real_add_or_renew_pool(
+                pool_host, is_host_addition,
+                on_add_reconnection=on_add_reconnection)
+            assert winner_future.result(timeout=5) is True
+            return real_add_or_renew_pool(
+                pool_host, is_host_addition,
+                on_add_reconnection=on_add_reconnection,
+                _expected_state=_expected_state,
+                _expected_intent=_expected_intent,
+                _distance=_distance)
+
+        session.add_or_renew_pool = publish_before_stale_add
+
+        with patch('cassandra.cluster.HostConnection',
+                   return_value=winner) as host_connection:
+            futures = session.update_created_pools(hosts=(host,))
+
+        assert futures == set()
+        assert len(observed_states) == 1
+        host_connection.assert_called_once_with(
+            host, HostDistance.LOCAL, session)
+        assert session._pools == {host: winner}
+        assert winner.is_shutdown is False
+        winner.shutdown.assert_not_called()
+
+    def test_later_reconciliation_joins_in_flight_generation(self):
+        host = self._host()
+        winner = self._pool(host)
+        session = self._session(workers=1)
+        factory = self._blocking_pool_factory(winner)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory) as host_connection:
+            first_futures = session.update_created_pools(hosts=(host,))
+            assert len(first_futures) == 1
+            winner_future = next(iter(first_futures))
+            assert factory.creation_started.wait(5)
+
+            later_futures = session.update_created_pools(hosts=(host,))
+            assert len(later_futures) == 1
+            reconciliation_future = next(iter(later_futures))
+
+            factory.release_creation.set()
+            assert winner_future.result(timeout=5) is True
+            assert reconciliation_future.result(timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            host, HostDistance.LOCAL, session)
+        assert session._pools == {host: winner}
+        winner.shutdown.assert_not_called()
+
+    def test_direct_add_invalidates_older_ignored_reconciliation(self):
+        host = self._host()
+        winner = self._pool(host)
+        session = self._session(workers=1)
+        old_distance_started = Event()
+        release_old_distance = Event()
+        self.addCleanup(release_old_distance.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                old_distance_started.set()
+                assert release_old_distance.wait(5)
+                return HostDistance.IGNORED
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        with patch('cassandra.cluster.HostConnection',
+                   return_value=winner):
+            with ThreadPoolExecutor(max_workers=1) as reconciler:
+                old_reconciliation = reconciler.submit(
+                    session.update_created_pools, hosts=(host,))
+                assert old_distance_started.wait(5)
+
+                direct_future = session.add_or_renew_pool(
+                    host, is_host_addition=True)
+                assert direct_future.result(timeout=5) is True
+
+                release_old_distance.set()
+                assert old_reconciliation.result(timeout=5) == set()
+
+        assert session._pools == {host: winner}
+        winner.shutdown.assert_not_called()
+
+    def test_direct_on_up_work_invalidates_older_reconciliation(self):
+        host = self._host()
+        old_pool = self._pool(host)
+        winner = self._pool(host)
+        session = self._session({host: old_pool})
+        old_distance_started = Event()
+        release_old_distance = Event()
+        self.addCleanup(release_old_distance.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                old_distance_started.set()
+                assert release_old_distance.wait(5)
+                return HostDistance.IGNORED
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        with patch('cassandra.cluster.HostConnection',
+                   return_value=winner):
+            with ThreadPoolExecutor(max_workers=1) as reconciler:
+                old_reconciliation = reconciler.submit(
+                    session.update_created_pools, hosts=(host,))
+                assert old_distance_started.wait(5)
+
+                removal_future = session.remove_pool(host)
+                removal_future.result(timeout=5)
+                direct_future = session.add_or_renew_pool(
+                    host, is_host_addition=False)
+                assert direct_future.result(timeout=5) is True
+
+                release_old_distance.set()
+                assert old_reconciliation.result(timeout=5) == set()
+
+        assert session._pools == {host: winner}
+        old_pool.shutdown.assert_called_once_with()
+        winner.shutdown.assert_not_called()
+
+    def test_direct_add_does_not_restart_after_pool_removal(self):
+        host = self._host()
+        session = self._session(workers=1)
+        distance_started = Event()
+        release_distance = Event()
+        self.addCleanup(release_distance.set)
+
+        def distance(_host):
+            distance_started.set()
+            assert release_distance.wait(5)
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        with patch('cassandra.cluster.HostConnection') as host_connection:
+            with ThreadPoolExecutor(max_workers=1) as lifecycle_executor:
+                add_call = lifecycle_executor.submit(
+                    session.add_or_renew_pool, host,
+                    is_host_addition=False)
+                assert distance_started.wait(5)
+
+                assert session.remove_pool(host) is None
+                session._profile_manager.distance.side_effect = \
+                    lambda _host: HostDistance.IGNORED
+                assert session.update_created_pools(hosts=(host,)) == set()
+                newer_intent = session._pool_intents[host]
+
+                release_distance.set()
+                add_future = add_call.result(timeout=5)
+                assert add_future.result(timeout=5) is False
+
+        host_connection.assert_not_called()
+        assert session._pools == {}
+        assert host not in session._pool_generations
+        assert session._pool_intents[host] is newer_intent
+
+    def test_removed_direct_add_does_not_clear_replacement_intent(self):
+        host_id = uuid.uuid4()
+        removed_host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=host_id)
+        replacement_host = Host(
+            "127.0.0.2", SimpleConvictionPolicy, host_id=host_id)
+        winner = self._pool(replacement_host)
+        session = self._session(workers=1)
+        old_distance_started = Event()
+        release_old_distance = Event()
+        replacement_distance_started = Event()
+        release_replacement_distance = Event()
+        self.addCleanup(release_old_distance.set)
+        self.addCleanup(release_replacement_distance.set)
+
+        def distance(host):
+            if host is removed_host:
+                old_distance_started.set()
+                assert release_old_distance.wait(5)
+            else:
+                assert host is replacement_host
+                replacement_distance_started.set()
+                assert release_replacement_distance.wait(5)
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        with patch('cassandra.cluster.HostConnection',
+                   return_value=winner) as host_connection:
+            with ThreadPoolExecutor(max_workers=2) as lifecycle_executor:
+                old_add_call = lifecycle_executor.submit(
+                    session.add_or_renew_pool, removed_host,
+                    is_host_addition=False)
+                assert old_distance_started.wait(5)
+
+                with removed_host.lock:
+                    removed_host._is_removed = True
+                    removed_host.set_down()
+                assert session.remove_pool(removed_host) is None
+
+                replacement_reconciliation = lifecycle_executor.submit(
+                    session.update_created_pools,
+                    hosts=(replacement_host,))
+                assert replacement_distance_started.wait(5)
+
+                release_old_distance.set()
+                old_future = old_add_call.result(timeout=5)
+                assert old_future.result(timeout=5) is False
+
+                release_replacement_distance.set()
+                replacement_futures = replacement_reconciliation.result(
+                    timeout=5)
+                assert len(replacement_futures) == 1
+                assert next(iter(replacement_futures)).result(
+                    timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            replacement_host, HostDistance.LOCAL, session)
+        assert session._pools == {replacement_host: winner}
+        winner.shutdown.assert_not_called()
+
+    def test_older_direct_add_cannot_replace_newer_winner(self):
+        host = self._host()
+        old_pool = self._pool(host)
+        winner = self._pool(host)
+        session = self._session({host: old_pool}, workers=1)
+        old_distance_started = Event()
+        release_old_distance = Event()
+        self.addCleanup(release_old_distance.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                old_distance_started.set()
+                assert release_old_distance.wait(5)
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        with patch('cassandra.cluster.HostConnection',
+                   return_value=winner) as host_connection:
+            with ThreadPoolExecutor(max_workers=1) as lifecycle_executor:
+                old_add_call = lifecycle_executor.submit(
+                    session.add_or_renew_pool, host,
+                    is_host_addition=False)
+                assert old_distance_started.wait(5)
+
+                newer_future = session.add_or_renew_pool(
+                    host, is_host_addition=False)
+                assert newer_future.result(timeout=5) is True
+
+                release_old_distance.set()
+                old_future = old_add_call.result(timeout=5)
+                assert old_future.result(timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            host, HostDistance.LOCAL, session)
+        assert session._pools == {host: winner}
+        old_pool.shutdown.assert_called_once_with()
+        winner.shutdown.assert_not_called()
+
+    def test_older_direct_add_retains_newer_reconciliation_winner(self):
+        host = self._host()
+        winner = self._pool(host)
+        session = self._session(workers=1)
+        old_distance_started = Event()
+        release_old_distance = Event()
+        self.addCleanup(release_old_distance.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                old_distance_started.set()
+                assert release_old_distance.wait(5)
+                return HostDistance.REMOTE
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        with patch('cassandra.cluster.HostConnection',
+                   return_value=winner) as host_connection:
+            with ThreadPoolExecutor(max_workers=1) as lifecycle_executor:
+                old_add_call = lifecycle_executor.submit(
+                    session.add_or_renew_pool, host,
+                    is_host_addition=False)
+                assert old_distance_started.wait(5)
+
+                reconciliation_futures = session.update_created_pools(
+                    hosts=(host,))
+                assert len(reconciliation_futures) == 1
+                assert next(iter(reconciliation_futures)).result(
+                    timeout=5) is True
+
+                release_old_distance.set()
+                old_future = old_add_call.result(timeout=5)
+                assert old_future.result(timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            host, HostDistance.LOCAL, session)
+        assert session._pools == {host: winner}
+        assert winner.host_distance == HostDistance.LOCAL
+        assert winner.is_shutdown is False
+        winner.shutdown.assert_not_called()
+
+    def test_older_direct_add_joins_newer_direct_failure(self):
+        host = self._host()
+        session = self._session(workers=1)
+        old_distance_started = Event()
+        release_old_distance = Event()
+        self.addCleanup(release_old_distance.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                old_distance_started.set()
+                assert release_old_distance.wait(5)
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        failure = ConnectionException("pool creation failed")
+        factory = self._blocked_failure_factory(failure)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory) as host_connection:
+            with ThreadPoolExecutor(max_workers=1) as lifecycle_executor:
+                old_add_call = lifecycle_executor.submit(
+                    session.add_or_renew_pool, host,
+                    is_host_addition=False)
+                assert old_distance_started.wait(5)
+
+                newer_future = session.add_or_renew_pool(
+                    host, is_host_addition=False)
+                assert factory.failure_started.wait(5)
+
+                release_old_distance.set()
+                old_future = old_add_call.result(timeout=5)
+                assert old_future.done() is False
+                assert session._pools == {}
+
+                factory.release_failure.set()
+                assert newer_future.result(timeout=5) is False
+                assert old_future.result(timeout=5) is False
+
+        host_connection.assert_called_once_with(
+            host, HostDistance.LOCAL, session)
+        assert session._pools == {}
+
+    def test_direct_add_observation_cannot_replace_published_winner(self):
+        host = self._host()
+        old_pool = self._pool(host)
+        winner = self._pool(host)
+        session = self._session({host: old_pool}, workers=1)
+        factory = self._blocking_pool_factory(winner)
+        distance_started = Event()
+        release_distance = Event()
+        self.addCleanup(release_distance.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 2:
+                distance_started.set()
+                assert release_distance.wait(5)
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory) as host_connection:
+            winner_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert factory.creation_started.wait(5)
+            winner_work = session._pool_creation_work[winner_future]
+
+            with ThreadPoolExecutor(max_workers=1) as lifecycle_executor:
+                observed_add = lifecycle_executor.submit(
+                    session.add_or_renew_pool, host,
+                    is_host_addition=False)
+                assert distance_started.wait(5)
+
+                factory.release_creation.set()
+                assert winner_work.result(timeout=5) is True
+                assert session._pools == {host: winner}
+                assert winner_future.done() is False
+
+                release_distance.set()
+                observed_future = observed_add.result(timeout=5)
+                assert observed_future.result(timeout=5) is True
+                assert winner_future.result(timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            host, HostDistance.LOCAL, session)
+        assert session._pools == {host: winner}
+        old_pool.shutdown.assert_called_once_with()
+        winner.shutdown.assert_not_called()
+
+    def test_newer_eligible_noop_supersedes_ignored_reconciliation(self):
+        host = self._host()
+        pool = self._pool(host)
+        session = self._session({host: pool})
+        old_distance_started = Event()
+        release_old_distance = Event()
+        self.addCleanup(release_old_distance.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                old_distance_started.set()
+                assert release_old_distance.wait(5)
+                return HostDistance.IGNORED
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        with ThreadPoolExecutor(max_workers=1) as reconciler:
+            old_reconciliation = reconciler.submit(
+                session.update_created_pools, hosts=(host,))
+            assert old_distance_started.wait(5)
+
+            assert session.update_created_pools(hosts=(host,)) == set()
+
+            release_old_distance.set()
+            assert old_reconciliation.result(timeout=5) == set()
+
+        assert session._pools == {host: pool}
+        assert pool.host_distance == HostDistance.LOCAL
+        pool.shutdown.assert_not_called()
+
+    def test_newer_distance_supersedes_older_assignment(self):
+        for old_distance, new_distance in (
+                (HostDistance.REMOTE, HostDistance.LOCAL),
+                (HostDistance.LOCAL, HostDistance.REMOTE)):
+            with self.subTest(
+                    old_distance=old_distance, new_distance=new_distance):
+                host = self._host()
+                pool = self._pool(host, distance=HostDistance.LOCAL_RACK)
+                session = self._session({host: pool})
+                old_distance_started = Event()
+                release_old_distance = Event()
+                self.addCleanup(release_old_distance.set)
+                distance_calls = 0
+                distance_lock = Lock()
+
+                def distance(_host):
+                    nonlocal distance_calls
+                    with distance_lock:
+                        distance_calls += 1
+                        call_number = distance_calls
+                    if call_number == 1:
+                        old_distance_started.set()
+                        assert release_old_distance.wait(5)
+                        return old_distance
+                    return new_distance
+
+                session._profile_manager.distance.side_effect = distance
+                with ThreadPoolExecutor(max_workers=1) as reconciler:
+                    old_reconciliation = reconciler.submit(
+                        session.update_created_pools, hosts=(host,))
+                    assert old_distance_started.wait(5)
+
+                    assert session.update_created_pools(
+                        hosts=(host,)) == set()
+
+                    release_old_distance.set()
+                    assert old_reconciliation.result(timeout=5) == set()
+
+                assert pool.host_distance == new_distance
+
+    def test_in_flight_eligible_creation_loses_to_ignored_intent(self):
+        host = self._host()
+        candidate = self._pool(host)
+        session = self._session(workers=1)
+        factory = self._blocking_pool_factory(candidate)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory):
+            creation_futures = session.update_created_pools(hosts=(host,))
+            assert len(creation_futures) == 1
+            creation_future = next(iter(creation_futures))
+            assert factory.creation_started.wait(5)
+            creation_work = \
+                session._pool_creation_work[creation_future]
+
+            session._profile_manager.distance.return_value = \
+                HostDistance.IGNORED
+            assert session.update_created_pools(hosts=(host,)) == set()
+
+            factory.release_creation.set()
+            assert creation_future.result(timeout=5) is True
+            creation_work.result(timeout=5)
+
+        assert session._pools == {}
+        assert host not in session._pool_generations
+        candidate.shutdown.assert_called_once_with()
+
+    def test_ignored_shutdown_completes_forwarded_direct_successfully(self):
+        host = self._host()
+        old_pool = self._pool(host)
+        candidate = self._pool(host)
+        session = self._session({host: old_pool}, workers=2)
+        old_distance_started = Event()
+        release_old_distance = Event()
+        candidate_shutdown = Event()
+        self.addCleanup(release_old_distance.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                old_distance_started.set()
+                assert release_old_distance.wait(5)
+                return HostDistance.LOCAL
+            if call_number == 2:
+                return HostDistance.LOCAL
+            return HostDistance.IGNORED
+
+        session._profile_manager.distance.side_effect = distance
+        factory = self._blocking_pool_factory(candidate)
+
+        def shutdown_candidate():
+            candidate.is_shutdown = True
+            candidate_shutdown.set()
+
+        candidate.shutdown.side_effect = shutdown_candidate
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory) as host_connection:
+            with ThreadPoolExecutor(max_workers=1) as lifecycle_executor:
+                old_add_call = lifecycle_executor.submit(
+                    session.add_or_renew_pool, host,
+                    is_host_addition=False)
+                assert old_distance_started.wait(5)
+
+                newer_future = session.add_or_renew_pool(
+                    host, is_host_addition=False)
+                assert factory.creation_started.wait(5)
+
+                release_old_distance.set()
+                old_future = old_add_call.result(timeout=5)
+                assert old_future.done() is False
+
+                ignored_futures = session.update_created_pools(hosts=(host,))
+                assert len(ignored_futures) == 1
+                shutdown_future = next(iter(ignored_futures))
+                assert shutdown_future.result(timeout=5) is True
+                assert old_future.result(timeout=5) is True
+
+                factory.release_creation.set()
+                assert candidate_shutdown.wait(5)
+                assert newer_future.result(timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            host, HostDistance.LOCAL, session)
+        assert session._pools == {}
+        old_pool.shutdown.assert_called_once_with()
+        candidate.shutdown.assert_called_once_with()
+
+    def test_superseded_ignored_shutdown_waits_for_newer_creation(self):
+        host = self._host()
+        old_pool = self._pool(host)
+        winner = self._pool(host)
+        session = self._session({host: old_pool}, workers=2)
+        shutdown_started = Event()
+        release_shutdown = Event()
+        shutdown_finished = Event()
+        self.addCleanup(release_shutdown.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                return HostDistance.IGNORED
+            assert call_number == 2
+            return HostDistance.LOCAL
+
+        def shutdown_pool():
+            shutdown_started.set()
+            assert release_shutdown.wait(5)
+            old_pool.is_shutdown = True
+            shutdown_finished.set()
+
+        session._profile_manager.distance.side_effect = distance
+        old_pool.shutdown.side_effect = shutdown_pool
+        factory = self._blocking_pool_factory(winner)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory) as host_connection:
+            ignored_futures = session.update_created_pools(hosts=(host,))
+            assert len(ignored_futures) == 1
+            ignored_future = next(iter(ignored_futures))
+            assert shutdown_started.wait(5)
+
+            creation_futures = session.update_created_pools(hosts=(host,))
+            assert len(creation_futures) == 1
+            creation_future = next(iter(creation_futures))
+            assert factory.creation_started.wait(5)
+
+            release_shutdown.set()
+            assert shutdown_finished.wait(5)
+            assert ignored_future.done() is False
+
+            factory.release_creation.set()
+            assert creation_future.result(timeout=5) is True
+            assert ignored_future.result(timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            host, HostDistance.LOCAL, session)
+        assert session._pools == {host: winner}
+        old_pool.shutdown.assert_called_once_with()
+        winner.shutdown.assert_not_called()
+
+    def test_intermediate_pool_does_not_complete_superseded_direct_add(self):
+        host = self._host()
+        intermediate_pool = self._pool(host)
+        session = self._session(workers=1)
+        factory = self._blocking_pool_factory(intermediate_pool)
+        direct_distance_started = Event()
+        release_direct_distance = Event()
+        ignored_distance_started = Event()
+        release_ignored_distance = Event()
+        self.addCleanup(release_direct_distance.set)
+        self.addCleanup(release_ignored_distance.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                return HostDistance.LOCAL
+            if call_number == 2:
+                direct_distance_started.set()
+                assert release_direct_distance.wait(5)
+                return HostDistance.LOCAL
+            assert call_number == 3
+            ignored_distance_started.set()
+            assert release_ignored_distance.wait(5)
+            return HostDistance.IGNORED
+
+        session._profile_manager.distance.side_effect = distance
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory) as host_connection:
+            older_creation = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert factory.creation_started.wait(5)
+
+            with ThreadPoolExecutor(max_workers=2) as lifecycle_executor:
+                direct_call = lifecycle_executor.submit(
+                    session.add_or_renew_pool, host,
+                    is_host_addition=False)
+                assert direct_distance_started.wait(5)
+
+                ignored_reconciliation = lifecycle_executor.submit(
+                    session.update_created_pools, hosts=(host,))
+                assert ignored_distance_started.wait(5)
+
+                executor_barrier = session.cluster.executor.submit(
+                    lambda: None)
+                factory.release_creation.set()
+                executor_barrier.result(timeout=5)
+                assert session._pools == {host: intermediate_pool}
+                assert older_creation.done() is False
+
+                release_direct_distance.set()
+                direct_future = direct_call.result(timeout=5)
+                assert direct_future.done() is False
+
+                release_ignored_distance.set()
+                ignored_futures = ignored_reconciliation.result(timeout=5)
+                assert len(ignored_futures) == 1
+                assert next(iter(ignored_futures)).result(timeout=5) is True
+                assert direct_future.result(timeout=5) is True
+                assert older_creation.result(timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            host, HostDistance.LOCAL, session)
+        assert session._pools == {}
+        intermediate_pool.shutdown.assert_called_once_with()
+
+    def test_current_direct_ignored_removes_intermediate_pool(self):
+        host = self._host()
+        intermediate_pool = self._pool(host)
+        session = self._session(workers=1)
+        factory = self._blocking_pool_factory(intermediate_pool)
+        ignored_distance_started = Event()
+        release_ignored_distance = Event()
+        shutdown_started = Event()
+        release_shutdown = Event()
+        shutdown_finished = Event()
+        self.addCleanup(release_ignored_distance.set)
+        self.addCleanup(release_shutdown.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                return HostDistance.LOCAL
+            assert call_number == 2
+            ignored_distance_started.set()
+            assert release_ignored_distance.wait(5)
+            return HostDistance.IGNORED
+
+        def shutdown_pool():
+            shutdown_started.set()
+            assert release_shutdown.wait(5)
+            intermediate_pool.is_shutdown = True
+            shutdown_finished.set()
+
+        session._profile_manager.distance.side_effect = distance
+        intermediate_pool.shutdown.side_effect = shutdown_pool
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory) as host_connection:
+            older_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert factory.creation_started.wait(5)
+            older_work = session._pool_creation_work[older_future]
+
+            with ThreadPoolExecutor(max_workers=1) as lifecycle_executor:
+                ignored_call = lifecycle_executor.submit(
+                    session.add_or_renew_pool, host,
+                    is_host_addition=False)
+                assert ignored_distance_started.wait(5)
+
+                factory.release_creation.set()
+                assert older_work.result(timeout=5) is True
+                assert session._pools == {host: intermediate_pool}
+                assert older_future.done() is False
+
+                release_ignored_distance.set()
+                assert ignored_call.result(timeout=5) is None
+                assert session._pools == {}
+                assert shutdown_started.wait(5)
+
+                release_shutdown.set()
+                assert shutdown_finished.wait(5)
+                assert older_future.result(timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            host, HostDistance.LOCAL, session)
+        assert session._pools == {}
+        intermediate_pool.shutdown.assert_called_once_with()
+
+    def test_removal_invalidates_pending_ignored_completion(self):
+        host = self._host()
+        old_pool = self._pool(host)
+        session = self._session({host: old_pool}, workers=1)
+        direct_distance_started = Event()
+        release_direct_distance = Event()
+        shutdown_started = Event()
+        release_shutdown = Event()
+        self.addCleanup(release_direct_distance.set)
+        self.addCleanup(release_shutdown.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                direct_distance_started.set()
+                assert release_direct_distance.wait(5)
+                return HostDistance.LOCAL
+            assert call_number == 2
+            return HostDistance.IGNORED
+
+        def shutdown_pool():
+            shutdown_started.set()
+            assert release_shutdown.wait(5)
+            old_pool.is_shutdown = True
+
+        session._profile_manager.distance.side_effect = distance
+        old_pool.shutdown.side_effect = shutdown_pool
+        with patch('cassandra.cluster.HostConnection') as host_connection:
+            with ThreadPoolExecutor(max_workers=1) as lifecycle_executor:
+                direct_call = lifecycle_executor.submit(
+                    session.add_or_renew_pool, host,
+                    is_host_addition=False)
+                assert direct_distance_started.wait(5)
+
+                ignored_futures = session.update_created_pools(hosts=(host,))
+                assert len(ignored_futures) == 1
+                shutdown_future = next(iter(ignored_futures))
+                assert shutdown_started.wait(5)
+
+                release_direct_distance.set()
+                direct_future = direct_call.result(timeout=5)
+                assert direct_future.done() is False
+
+                with host.lock:
+                    host._is_removed = True
+                    host.set_down()
+                assert session.remove_pool(host) is None
+                assert host not in session._pool_intents
+
+                release_shutdown.set()
+                assert shutdown_future.result(timeout=5) is False
+                assert direct_future.result(timeout=5) is False
+
+        host_connection.assert_not_called()
+        assert session._pools == {}
+        old_pool.shutdown.assert_called_once_with()
+
+    def test_down_host_reconciliation_fences_in_flight_creation(self):
+        host = self._host()
+        candidate = self._pool(host)
+        session = self._session(workers=1)
+        factory = self._blocking_pool_factory(candidate)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory):
+            creation_futures = session.update_created_pools(hosts=(host,))
+            creation_future = next(iter(creation_futures))
+            assert factory.creation_started.wait(5)
+            creation_work = \
+                session._pool_creation_work[creation_future]
+
+            with host.lock:
+                host.set_down()
+            assert session.update_created_pools(hosts=(host,)) == set()
+
+            factory.release_creation.set()
+            assert creation_future.result(timeout=5) is False
+            creation_work.result(timeout=5)
+
+        assert session._pools == {}
+        assert host not in session._pool_generations
+        candidate.shutdown.assert_called_once_with()
+
+    def test_down_host_reconciliation_suppresses_in_flight_failure(self):
+        host = self._host()
+        session = self._session(workers=1)
+        failure = ConnectionException("pool creation failed")
+        factory = self._blocked_failure_factory(failure)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory):
+            failure_futures = session.update_created_pools(hosts=(host,))
+            failure_future = next(iter(failure_futures))
+            assert factory.failure_started.wait(5)
+            failure_work = session._pool_creation_work[failure_future]
+
+            with host.lock:
+                host.set_down()
+            assert session.update_created_pools(hosts=(host,)) == set()
+
+            factory.release_failure.set()
+            assert failure_future.result(timeout=5) is False
+            failure_work.result(timeout=5)
+
+        assert session._pools == {}
+        assert host not in session._pool_generations
+        session.cluster.signal_connection_failure.assert_not_called()
+        session.cluster.on_down.assert_not_called()
+
+    def test_ignored_intent_suppresses_stale_failure_dispatch(self):
+        host = self._host()
+        session = self._session(workers=1)
+        failure = ConnectionException("pool creation failed")
+        factory = self._blocked_failure_factory(failure)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory):
+            failure_futures = session.update_created_pools(hosts=(host,))
+            failure_future = next(iter(failure_futures))
+            assert factory.failure_started.wait(5)
+            failure_work = session._pool_creation_work[failure_future]
+
+            session._profile_manager.distance.return_value = \
+                HostDistance.IGNORED
+            assert session.update_created_pools(hosts=(host,)) == set()
+
+            factory.release_failure.set()
+            assert failure_future.result(timeout=5) is True
+            failure_work.result(timeout=5)
+
+        assert session._pools == {}
+        assert host not in session._pool_generations
+        session.cluster.signal_connection_failure.assert_not_called()
+        session.cluster.on_down.assert_not_called()
+
+    def test_keyspace_change_racing_publication_updates_candidate(self):
+        host = self._host()
+        candidate_created = Event()
+        publication_boundary = Event()
+        release_publication = Event()
+        self.addCleanup(release_publication.set)
+
+        class PublicationBoundaryLock(object):
+
+            def __init__(self):
+                self.lock = RLock()
+                self.hook_lock = Lock()
+                self.paused = False
+
+            def acquire(self, *args, **kwargs):
+                return self.lock.acquire(*args, **kwargs)
+
+            def release(self):
+                self.lock.release()
+                pause_here = False
+                if candidate_created.is_set():
+                    with self.hook_lock:
+                        if not self.paused:
+                            # Pause at first post-construction lock boundary:
+                            # atomic code published; split code has not.
+                            self.paused = True
+                            pause_here = True
+                if pause_here:
+                    publication_boundary.set()
+                    assert release_publication.wait(5)
+
+            def __enter__(self):
+                self.acquire()
+                return self
+
+            def __exit__(self, *args):
+                self.release()
+
+        candidate = self._pool(host, keyspace="old_keyspace")
+
+        def set_candidate_keyspace(keyspace, callback):
+            candidate._keyspace = keyspace
+            callback(candidate, [])
+
+        candidate._set_keyspace_for_all_conns.side_effect = \
+            set_candidate_keyspace
+        session = self._session(keyspace="old_keyspace", workers=1)
+        session._lock = PublicationBoundaryLock()
+
+        def create_candidate(*args, **kwargs):
+            candidate_created.set()
+            return candidate
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=create_candidate):
+            candidate_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert publication_boundary.wait(5)
+
+            keyspace_callback = Mock()
+            session._set_keyspace_for_all_pools(
+                "new_keyspace", keyspace_callback)
+            keyspace_callback.assert_called_once_with({})
+
+            release_publication.set()
+            assert candidate_future.result(timeout=5) is True
+
+        assert session.keyspace == "new_keyspace"
+        assert session._pools == {host: candidate}
+        assert candidate._keyspace == "new_keyspace"
+        candidate._set_keyspace_for_all_conns.assert_called_once_with(
+            "new_keyspace", ANY)
+        candidate.shutdown.assert_not_called()
+
+    def test_queued_reconciliation_keeps_first_published_pools(self):
+        blocker_host = self._host()
+        target_host = self._host("127.0.0.2")
+        session = self._session(workers=1)
+
+        blocker_started = Event()
+        release_blocker = Event()
+        self.addCleanup(release_blocker.set)
+        created_pools = {blocker_host: [], target_host: []}
+
+        def create_pool(host, distance, pool_session):
+            pool = self._pool(host, distance=distance)
+            created_pools[host].append(pool)
+            if host is blocker_host and len(created_pools[host]) == 1:
+                blocker_started.set()
+                assert release_blocker.wait(5)
+            return pool
+
+        hosts = (blocker_host, target_host)
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=create_pool):
+            first_futures = session.update_created_pools(hosts=hosts)
+            assert blocker_started.wait(5)
+
+            queued_futures = session.update_created_pools(hosts=hosts)
+            release_blocker.set()
+
+            for future in first_futures | queued_futures:
+                assert future.result(timeout=5) is True
+
+        for host in hosts:
+            assert len(created_pools[host]) == 1
+            first_pool = created_pools[host][0]
+            assert session._pools[host] is first_pool
+            assert first_pool.is_shutdown is False
+            first_pool.shutdown.assert_not_called()
+
+    def test_removed_equal_host_does_not_clear_replacement_intent(self):
+        host_id = uuid.uuid4()
+        removed_host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=host_id)
+        replacement_host = Host(
+            "127.0.0.2", SimpleConvictionPolicy, host_id=host_id)
+        winner = self._pool(replacement_host)
+        session = self._session(workers=1)
+        replacement_distance_started = Event()
+        release_replacement_distance = Event()
+        self.addCleanup(release_replacement_distance.set)
+
+        with removed_host.lock:
+            removed_host._is_removed = True
+            removed_host.set_down()
+
+        def distance(host):
+            assert host is replacement_host
+            replacement_distance_started.set()
+            assert release_replacement_distance.wait(5)
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        with patch('cassandra.cluster.HostConnection',
+                   return_value=winner) as host_connection:
+            with ThreadPoolExecutor(max_workers=1) as reconciler:
+                replacement_reconciliation = reconciler.submit(
+                    session.update_created_pools,
+                    hosts=(replacement_host,))
+                assert replacement_distance_started.wait(5)
+
+                assert session.update_created_pools(
+                    hosts=(removed_host,)) == set()
+
+                release_replacement_distance.set()
+                replacement_futures = replacement_reconciliation.result(
+                    timeout=5)
+                assert len(replacement_futures) == 1
+                assert next(iter(replacement_futures)).result(
+                    timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            replacement_host, HostDistance.LOCAL, session)
+        assert session._pools == {replacement_host: winner}
+        winner.shutdown.assert_not_called()
+
+    def test_stale_reconciliation_returns_superseding_future(self):
+        host = self._host()
+        winner = self._pool(host)
+        session = self._session(workers=1)
+        old_distance_started = Event()
+        release_old_distance = Event()
+        self.addCleanup(release_old_distance.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                old_distance_started.set()
+                assert release_old_distance.wait(5)
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        factory = self._blocking_pool_factory(winner)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory) as host_connection:
+            with ThreadPoolExecutor(max_workers=1) as reconciler:
+                old_reconciliation = reconciler.submit(
+                    session.update_created_pools, hosts=(host,))
+                assert old_distance_started.wait(5)
+
+                newer_futures = session.update_created_pools(hosts=(host,))
+                assert len(newer_futures) == 1
+                assert factory.creation_started.wait(5)
+
+                release_old_distance.set()
+                stale_futures = old_reconciliation.result(timeout=5)
+                assert len(stale_futures) == 1
+                stale_future = next(iter(stale_futures))
+                assert stale_future.done() is False
+                assert session._pools == {}
+
+                factory.release_creation.set()
+                assert next(iter(newer_futures)).result(timeout=5) is True
+                assert stale_future.result(timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            host, HostDistance.LOCAL, session)
+        assert session._pools == {host: winner}
+        winner.shutdown.assert_not_called()
+
+    def test_stale_distance_candidate_cannot_replace_winner(self):
+        host = self._host()
+        remote_pool = self._pool(host, distance=HostDistance.REMOTE)
+        local_pool = self._pool(host, distance=HostDistance.LOCAL)
+        session = self._session(workers=2)
+        current_distance = [HostDistance.REMOTE]
+        session._profile_manager.distance.side_effect = \
+            lambda pool_host: current_distance[0]
+        remote_started = Event()
+        release_remote = Event()
+        self.addCleanup(release_remote.set)
+
+        def create_pool(pool_host, distance, pool_session):
+            if distance == HostDistance.REMOTE:
+                remote_started.set()
+                assert release_remote.wait(5)
+                return remote_pool
+            return local_pool
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=create_pool) as host_connection:
+            remote_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert remote_started.wait(5)
+            remote_work = session._pool_creation_work[remote_future]
+
+            current_distance[0] = HostDistance.LOCAL
+            local_futures = session.update_created_pools(hosts=(host,))
+            assert len(local_futures) == 1
+            local_future = local_futures.pop()
+            assert local_future.result(timeout=5) is True
+
+            release_remote.set()
+            assert remote_future.result(timeout=5) is True
+            remote_work.result(timeout=5)
+
+        assert host_connection.call_args_list == [
+            call(host, HostDistance.REMOTE, session),
+            call(host, HostDistance.LOCAL, session),
+        ]
+        assert session._pools == {host: local_pool}
+        remote_pool.shutdown.assert_called_once_with()
+        local_pool.shutdown.assert_not_called()
+
+    def test_newer_reconciliation_updates_in_flight_replacement_distance(self):
+        host = self._host()
+        old_pool = self._pool(host, distance=HostDistance.REMOTE)
+        candidate = self._pool(host, distance=HostDistance.REMOTE)
+        session = self._session({host: old_pool}, workers=1)
+        current_distance = [HostDistance.REMOTE]
+        session._profile_manager.distance.side_effect = \
+            lambda _host: current_distance[0]
+        factory = self._blocking_pool_factory(candidate)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory):
+            candidate_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert factory.creation_started.wait(5)
+            candidate_work = \
+                session._pool_creation_work[candidate_future]
+
+            current_distance[0] = HostDistance.LOCAL
+            assert session.update_created_pools(hosts=(host,)) == set()
+            assert old_pool.host_distance == HostDistance.LOCAL
+
+            factory.release_creation.set()
+            assert candidate_future.result(timeout=5) is True
+            candidate_work.result(timeout=5)
+
+        assert session._pools == {host: candidate}
+        assert candidate.host_distance == HostDistance.LOCAL
+        old_pool.shutdown.assert_called_once_with()
+        candidate.shutdown.assert_not_called()
+
+    def test_competing_pool_creation_keeps_first_published_replacement(self):
+        host = self._host()
+        old_pool = self._pool(host)
+        losing_candidate = self._pool(host)
+        winning_pool = self._pool(host)
+        session = self._session({host: old_pool})
+
+        candidate_started = Event()
+        release_candidate = Event()
+        self.addCleanup(release_candidate.set)
+
+        creation_count = 0
+        creation_lock = Lock()
+
+        def create_pool(*args, **kwargs):
+            nonlocal creation_count
+            with creation_lock:
+                creation_count += 1
+                creation_number = creation_count
+
+            if creation_number == 1:
+                candidate_started.set()
+                assert release_candidate.wait(5)
+                return losing_candidate
+            return winning_pool
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=create_pool) as host_connection:
+            losing_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert candidate_started.wait(5)
+            losing_work = session._pool_creation_work[losing_future]
+
+            winning_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert winning_future.result(timeout=5) is True
+
+            release_candidate.set()
+            assert losing_future.result(timeout=5) is True
+            losing_work.result(timeout=5)
+
+        assert host_connection.call_count == 2
+        assert session._pools == {host: winning_pool}
+        assert session._pools[host] is winning_pool
+        assert old_pool.is_shutdown is True
+        assert losing_candidate.is_shutdown is True
+        assert winning_pool.is_shutdown is False
+        old_pool.shutdown.assert_called_once_with()
+        losing_candidate.shutdown.assert_called_once_with()
+        winning_pool.shutdown.assert_not_called()
+
+    def test_remove_pool_prevents_in_flight_candidate_publication(self):
+        host = self._host()
+        old_pool = self._pool(host)
+        candidate = self._pool(host)
+        session = self._session({host: old_pool})
+        factory = self._blocking_pool_factory(candidate)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory) as host_connection:
+            candidate_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert factory.creation_started.wait(5)
+            candidate_work = \
+                session._pool_creation_work[candidate_future]
+
+            shutdown_future = session.remove_pool(host)
+            shutdown_future.result(timeout=5)
+            assert host not in session._pool_generations
+
+            factory.release_creation.set()
+            assert candidate_future.result(timeout=5) is False
+            candidate_work.result(timeout=5)
+            candidate_work.result(timeout=5)
+
+        host_connection.assert_called_once_with(
+            host, HostDistance.LOCAL, session)
+        assert session._pools == {}
+        assert old_pool.is_shutdown is True
+        assert candidate.is_shutdown is True
+        old_pool.shutdown.assert_called_once_with()
+        candidate.shutdown.assert_called_once_with()
+
+    def test_remove_old_pool_preserves_equal_replacement_intent(self):
+        host_id = uuid.uuid4()
+        removed_host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=host_id)
+        replacement_host = Host(
+            "127.0.0.2", SimpleConvictionPolicy, host_id=host_id)
+        old_pool = self._pool(removed_host)
+        winner = self._pool(replacement_host)
+        session = self._session({removed_host: old_pool}, workers=1)
+        replacement_distance_started = Event()
+        release_replacement_distance = Event()
+        self.addCleanup(release_replacement_distance.set)
+
+        with removed_host.lock:
+            removed_host._is_removed = True
+            removed_host.set_down()
+
+        def distance(host):
+            assert host is replacement_host
+            replacement_distance_started.set()
+            assert release_replacement_distance.wait(5)
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        with patch('cassandra.cluster.HostConnection',
+                   return_value=winner) as host_connection:
+            with ThreadPoolExecutor(max_workers=1) as reconciler:
+                replacement_reconciliation = reconciler.submit(
+                    session.update_created_pools,
+                    hosts=(replacement_host,))
+                assert replacement_distance_started.wait(5)
+                replacement_intent = \
+                    session._pool_intents[replacement_host]
+
+                shutdown_future = session.remove_pool(removed_host)
+                assert shutdown_future is not None
+                shutdown_future.result(timeout=5)
+                assert session._pools == {}
+                assert session._pool_intents[
+                    replacement_host] is replacement_intent
+
+                release_replacement_distance.set()
+                replacement_futures = replacement_reconciliation.result(
+                    timeout=5)
+                assert len(replacement_futures) == 1
+                assert next(iter(replacement_futures)).result(
+                    timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            replacement_host, HostDistance.LOCAL, session)
+        assert session._pools == {replacement_host: winner}
+        old_pool.shutdown.assert_called_once_with()
+        winner.shutdown.assert_not_called()
+
+    def test_remove_old_pool_keeps_in_flight_equal_replacement(self):
+        host_id = uuid.uuid4()
+        removed_host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=host_id)
+        replacement_host = Host(
+            "127.0.0.2", SimpleConvictionPolicy, host_id=host_id)
+        old_pool = self._pool(removed_host)
+        winner = self._pool(replacement_host)
+        session = self._session({removed_host: old_pool}, workers=1)
+        factory = self._blocking_pool_factory(winner)
+
+        with removed_host.lock:
+            removed_host._is_removed = True
+            removed_host.set_down()
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory) as host_connection:
+            replacement_future = session.add_or_renew_pool(
+                replacement_host, is_host_addition=False)
+            assert factory.creation_started.wait(5)
+
+            assert session.remove_pool(removed_host) is None
+            assert session._pools[replacement_host] is old_pool
+            old_pool.shutdown.assert_not_called()
+
+            factory.release_creation.set()
+            assert replacement_future.result(timeout=5) is True
+
+        host_connection.assert_called_once_with(
+            replacement_host, HostDistance.LOCAL, session)
+        assert session._pools == {replacement_host: winner}
+        old_pool.shutdown.assert_called_once_with()
+        winner.shutdown.assert_not_called()
+
+    def test_remove_old_pool_after_equal_replacement_noop(self):
+        host_id = uuid.uuid4()
+        removed_host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=host_id)
+        replacement_host = Host(
+            "127.0.0.2", SimpleConvictionPolicy, host_id=host_id)
+        old_pool = self._pool(removed_host)
+        session = self._session({removed_host: old_pool}, workers=1)
+
+        with removed_host.lock:
+            removed_host._is_removed = True
+            removed_host.set_down()
+
+        with patch('cassandra.cluster.HostConnection') as host_connection:
+            assert session.update_created_pools(
+                hosts=(replacement_host,)) == set()
+            replacement_intent = \
+                session._pool_intents[replacement_host]
+            assert replacement_intent.completion.done() is True
+            assert replacement_intent.completion.result() is True
+
+            shutdown_future = session.remove_pool(removed_host)
+            assert shutdown_future is not None
+            assert shutdown_future.result(timeout=5) is None
+
+        host_connection.assert_not_called()
+        assert session._pools == {}
+        old_pool.shutdown.assert_called_once_with()
+
+    def test_remove_missing_pool_fences_in_flight_candidate(self):
+        host = self._host()
+        candidate = self._pool(host)
+        session = self._session(workers=1)
+        factory = self._blocking_pool_factory(candidate)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory):
+            candidate_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert factory.creation_started.wait(5)
+            candidate_work = \
+                session._pool_creation_work[candidate_future]
+
+            assert session.remove_pool(host) is None
+            assert host not in session._pool_generations
+
+            factory.release_creation.set()
+            assert candidate_future.result(timeout=5) is False
+            candidate_work.result(timeout=5)
+
+        assert session._pools == {}
+        assert candidate.is_shutdown is True
+        candidate.shutdown.assert_called_once_with()
+
+    def test_shutdown_prevents_in_flight_candidate_publication(self):
+        host = self._host()
+        candidate = self._pool(host)
+        session = self._session(workers=1)
+        factory = self._blocking_pool_factory(candidate)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory):
+            candidate_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert factory.creation_started.wait(5)
+
+            session.shutdown()
+            assert session._pool_generations == {}
+
+            factory.release_creation.set()
+            assert candidate_future.result(timeout=5) is True
+
+        assert session._pools == {}
+        assert candidate.is_shutdown is True
+        candidate.shutdown.assert_called_once_with()
+
+    def test_winner_suppresses_stale_constructor_failure(self):
+        for failure_type in (ConnectionException, AuthenticationFailed):
+            with self.subTest(failure_type=failure_type):
+                host = self._host()
+                old_pool = self._pool(host)
+                winner = self._pool(host)
+                session = self._session({host: old_pool})
+                failure = failure_type("pool creation failed")
+                factory = self._blocked_failure_factory(
+                    failure, second_pool=winner)
+                replacement_callback = Mock()
+
+                with patch('cassandra.cluster.HostConnection',
+                           side_effect=factory):
+                    losing_future = session.add_or_renew_pool(
+                        host, is_host_addition=True,
+                        on_add_reconnection=replacement_callback)
+                    assert factory.failure_started.wait(5)
+
+                    winning_future = session.add_or_renew_pool(
+                        host, is_host_addition=True,
+                        on_add_reconnection=replacement_callback)
+                    assert factory.second_started.wait(5)
+                    assert winning_future.result(timeout=5) is True
+
+                    factory.release_failure.set()
+                    assert losing_future.result(timeout=5) is True
+
+                assert session._pools == {host: winner}
+                assert winner.is_shutdown is False
+                old_pool.shutdown.assert_called_once_with()
+                winner.shutdown.assert_not_called()
+                session.cluster.signal_connection_failure.assert_not_called()
+                session.cluster.on_down.assert_not_called()
+
+    def test_superseded_failure_waits_for_newer_direct_winner(self):
+        host = self._host()
+        winner = self._pool(host)
+        session = self._session(workers=1)
+        newer_distance_started = Event()
+        release_newer_distance = Event()
+        self.addCleanup(release_newer_distance.set)
+        distance_calls = 0
+        distance_lock = Lock()
+
+        def distance(_host):
+            nonlocal distance_calls
+            with distance_lock:
+                distance_calls += 1
+                call_number = distance_calls
+            if call_number == 1:
+                return HostDistance.LOCAL
+            assert call_number == 2
+            newer_distance_started.set()
+            assert release_newer_distance.wait(5)
+            return HostDistance.LOCAL
+
+        session._profile_manager.distance.side_effect = distance
+        failure = ConnectionException("pool creation failed")
+        factory = self._blocked_failure_factory(
+            failure, second_pool=winner)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory) as host_connection:
+            older_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert factory.failure_started.wait(5)
+
+            with ThreadPoolExecutor(max_workers=1) as lifecycle_executor:
+                newer_call = lifecycle_executor.submit(
+                    session.add_or_renew_pool, host,
+                    is_host_addition=False)
+                assert newer_distance_started.wait(5)
+
+                executor_barrier = session.cluster.executor.submit(
+                    lambda: None)
+                factory.release_failure.set()
+                executor_barrier.result(timeout=5)
+                assert older_future.done() is False
+                session.cluster.signal_connection_failure.assert_not_called()
+                session.cluster.on_down.assert_not_called()
+
+                release_newer_distance.set()
+                newer_future = newer_call.result(timeout=5)
+                assert newer_future.result(timeout=5) is True
+                assert older_future.result(timeout=5) is True
+
+        assert host_connection.call_args_list == [
+            call(host, HostDistance.LOCAL, session),
+            call(host, HostDistance.LOCAL, session),
+        ]
+        assert session._pools == {host: winner}
+        winner.shutdown.assert_not_called()
+
+    def test_superseded_constructor_failure_allows_newer_winner(self):
+        for failure_type in (ConnectionException, AuthenticationFailed):
+            with self.subTest(failure_type=failure_type):
+                host = self._host()
+                old_pool = self._pool(host)
+                sibling = self._pool(host)
+                session = self._session({host: old_pool})
+                failure = failure_type("pool creation failed")
+                factory = self._blocked_failure_factory(
+                    failure, second_pool=sibling, block_second=True)
+                replacement_callback = Mock()
+
+                with patch('cassandra.cluster.HostConnection',
+                           side_effect=factory):
+                    owning_future = session.add_or_renew_pool(
+                        host, is_host_addition=True,
+                        on_add_reconnection=replacement_callback)
+                    assert factory.failure_started.wait(5)
+
+                    sibling_future = session.add_or_renew_pool(
+                        host, is_host_addition=True,
+                        on_add_reconnection=replacement_callback)
+                    assert factory.second_started.wait(5)
+                    generation = session._pool_generations[host]
+
+                    executor_barrier = session.cluster.executor.submit(
+                        lambda: None)
+                    factory.release_failure.set()
+                    executor_barrier.result(timeout=5)
+                    assert owning_future.done() is False
+                    assert session._pool_generations[host] is generation
+                    failure_signal = \
+                        session.cluster.signal_connection_failure
+                    failure_signal.assert_not_called()
+
+                    factory.release_second.set()
+                    assert sibling_future.result(timeout=5) is True
+                    assert owning_future.result(timeout=5) is True
+
+                assert session._pools == {host: sibling}
+                old_pool.shutdown.assert_called_once_with()
+                sibling.shutdown.assert_not_called()
+                session.cluster.on_down.assert_not_called()
+
+    def test_winner_suppresses_stale_keyspace_failure(self):
+        host = self._host()
+        old_pool = self._pool(host, keyspace="new_keyspace")
+        failing_candidate = self._pool(host, keyspace="old_keyspace")
+        winner = self._pool(host, keyspace="new_keyspace")
+        session = self._session(
+            {host: old_pool}, keyspace="new_keyspace")
+        keyspace_started = Event()
+        release_keyspace = Event()
+        self.addCleanup(release_keyspace.set)
+        keyspace_error = ConnectionException("keyspace update failed")
+
+        def fail_keyspace(_keyspace, callback):
+            keyspace_started.set()
+            assert release_keyspace.wait(5)
+            callback(failing_candidate, [keyspace_error])
+
+        failing_candidate._set_keyspace_for_all_conns.side_effect = \
+            fail_keyspace
+        replacement_callback = Mock()
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=(failing_candidate, winner)):
+            failing_future = session.add_or_renew_pool(
+                host, is_host_addition=True,
+                on_add_reconnection=replacement_callback)
+            assert keyspace_started.wait(5)
+            failing_work = session._pool_creation_work[failing_future]
+
+            winning_future = session.add_or_renew_pool(
+                host, is_host_addition=True,
+                on_add_reconnection=replacement_callback)
+            assert winning_future.result(timeout=5) is True
+
+            release_keyspace.set()
+            assert failing_future.result(timeout=5) is True
+            failing_work.result(timeout=5)
+
+        assert session._pools == {host: winner}
+        old_pool.shutdown.assert_called_once_with()
+        failing_candidate.shutdown.assert_called_once_with()
+        winner.shutdown.assert_not_called()
+        session.cluster.signal_connection_failure.assert_not_called()
+        session.cluster.on_down.assert_not_called()
+
+    def test_superseded_keyspace_failure_allows_newer_winner(self):
+        host = self._host()
+        old_pool = self._pool(host, keyspace="new_keyspace")
+        failing_candidate = self._pool(host, keyspace="old_keyspace")
+        sibling = self._pool(host, keyspace="new_keyspace")
+        session = self._session(
+            {host: old_pool}, keyspace="new_keyspace")
+        keyspace_started = Event()
+        release_keyspace = Event()
+        sibling_started = Event()
+        release_sibling = Event()
+        self.addCleanup(release_keyspace.set)
+        self.addCleanup(release_sibling.set)
+        keyspace_error = ConnectionException("keyspace update failed")
+        creation_lock = Lock()
+        creation_count = 0
+
+        def fail_keyspace(_keyspace, callback):
+            keyspace_started.set()
+            assert release_keyspace.wait(5)
+            callback(failing_candidate, [keyspace_error])
+
+        def create_pool(*args, **kwargs):
+            nonlocal creation_count
+            with creation_lock:
+                creation_count += 1
+                creation_number = creation_count
+            if creation_number == 1:
+                return failing_candidate
+            assert creation_number == 2
+            sibling_started.set()
+            assert release_sibling.wait(5)
+            return sibling
+
+        failing_candidate._set_keyspace_for_all_conns.side_effect = \
+            fail_keyspace
+        replacement_callback = Mock()
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=create_pool):
+            failing_future = session.add_or_renew_pool(
+                host, is_host_addition=True,
+                on_add_reconnection=replacement_callback)
+            assert keyspace_started.wait(5)
+
+            sibling_future = session.add_or_renew_pool(
+                host, is_host_addition=True,
+                on_add_reconnection=replacement_callback)
+            assert sibling_started.wait(5)
+            generation = session._pool_generations[host]
+
+            executor_barrier = session.cluster.executor.submit(lambda: None)
+            release_keyspace.set()
+            executor_barrier.result(timeout=5)
+            assert failing_future.done() is False
+            assert session._pool_generations[host] is generation
+            session.cluster.on_down.assert_not_called()
+
+            release_sibling.set()
+            assert sibling_future.result(timeout=5) is True
+            assert failing_future.result(timeout=5) is True
+
+        assert session._pools == {host: sibling}
+        old_pool.shutdown.assert_called_once_with()
+        failing_candidate.shutdown.assert_called_once_with()
+        sibling.shutdown.assert_not_called()
+        session.cluster.signal_connection_failure.assert_not_called()
+
+    def test_shutdown_suppresses_blocked_constructor_failure(self):
+        host = self._host()
+        session = self._session(workers=1)
+        failure = ConnectionException("pool creation failed")
+        factory = self._blocked_failure_factory(failure)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory):
+            failing_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert factory.failure_started.wait(5)
+
+            session.shutdown()
+            assert session._pool_generations == {}
+            assert session._pool_intents == {}
+
+            factory.release_failure.set()
+            assert failing_future.result(timeout=5) is True
+
+        session.cluster.signal_connection_failure.assert_not_called()
+        session.cluster.on_down.assert_not_called()
+
+    def test_removal_suppresses_blocked_constructor_failure(self):
+        host = self._host()
+        session = self._session(workers=1)
+        failure = ConnectionException("pool creation failed")
+        factory = self._blocked_failure_factory(failure)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory):
+            failing_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert factory.failure_started.wait(5)
+
+            with host.lock:
+                host._is_removed = True
+                host.set_down()
+            session.on_remove(host, trigger_reconciliation=False)
+            assert host not in session._pool_generations
+            assert host not in session._pool_intents
+
+            factory.release_failure.set()
+            assert failing_future.result(timeout=5) is False
+
+        session.cluster.signal_connection_failure.assert_not_called()
+        session.cluster.on_down.assert_not_called()
+
+    def test_shutdown_and_removal_keep_blocked_failure_unsuccessful(self):
+        host = self._host()
+        session = self._session(workers=1)
+        failure = ConnectionException("pool creation failed")
+        factory = self._blocked_failure_factory(failure)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory):
+            failing_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            assert factory.failure_started.wait(5)
+
+            session.shutdown()
+            with host.lock:
+                host._is_removed = True
+                host.set_down()
+
+            factory.release_failure.set()
+            assert failing_future.result(timeout=5) is False
+
+        session.cluster.signal_connection_failure.assert_not_called()
+        session.cluster.on_down.assert_not_called()
+
+
 class SessionTest(unittest.TestCase):
     class FakeTime(object):
 
@@ -2628,11 +4508,10 @@ class SessionTest(unittest.TestCase):
         assert callback.call_args.args[0] == {'host1': [keyspace_error]}
 
     def test_remove_pool_after_host_endpoint_changes(self):
-        session = Session.__new__(Session)
         host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
         pool = Mock(host=host)
         shutdown_future = Future()
-        session._pools = {host: pool}
+        session = new_session_with_pool_state({host: pool})
         session.cluster = Mock()
         session.cluster.executor.submit.return_value = shutdown_future
         session.is_shutdown = False
@@ -2648,7 +4527,6 @@ class SessionTest(unittest.TestCase):
         session.cluster.executor.submit.assert_called_once_with(pool.shutdown)
 
     def test_pool_renewal_uses_pool_host_not_retained_dict_key(self):
-        session = Session.__new__(Session)
         host_id = uuid.uuid4()
         original_host = Host(
             "127.0.0.1", SimpleConvictionPolicy, host_id=host_id)
@@ -2658,8 +4536,7 @@ class SessionTest(unittest.TestCase):
         pool_state = {"open_count": 1}
         new_pool = Mock(host=current_host, _keyspace=None)
         new_pool.get_state.return_value = pool_state
-        session._pools = {original_host: old_pool}
-        session._lock = RLock()
+        session = new_session_with_pool_state({original_host: old_pool})
         session.keyspace = None
         session.is_shutdown = False
         session.cluster = Mock(
