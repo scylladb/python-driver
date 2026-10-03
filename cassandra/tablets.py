@@ -1,13 +1,8 @@
-from bisect import bisect_left
-from operator import attrgetter
+from bisect import bisect_left, bisect_right
 from random import getrandbits
 from threading import Lock
 from typing import Optional
 from uuid import UUID
-
-# C-accelerated attrgetter avoids per-call lambda allocation overhead
-_get_first_token = attrgetter("first_token")
-_get_last_token = attrgetter("last_token")
 
 
 def choose_tablet_version_block(tablet_version: int) -> int:
@@ -36,23 +31,27 @@ def random_tablet_version_block() -> int:
     return getrandbits(8)
 
 
+# host_id.int -> one shared UUID per host; tablets key by its .int so all share one int per host.
+# ponytail: never pruned; grows with every host ever seen, fine unless hosts churn by thousands.
+_host_ids = {}
+
+
 class Tablet(object):
     """
     Represents a single ScyllaDB tablet.
     It stores information about each replica, its host and shard,
     and the token interval in the format (first_token, last_token].
     """
-    first_token = 0
-    last_token = 0
-    replicas = None
-    # uint64 hash; None means unknown -- a cold start, or a tablet learned over
-    # TABLETS_ROUTING_V1, which does not report a version.
-    tablet_version = None
+    __slots__ = ('first_token', 'last_token', 'tablet_version', '_replica_dict')
 
     def __init__(self, first_token=0, last_token=0, replicas=None, tablet_version=None):
         self.first_token = first_token
         self.last_token = last_token
-        self.replicas = replicas
+        # The only replica storage: {host_id.int: shard}, in wire order so the leader is first.
+        # Int keys: UUID.__hash__ is pure Python, and the wire's UUID objects can be freed.
+        intern = _host_ids.setdefault
+        self._replica_dict = {intern(u.int, u).int: s for u, s in replicas} if replicas is not None else {}
+        # uint64 hash; None = unknown (cold start, or learned over TABLETS_ROUTING_V1).
         self.tablet_version = tablet_version
 
     def __str__(self):
@@ -61,20 +60,20 @@ class Tablet(object):
     __repr__ = __str__
 
     @staticmethod
-    def _is_valid_tablet(replicas):
-        return replicas is not None and len(replicas) != 0
-
-    @staticmethod
     def from_row(first_token, last_token, replicas, tablet_version=None):
-        if Tablet._is_valid_tablet(replicas):
-            if tablet_version is not None:
-                # tablet_version is an unsigned 64-bit value, but it is
-                # deserialized from the wire as a signed LongType; normalize it
-                # back to unsigned so it matches the server's representation.
-                tablet_version &= 0xFFFFFFFFFFFFFFFF
-            tablet = Tablet(first_token, last_token, replicas, tablet_version)
-            return tablet
-        return None
+        if tablet_version is not None:
+            # tablet_version is an unsigned 64-bit value, but it is
+            # deserialized from the wire as a signed LongType; normalize it
+            # back to unsigned so it matches the server's representation.
+            tablet_version &= 0xFFFFFFFFFFFFFFFF
+        # __init__ consumes replicas once, so empty generators are caught too.
+        tablet = Tablet(first_token, last_token, replicas, tablet_version)
+        return tablet if tablet._replica_dict else None
+
+    @property
+    def replicas(self):
+        # Rebuilt on each access; kept for compatibility, not used on the query path.
+        return tuple([(_host_ids[k], s) for k, s in self._replica_dict.items()])
 
     @property
     def leader(self) -> Optional[UUID]:
@@ -99,42 +98,59 @@ class Tablet(object):
         Returns ``None`` for a tablet with no replicas rather than raising, so
         callers do not have to guard the lookup themselves.
         """
-        if not self.replicas:
-            return None
-        return self.replicas[0][0]
+        for key in self._replica_dict:
+            return _host_ids[key]
+        return None
 
-    def replica_contains_host_id(self, uuid: UUID) -> bool:
-        for replica in self.replicas:
-            if replica[0] == uuid:
-                return True
-        return False
+    def replica_contains_host_id(self, uuid: Optional[UUID]) -> bool:
+        # A host whose id is not yet known (discovery/metadata transitions) is
+        # not a replica; treat it as a non-match rather than raising.
+        if uuid is None:
+            return False
+        return uuid.int in self._replica_dict
+
+    def get_replica_shard_id(self, uuid: Optional[UUID]) -> Optional[int]:
+        if uuid is None:
+            return None
+        return self._replica_dict.get(uuid.int)
 
 
 class Tablets(object):
-    _lock = None
-    _tablets = {}
-
     def __init__(self, tablets):
-        self._tablets = tablets
+        # Instance-only: mutable class-level dicts would be shared across instances.
         self._lock = Lock()
+        self._tablets = tablets
+        # Parallel (keyspace, table) -> list[int] so bisect runs without a key= callback.
+        self._last_tokens = {
+            key: [t.last_token for t in tlist]
+            for key, tlist in tablets.items()
+        }
 
     def table_has_tablets(self, keyspace, table) -> bool:
         return bool(self._tablets.get((keyspace, table), []))
 
     def get_tablet_for_key(self, keyspace, table, t):
-        tablet = self._tablets.get((keyspace, table), [])
-        if not tablet:
+        # Lock-free hot path: writers may be mid-update, so verify the pick covers the token.
+        key = (keyspace, table)
+        last_tokens = self._last_tokens.get(key)
+        if not last_tokens:
             return None
 
-        id = bisect_left(tablet, t.value, key=_get_last_token)
-        if id < len(tablet) and t.value > tablet[id].first_token:
-            return tablet[id]
+        token_value = t.value
+        try:
+            tablet = self._tablets[key][bisect_left(last_tokens, token_value)]
+        except (KeyError, IndexError):
+            return None
+        if tablet.first_token < token_value <= tablet.last_token:
+            return tablet
         return None
 
     def drop_tablets(self, keyspace: str, table: Optional[str] = None):
         with self._lock:
             if table is not None:
-                self._tablets.pop((keyspace, table), None)
+                key = (keyspace, table)
+                self._tablets.pop(key, None)
+                self._last_tokens.pop(key, None)
                 return
 
             to_be_deleted = []
@@ -144,36 +160,44 @@ class Tablets(object):
 
             for key in to_be_deleted:
                 del self._tablets[key]
+                self._last_tokens.pop(key, None)
 
     def drop_tablets_by_host_id(self, host_id: Optional[UUID]):
         if host_id is None:
             return
         with self._lock:
+            emptied = []
             for key, tablets in self._tablets.items():
-                to_be_deleted = []
-                for tablet_id, tablet in enumerate(tablets):
-                    if tablet.replica_contains_host_id(host_id):
-                        to_be_deleted.append(tablet_id)
-
-                for tablet_id in reversed(to_be_deleted):
-                    tablets.pop(tablet_id)
+                # Filter in one pass instead of popping one-by-one (O(n) vs O(k*n))
+                kept = [t for t in tablets if not t.replica_contains_host_id(host_id)]
+                if len(kept) == len(tablets):
+                    continue  # nothing to drop
+                if kept:
+                    self._tablets[key] = kept
+                    self._last_tokens[key] = [t.last_token for t in kept]
+                else:
+                    emptied.append(key)
+            # A table left with no tablets must not keep an empty entry in
+            # either map; drop both keys entirely instead.
+            for key in emptied:
+                del self._tablets[key]
+                self._last_tokens.pop(key, None)
 
     def add_tablet(self, keyspace, table, tablet):
         with self._lock:
-            tablets_for_table = self._tablets.setdefault((keyspace, table), [])
+            key = (keyspace, table)
+            tablets_for_table = self._tablets.setdefault(key, [])
+            last_tokens = self._last_tokens.setdefault(key, [])
 
             # find first overlapping range
-            start = bisect_left(tablets_for_table, tablet.first_token, key=_get_first_token)
-            if start > 0 and tablets_for_table[start - 1].last_token > tablet.first_token:
-                start = start - 1
+            start = bisect_right(last_tokens, tablet.first_token)
 
             # find last overlapping range
-            end = bisect_left(tablets_for_table, tablet.last_token, key=_get_last_token)
-            if end < len(tablets_for_table) and tablets_for_table[end].first_token >= tablet.last_token:
+            end = bisect_left(last_tokens, tablet.last_token)
+            if end < len(last_tokens) and tablets_for_table[end].first_token >= tablet.last_token:
                 end = end - 1
 
-            if start <= end:
-                del tablets_for_table[start:end + 1]
-
-            tablets_for_table.insert(start, tablet)
+            # Slice assignment: no memmove when one tablet replaces one, and inserts when start > end.
+            tablets_for_table[start:end + 1] = (tablet,)
+            last_tokens[start:end + 1] = (tablet.last_token,)
 
