@@ -1,0 +1,37 @@
+# Codecov configuration for the upload in .github/workflows/coverage.yml.
+# Reference: https://docs.codecov.com/docs/codecov-yaml
+
+codecov:
+  # coverage.yml is the only uploader, so its report should neither be withheld
+  # because another workflow's check failed nor wait for the integration-tests
+  # matrix to finish.
+  require_ci_to_pass: false
+  notify:
+    wait_for_ci: false
+  # See `fixes` below.
+  disable_default_path_fixes: true
+
+# coverage.xml carries <source>cassandra</source> and filenames relative to it
+# (cluster.py, io/__init__.py). Codecov ignores a relative <source> and would
+# match the bare names by suffix against the repository instead, which drops
+# every name that is not unique in the tree (connection.py, policies.py,
+# query.py, util.py and several __init__.py). With default path fixing off,
+# this prefix maps every filename onto the right file under cassandra/.
+fixes:
+  - "::cassandra/"
+
+coverage:
+  status:
+    # Informational: report the delta, never fail a pull request on it. The
+    # integration suite runs against a live Scylla cluster, so which lines it
+    # reaches depends on cluster timing as well as on the diff.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
