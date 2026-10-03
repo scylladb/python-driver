@@ -1,0 +1,141 @@
+# Execution Profiles
+
+Execution profiles aim at making it easier to execute requests in different ways within
+a single connected `Session`. Execution profiles are being introduced to deal with the exploding number of
+configuration options, especially as the database platform evolves more complex workloads.
+
+The legacy configuration remains intact, but legacy and Execution Profile APIs
+cannot be used simultaneously on the same client `Cluster`. Legacy configuration
+will be removed in the next major release (4.0).
+
+An execution profile and its parameters should be unique across `Cluster` instances.
+For example, an execution profile and its `LoadBalancingPolicy` should
+not be applied to more than one `Cluster` instance.
+
+This document explains how Execution Profiles relate to existing settings, and shows how to use the new profiles for
+request execution.
+
+## Mapping Legacy Parameters to Profiles
+
+Execution profiles can inherit from [`cluster.ExecutionProfile`](https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.md#cassandra.cluster.ExecutionProfile), and currently provide the following options,
+previously input from the noted attributes:
+
+- load_balancing_policy - [`Cluster.load_balancing_policy`](https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.md#cassandra.cluster.Cluster.load_balancing_policy)
+- request_timeout - [`Session.default_timeout`](https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.md#cassandra.cluster.Session.default_timeout), optional [`Session.execute()`](https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.md#cassandra.cluster.Session.execute) parameter
+- retry_policy - [`Cluster.default_retry_policy`](https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.md#cassandra.cluster.Cluster.default_retry_policy), optional [`Statement.retry_policy`](https://python-driver.docs.scylladb.com/master/api/cassandra/query.md#cassandra.query.Statement.retry_policy) attribute
+- consistency_level - [`Session.default_consistency_level`](https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.md#cassandra.cluster.Session.default_consistency_level), optional [`Statement.consistency_level`](https://python-driver.docs.scylladb.com/master/api/cassandra/query.md#cassandra.query.Statement.consistency_level) attribute
+- serial_consistency_level - [`Session.default_serial_consistency_level`](https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.md#cassandra.cluster.Session.default_serial_consistency_level), optional [`Statement.serial_consistency_level`](https://python-driver.docs.scylladb.com/master/api/cassandra/query.md#cassandra.query.Statement.serial_consistency_level) attribute
+- row_factory - [`Session.row_factory`](https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.md#cassandra.cluster.Session.row_factory) attribute
+
+When using the new API, these parameters can be defined by instances of [`cluster.ExecutionProfile`](https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.md#cassandra.cluster.ExecutionProfile).
+
+## Using Execution Profiles
+
+### Default
+
+```python
+from cassandra.cluster import Cluster
+cluster = Cluster()
+session = cluster.connect()
+local_query = 'SELECT rpc_address FROM system.local'
+for _ in cluster.metadata.all_hosts():
+    print(session.execute(local_query)[0])
+```
+
+```default
+Row(rpc_address='127.0.0.2')
+Row(rpc_address='127.0.0.1')
+```
+
+The default execution profile is built from Cluster parameters and default Session attributes. This profile matches existing default
+parameters.
+
+### Initializing cluster with profiles
+
+```python
+from cassandra.cluster import ExecutionProfile
+from cassandra.policies import WhiteListRoundRobinPolicy
+
+node1_profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy(['127.0.0.1']))
+node2_profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy(['127.0.0.2']))
+
+profiles = {'node1': node1_profile, 'node2': node2_profile}
+session = Cluster(execution_profiles=profiles).connect()
+for _ in cluster.metadata.all_hosts():
+    print(session.execute(local_query, execution_profile='node1')[0])
+```
+
+```default
+Row(rpc_address='127.0.0.1')
+Row(rpc_address='127.0.0.1')
+```
+
+```python
+for _ in cluster.metadata.all_hosts():
+    print(session.execute(local_query, execution_profile='node2')[0])
+```
+
+```default
+Row(rpc_address='127.0.0.2')
+Row(rpc_address='127.0.0.2')
+```
+
+```python
+for _ in cluster.metadata.all_hosts():
+    print(session.execute(local_query)[0])
+```
+
+```default
+Row(rpc_address='127.0.0.2')
+Row(rpc_address='127.0.0.1')
+```
+
+Note that, even when custom profiles are injected, the default `TokenAwarePolicy(DCAwareRoundRobinPolicy())` is still
+present. To override the default, specify a policy with the [`EXEC_PROFILE_DEFAULT`](https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.md#cassandra.cluster.EXEC_PROFILE_DEFAULT) key.
+
+```python
+from cassandra.cluster import EXEC_PROFILE_DEFAULT
+profile = ExecutionProfile(request_timeout=30)
+cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile})
+```
+
+### Adding named profiles
+
+New profiles can be added constructing from scratch, or deriving from default:
+
+```python
+locked_execution = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy(['127.0.0.1']))
+node1_profile = 'node1_whitelist'
+cluster.add_execution_profile(node1_profile, locked_execution)
+
+for _ in cluster.metadata.all_hosts():
+    print(session.execute(local_query, execution_profile=node1_profile)[0])
+```
+
+```default
+Row(rpc_address='127.0.0.1')
+Row(rpc_address='127.0.0.1')
+```
+
+See [`Cluster.add_execution_profile()`](https://python-driver.docs.scylladb.com/master/api/cassandra/cluster.md#cassandra.cluster.Cluster.add_execution_profile) for details and optional parameters.
+
+### Passing a profile instance without mapping
+
+We also have the ability to pass profile instances to be used for execution, but not added to the mapping:
+
+```python
+from cassandra.query import tuple_factory
+
+tmp = session.execution_profile_clone_update('node1', request_timeout=100, row_factory=tuple_factory)
+
+print(session.execute(local_query, execution_profile=tmp)[0])
+print(session.execute(local_query, execution_profile='node1')[0])
+```
+
+```default
+('127.0.0.1',)
+Row(rpc_address='127.0.0.1')
+```
+
+The new profile is a shallow copy, so the `tmp` profile shares a load balancing policy with one managed by the cluster.
+If reference objects are to be updated in the clone, one would typically set those attributes to a new instance.
