@@ -1789,8 +1789,8 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         # Model the transient middle of a metadata reindex without mutating
         # the Host's immutable identity.
         with cluster.metadata._hosts_lock:
-            assert cluster.metadata._hosts.pop(
-                current_host_id) is self.host
+            popped_host = cluster.metadata._hosts.pop(current_host_id)
+            assert popped_host is self.host
             cluster.metadata._hosts[stale_host_id] = self.host
             cluster.metadata._host_id_by_endpoint[
                 self.host.endpoint] = stale_host_id
