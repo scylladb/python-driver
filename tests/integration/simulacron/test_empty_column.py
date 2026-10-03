@@ -15,6 +15,7 @@
 from collections import namedtuple, OrderedDict
 
 from cassandra.cluster import Cluster, EXEC_PROFILE_DEFAULT
+from cassandra.metadata import SchemaParserV3
 from cassandra.query import (named_tuple_factory, tuple_factory,
                              dict_factory, ordered_dict_factory)
 
@@ -159,7 +160,7 @@ class EmptyColumnTests(SimulacronCluster):
             prime_request(query)
 
         queries = [
-            "SELECT * FROM system_schema.columns",
+            SchemaParserV3._SELECT_COLUMNS,
             "SELECT * FROM system.schema.columns",
             "SELECT * FROM system.schema_columns"
         ]
