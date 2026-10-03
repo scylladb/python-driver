@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import struct
 import unittest
+import uuid
 
 from cassandra.util import OrderedMap, OrderedMapSerializedKey
-from cassandra.cqltypes import EMPTY, UTF8Type, lookup_casstype
+from cassandra.cqltypes import (EMPTY, InetAddressType, Int32Type, UTF8Type,
+                               UUIDType, lookup_casstype)
 from tests.util import assertListEqual
 import pytest
 
@@ -153,8 +156,12 @@ class OrderedMapTest(unittest.TestCase):
     def test_delitem(self):
         om = OrderedMap({1: 1, 2: 2})
 
-        with pytest.raises(KeyError):
+        with pytest.raises(KeyError) as excinfo:
             om.__delitem__(3)
+        assert excinfo.value.args == ('3',)
+        with pytest.raises(KeyError) as excinfo:
+            om[3]
+        assert excinfo.value.args == ('3',)
 
         del om[1]
         assert om == {2: 2}
@@ -184,3 +191,102 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
         assert om[{'one': 1}] is om[{u'one': 1}]
         assert om[{'two': 2}] is om[{u'two': 2}]
         assert om[{'one': 1}] is not om[{'two': 2}]
+
+    def test_unserializable_key_treated_as_missing(self):
+        # a key that cannot be serialized with the map's key type cannot be
+        # present, so lookups behave like a plain dict instead of leaking the
+        # serializer's exception
+        om = OrderedMapSerializedKey(UTF8Type, 3)
+        om._insert_unchecked('one', UTF8Type.serialize('one', 3), 1)
+
+        assert om.get(None) is None
+        assert om.get(None, 2) == 2
+        assert None not in om
+        with pytest.raises(KeyError) as excinfo:
+            om[None]
+        assert excinfo.value.args == (None,)
+        assert excinfo.value.__context__ is None
+        with pytest.raises(KeyError) as excinfo:
+            del om[None]
+        assert excinfo.value.args == (None,)
+        assert excinfo.value.__context__ is None
+        assert list(om.items()) == [('one', 1)]
+
+        # the missing-key error must not depend on the key's __str__
+        class BadStr(object):
+            def __str__(self):
+                raise RuntimeError('no str')
+
+        assert om.get(BadStr()) is None
+        assert BadStr() not in om
+
+        # inserting a key of the wrong type still surfaces the serializer error
+        with pytest.raises(AttributeError):
+            om[None] = 2
+        assert list(om.items()) == [('one', 1)]
+
+    def test_lookup_with_key_rejected_by_key_type(self):
+        # UUIDType raises TypeError, InetAddressType ValueError and Int32Type
+        # struct.error for these keys
+        for key_type, key, bad_key, error in [
+            (UUIDType, uuid.UUID(int=1), 'not-a-uuid', TypeError),
+            (InetAddressType, '127.0.0.1', 'not-an-ip', ValueError),
+            (Int32Type, 1, 2 ** 40, struct.error),
+        ]:
+            om = OrderedMapSerializedKey(key_type, 3)
+            om[key] = 'v'
+
+            assert om.get(bad_key) is None
+            assert bad_key not in om
+            with pytest.raises(KeyError) as excinfo:
+                om[bad_key]
+            assert excinfo.value.args == (bad_key,)
+            with pytest.raises(KeyError) as excinfo:
+                del om[bad_key]
+            assert excinfo.value.args == (bad_key,)
+            assert list(om.items()) == [(key, 'v')]
+
+            # inserts are not translated, the serializer error still escapes
+            with pytest.raises(error):
+                om[bad_key] = 'x'
+            assert list(om.items()) == [(key, 'v')]
+
+            del om[key]
+            assert list(om.items()) == []
+            assert key not in om
+
+    def test_lookup_preserves_unexpected_serializer_errors(self):
+        class Boom(Exception):
+            pass
+
+        for error_type in (RuntimeError, OSError, MemoryError, KeyError, Boom):
+            with self.subTest(error_type=error_type):
+                error = error_type('serializer failed')
+
+                class FailingType(UTF8Type):
+                    @staticmethod
+                    def serialize(val, protocol_version):
+                        if val == 'bad':
+                            raise error
+                        return UTF8Type.serialize(val, protocol_version)
+
+                om = OrderedMapSerializedKey(FailingType, 3)
+                om['one'] = 1
+                om['two'] = 2
+
+                for lookup in (lambda: om.get('bad'), lambda: 'bad' in om,
+                               lambda: om['bad'], lambda: om.__delitem__('bad')):
+                    with pytest.raises(error_type) as excinfo:
+                        lookup()
+                    assert excinfo.value is error
+                    assert list(om.items()) == [('one', 1), ('two', 2)]
+
+                with pytest.raises(error_type) as excinfo:
+                    om['bad'] = 3
+                assert excinfo.value is error
+                assert list(om.items()) == [('one', 1), ('two', 2)]
+
+                del om['one']
+                assert list(om.items()) == [('two', 2)]
+                assert om['two'] == 2
+                assert 'one' not in om
