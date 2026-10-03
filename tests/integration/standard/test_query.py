@@ -33,6 +33,7 @@ from tests.integration import greaterthanorequalcass30, get_node
 from tests.util import assertListEqual, wait_until
 
 import time
+import uuid
 import random
 import re
 
@@ -526,6 +527,44 @@ class PreparedStatementArgTest(unittest.TestCase):
             for host in clus.metadata.all_hosts():
                 session.execute(select_statement, (1, ), host=host)
             assert 2 == mock_handler.get_message_count('debug', "Re-preparing")
+
+    def test_prepare_on_all_hosts_default_and_explicit_true(self):
+        """
+        Regression test for the prepare_on_all_hosts default flip to False.
+
+        test_prepare_on_all_hosts above pins prepare_on_all_hosts=False explicitly, so it
+        can't catch a regression in the class attribute or constructor default. Disable the
+        warm-up shim (warmup_seconds=0) so the unset default is exercised deterministically,
+        and also cover the explicit True opt-in to eager preparation.
+        """
+        with MockLoggingHandler().set_module_name(cluster.__name__) as mock_handler:
+            clus = TestCluster(reprepare_on_up=False, prepare_on_all_hosts_warmup_seconds=0)
+            self.addCleanup(clus.shutdown)
+            assert clus.prepare_on_all_hosts is False
+
+            session = clus.connect(wait_for_all_pools=True)
+            # Random alias: the server prepared cache is keyed by query text, so a fixed text
+            # could already be prepared on every host (earlier run/test) and mask the check.
+            select_statement = session.prepare(
+                "SELECT k AS dflt_%s FROM test3rf.test WHERE k = ?" % uuid.uuid4().hex)
+            for host in clus.metadata.all_hosts():
+                session.execute(select_statement, (1, ), host=host)
+            assert 2 == mock_handler.get_message_count('debug', "Re-preparing")
+
+        with MockLoggingHandler().set_module_name(cluster.__name__) as mock_handler:
+            clus = TestCluster(prepare_on_all_hosts=True, reprepare_on_up=False)
+            self.addCleanup(clus.shutdown)
+            assert clus.prepare_on_all_hosts is True
+
+            session = clus.connect(wait_for_all_pools=True)
+            # unique text (alias) so no earlier prepare on this cluster can make the check trivially pass
+            with mock.patch.object(session, 'prepare_on_all_hosts', wraps=session.prepare_on_all_hosts) as broadcast:
+                select_statement = session.prepare("SELECT k AS eager_optin_k FROM test3rf.test WHERE k = ?")
+            # the broadcast itself must have happened, not just an absence of reprepares
+            assert 1 == broadcast.call_count
+            for host in clus.metadata.all_hosts():
+                session.execute(select_statement, (1, ), host=host)
+            assert 0 == mock_handler.get_message_count('debug', "Re-preparing")
 
     def test_prepare_batch_statement(self):
         """
