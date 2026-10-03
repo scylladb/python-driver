@@ -359,13 +359,11 @@ class MetricsRequestSize(BasicExistingKeyspaceUnitTestCase):
         cls.common_setup(1, keyspace_creation=False)
 
     def wait_for_count(self, ra, expected_count, error=False):
-        for _ in range(10):
-            if not error:
-                if ra.successful == expected_count:
-                    return True
-            else:
-                if ra.errors == expected_count:
-                    return True
+        # Callbacks run on the event loop thread and can lag execute() on loaded CI runners.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if (ra.errors if error else ra.successful) == expected_count:
+                return True
             time.sleep(.01)
         return False
 
