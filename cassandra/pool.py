@@ -495,7 +495,7 @@ class HostConnection(object):
 
         log.debug("Initializing connection for host %s", self.host)
         first_connection = session.cluster.connection_factory(self.host.endpoint, on_orphaned_stream_released=self.on_orphaned_stream_released)
-        log.debug("First connection created to %s for shard_id=%i", self.host, first_connection.features.shard_id)
+        log.debug("First connection created to %s for shard_id=%s", self.host, first_connection.features.shard_id)
         self._connections[first_connection.features.shard_id] = first_connection
         self._keyspace = session.keyspace
 

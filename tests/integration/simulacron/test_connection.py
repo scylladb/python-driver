@@ -27,14 +27,15 @@ from tests.integration import requiressimulacron, libevtest
 from tests.integration.util import assert_quiescent_pool_state
 # important to import the patch PROTOCOL_VERSION from the simulacron module
 from tests.integration.simulacron import SimulacronBase, PROTOCOL_VERSION
-from cassandra.connection import DEFAULT_CQL_VERSION, Connection
+from cassandra.connection import Connection
 from tests.unit.cython.utils import cythontest
 from tests.integration.simulacron.utils import (NO_THEN, PrimeOptions,
                                                 prime_query, prime_request,
                                                 start_and_prime_cluster_defaults,
                                                 start_and_prime_singledc,
                                                 clear_queries, RejectConnections,
-                                                RejectType, AcceptConnections, PauseReads, ResumeReads)
+                                                RejectType, AcceptConnections, PauseReads, ResumeReads,
+                                                CQL_VERSION)
 import pytest
 
 
@@ -80,7 +81,7 @@ def _send_options_message(self):
     test to avoid a condition where the CC tries to reconnect in the executor but can't
     since we prime that message."""
     self._compressor = None
-    self.cql_version = DEFAULT_CQL_VERSION
+    self.cql_version = CQL_VERSION
     self._send_startup_message(no_compact=self.no_compact)
 
 
