@@ -25,7 +25,7 @@ from cassandra import (AuthenticationFailed, OperationTimedOut,
                        SchemaTargetType, SchemaChangeType,
                        UnresolvableContactPoints)
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
-from cassandra.cluster import (Cluster, ControlConnection, Session, _Scheduler,
+from cassandra.cluster import (Cluster, ControlConnection, _Scheduler,
                                ProfileManager, EXEC_PROFILE_DEFAULT,
                                ExecutionProfile,
                                ControlConnectionQueryFallback,
@@ -38,6 +38,7 @@ from cassandra.policies import (DCAwareRoundRobinPolicy, HostDistance,
                                 ConstantReconnectionPolicy,
                                 ExponentialReconnectionPolicy,
                                 IdentityTranslator)
+from tests.unit.utils import new_session_with_pool_state
 
 PEER_IP = "foobar"
 
@@ -1592,9 +1593,8 @@ class ControlConnectionTest(unittest.TestCase):
         }
         removal_future = Future()
         addition_future = Future()
-        session = Session.__new__(Session)
+        session = new_session_with_pool_state(retained_pools)
         session.cluster = cluster
-        session._pools = dict(retained_pools)
         session._pools[old_host] = old_pool
         session.is_shutdown = False
 
@@ -1690,9 +1690,9 @@ class ControlConnectionTest(unittest.TestCase):
         removal_future = Future()
         replacement_future = Future()
         promoted_future = Future()
-        session = Session.__new__(Session)
+        session = new_session_with_pool_state(
+            {local_host: local_pool, old_host: old_pool})
         session.cluster = cluster
-        session._pools = {local_host: local_pool, old_host: old_pool}
         session.is_shutdown = False
 
         def submit(fn, *args, **kwargs):
@@ -1702,12 +1702,18 @@ class ControlConnectionTest(unittest.TestCase):
         session.submit = submit
         session._profile_manager = cluster.profile_manager
         def add_or_renew_pool(host, is_host_addition,
-                              on_add_reconnection=None):
+                              on_add_reconnection=None,
+                              _expected_state=None,
+                              _expected_intent=None, _distance=None):
             if is_host_addition:
                 assert on_add_reconnection is not None
+                assert _expected_state is None
                 return replacement_future
             assert host is promoted_host
             assert cluster.profile_manager.distance(host) == HostDistance.REMOTE
+            assert _expected_state is not None
+            assert _expected_intent is not None
+            assert _distance == HostDistance.REMOTE
             return promoted_future
 
         session.add_or_renew_pool = Mock(side_effect=add_or_renew_pool)
@@ -1753,7 +1759,8 @@ class ControlConnectionTest(unittest.TestCase):
         assert session.add_or_renew_pool.call_args_list == [
             call(replacement, is_host_addition=True,
                  on_add_reconnection=ANY),
-            call(promoted_host, False),
+            call(promoted_host, False, _expected_state=ANY,
+                 _expected_intent=ANY, _distance=HostDistance.REMOTE),
         ]
         listener.on_add.assert_not_called()
 

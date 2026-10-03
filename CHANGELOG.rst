@@ -21,6 +21,10 @@ Bug Fixes
   (DRIVER-1122, #1054).
 * Distribute SNI endpoints across resolved proxy addresses so one unavailable DNS
   answer does not prevent every cloud endpoint from connecting (PYTHON-1419).
+* Stale pool creations, failures, and load-balancing reconciliation no longer
+  replace, close, or misconfigure a live pool. Closing a pool with requests in
+  flight could retry an already executed request, causing it to execute twice
+  (#317).
 
 Behavior Changes
 ----------------
