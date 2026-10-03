@@ -27,3 +27,7 @@ class TypesTest(unittest.TestCase):
     @cythontest
     def test_date_side_by_side(self):
         types_testhelper.test_date_side_by_side()
+
+    @cythontest
+    def test_decimal_empty_varint_raises(self):
+        types_testhelper.test_decimal_empty_varint_raises()
