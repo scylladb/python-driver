@@ -33,13 +33,11 @@ import time
 import unittest
 import uuid
 
-import json as _json
-import urllib.request
-
 from cassandra.cluster import Cluster
 from cassandra.client_routes import ClientRoutesConfig, ClientRouteProxy
 from cassandra.connection import ClientRoutesEndPoint
 from cassandra.policies import RoundRobinPolicy
+from tests.client_routes_rest import MAX_ATTEMPTS, post_client_routes
 from tests.integration import (
     TestCluster,
     get_cluster,
@@ -209,41 +207,6 @@ class NLBEmulator:
         with self._lock:
             return [p.target_host for p in self._node_proxies.values()]
 
-def post_client_routes(contact_point, routes):
-    """
-    Post client routes to Scylla's REST API.
-
-    :param contact_point: IP/hostname of a Scylla node (e.g. "127.0.0.1")
-    :param routes: List of route dicts with keys: connection_id, host_id, address, port
-                   and optionally tls_port
-    """
-    payload = []
-    for route in routes:
-        entry = {
-            "connection_id": str(route["connection_id"]),
-            "host_id": str(route["host_id"]),
-            "address": route["address"],
-            "port": route["port"],
-        }
-        if route.get("tls_port") is not None:
-            entry["tls_port"] = route["tls_port"]
-        payload.append(entry)
-
-    url = "http://%s:10000/v2/client-routes" % contact_point
-    log.info("Posting %d routes to %s", len(payload), url)
-    data = _json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST",
-    )
-    response = urllib.request.urlopen(req)
-    log.info("Routes posted successfully (status %d)", response.status)
-
 
 def get_host_ids_from_cluster(session):
     """
@@ -282,10 +245,10 @@ def build_routes_for_nlb(connection_id, host_id_map, nlb):
     return routes
 
 
-def post_routes_for_nlb(contact_point, connection_id, host_id_map, nlb):
+def post_routes_for_nlb(contact_point, connection_id, host_id_map, nlb, retries=1):
     """Build routes for the NLB and POST them via the REST API."""
     routes = build_routes_for_nlb(connection_id, host_id_map, nlb)
-    post_client_routes(contact_point, routes)
+    post_client_routes(contact_point, routes, retries=retries)
     return routes
 
 def wait_for_routes_visible(session, connection_id, expected_count, timeout=10, poll_interval=0.1):
@@ -1122,9 +1085,13 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
 
                     surviving_ips = list(remaining_host_ids.keys())
                     if surviving_ips:
+                        # The REST API can briefly answer 5xx right after a
+                        # decommission; this is the only path with evidence of
+                        # that transient failure, so it opts into retrying.
                         post_routes_for_nlb(
                             surviving_ips[0], self.connection_id,
                             remaining_host_ids, nlb,
+                            retries=MAX_ATTEMPTS,
                         )
 
                     expected_remaining = expected_total - (original_node_ids.index(node_id) + 1)
