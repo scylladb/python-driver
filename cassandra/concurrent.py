@@ -214,11 +214,26 @@ class ConcurrentExecutorGenResults(_ConcurrentExecutor):
 class ConcurrentExecutorListResults(_ConcurrentExecutor):
 
     _exception = None
+    _input_error = None
 
     def execute(self, concurrency, fail_fast):
         self._exception = None
+        self._input_error = None
         self._result_list = [None] * self._input_len
-        return super(ConcurrentExecutorListResults, self).execute(concurrency, fail_fast)
+        self._fail_fast = fail_fast
+        self._current = 0
+        self._exec_count = 0
+        self._stopped = False
+        with self._condition:
+            try:
+                for n in range(concurrency):
+                    if not self._execute_next():
+                        break
+            except BaseException as exc:
+                # The caller's iterable failed; surfaced by _results().
+                self._stopped = True
+                self._input_error = exc
+        return self._results()
 
     def _put_result(self, result, idx, success):
         with self._condition:
@@ -237,15 +252,28 @@ class ConcurrentExecutorListResults(_ConcurrentExecutor):
                 if self._exception is None:
                     self._exception = result
                 self._condition.notify()
-            elif not self._execute_next() and self._current == self._exec_count:
-                self._condition.notify()
+            else:
+                try:
+                    has_next = self._execute_next()
+                except BaseException as exc:
+                    # The caller's iterable failed; on an IO thread this would be lost.
+                    self._stopped = True
+                    self._input_error = exc
+                    self._condition.notify()
+                    return
+                if not has_next and self._current == self._exec_count:
+                    self._condition.notify()
 
     def _results(self):
         with self._condition:
             while self._current < self._exec_count:
+                if self._input_error is not None:
+                    raise self._input_error
                 if self._exception is not None and self._fail_fast:
                     raise self._exception
                 self._condition.wait()
+        if self._input_error is not None:
+            raise self._input_error
         if self._exception is not None and self._fail_fast:  # raise the exception even if there was no wait
             raise self._exception
         del self._result_list[self._exec_count:]
