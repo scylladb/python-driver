@@ -105,6 +105,10 @@ class _ConcurrentExecutor(object):
 
     def __init__(self, session, statements_and_params, execution_profile):
         self.session = session
+        try:
+            self._input_len = len(statements_and_params)
+        except TypeError:
+            self._input_len = 0
         self._enum_statements = enumerate(iter(statements_and_params))
         self._execution_profile = execution_profile
         self._condition = Condition()
@@ -213,11 +217,20 @@ class ConcurrentExecutorListResults(_ConcurrentExecutor):
 
     def execute(self, concurrency, fail_fast):
         self._exception = None
+        self._result_list = [None] * self._input_len
         return super(ConcurrentExecutorListResults, self).execute(concurrency, fail_fast)
 
     def _put_result(self, result, idx, success):
-        self._results_queue.append((idx, ExecutionResult(success, result)))
         with self._condition:
+            # First completion wins; a future may report again (e.g. late
+            # response after a client timeout) and must not be counted twice.
+            results = self._result_list
+            if idx >= len(results):
+                # Unsized input: grow geometrically.
+                results.extend([None] * max(idx + 1 - len(results), len(results)))
+            if results[idx] is not None:
+                return
+            results[idx] = ExecutionResult(success, result)
             self._current += 1
             if not success and self._fail_fast:
                 self._stopped = True
@@ -235,7 +248,8 @@ class ConcurrentExecutorListResults(_ConcurrentExecutor):
                 self._condition.wait()
         if self._exception is not None and self._fail_fast:  # raise the exception even if there was no wait
             raise self._exception
-        return [r[1] for r in sorted(self._results_queue)]
+        del self._result_list[self._exec_count:]
+        return self._result_list
 
 
 
