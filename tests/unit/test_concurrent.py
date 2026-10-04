@@ -15,6 +15,7 @@
 
 import unittest
 
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from itertools import cycle
 from unittest.mock import Mock, patch
@@ -1357,3 +1358,35 @@ class ConcurrentListExecutorTest(unittest.TestCase):
             for future in held:
                 future.callback(['r'])
             assert len(consumed) <= 5
+
+    @pytest.mark.skipif(not sys.platform.startswith('linux'), reason="ru_nvcsw is only reliable on Linux")
+    def test_list_executor_does_not_block_per_request(self):
+        # Inline submission from the IO thread should not context-switch per request.
+        import resource
+        pending = deque()
+        stop = threading.Event()
+
+        def io_loop():
+            # Spin instead of blocking, so only the executor can cause switches.
+            while not stop.is_set():
+                try:
+                    future = pending.popleft()
+                except IndexError:
+                    continue
+                future.callback(['r'])
+
+        io_thread = threading.Thread(target=io_loop, daemon=True)
+        io_thread.start()
+        try:
+            session = _session_with(pending.append)
+            n = 2000
+            execute_concurrent(session, [("q", (0,))] * 100, raise_on_first_error=False)  # warm up
+            before = resource.getrusage(resource.RUSAGE_SELF).ru_nvcsw
+            results = self._run(execute_concurrent, session, [("q", (i,)) for i in range(n)],
+                                raise_on_first_error=False)
+            switches = resource.getrusage(resource.RUSAGE_SELF).ru_nvcsw - before
+        finally:
+            stop.set()
+            io_thread.join(5)
+        assert len(results) == n
+        assert switches / n < 0.2, "%d voluntary context switches for %d requests" % (switches, n)
