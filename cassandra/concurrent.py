@@ -190,8 +190,19 @@ class _ConcurrentExecutor(object):
 
 class ConcurrentExecutorGenResults(_ConcurrentExecutor):
 
+    def execute(self, concurrency, fail_fast):
+        # Completed but not yet yielded idxs; bounded like the results heap.
+        self._reported = set()
+        return _ConcurrentExecutor.execute(self, concurrency, fail_fast)
+
     def _put_result(self, result, idx, success):
         with self._condition:
+            # First completion wins; a future may report again (e.g. late
+            # response after a client timeout) and must not be counted twice.
+            reported = self._reported
+            if idx < self._current or idx in reported:
+                return
+            reported.add(idx)
             heappush(self._results_queue, (idx, ExecutionResult(success, result)))
             if not success and self._fail_fast:
                 self._stopped = True
@@ -205,7 +216,7 @@ class ConcurrentExecutorGenResults(_ConcurrentExecutor):
                 while not self._results_queue or self._results_queue[0][0] != self._current:
                     self._condition.wait()
                 while self._results_queue and self._results_queue[0][0] == self._current:
-                    _, res = heappop(self._results_queue)
+                    idx, res = heappop(self._results_queue)
                     try:
                         self._condition.release()
                         if self._fail_fast and not res[0]:
@@ -214,6 +225,7 @@ class ConcurrentExecutorGenResults(_ConcurrentExecutor):
                     finally:
                         self._condition.acquire()
                     self._current += 1
+                    self._reported.discard(idx)
 
 
 class ConcurrentExecutorListResults(_ConcurrentExecutor):
