@@ -1288,6 +1288,37 @@ class ConcurrentListExecutorTest(unittest.TestCase):
             raise out['exc']
         return out['result']
 
+    def test_callbacks_are_plain_functions_not_bound_methods(self):
+        # A bound method per request is an allocation, and storing one on
+        # the executor would create a self-cycle.
+        from cassandra.concurrent import _ConcurrentExecutor
+        seen = []
+
+        def on_execute(future):
+            seen.append(future)
+            future.callback(['ok'])
+
+        results = self._run(execute_concurrent,
+            _session_with(on_execute), [("q", (i,)) for i in range(5)])
+        assert [r.success for r in results] == [True] * 5
+        assert len(seen) == 5
+
+        registered = []
+        orig = _ManualFuture.add_callbacks
+
+        def spy(self_, callback, errback, callback_args=(), **kw):
+            registered.append((callback, errback, callback_args))
+            return orig(self_, callback, errback, callback_args, **kw)
+
+        with patch.object(_ManualFuture, 'add_callbacks', spy):
+            self._run(execute_concurrent, _session_with(on_execute),
+                      [("q", (i,)) for i in range(3)])
+        assert len(registered) == 3
+        for cb, eb, args in registered:
+            assert cb is _ConcurrentExecutor._on_success
+            assert eb is _ConcurrentExecutor._on_error
+            assert isinstance(args[0], _ConcurrentExecutor)
+
     def test_duplicate_completion_counted_once(self):
         # e.g. a speculative response arriving after a client timeout
         futures = []
