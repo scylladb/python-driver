@@ -1379,6 +1379,29 @@ class ConcurrentListExecutorTest(unittest.TestCase):
         assert not t.is_alive(), "execute_concurrent hung"
         assert [r.success for r in out[0]] == [False, True]
 
+    def test_generator_duplicate_completion_counted_once(self):
+        # A duplicate report must not be yielded, block the generator, or submit more work.
+        futures = []
+        inline = []
+
+        def on_execute(future):
+            futures.append(future)
+            if future.params[0] == 0:
+                future.errback(OperationTimedOut())
+                future.callback(['late'])
+            elif inline:
+                future.callback(['r'])
+
+        session = _session_with(on_execute)
+        results = execute_concurrent(session, [("q", (i,)) for i in range(4)],
+                                     concurrency=1, raise_on_first_error=False, results_generator=True)
+        assert session.execute_async.call_count == 2
+        inline.append(True)
+        futures[1].callback(['r'])
+        results = self._run(list, results)
+        assert [r.success for r in results] == [False, True, True, True]
+        assert session.execute_async.call_count == 4
+
     def test_late_error_after_success_is_ignored(self):
         def on_execute(future):
             future.callback(['ok'])
@@ -1441,6 +1464,21 @@ class ConcurrentListExecutorTest(unittest.TestCase):
             for future in held:
                 future.callback(['r'])
             assert len(consumed) <= 5
+
+    def test_exhausted_iterator_not_advanced_again(self):
+        class Counting(object):
+            calls = 0
+            def __init__(self): self.it = iter([("q", (0,)), ("q", (1,))])
+            def __iter__(self): return self
+            def __next__(self):
+                Counting.calls += 1
+                return next(self.it)
+
+        def complete_inline(future):
+            future.callback(['r'])
+
+        self._run(execute_concurrent, _session_with(complete_inline), Counting(), concurrency=2)
+        assert Counting.calls == 3  # 2 items + one StopIteration
 
     @pytest.mark.skipif(not sys.platform.startswith('linux'), reason="ru_nvcsw is only reliable on Linux")
     def test_list_executor_does_not_block_per_request(self):
