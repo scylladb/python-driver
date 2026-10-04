@@ -32,6 +32,10 @@ Bug Fixes
   ``raise_on_first_error=True``. An exception raised by the caller's statement
   iterable is now raised from ``execute_concurrent()`` instead of being
   recorded as a result or lost.
+* ``execute_concurrent(..., results_generator=True)`` counts each statement
+  once when its future reports more than once (e.g. a speculative response
+  after a client timeout). Previously the generator could hang and submit more
+  than ``concurrency`` statements.
 
 Behavior Changes
 ----------------
