@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from collections import namedtuple
+from collections import deque, namedtuple
 from concurrent.futures import Future
 from heapq import heappush, heappop
 from itertools import cycle
@@ -117,6 +117,7 @@ class _ConcurrentExecutor(object):
         self._current = 0
         self._exec_count = 0
         self._executing = False
+        self._pending_executions = deque()
         self._stopped = False
 
     def execute(self, concurrency, fail_fast):
@@ -149,38 +150,42 @@ class _ConcurrentExecutor(object):
         # -> _execute.  Without protection this recurses once per remaining
         # statement and blows the stack.
         #
-        # ``_executing`` marks that we are already inside this method higher up
-        # the call stack.  When a synchronous callback re-enters, we just stash
-        # the pending work in ``_pending_executions`` and let the outermost
-        # invocation drain it in a loop -- no recursion.
+        # ``_executing`` marks that we are inside this method higher up the
+        # stack; re-entrant calls queue their work in ``_pending_executions``
+        # and the outermost call drains it in a loop -- no recursion.
         if self._executing:
             self._pending_executions.append((idx, statement, params))
             return
 
         self._executing = True
-        self._pending_executions = [(idx, statement, params)]
+        pending = self._pending_executions
         try:
-            while self._pending_executions:
-                p_idx, p_statement, p_params = self._pending_executions.pop(0)
+            while True:
                 try:
                     future = self.session.execute_async(
-                        p_statement, p_params,
+                        statement, params,
                         execution_profile=self._execution_profile)
-                    args = (future, p_idx)
+                    # Plain functions + self in args: no bound method per request.
+                    args = (self, future, idx)
                     future.add_callbacks(
                         callback=self._on_success, callback_args=args,
                         errback=self._on_error, errback_args=args)
                 except Exception as exc:
-                    self._put_result(exc, p_idx, False)
+                    self._put_result(exc, idx, False)
+                if not pending:
+                    break
+                idx, statement, params = pending.popleft()
         finally:
             self._executing = False
 
-    def _on_success(self, result, future, idx):
+    @staticmethod
+    def _on_success(result, executor, future, idx):
         future.clear_callbacks()
-        self._put_result(ResultSet(future, result), idx, True)
+        executor._put_result(ResultSet(future, result), idx, True)
 
-    def _on_error(self, result, future, idx):
-        self._put_result(result, idx, False)
+    @staticmethod
+    def _on_error(result, executor, future, idx):
+        executor._put_result(result, idx, False)
 
 
 class ConcurrentExecutorGenResults(_ConcurrentExecutor):
