@@ -1306,6 +1306,25 @@ class ConcurrentListExecutorTest(unittest.TestCase):
             concurrency=1, raise_on_first_error=True)
         assert [r.success for r in results] == [True, True, True]
 
+    def test_iterable_errors_propagate(self):
+        def broken(exc):
+            for i in range(5):
+                yield ("q", (i,))
+            raise exc
+
+        def complete_inline(future):
+            future.callback(['r'])
+
+        def complete_on_io_thread(future):
+            threading.Thread(target=future.callback, args=(['r'],), daemon=True).start()
+
+        for on_execute in (complete_inline, complete_on_io_thread):
+            for exc in (ValueError("boom"), GeneratorExit()):
+                with pytest.raises(type(exc)):
+                    self._run(execute_concurrent,
+                        _session_with(on_execute), broken(exc), concurrency=2,
+                        raise_on_first_error=False)
+
     def test_fail_fast_stops_consuming_input(self):
         consumed = []
 
