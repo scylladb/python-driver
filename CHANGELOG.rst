@@ -31,6 +31,9 @@ Bug Fixes
   built-in Cython LZ4 codec is present. As before 3.29.12, it picks LZ4 only when
   the ``lz4`` package is installed; ``compression='lz4'`` still works with the
   built-in codec alone (#1085).
+* Tablet updates no longer mutate a table's tablet list in place, so a
+  concurrent lookup cannot fail with ``IndexError``, miss its tablet, or route
+  to the wrong one (#1086).
 
 Behavior Changes
 ----------------
