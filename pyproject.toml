@@ -203,8 +203,9 @@ test-extras = ["compress-lz4"]
 # Homebrew). The extra -k exclusions are timing-sensitive tests that are flaky
 # on macOS runners. The asyncio reactor test file only contains those
 # timing-sensitive timer tests, so it is not run separately here.
+# test_list_executor_does_not_block_per_request is Linux-only (skipped elsewhere).
 test-command = [
-    "CASS_DRIVER_NO_SKIP=1 pytest --import-mode=append {project}/tests/unit -v --ignore={project}/tests/unit/column_encryption --ignore={project}/tests/unit/io/test_asyncioreactor.py --ignore={project}/tests/unit/io/test_asyncorereactor.py -k 'not (test_multi_timer_validation or test_empty_connections or test_timer_cancellation or test_deserialize_date_range_month)'",
+    "CASS_DRIVER_NO_SKIP=1 pytest --import-mode=append {project}/tests/unit -v --ignore={project}/tests/unit/column_encryption --ignore={project}/tests/unit/io/test_asyncioreactor.py --ignore={project}/tests/unit/io/test_asyncorereactor.py -k 'not (test_multi_timer_validation or test_empty_connections or test_timer_cancellation or test_deserialize_date_range_month or test_list_executor_does_not_block_per_request)'",
 ]
 
 [tool.cibuildwheel.windows]
