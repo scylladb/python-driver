@@ -31,6 +31,9 @@ Bug Fixes
   built-in Cython LZ4 codec is present. As before 3.29.12, it picks LZ4 only when
   the ``lz4`` package is installed; ``compression='lz4'`` still works with the
   built-in codec alone (#1085).
+* The Cython LZ4 codec no longer releases the GIL for frames under 2 KiB.
+  Releasing it on every small frame forced GIL handoffs between driver threads,
+  costing more CPU and context switches than the compression itself.
 
 Behavior Changes
 ----------------
