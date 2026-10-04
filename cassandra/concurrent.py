@@ -119,6 +119,7 @@ class _ConcurrentExecutor(object):
         self._executing = False
         self._pending_executions = deque()
         self._stopped = False
+        self._exhausted = False
 
     def execute(self, concurrency, fail_fast):
         self._fail_fast = fail_fast
@@ -127,14 +128,14 @@ class _ConcurrentExecutor(object):
         self._exec_count = 0
         self._stopped = False
         with self._condition:
-            for n in range(concurrency):
-                if not self._execute_next():
-                    break
+            # Window-aware: inline completions may already have submitted more.
+            while self._exec_count - self._current < concurrency and self._execute_next():
+                pass
         return self._results()
 
     def _execute_next(self):
         # lock must be held
-        if self._stopped:
+        if self._stopped or self._exhausted:
             return False
         try:
             (idx, (statement, params)) = next(self._enum_statements)
@@ -142,7 +143,9 @@ class _ConcurrentExecutor(object):
             self._execute(idx, statement, params)
             return True
         except StopIteration:
-            pass
+            # Custom iterators must not be advanced again after signalling the end.
+            self._exhausted = True
+            return False
 
     def _execute(self, idx, statement, params):
         # When execute_async completes synchronously (e.g. immediate timeout),
@@ -193,6 +196,8 @@ class ConcurrentExecutorGenResults(_ConcurrentExecutor):
     def execute(self, concurrency, fail_fast):
         # Completed but not yet yielded idxs; bounded like the results heap.
         self._reported = set()
+        self._concurrency = concurrency
+        self._head_waited = False
         return _ConcurrentExecutor.execute(self, concurrency, fail_fast)
 
     def _put_result(self, result, idx, success):
@@ -206,7 +211,9 @@ class ConcurrentExecutorGenResults(_ConcurrentExecutor):
             heappush(self._results_queue, (idx, ExecutionResult(success, result)))
             if not success and self._fail_fast:
                 self._stopped = True
-            else:
+            # Unyielded results hold the window, so a slow consumer bounds memory.
+            # The head counts as yielded only while the consumer is blocked on it.
+            elif (idx == self._current and self._head_waited) or self._exec_count - self._current < self._concurrency:
                 self._execute_next()
             self._condition.notify()
 
@@ -214,7 +221,9 @@ class ConcurrentExecutorGenResults(_ConcurrentExecutor):
         with self._condition:
             while self._current < self._exec_count:
                 while not self._results_queue or self._results_queue[0][0] != self._current:
+                    self._head_waited = True
                     self._condition.wait()
+                self._head_waited = False
                 while self._results_queue and self._results_queue[0][0] == self._current:
                     idx, res = heappop(self._results_queue)
                     try:
@@ -226,6 +235,8 @@ class ConcurrentExecutorGenResults(_ConcurrentExecutor):
                         self._condition.acquire()
                     self._current += 1
                     self._reported.discard(idx)
+                    if self._exec_count - self._current < self._concurrency:
+                        self._execute_next()
 
 
 class ConcurrentExecutorListResults(_ConcurrentExecutor):
