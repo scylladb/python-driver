@@ -338,3 +338,32 @@ class HostConnectionTests(_PoolTests):
 
             # Cleanup executor with proper wait
             session.cluster.executor.shutdown(wait=True)
+
+
+def test_pool_reuses_session_tablet_without_second_lookup():
+    # The session looks the tablet up once; the pool must not repeat it.
+    tablet = Mock()
+    tablet.get_replica_shard_id.return_value = 3
+    pool = Mock(spec=HostConnection, is_shutdown=False, supports_tablet_routing=True, _connections={3: Mock(orphaned_threshold_reached=False)})
+    pool._session.cluster.shard_aware_options.disable = False
+    pool.host.sharding_info = Mock()
+    pool._session.cluster.metadata._tablets.get_tablet_for_key.side_effect = AssertionError("second lookup")
+    HostConnection._get_connection_for_routing_key(
+        pool, b'k', 'ks', 'tb', routing_token=Mock(), routing_tablet=tablet)
+    tablet.get_replica_shard_id.assert_called_once()
+
+
+def test_pool_looks_up_tablet_when_only_token_given():
+    # A caller passing routing_token without routing_tablet must still get tablet routing.
+    tablet = Mock()
+    tablet.get_replica_shard_id.return_value = 3
+    conn = Mock(orphaned_threshold_reached=False)
+    pool = Mock(spec=HostConnection, is_shutdown=False, supports_tablet_routing=True, _connections={3: conn})
+    pool._session.cluster.shard_aware_options.disable = False
+    pool.host.sharding_info = Mock()
+    lookup = pool._session.cluster.metadata._tablets.get_tablet_for_key
+    lookup.return_value = tablet
+    assert HostConnection._get_connection_for_routing_key(
+        pool, b'k', 'ks', 'tb', routing_token=Mock()) is conn
+    lookup.assert_called_once()
+    tablet.get_replica_shard_id.assert_called_once()

@@ -83,7 +83,7 @@ from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, Simpl
                                 RetryPolicy, IdentityTranslator, NoSpeculativeExecutionPlan,
                                 NoSpeculativeExecutionPolicy, DefaultLoadBalancingPolicy,
                                 NeverRetryPolicy)
-from cassandra.pool import (Host, _ReconnectionHandler, _HostReconnectionHandler,
+from cassandra.pool import (_TABLET_NOT_LOOKED_UP, Host, _ReconnectionHandler, _HostReconnectionHandler,
                             HostConnection,
                             NoConnectionsAvailable)
 from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
@@ -3855,12 +3855,16 @@ class Session(object):
         # balancing policy drops token awareness in that case. Without the check
         # this path would raise on every prepared-statement execution instead.
         routing_token = None
+        routing_tablet = None
         routing_key = query.routing_key
         if routing_key is not None:
             metadata = self.cluster.metadata
             token_map = metadata.token_map
             if token_map is not None and metadata.can_support_partitioner():
                 routing_token = token_map.token_class.from_key(routing_key)
+                # One tablet lookup per request, shared with the version block and the pool.
+                routing_tablet = metadata._tablets.get_tablet_for_key(
+                    query.keyspace or self.keyspace, query.table, routing_token)
 
         if isinstance(query, SimpleStatement):
             query_string = query.query_string
@@ -3899,7 +3903,7 @@ class Session(object):
                           and continuous_paging_options is None,
                 continuous_paging_options=continuous_paging_options,
                 result_metadata_id=result_metadata_id,
-                tablet_version_block=self._compute_tablet_version_block(query, routing_key, routing_token))
+                tablet_version_block=self._compute_tablet_version_block(query, routing_key, routing_token, routing_tablet))
         elif isinstance(query, BatchStatement):
             if self._protocol_version < 2:
                 raise UnsupportedOperation(
@@ -3927,10 +3931,10 @@ class Session(object):
             prepared_statement=prepared_statement, retry_policy=retry_policy, row_factory=row_factory,
             load_balancer=load_balancing_policy, start_time=start_time, speculative_execution_plan=spec_exec_plan,
             continuous_paging_state=None, host=host, bound_result_metadata=bound_result_metadata,
-            routing_token=routing_token)
+            routing_token=routing_token, routing_tablet=routing_tablet)
 
     def _compute_tablet_version_block(self, query, routing_key: Optional[bytes],
-                                      routing_token: Optional[Token]) -> int:
+                                      routing_token: Optional[Token], tablet: Optional[Tablet] = None) -> int:
         """
         Compute the tablet_version_block byte for a BoundStatement.
 
@@ -3972,11 +3976,8 @@ class Session(object):
             # useful. Make it possible to obtain it.
             return random_tablet_version_block()
 
-        # A single lookup: get_tablet_for_key already reports a table with no
-        # cached tablets (a vnode table, or a tablet table on cold start) as
-        # None, and going through the mutable cache twice would leave a window
-        # for the tablet to disappear between the checks.
-        tablet = self.cluster.metadata._tablets.get_tablet_for_key(keyspace, table, routing_token)
+        # ``tablet`` is the caller's single lookup; None covers a vnode table and
+        # a tablet table on cold start alike.
         if tablet is None or tablet.tablet_version is None:
             # A version miss on the server, which replies with fresh routing info.
             return random_tablet_version_block()
@@ -6729,7 +6730,8 @@ class ResponseFuture(object):
     def __init__(self, session, message, query, timeout, metrics=None, prepared_statement=None,
                  retry_policy=RetryPolicy(), row_factory=None, load_balancer=None, start_time=None,
                  speculative_execution_plan=None, continuous_paging_state=None, host=None,
-                 bound_result_metadata=_NOT_SET, routing_token=None):
+                 bound_result_metadata=_NOT_SET, routing_token=None,
+                 routing_tablet=_TABLET_NOT_LOOKED_UP):
         self.session = session
         # TODO: normalize handling of retry policy and row factory
         self.row_factory = row_factory or session.row_factory
@@ -6750,6 +6752,7 @@ class ResponseFuture(object):
         self._start_time = start_time or time.time()
         self._host = host
         self._routing_token = routing_token
+        self._routing_tablet = routing_tablet
         self._control_connection_query_attempted = False
         self._page_generation = 0
         self._retry_aborted = False
@@ -7293,7 +7296,7 @@ class ResponseFuture(object):
                 connection, request_id = pool.borrow_connection(
                     timeout=2.0, routing_key=self.query.routing_key,
                     keyspace=self.query.keyspace, table=self.query.table,
-                    routing_token=self._routing_token)
+                    routing_token=self._routing_token, routing_tablet=self._routing_tablet)
             else:
                 connection, request_id = pool.borrow_connection(timeout=2.0)
             self._connection = connection
