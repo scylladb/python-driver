@@ -1230,3 +1230,84 @@ class ConcurrencyTest((unittest.TestCase)):
         for success, result in results:
             assert not success
             assert result is error
+
+
+class _ManualFuture(object):
+    """Future completed explicitly by the test, from any thread."""
+    _query_trace = None
+    _col_names = None
+    _col_types = None
+    has_more_pages = False
+
+    def __init__(self, params, on_registered):
+        self.params = params
+        self._on_registered = on_registered
+
+    def add_callbacks(self, callback, errback, callback_args=(), callback_kwargs=None,
+                      errback_args=(), errback_kwargs=None):
+        self.callback = lambda rows: callback(rows, *callback_args)
+        self.errback = lambda exc: errback(exc, *errback_args)
+        self._on_registered(self)
+
+    def clear_callbacks(self):
+        pass
+
+
+def _session_with(on_registered):
+    # on_registered(future) runs once execute_concurrent has attached its callbacks
+    session = Mock()
+    session.execute_async.side_effect = lambda stmt, params, **kw: _ManualFuture(params, on_registered)
+    return session
+
+
+class ConcurrentListExecutorTest(unittest.TestCase):
+
+    def _run(self, fn, *args, **kwargs):
+        # Fail instead of hanging the suite on a deadlock regression.
+        out = {}
+
+        def target():
+            try:
+                out['result'] = fn(*args, **kwargs)
+            except BaseException as exc:
+                out['exc'] = exc
+        t = threading.Thread(target=target, daemon=True)
+        t.start()
+        t.join(10)
+        assert not t.is_alive(), "execute_concurrent hung"
+        if 'exc' in out:
+            raise out['exc']
+        return out['result']
+
+    def test_fail_fast_stops_consuming_input(self):
+        consumed = []
+
+        def statements():
+            for i in range(20000):
+                consumed.append(i)
+                yield ("q", (i,))
+
+        held = []
+
+        def complete_inline(future):
+            if future.params[0] == 0:
+                future.errback(ValueError("first"))
+            else:
+                future.callback(['r'])
+
+        def fail_first_on_io_thread(future):
+            # Successes are held so they cannot legitimately replenish before the failure.
+            if future.params[0] == 0:
+                threading.Thread(target=future.errback, args=(ValueError("first"),), daemon=True).start()
+            else:
+                held.append(future)
+
+        for on_execute in (complete_inline, fail_first_on_io_thread):
+            del consumed[:]
+            with pytest.raises(ValueError, match="first"):
+                self._run(execute_concurrent,
+                    _session_with(on_execute), statements(), concurrency=5,
+                    raise_on_first_error=True)
+            for future in held:
+                future.callback(['r'])
+            assert len(consumed) <= 5
