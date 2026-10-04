@@ -483,10 +483,17 @@ class ConcurrencyTest((unittest.TestCase)):
         result_future = execute_concurrent_async(
             session, statements(), concurrency=2)
         completions = []
-        result_future.add_done_callback(
-            lambda completed: completions.append(completed.exception()))
+        callback_done = threading.Event()
+
+        def on_done(completed):
+            completions.append(completed.exception())
+            callback_done.set()
+
+        # exception() can return before done-callbacks run on the completion thread.
+        result_future.add_done_callback(on_done)
 
         assert result_future.exception(timeout=1.0) is error
+        assert callback_done.wait(1.0)
         assert completions == [error]
 
         # Request scheduled before iteration failed may still finish.
@@ -509,12 +516,19 @@ class ConcurrencyTest((unittest.TestCase)):
             session, statements(), concurrency=1)
         self.wait_for_response_futures(response_futures, 1)
         completions = []
-        result_future.add_done_callback(
-            lambda completed: completions.append(completed.exception()))
+        callback_done = threading.Event()
+
+        def on_done(completed):
+            completions.append(completed.exception())
+            callback_done.set()
+
+        # exception() can return before done-callbacks run on the completion thread.
+        result_future.add_done_callback(on_done)
         assert not result_future.done()
 
         response_futures[0].succeed(["zero"])
         assert result_future.exception(timeout=1.0) is error
+        assert callback_done.wait(1.0)
         assert completions == [error]
 
         # Second request was already in flight when iteration failed.
