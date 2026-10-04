@@ -149,18 +149,15 @@ class Tablets(object):
         if host_id is None:
             return
         with self._lock:
-            for key, tablets in self._tablets.items():
-                to_be_deleted = []
-                for tablet_id, tablet in enumerate(tablets):
-                    if tablet.replica_contains_host_id(host_id):
-                        to_be_deleted.append(tablet_id)
-
-                for tablet_id in reversed(to_be_deleted):
-                    tablets.pop(tablet_id)
+            for key, tablets in list(self._tablets.items()):
+                kept = [tablet for tablet in tablets if not tablet.replica_contains_host_id(host_id)]
+                if len(kept) != len(tablets):
+                    self._tablets[key] = kept
 
     def add_tablet(self, keyspace, table, tablet):
         with self._lock:
-            tablets_for_table = self._tablets.setdefault((keyspace, table), [])
+            # Copy-on-write: lock-free readers in get_tablet_for_key may hold the old list.
+            tablets_for_table = list(self._tablets.get((keyspace, table), ()))
 
             # find first overlapping range
             start = bisect_left(tablets_for_table, tablet.first_token, key=_get_first_token)
@@ -176,4 +173,5 @@ class Tablets(object):
                 del tablets_for_table[start:end + 1]
 
             tablets_for_table.insert(start, tablet)
+            self._tablets[(keyspace, table)] = tablets_for_table
 
