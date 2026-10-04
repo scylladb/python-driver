@@ -25,6 +25,10 @@ Bug Fixes
   replace, close, or misconfigure a live pool. Closing a pool with requests in
   flight could retry an already executed request, causing it to execute twice
   (#317).
+* ``compression=True`` (the default) no longer negotiates LZ4 just because the
+  built-in Cython LZ4 codec is present. As before 3.29.12, it picks LZ4 only when
+  the ``lz4`` package is installed; ``compression='lz4'`` still works with the
+  built-in codec alone (#1085).
 
 Behavior Changes
 ----------------

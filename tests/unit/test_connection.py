@@ -146,6 +146,7 @@ class ConnectionTest(unittest.TestCase):
         args, kwargs = c.defunct.call_args
         assert isinstance(args[0], ProtocolError)
 
+    @patch('cassandra.connection._explicit_only_compressions', frozenset())
     def test_prefer_lz4_compression(self, *args):
         c = self.make_connection()
         c._requests = {0: (c._handle_options_response, ProtocolHandler.decode_message, [])}
@@ -168,6 +169,44 @@ class ConnectionTest(unittest.TestCase):
         c.process_msg(_Frame(version=4, flags=0, stream=0, opcode=SupportedMessage.opcode, body_offset=9, end_pos=9 + len(options)), options)
 
         assert c.decompressor == locally_supported_compressions['lz4'][1]
+
+    def _negotiate(self, compression, remote):
+        c = self.make_connection(protocol_version=4)
+        c._requests = {0: (c._handle_options_response, ProtocolHandler.decode_message, [])}
+        c.defunct = Mock()
+        c.cql_version = "3.0.3"
+        c.compression = compression
+        c._send_startup_message = Mock()
+        options_buf = BytesIO()
+        write_stringmultimap(options_buf, {'CQL_VERSION': ['3.0.3'], 'COMPRESSION': remote})
+        options = options_buf.getvalue()
+        c.process_msg(_Frame(version=4, flags=0, stream=0, opcode=SupportedMessage.opcode, body_offset=9, end_pos=9 + len(options)), options)
+        c.defunct.assert_not_called()
+        return c
+
+    @patch('cassandra.connection._explicit_only_compressions', frozenset(('lz4',)))
+    @patch.dict('cassandra.connection.locally_supported_compressions',
+                {'lz4': ('lz4compress', 'lz4decompress')}, clear=True)
+    def test_auto_compression_skips_cython_only_lz4(self, *args):
+        # Without the lz4 package, compression=True must not negotiate the built-in codec.
+        c = self._negotiate(True, ['lz4'])
+        assert c.decompressor is None
+        assert c._send_startup_message.call_args[0][0] is None
+
+    @patch('cassandra.connection._explicit_only_compressions', frozenset(('lz4',)))
+    @patch.dict('cassandra.connection.locally_supported_compressions',
+                {'lz4': ('lz4compress', 'lz4decompress'),
+                 'snappy': ('snappycompress', 'snappydecompress')}, clear=True)
+    def test_auto_compression_falls_back_past_cython_only_lz4(self, *args):
+        assert self._negotiate(True, ['lz4', 'snappy']).decompressor == 'snappydecompress'
+
+    @patch('cassandra.connection._explicit_only_compressions', frozenset(('lz4',)))
+    @patch.dict('cassandra.connection.locally_supported_compressions',
+                {'lz4': ('lz4compress', 'lz4decompress')}, clear=True)
+    def test_requested_lz4_uses_cython_only_codec(self, *args):
+        c = self._negotiate('lz4', ['lz4'])
+        assert c.decompressor == 'lz4decompress'
+        assert c._send_startup_message.call_args[0][0] == 'lz4'
 
     def test_requested_compression_not_available(self, *args):
         c = self.make_connection()

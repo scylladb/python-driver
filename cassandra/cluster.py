@@ -937,6 +937,8 @@ class Cluster(object):
     If left as the default of :const:`True`, either lz4 or snappy compression
     may be used, depending on what is supported by both the driver
     and Cassandra.  If both are fully supported, lz4 will be preferred.
+    lz4 is chosen this way only when the ``lz4`` package is installed; the
+    built-in Cython LZ4 codec alone is used only when 'lz4' is requested.
 
     You may also set this to 'snappy' or 'lz4' to request that specific
     compression type.
