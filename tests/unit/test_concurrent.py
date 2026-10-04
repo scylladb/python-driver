@@ -1364,12 +1364,42 @@ class ConcurrentListExecutorTest(unittest.TestCase):
         session = _session_with(on_execute)
         results = execute_concurrent(session, [("q", (i,)) for i in range(4)],
                                      concurrency=1, raise_on_first_error=False, results_generator=True)
-        assert session.execute_async.call_count == 2
+        assert session.execute_async.call_count == 1
         inline.append(True)
-        futures[1].callback(['r'])
         results = self._run(list, results)
         assert [r.success for r in results] == [False, True, True, True]
         assert session.execute_async.call_count == 4
+
+    def test_generator_window_bounded_by_unyielded_results(self):
+        # A slow consumer must not let completed results pile up.
+        def complete_inline(future):
+            future.callback([future.params[0]])
+
+        def complete_on_io_thread(future):
+            threading.Thread(target=future.callback, args=([future.params[0]],), daemon=True).start()
+
+        concurrency = 3
+        for on_execute in (complete_inline, complete_on_io_thread):
+            session = _session_with(on_execute)
+            results = execute_concurrent(session, [("q", (i,)) for i in range(20)],
+                                         concurrency=concurrency, results_generator=True)
+
+            def consume():
+                seen = []
+                for r in results:
+                    time.sleep(0.005)
+                    seen.append(r.result_or_exc.one())
+                    assert session.execute_async.call_count <= len(seen) + concurrency
+                return seen
+            assert self._run(consume) == list(range(20))
+
+    def test_generator_head_exemption_only_while_consumer_waits(self):
+        # With no consumer waiting, a completed head must not open the window.
+        session = _session_with(lambda future: future.callback([future.params[0]]))
+        results = execute_concurrent(session, [("q", (i,)) for i in range(3)],
+                                     concurrency=1, results_generator=True)
+        assert session.execute_async.call_count == 1
+        assert [r.result_or_exc.one() for r in self._run(list, results)] == [0, 1, 2]
 
     def test_late_error_after_success_is_ignored(self):
         def on_execute(future):

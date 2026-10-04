@@ -36,6 +36,10 @@ Bug Fixes
   once when its future reports more than once (e.g. a speculative response
   after a client timeout). Previously the generator could hang and submit more
   than ``concurrency`` statements.
+* ``execute_concurrent(..., results_generator=True)`` no longer runs ahead of a
+  slow consumer: submitted statements are bounded by ``concurrency`` plus the
+  results already yielded, so completed results can no longer pile up and pull
+  the whole input into memory.
 
 Behavior Changes
 ----------------
