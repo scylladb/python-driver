@@ -25,6 +25,7 @@ import sys
 import platform
 import uuid
 
+from cassandra import OperationTimedOut
 from cassandra.cluster import Cluster, EXEC_PROFILE_DEFAULT, Session
 from cassandra.concurrent import (execute_concurrent,
                                   execute_concurrent_async,
@@ -1278,6 +1279,39 @@ class ConcurrentListExecutorTest(unittest.TestCase):
         if 'exc' in out:
             raise out['exc']
         return out['result']
+
+    def test_duplicate_completion_counted_once(self):
+        # e.g. a speculative response arriving after a client timeout
+        futures = []
+
+        def on_execute(future):
+            futures.append(future)
+            if future.params[0] == 0:
+                future.errback(OperationTimedOut())
+                future.callback(['late'])
+
+        out = []
+        t = threading.Thread(target=lambda: out.append(execute_concurrent(
+            _session_with(on_execute), [("q", (i,)) for i in range(2)], raise_on_first_error=False)),
+            daemon=True)
+        t.start()
+        t.join(0.5)
+        assert not out, "returned before the second request completed"
+        futures[1].callback(['r'])
+        t.join(5)
+        assert not t.is_alive(), "execute_concurrent hung"
+        assert [r.success for r in out[0]] == [False, True]
+
+    def test_late_error_after_success_is_ignored(self):
+        def on_execute(future):
+            future.callback(['ok'])
+            if future.params[0] == 0:
+                future.errback(OperationTimedOut())
+
+        results = self._run(execute_concurrent,
+            _session_with(on_execute), [("q", (i,)) for i in range(3)],
+            concurrency=1, raise_on_first_error=True)
+        assert [r.success for r in results] == [True, True, True]
 
     def test_fail_fast_stops_consuming_input(self):
         consumed = []
