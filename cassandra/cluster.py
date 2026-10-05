@@ -577,6 +577,8 @@ class ProfileManager(object):
             return
         for p in self.profiles.values():
             p.load_balancing_policy.on_down(host)
+            if host._is_removed:
+                return
 
     def on_add(self, host):
         for p in self.profiles.values():
@@ -2189,6 +2191,10 @@ class Cluster(object):
 
         log.debug("Waiting to acquire lock for handling up status of node %s", host)
         with host.lock:
+            if host._is_removed:
+                log.debug("Ignoring up status for removed host %s", host)
+                return
+
             if host._currently_handling_node_up:
                 log.debug("Another thread is already handling up status of node %s", host)
                 return
@@ -2314,40 +2320,46 @@ class Cluster(object):
                                      down_event_generation,
                                      on_add_reconnection=None):
         try:
-            with host.lock:
-                if down_event_generation != host._down_event_generation:
-                    return
-
             # The load balancing policies go first, so that the query plan the
             # control connection's reconnect walks no longer offers the host
             # that just went down; otherwise the reconnect submitted below can
             # start before the policies have dropped it and burn a
-            # connect_timeout on a dead node. Both calls are guarded because
+            # connect_timeout on a dead node. Callbacks are guarded because
             # on_down() reports successful dispatch to callers that rely on a
             # reconnection being started.
             try:
-                self.profile_manager.on_down(host)
+                if not self._dispatch_down_callback(
+                        host, down_event_generation,
+                        self.profile_manager.on_down):
+                    return
             except Exception:
                 log.exception("Error in load balancing policy down handler for host %s", host)
             try:
-                self.control_connection.on_down(host)
+                if not self._dispatch_down_callback(
+                        host, down_event_generation,
+                        self.control_connection.on_down):
+                    return
             except Exception:
                 log.exception("Error in control connection down handler for host %s", host)
             for session in tuple(self.sessions):
                 try:
-                    session.on_down(host)
+                    if not self._dispatch_down_callback(
+                            host, down_event_generation, session.on_down):
+                        return
                 except Exception:
                     log.exception("Error marking host %s down in session", host)
 
             for listener in self.listeners:
                 try:
-                    listener.on_down(host)
+                    if not self._dispatch_down_callback(
+                            host, down_event_generation, listener.on_down):
+                        return
                 except Exception:
                     log.exception("Error in host state listener down handler for host %s", host)
 
             # Pool cleanup and listener callbacks above may race a newer DOWN
-            # generation. Pair the final generation check with installation
-            # so stale work cannot publish a reconnector after invalidation.
+            # generation or host removal. Pair the final check with handler
+            # installation so stale work cannot publish a reconnector.
             with host.lock:
                 if down_event_generation != host._down_event_generation:
                     return
@@ -2361,6 +2373,20 @@ class Cluster(object):
             with host.lock:
                 if down_event_generation == host._down_event_generation:
                     host._currently_handling_node_down = False
+
+    @staticmethod
+    def _dispatch_down_callback(host, down_event_generation, callback):
+        """Invoke a current DOWN callback before removal can overtake it."""
+        # Removal waits for this callback before notifying on_remove. User
+        # callbacks must not wait on cluster executor work; #382 tracks moving
+        # lifecycle ordering to queued work instead of blocking a worker.
+        with host._down_callbacks_lock:
+            with host.lock:
+                if (host._is_removed or
+                        down_event_generation != host._down_event_generation):
+                    return False
+            callback(host)
+            return True
 
     @run_in_executor
     def _restart_reconnector(self, host, is_host_addition,
@@ -2400,6 +2426,9 @@ class Cluster(object):
 
         restart_reconnector = False
         with host.lock:
+            if host._is_removed:
+                return False
+
             was_up = host.is_up
 
             # ignore down signals if we have open pools to the host
@@ -2648,13 +2677,14 @@ class Cluster(object):
         log.debug("[cluster] Removing host %s", host)
         # A Host object is never re-added after lifecycle removal; a later
         # discovery creates a new object, even when it carries the same ID.
-        # Mark this instance before removing its pools so pool creation
-        # already in flight cannot publish after removal has passed it.
-        with host.lock:
-            host._is_removed = True
-            host.set_down()
-            host._pending_host_addition = False
-            host._pending_host_addition_callback = None
+        # Serialize the terminal transition with DOWN callbacks that already
+        # validated this Host, then mark it before removing its pools.
+        with host._down_callbacks_lock:
+            with host.lock:
+                host._is_removed = True
+                host.set_down()
+                host._pending_host_addition = False
+                host._pending_host_addition_callback = None
         self.profile_manager.on_remove(host)
         for session in tuple(self.sessions):
             session.on_remove(

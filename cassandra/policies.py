@@ -87,7 +87,13 @@ class HostStateListener(object):
         raise NotImplementedError()
 
     def on_down(self, host):
-        """ Called when a node is marked down. """
+        """
+        Called when a node is marked down.
+
+        Return promptly. Host removal waits for an in-progress DOWN callback,
+        so do not wait synchronously for work submitted to the cluster executor.
+        This applies to registered listeners and custom load-balancing policies.
+        """
         raise NotImplementedError()
 
     def on_add(self, host):

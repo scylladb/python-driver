@@ -381,6 +381,38 @@ class ClusterTest(unittest.TestCase):
         first_session.remove_pool.assert_has_calls([call(host), call(host)])
         second_session.remove_pool.assert_has_calls([call(host), call(host)])
 
+    def test_on_up_ignores_removed_host(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_remove = Mock()
+        cluster._prepare_all_queries = Mock()
+
+        host = Host(
+            "127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        host.set_down()
+        cluster.remove_host(host)
+
+        session = Mock()
+        session.add_or_renew_pool = Mock()
+        session.update_created_pools = Mock()
+        cluster.sessions = (session,)
+        listener = Mock()
+        cluster.register_listener(listener)
+
+        cluster.on_up(host)
+
+        session.remove_pool.assert_not_called()
+        session.add_or_renew_pool.assert_not_called()
+        cluster._prepare_all_queries.assert_not_called()
+        cluster.profile_manager.on_up.assert_not_called()
+        cluster.control_connection.on_up.assert_not_called()
+        listener.on_up.assert_not_called()
+        assert not host._currently_handling_node_up
+
     def test_failed_replacement_add_removes_partial_pools_and_reconnects(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)
@@ -1451,6 +1483,26 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         cluster._start_reconnector.assert_not_called()
         assert not self.host._currently_handling_node_down
 
+    def test_queued_reconnector_restart_skips_removed_host(self):
+        cluster = Cluster()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.metadata.add_or_return_host(self.host)
+        cluster.executor.submit.return_value = Future()
+        self.host.set_down()
+
+        assert not cluster.on_down(self.host, is_host_addition=False)
+        restart_task, *args = cluster.executor.submit.call_args.args
+        cluster.remove_host(self.host)
+
+        restart_task(*args)
+
+        assert self.host._is_removed
+        assert not self.host.is_currently_reconnecting()
+        assert not self.host._currently_handling_node_down
+
     def test_fresh_down_supersedes_queued_reconnector_restart(self):
         cluster = Cluster()
         cluster.executor.shutdown()
@@ -1706,6 +1758,97 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         cluster.on_down(self.host, is_host_addition=False)
 
         assert not self.host._currently_handling_node_down
+
+    def test_queued_down_processing_survives_stale_metadata_index(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.metadata.add_or_return_host(self.host)
+        cluster.profile_manager.distance = Mock(
+            return_value=HostDistance.LOCAL)
+        cluster.profile_manager.on_down = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock())
+        session = Mock()
+        cluster.sessions = (session,)
+        listener = Mock()
+        cluster.register_listener(listener)
+        cluster.executor.submit.return_value = Future()
+        self.host.set_up()
+
+        assert cluster.on_down(self.host, is_host_addition=False)
+        down_task, *args = cluster.executor.submit.call_args.args
+        current_host_id = self.host.host_id
+        stale_host_id = uuid.uuid4()
+        # Model the transient middle of a metadata reindex without mutating
+        # the Host's immutable identity.
+        with cluster.metadata._hosts_lock:
+            popped_host = cluster.metadata._hosts.pop(current_host_id)
+            assert popped_host is self.host
+            cluster.metadata._hosts[stale_host_id] = self.host
+            cluster.metadata._host_id_by_endpoint[
+                self.host.endpoint] = stale_host_id
+
+        assert self.host.host_id == current_host_id
+        assert cluster.metadata.get_host_by_host_id(current_host_id) is None
+        assert cluster.metadata.get_host(self.host.endpoint) is self.host
+        assert cluster.metadata.all_hosts_items() == [
+            (stale_host_id, self.host)]
+        assert not self.host._is_removed
+
+        down_task(*args)
+
+        cluster.profile_manager.on_down.assert_called_once_with(self.host)
+        cluster.control_connection.on_down.assert_called_once_with(self.host)
+        session.on_down.assert_called_once_with(self.host)
+        listener.on_down.assert_called_once_with(self.host)
+        cluster._make_connection_factory.assert_called_once_with(self.host)
+        assert self.host.is_currently_reconnecting()
+        cluster.scheduler.schedule.assert_called_once()
+        assert not self.host._currently_handling_node_down
+
+    def test_removed_host_rejects_queued_and_new_down_processing(self):
+        cluster = Cluster()
+        cluster.scheduler.shutdown()
+        cluster.scheduler = Mock()
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        self.addCleanup(cluster.shutdown)
+        cluster._discount_down_events = False
+        cluster.metadata.add_or_return_host(self.host)
+        cluster.profile_manager.on_down = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._start_reconnector = Mock()
+        session = Mock()
+        cluster.sessions = (session,)
+        listener = Mock()
+        cluster.register_listener(listener)
+        pending_future = Future()
+        cluster.executor.submit.return_value = pending_future
+        self.host.set_up()
+
+        assert cluster.on_down(self.host, is_host_addition=False)
+        down_task, *args = cluster.executor.submit.call_args.args
+        cluster.remove_host(self.host)
+        cluster.profile_manager.on_down.reset_mock()
+        cluster.control_connection.on_down.reset_mock()
+
+        down_task(*args)
+        assert not cluster.on_down(self.host, is_host_addition=False)
+
+        cluster.profile_manager.on_down.assert_not_called()
+        cluster.control_connection.on_down.assert_not_called()
+        session.on_down.assert_not_called()
+        listener.on_down.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
+        cluster.executor.submit.assert_called_once()
+        assert self.host._is_removed
+        assert not self.host._currently_handling_node_down
+
 
 class SchedulerTest(unittest.TestCase):
     # TODO: this suite could be expanded; for now just adding a test covering a ticket
@@ -2769,6 +2912,120 @@ class ClusterDownHandlingTest(unittest.TestCase):
         following_listener.on_down.assert_called_once_with(self.host)
         self.cluster._start_reconnector.assert_called_once_with(
             self.host, False)
+
+    def test_reentrant_removal_stops_remaining_down_callbacks(self):
+        del self.cluster.on_down_potentially_blocking  # use the real method
+        self.cluster.metadata.add_or_return_host(self.host)
+        self.cluster.control_connection = Mock()
+        session = Mock()
+        self.cluster.sessions = (session,)
+        listener = Mock()
+        self.cluster.register_listener(listener)
+        self.cluster._start_reconnector = Mock()
+        self.cluster.profile_manager.on_down = Mock(
+            side_effect=lambda host: self.cluster.remove_host(host))
+        body = Cluster.on_down_potentially_blocking.__wrapped__
+
+        body(self.cluster, self.host, is_host_addition=False,
+             down_event_generation=self.host._down_event_generation)
+
+        assert self.host._is_removed
+        self.cluster.control_connection.on_down.assert_not_called()
+        session.on_down.assert_not_called()
+        listener.on_down.assert_not_called()
+        self.cluster._start_reconnector.assert_not_called()
+
+    def test_reentrant_policy_removal_stops_later_policy_callbacks(self):
+        del self.cluster.on_down_potentially_blocking  # use the real method
+        self.cluster.metadata.add_or_return_host(self.host)
+        removing_policy = Mock()
+        following_policy = Mock()
+        removing_policy.on_down.side_effect = \
+            lambda host: self.cluster.remove_host(host)
+        self.cluster.profile_manager.profiles = {
+            'removing': ExecutionProfile(removing_policy),
+            'following': ExecutionProfile(following_policy),
+        }
+        self.cluster.control_connection = Mock()
+        self.cluster._start_reconnector = Mock()
+        body = Cluster.on_down_potentially_blocking.__wrapped__
+
+        body(self.cluster, self.host, is_host_addition=False,
+             down_event_generation=self.host._down_event_generation)
+
+        assert self.host._is_removed
+        removing_policy.on_down.assert_called_once_with(self.host)
+        following_policy.on_down.assert_not_called()
+        self.cluster.control_connection.on_down.assert_not_called()
+        self.cluster._start_reconnector.assert_not_called()
+
+    def test_remove_waits_for_inflight_down_callback(self):
+        del self.cluster.on_down_potentially_blocking  # use the real method
+        self.cluster.metadata.add_or_return_host(self.host)
+        self.cluster.profile_manager.on_down = Mock()
+        self.cluster._start_reconnector = Mock()
+        callback_started = Event()
+        release_callback = Event()
+        removal_attempted = Event()
+        removal_finished = Event()
+        callback_order = []
+
+        def on_control_down(_host):
+            callback_started.set()
+            assert release_callback.wait(5)
+            callback_order.append('down')
+
+        self.cluster.control_connection = Mock()
+        self.cluster.control_connection.on_down.side_effect = on_control_down
+        listener = Mock()
+        listener.on_remove.side_effect = \
+            lambda _host: callback_order.append('remove')
+        self.cluster.register_listener(listener)
+        self.host.set_down()
+        self.host._currently_handling_node_down = True
+
+        callback_lock = self.host._down_callbacks_lock
+        remove_thread = None
+
+        class AttemptTrackingLock(object):
+
+            def __enter__(self):
+                if threading.current_thread() is remove_thread:
+                    removal_attempted.set()
+                callback_lock.acquire()
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                callback_lock.release()
+
+        self.host._down_callbacks_lock = AttemptTrackingLock()
+        body = Cluster.on_down_potentially_blocking.__wrapped__
+        down_thread = Thread(
+            target=body,
+            args=(self.cluster, self.host, False,
+                  self.host._down_event_generation))
+
+        def remove_host():
+            try:
+                self.cluster.remove_host(self.host)
+            finally:
+                removal_finished.set()
+
+        remove_thread = Thread(target=remove_host)
+        down_thread.start()
+        assert callback_started.wait(5)
+        remove_thread.start()
+        assert removal_attempted.wait(5)
+        removal_was_blocked = not removal_finished.is_set()
+        release_callback.set()
+        down_thread.join(5)
+        remove_thread.join(5)
+
+        assert removal_was_blocked
+        assert not down_thread.is_alive()
+        assert not remove_thread.is_alive()
+        assert callback_order.index('down') < callback_order.index('remove')
+        assert self.host._is_removed
 
     def test_signal_connection_failure_rejected_by_conviction_policy(self):
         error = ConnectionException("connection failed")
