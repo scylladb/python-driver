@@ -4677,6 +4677,12 @@ class Session(object):
                 with host.lock:
                     if host._is_removed:
                         continue
+                    # In-flight on_add/on_up owns pool creation for a down host;
+                    # superseding it would settle its result False with no retry.
+                    if host.is_up is False and (
+                            host._pending_host_addition or
+                            host._currently_handling_node_up):
+                        continue
                     intent = self._claim_pool_intent_locked(host)
 
             try:

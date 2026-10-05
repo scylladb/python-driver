@@ -3270,6 +3270,31 @@ class SessionPoolRaceTest(unittest.TestCase):
         assert host not in session._pool_generations
         candidate.shutdown.assert_called_once_with()
 
+    def test_down_host_reconciliation_keeps_in_flight_add(self):
+        # A pending on_add/on_up owns pool creation for a down host.
+        for flag in ('_pending_host_addition', '_currently_handling_node_up'):
+            host = self._host()
+            candidate = self._pool(host)
+            session = self._session(workers=1)
+            factory = self._blocking_pool_factory(candidate)
+            with host.lock:
+                host.set_down()
+                setattr(host, flag, True)
+
+            with patch('cassandra.cluster.HostConnection',
+                       side_effect=factory):
+                add_future = session.add_or_renew_pool(
+                    host, is_host_addition=True)
+                assert factory.creation_started.wait(5)
+
+                assert session.update_created_pools(hosts=(host,)) == set()
+
+                factory.release_creation.set()
+                assert add_future.result(timeout=5) is True
+
+            assert session._pools == {host: candidate}
+            candidate.shutdown.assert_not_called()
+
     def test_down_host_reconciliation_suppresses_in_flight_failure(self):
         host = self._host()
         session = self._session(workers=1)
