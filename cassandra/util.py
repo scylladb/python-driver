@@ -793,7 +793,8 @@ class OrderedMapSerializedKey(OrderedMap):
     # Serializer errors for a key of the wrong type or out of range. A key
     # rejected this way cannot be in the map, so lookups treat it as missing.
     # Anything else raised by the serializer propagates unchanged.
-    _REJECTED_KEY_ERRORS = (TypeError, AttributeError, ValueError, struct.error)
+    _REJECTED_KEY_ERRORS = (TypeError, AttributeError, ValueError, OverflowError,
+                            struct.error)
 
     def _lookup_index(self, key):
         try:
@@ -802,16 +803,21 @@ class OrderedMapSerializedKey(OrderedMap):
             return None, -1
         return flat_key, self._index.get(flat_key, -1)
 
+    @staticmethod
+    def _missing(key, flat_key):
+        # a serialized key that is just absent keeps the base OrderedMap payload
+        return KeyError(key) if flat_key is None else KeyError(str(key))
+
     def __getitem__(self, key):
-        _, index = self._lookup_index(key)
+        flat_key, index = self._lookup_index(key)
         if index < 0:
-            raise KeyError(key)
+            raise self._missing(key, flat_key)
         return self._items[index][1]
 
     def __delitem__(self, key):
         flat_key, index = self._lookup_index(key)
         if index < 0:
-            raise KeyError(key)
+            raise self._missing(key, flat_key)
         del self._index[flat_key]
         self._index = dict((k, i if i < index else i - 1) for k, i in self._index.items())
         self._items.pop(index)

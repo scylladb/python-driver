@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import datetime
 import struct
 import unittest
 import uuid
 
 from cassandra.util import OrderedMap, OrderedMapSerializedKey
-from cassandra.cqltypes import (EMPTY, InetAddressType, Int32Type, UTF8Type,
+from cassandra.cqltypes import (EMPTY, DateType, InetAddressType, Int32Type, UTF8Type,
                                UUIDType, lookup_casstype)
 from tests.util import assertListEqual
 import pytest
@@ -232,6 +233,7 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
             (UUIDType, uuid.UUID(int=1), 'not-a-uuid', TypeError),
             (InetAddressType, '127.0.0.1', 'not-an-ip', ValueError),
             (Int32Type, 1, 2 ** 40, struct.error),
+            (DateType, datetime.datetime(2020, 1, 1), float('inf'), OverflowError),
         ]:
             om = OrderedMapSerializedKey(key_type, 3)
             om[key] = 'v'
@@ -254,6 +256,14 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
             del om[key]
             assert list(om.items()) == []
             assert key not in om
+
+            # a valid key that is simply absent keeps the base KeyError(str(key))
+            with pytest.raises(KeyError) as excinfo:
+                om[key]
+            assert excinfo.value.args == (str(key),)
+            with pytest.raises(KeyError) as excinfo:
+                del om[key]
+            assert excinfo.value.args == (str(key),)
 
     def test_lookup_preserves_unexpected_serializer_errors(self):
         class Boom(Exception):
