@@ -156,6 +156,16 @@ _GRAPH_PAGING_MIN_DSE_VERSION = Version('6.8.0')
 _NOT_SET = object()
 
 
+def _cancel_and_notify(future):
+    # A bare Future's cancel() doesn't wake concurrent.futures.wait() callers;
+    # only set_running_or_notify_cancel() does (executors call it themselves).
+    if future.cancel():
+        try:
+            future.set_running_or_notify_cancel()
+        except RuntimeError:
+            pass  # already notified
+
+
 class _PoolIntentCompletion(object):
     """Coordinates completion proxies for one pending intent chain."""
 
@@ -231,7 +241,7 @@ class _PoolIntentCompletion(object):
     @staticmethod
     def _cancel(waiters):
         for waiter in waiters:
-            waiter.cancel()
+            _cancel_and_notify(waiter)
 
     @classmethod
     def _settle(cls, waiters, outcome_kind, outcome):
@@ -4180,7 +4190,7 @@ class Session(object):
         wait_futures(initial_connect_work)
 
         for future in initial_connect_futures:
-            future.cancel()
+            _cancel_and_notify(future)
         wait_futures(initial_connect_futures)
 
         for pool in tuple(self._pools.values()):
@@ -4676,6 +4686,12 @@ class Session(object):
                     break
                 with host.lock:
                     if host._is_removed:
+                        continue
+                    # In-flight on_add/on_up owns pool creation for a down host;
+                    # superseding it would settle its result False with no retry.
+                    if host.is_up is False and (
+                            host._pending_host_addition or
+                            host._currently_handling_node_up):
                         continue
                     intent = self._claim_pool_intent_locked(host)
 
