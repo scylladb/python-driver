@@ -102,6 +102,7 @@ class DeferredResponseFuture(object):
     def __init__(self):
         self._callback = None
         self._errback = None
+        self.attached = False
 
     def add_callbacks(self, callback, errback,
                       callback_args=(), callback_kwargs=None,
@@ -110,6 +111,7 @@ class DeferredResponseFuture(object):
             callback, callback_args, callback_kwargs or {})
         self._errback = (
             errback, errback_args, errback_kwargs or {})
+        self.attached = True
 
     def succeed(self, result):
         callback, args, kwargs = self._callback
@@ -205,6 +207,11 @@ class ConcurrencyTest((unittest.TestCase)):
         while len(response_futures) < count and time.monotonic() < deadline:
             time.sleep(0.001)
         assert len(response_futures) == count
+        # execute_async returns before the driver calls add_callbacks
+        while (not all(getattr(f, 'attached', True) for f in list(response_futures))
+               and time.monotonic() < deadline):
+            time.sleep(0.001)
+        assert all(getattr(f, 'attached', True) for f in list(response_futures))
 
     def deferred_session(self, max_workers=2):
         response_futures = []
