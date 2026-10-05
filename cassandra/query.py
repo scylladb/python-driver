@@ -29,6 +29,7 @@ from cassandra import ConsistencyLevel, OperationTimedOut
 from cassandra.util import unix_time_from_uuid1, maybe_add_timeout_to_query
 from cassandra.encoder import Encoder
 import cassandra.encoder
+from cassandra.marshal import uint16_pack
 from cassandra.policies import ColDesc
 from cassandra.protocol import _UNSET_VALUE
 from cassandra.util import OrderedDict, _sanitize_identifiers
@@ -299,9 +300,17 @@ class Statement(object):
         self.is_idempotent = is_idempotent
 
     def _key_parts_packed(self, parts):
+        _pack = uint16_pack
         for p in parts:
-            l = len(p)
-            yield struct.pack(">H%dsB" % l, l, p, 0)
+            # Normalize to bytes so any buffer-protocol object (bytearray,
+            # memoryview, including non-contiguous slices, etc.) is accepted,
+            # matching (and slightly broadening) what struct.pack used to
+            # tolerate here. This is a cheap no-op when p is already bytes.
+            if not isinstance(p, bytes):
+                p = bytes(p)
+            # Single allocation via join(), instead of chained `+` which
+            # would create an extra intermediate bytes object.
+            yield b''.join((_pack(len(p)), p, b'\x00'))
 
     def _get_routing_key(self):
         return self._routing_key
