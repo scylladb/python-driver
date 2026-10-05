@@ -53,7 +53,11 @@ class AsyncioTimerTests(TimerTestMixin, unittest.TestCase):
         socket_patcher.start()
 
         old_selector = AsyncioConnection._loop._selector
-        AsyncioConnection._loop._selector = MagicMock(spec=selectors.BaseSelector)
+        # A bare MagicMock selector returns instantly, so the loop busy-spins and
+        # timers fire late; block briefly like a real select().
+        mock_selector = MagicMock(spec=selectors.BaseSelector)
+        mock_selector.select.side_effect = lambda timeout=None: time.sleep(min(timeout or .001, .001)) or []
+        AsyncioConnection._loop._selector = mock_selector
 
         def reset_selector():
             AsyncioConnection._loop._selector = old_selector
