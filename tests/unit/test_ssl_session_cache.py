@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import threading
-import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
@@ -118,10 +117,8 @@ class SSLSessionCacheTest(unittest.TestCase):
         # was offered, whose lifetime runs from when the peer issued it and not
         # from when it was last replayed.
         cache = SSLSessionCache()
-        cache.set('key', _Session(), lifetime=0.05)
+        cache.set('key', _Session(), lifetime=-1)
         cache.set('key', _Session(), lifetime=3600)
-
-        time.sleep(0.06)
 
         assert cache.get('key') is None
 
