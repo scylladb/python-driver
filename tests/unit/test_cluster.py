@@ -3295,6 +3295,30 @@ class SessionPoolRaceTest(unittest.TestCase):
             assert session._pools == {host: candidate}
             candidate.shutdown.assert_not_called()
 
+    def test_shutdown_does_not_hang_on_superseded_initial_connect(self):
+        # A cancelled bare Future never wakes concurrent.futures.wait().
+        host = self._host()
+        session = self._session(workers=1)
+        factory = self._blocking_pool_factory(self._pool(host))
+        release_blocker = Event()
+        self.addCleanup(release_blocker.set)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory):
+            initial_future = session.add_or_renew_pool(
+                host, is_host_addition=False)
+            session._initial_connect_futures = {initial_future}
+            assert factory.creation_started.wait(5)
+            # Keep the superseding work queued until shutdown has run.
+            session.submit(release_blocker.wait, 5)
+            session.update_created_pools(hosts=(host,))
+            factory.release_creation.set()
+
+            shutdown_thread = Thread(target=session.shutdown, daemon=True)
+            shutdown_thread.start()
+            shutdown_thread.join(2)
+            assert not shutdown_thread.is_alive()
+
     def test_down_host_reconciliation_suppresses_in_flight_failure(self):
         host = self._host()
         session = self._session(workers=1)
