@@ -1089,9 +1089,8 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
                 log.info("All host IDs after expansion: %s", all_host_ids)
                 post_routes_for_nlb("127.0.0.1", self.connection_id, all_host_ids, nlb)
 
-                handler.initialize(
-                    cluster.control_connection._connection,
-                    cluster.control_connection._timeout)
+                conn = self._wait_for_control_connection(cluster)
+                handler.initialize(conn, cluster.control_connection._timeout)
 
                 self._wait_for_condition(
                     lambda: sum(1 for h in cluster.metadata.all_hosts() if h.is_up) >= expected_total,
@@ -1140,9 +1139,8 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
                     # Reload routes after the control connection has
                     # re-established itself (the decommission may have
                     # killed the old control connection).
-                    handler.initialize(
-                        cluster.control_connection._connection,
-                        cluster.control_connection._timeout)
+                    conn = self._wait_for_control_connection(cluster)
+                    handler.initialize(conn, cluster.control_connection._timeout)
 
                     assert_routes_via_nlb(self, cluster, nlb,
                                              remaining_node_ids)
@@ -1201,6 +1199,15 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
         node_instance.start(wait_for_binary_proto=True, wait_other_notice=True)
         wait_for_node_socket(node_instance, 120)
         log.info("Node %d bootstrapped successfully", node_id)
+
+    def _wait_for_control_connection(self, cluster, timeout_seconds=30):
+        # The old control connection may be closed while it reconnects.
+        def usable():
+            c = cluster.control_connection._connection
+            return c is not None and not c.is_closed and not c.is_defunct
+        self._wait_for_condition(usable, timeout_seconds, poll_interval=0.1,
+                                 description="usable control connection")
+        return cluster.control_connection._connection
 
     @staticmethod
     def _wait_for_condition(predicate, timeout_seconds, poll_interval=2, description="condition"):
