@@ -1243,14 +1243,48 @@ class Cluster(object):
     establish connection pools. This can cause a rush of connections and queries if not mitigated with this factor.
     """
 
-    prepare_on_all_hosts = True
-    """
-    Specifies whether statements should be prepared on all hosts, or just one.
+    # _NOT_SET until assigned: one attribute holds both value and explicit-ness, so readers see a consistent state
+    _prepare_on_all_hosts = _NOT_SET
 
-    This can reasonably be disabled on long-running applications with numerous clients preparing statements on startup,
-    where a randomized initial condition of the load balancing policy can be expected to distribute prepares from
-    different clients across the cluster.
-    """
+    @property
+    def prepare_on_all_hosts(self):
+        """
+        Specifies whether statements should be prepared on all hosts, or just one.
+
+        Eager preparing is only a latency optimization (an ``UNPREPARED`` response always triggers reprepare and
+        retry), so it can be disabled on long-running applications with many clients preparing on startup.
+
+        If left unset (the default), :attr:`.prepare_on_all_hosts_warmup_seconds` applies: behaves as ``True`` for
+        a short window after the session connects, then as ``False``. Explicitly assigning ``True`` or ``False``
+        disables the warm-up for good.
+        """
+        value = self._prepare_on_all_hosts
+        return False if value is _NOT_SET else value
+
+    @prepare_on_all_hosts.setter
+    def prepare_on_all_hosts(self, value):
+        self._prepare_on_all_hosts = value
+
+    _prepare_on_all_hosts_warmup_seconds = 15
+
+    @property
+    def prepare_on_all_hosts_warmup_seconds(self):
+        """
+        Length, in seconds, of the post-:meth:`.Cluster.connect` window in which :meth:`.Session.prepare` eagerly
+        prepares on all pooled hosts, when :attr:`.prepare_on_all_hosts` was not explicitly set. The window starts
+        when connect is ready to return (after all initial pools with ``wait_for_all_pools=True``).
+
+        Must be a finite, non-negative number, else :exc:`ValueError`. Zero disables the warm-up.
+        """
+        return self._prepare_on_all_hosts_warmup_seconds
+
+    @prepare_on_all_hosts_warmup_seconds.setter
+    def prepare_on_all_hosts_warmup_seconds(self, value):
+        # chained compare rejects nan/inf/negatives without math.isfinite (it overflows on huge ints)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value < float('inf'):
+            raise ValueError("prepare_on_all_hosts_warmup_seconds must be a finite, non-negative number; got %r"
+                             % (value,))
+        self._prepare_on_all_hosts_warmup_seconds = value
 
     reprepare_on_up = True
     """
@@ -1469,7 +1503,7 @@ class Cluster(object):
                  schema_metadata_page_size=1000,
                  address_translator=None,
                  status_event_refresh_window=2,
-                 prepare_on_all_hosts=True,
+                 prepare_on_all_hosts=_NOT_SET,
                  reprepare_on_up=True,
                  execution_profiles=None,
                  allow_beta_protocol_version=False,
@@ -1487,7 +1521,8 @@ class Cluster(object):
                  client_routes_config:Optional[ClientRoutesConfig]=None,
                  allow_control_connection_query_fallback:Optional[ControlConnectionQueryFallback]=ControlConnectionQueryFallback.Disabled,
                  driver_config_reporting_enabled=True,
-                 ssl_session_cache=_NOT_SET
+                 ssl_session_cache=_NOT_SET,
+                 prepare_on_all_hosts_warmup_seconds=15
                  ):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
@@ -1760,7 +1795,8 @@ class Cluster(object):
         self.topology_event_refresh_window = topology_event_refresh_window
         self.status_event_refresh_window = status_event_refresh_window
         self.connect_timeout = connect_timeout
-        self.prepare_on_all_hosts = prepare_on_all_hosts
+        self._prepare_on_all_hosts = prepare_on_all_hosts  # may be _NOT_SET (warm-up behavior)
+        self.prepare_on_all_hosts_warmup_seconds = prepare_on_all_hosts_warmup_seconds
         self.reprepare_on_up = reprepare_on_up
         self.shard_aware_options = ShardAwareOptions(opts=shard_aware_options)
 
@@ -2203,6 +2239,8 @@ class Cluster(object):
         session = self._new_session(keyspace)
         if wait_for_all_pools:
             wait_futures(session._initial_connect_futures)
+        # start the prepare warm-up window once connect is done, not at Session init
+        session._connect_time = time.monotonic()
 
         self._set_default_dbaas_consistency(session)
 
@@ -3387,6 +3425,9 @@ class Session(object):
                 raise InvalidRequest(conflict)
 
         self.session_id = uuid.uuid4()
+        # marks when this session finished its initial pool setup; used to gauge whether we're
+        # still in the post-connect warm-up window for prepare_on_all_hosts (see _should_prepare_on_all_hosts)
+        self._connect_time = time.monotonic()
 
         if self.cluster.column_encryption_policy is not None:
             try:
@@ -4104,7 +4145,7 @@ class Session(object):
 
         self.cluster.add_prepared(response.query_id, prepared_statement)
 
-        if self.cluster.prepare_on_all_hosts:
+        if self._should_prepare_on_all_hosts():
             host = future._current_host
             try:
                 self.prepare_on_all_hosts(prepared_statement.query_string, host, prepared_keyspace)
@@ -4112,6 +4153,26 @@ class Session(object):
                 log.exception("Error preparing query on all hosts:")
 
         return prepared_statement
+
+    def _should_prepare_on_all_hosts(self):
+        """
+        Decide whether this prepare() call should eagerly broadcast to all pooled hosts.
+
+        If the user explicitly set Cluster.prepare_on_all_hosts, that choice always wins. Otherwise, act as
+        if it were True during the post-connect warm-up window (see prepare_on_all_hosts_warmup_seconds) and
+        False afterwards.
+        """
+        cluster = self.cluster
+        explicit = cluster._prepare_on_all_hosts  # single read: value and explicit-ness stay consistent
+        if explicit is not _NOT_SET:
+            return explicit
+        if type(cluster).prepare_on_all_hosts is not Cluster.prepare_on_all_hosts:
+            return cluster.prepare_on_all_hosts  # subclass overrides the attribute: honor it
+
+        warmup_seconds = cluster.prepare_on_all_hosts_warmup_seconds
+        if not warmup_seconds:
+            return False
+        return (time.monotonic() - self._connect_time) <= warmup_seconds
 
     def prepare_on_all_hosts(self, query, excluded_host, keyspace=None):
         """
