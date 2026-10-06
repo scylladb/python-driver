@@ -695,6 +695,7 @@ class HostConnection(object):
                     if self._keyspace:
                         connection.set_keyspace_blocking(self._keyspace)
                     self._connections[connection.features.shard_id] = connection
+                    self._sync_keyspace(connection)
             except Exception:
                 log.warning("Failed reconnecting %s. Retrying." % (self.host.endpoint,))
                 self._session.submit(self._replace, connection)
@@ -871,6 +872,7 @@ class HostConnection(object):
                     if self._keyspace:
                         conn.set_keyspace_blocking(self._keyspace)
                     self._connections[conn.features.shard_id] = conn
+                    self._sync_keyspace(conn)
 
             if is_shutdown:
                 conn.close()
@@ -975,12 +977,27 @@ class HostConnection(object):
             for conn in self._trash:
                 conn.close()
 
+    def _sync_keyspace(self, conn):
+        """
+        Re-applies the pool keyspace on a connection that was just published.
+        `_set_keyspace_for_all_conns` may have changed `self._keyspace` after
+        the caller read it, while `conn` was not yet in `self._connections`.
+        One re-check is enough: any later change already sees `conn`.
+        """
+        if self._keyspace and conn.keyspace != self._keyspace:
+            conn.set_keyspace_blocking(self._keyspace)
+
     def _set_keyspace_for_all_conns(self, keyspace, callback):
         """
         Asynchronously sets the keyspace for all connections.  When all
         connections have been set, `callback` will be called with two
         arguments: this pool, and a list of any errors that occurred.
         """
+        # Publish the new keyspace before taking the snapshot: a connection
+        # published after the snapshot is re-synced by `_sync_keyspace`.
+        # This runs on the event loop thread, so it must not take self._lock
+        # (callers hold it across set_keyspace_blocking, which needs the loop).
+        self._keyspace = keyspace
         remaining_callbacks = set(self._connections.values())
         remaining_callbacks_lock = Lock()
         errors = []
@@ -999,8 +1016,7 @@ class HostConnection(object):
             if not remaining_callbacks:
                 callback(self, errors)
 
-        self._keyspace = keyspace
-        for conn in list(self._connections.values()):
+        for conn in list(remaining_callbacks):
             conn.set_keyspace_async(keyspace, connection_finished_setting_keyspace)
 
     def get_connections(self):
