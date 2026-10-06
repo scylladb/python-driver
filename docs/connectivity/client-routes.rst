@@ -190,6 +190,14 @@ not currently compatible with proxy addresses. Set
 ``SSLContext.check_hostname`` to ``False``; :class:`~cassandra.cluster.Cluster`
 rejects a Client Routes configuration when it is ``True``.
 
+In ScyllaDB Cloud, a node certificate may contain only that node's broadcast
+RPC IP, while the application connects through a proxy address absent from
+the certificate. The initial contact point is not translated and has no known
+host ID yet, so the driver cannot safely choose a node IP to verify for that
+first TLS connection. It therefore does not disable hostname checking
+automatically. Configure this mode explicitly if the provider's certificate
+does not cover the proxy endpoint.
+
 .. code-block:: python
 
     import ssl
@@ -211,8 +219,9 @@ rejects a Client Routes configuration when it is ``True``.
     )
 
 Disabling hostname verification prevents checking that the proxy hostname
-matches the node certificate. ``ssl.create_default_context`` still requires a
-certificate signed by a trusted CA in this example.
+matches the node certificate or that the connection reached the intended node.
+``ssl.create_default_context`` still requires a certificate signed by the CA
+in ``cafile`` in this example. Do not set ``verify_mode`` to ``CERT_NONE``.
 
 Shard awareness
 ---------------
