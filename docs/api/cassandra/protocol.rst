@@ -44,11 +44,20 @@ and ``NumpyProtocolHandler``. They can be used as follows:
 
 .. code:: python
 
-    from cassandra.protocol import NumpyProtocolHandler, LazyProtocolHandler
+    from cassandra.protocol import LazyProtocolHandler
+    from cassandra.numpy_support import get_numpy_protocol_handler
     from cassandra.query import tuple_factory
     s.client_protocol_handler = LazyProtocolHandler   # for a result iterator
     s.row_factory = tuple_factory  #required for Numpy results
-    s.client_protocol_handler = NumpyProtocolHandler  # for a dict of NumPy arrays as result
+    numpy_handler = get_numpy_protocol_handler()
+    if numpy_handler is not None:
+        s.client_protocol_handler = numpy_handler  # for a dict of NumPy arrays as result
+
+``cassandra.numpy_support.get_numpy_protocol_handler()`` loads optional NumPy support on first call and
+returns ``None`` when NumPy or Cython support is unavailable. The existing
+``from cassandra.protocol import NumpyProtocolHandler`` remains supported but
+is deprecated and emits ``DeprecationWarning``. Check availability explicitly
+with ``cassandra.numpy_support.numpy_available()`` when needed.
 
 These protocol handlers comprise different parsers, and return results as described below:
 

@@ -34,7 +34,8 @@ from cassandra.parsing cimport ParseDesc, ColumnParser, RowParser
 from cassandra import cqltypes
 from cassandra.util import is_little_endian
 
-import numpy as np
+from cassandra.numpy_support import require_numpy
+np = require_numpy()
 
 cdef extern from "numpyFlags.h":
     # Include 'numpyFlags.h' into the generated C code to disable the

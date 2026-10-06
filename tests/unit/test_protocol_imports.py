@@ -31,6 +31,156 @@ assert 'cassandra.numpy_parser' not in sys.modules
 """, timeout=10)
 
 
+def test_numpy_import_is_attempted_once_when_unavailable():
+    run_isolated_subprocess("""
+import builtins
+from unittest.mock import patch
+
+sys.modules['numpy'] = None
+from cassandra.numpy_support import get_numpy, numpy_available, require_numpy
+
+original_import = builtins.__import__
+attempts = []
+
+def tracked_import(name, *args, **kwargs):
+    if name == 'numpy':
+        attempts.append(name)
+    return original_import(name, *args, **kwargs)
+
+with patch('builtins.__import__', tracked_import):
+    assert get_numpy() is None
+    assert get_numpy() is None
+    assert not numpy_available()
+    try:
+        require_numpy()
+    except ImportError:
+        pass
+    else:
+        raise AssertionError('require_numpy() should reject missing NumPy')
+
+assert attempts == ['numpy']
+""", timeout=10)
+
+
+def test_require_numpy_preserves_import_failure():
+    run_isolated_subprocess("""
+import builtins
+from unittest.mock import patch
+from cassandra.numpy_support import get_numpy, require_numpy
+
+original_import = builtins.__import__
+failure = ImportError('missing libopenblas')
+attempts = []
+
+def broken_numpy_import(name, *args, **kwargs):
+    if name == 'numpy':
+        attempts.append(name)
+        raise failure
+    return original_import(name, *args, **kwargs)
+
+with patch('builtins.__import__', broken_numpy_import):
+    assert get_numpy() is None
+    assert get_numpy() is None
+    try:
+        require_numpy()
+    except ImportError as exc:
+        assert exc.__cause__ is failure
+        assert str(exc.__cause__) == 'missing libopenblas'
+    else:
+        raise AssertionError('require_numpy() should reject broken NumPy')
+
+assert attempts == ['numpy']
+""", timeout=10)
+
+
+def test_concurrent_numpy_import_is_attempted_once_when_unavailable():
+    run_isolated_subprocess("""
+import builtins
+from threading import Barrier, BrokenBarrierError, Thread
+from unittest.mock import patch
+
+sys.modules['numpy'] = None
+from cassandra.numpy_support import get_numpy
+
+start = Barrier(3)
+imports = Barrier(2)
+attempts = []
+results = []
+original_import = builtins.__import__
+
+def tracked_import(name, *args, **kwargs):
+    if name == 'numpy':
+        attempts.append(name)
+        try:
+            imports.wait(timeout=0.2)
+        except BrokenBarrierError:
+            pass
+    return original_import(name, *args, **kwargs)
+
+def check_numpy():
+    start.wait()
+    results.append(get_numpy())
+
+with patch('builtins.__import__', tracked_import):
+    threads = [Thread(target=check_numpy) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait()
+    for thread in threads:
+        thread.join(timeout=3)
+
+assert all(not thread.is_alive() for thread in threads)
+assert results == [None, None]
+assert attempts == ['numpy']
+""", timeout=10)
+
+
+def test_concurrent_numpy_protocol_handler_is_built_once():
+    run_isolated_subprocess("""
+import types
+from threading import Barrier, BrokenBarrierError, Thread
+from unittest.mock import patch
+
+import cassandra.protocol as protocol
+import cassandra.numpy_support as numpy_support
+
+parser_module = types.ModuleType('cassandra.numpy_parser')
+parser_module.NumpyParser = lambda: object()
+sys.modules['cassandra.numpy_parser'] = parser_module
+
+start = Barrier(3)
+builds = Barrier(2)
+build_calls = []
+results = []
+
+def build_handler(parser):
+    build_calls.append(parser)
+    try:
+        builds.wait(timeout=0.2)
+    except BrokenBarrierError:
+        pass
+    return object()
+
+def get_handler():
+    start.wait()
+    results.append(numpy_support.get_numpy_protocol_handler())
+
+with patch.object(protocol, 'HAVE_CYTHON', True), \\
+     patch.object(protocol, 'cython_protocol_handler', build_handler), \\
+     patch.object(numpy_support, 'numpy_available', return_value=True):
+    threads = [Thread(target=get_handler) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait()
+    for thread in threads:
+        thread.join(timeout=3)
+
+assert all(not thread.is_alive() for thread in threads)
+assert len(build_calls) == 1
+assert len(results) == 2 and results[0] is results[1]
+""", timeout=10)
+
+
 def test_numpy_protocol_handler_loads_numpy_on_access():
     if importlib.util.find_spec('numpy') is None:
         pytest.skip("NumPy is unavailable")
@@ -39,18 +189,28 @@ def test_numpy_protocol_handler_loads_numpy_on_access():
 
     run_isolated_subprocess("""
 import cassandra.protocol as protocol
+from cassandra.numpy_support import numpy_available, get_numpy_protocol_handler
 
 assert 'numpy' not in sys.modules
 assert 'cassandra.numpy_parser' not in sys.modules
 assert 'NumpyProtocolHandler' in dir(protocol)
 assert protocol.HAVE_CYTHON
 
-from cassandra.protocol import NumpyProtocolHandler
+import warnings
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter('always', DeprecationWarning)
+    from cassandra.protocol import NumpyProtocolHandler
+assert any(issubclass(item.category, DeprecationWarning) for item in caught)
+assert any('cassandra.numpy_support.get_numpy_protocol_handler()' in str(item.message)
+           for item in caught)
+assert all(item.filename == '<string>' for item in caught
+           if issubclass(item.category, DeprecationWarning))
 
 assert NumpyProtocolHandler is not None
 assert 'numpy' in sys.modules
 assert 'cassandra.numpy_parser' in sys.modules
-assert protocol.NumpyProtocolHandler is NumpyProtocolHandler
+assert numpy_available()
+assert get_numpy_protocol_handler() is NumpyProtocolHandler
 """, timeout=10)
 
 
@@ -59,12 +219,26 @@ def test_numpy_protocol_handler_is_unavailable_without_numpy():
 sys.modules['numpy'] = None
 
 import cassandra.protocol as protocol
+from cassandra.numpy_support import numpy_available, get_numpy_protocol_handler
 
 assert 'cassandra.numpy_parser' not in sys.modules
-from cassandra.protocol import NumpyProtocolHandler
+assert not numpy_available()
+assert get_numpy_protocol_handler() is None
+import warnings
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter('always', DeprecationWarning)
+    from cassandra.cython_deps import HAVE_NUMPY
+    from cassandra.protocol import NumpyProtocolHandler
+assert not HAVE_NUMPY
+assert sum(issubclass(item.category, DeprecationWarning) for item in caught) >= 2
+assert any('cassandra.numpy_support.numpy_available()' in str(item.message)
+           for item in caught)
 
 assert NumpyProtocolHandler is None
-assert protocol.NumpyProtocolHandler is None
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter('always', DeprecationWarning)
+    assert protocol.NumpyProtocolHandler is None
+assert caught
 assert sys.modules['numpy'] is None
 assert 'cassandra.numpy_parser' not in sys.modules
 """, timeout=10)
@@ -75,15 +249,24 @@ def test_numpy_protocol_handler_is_unavailable_without_cython():
 sys.modules['cassandra.row_parser'] = None
 
 import cassandra.protocol as protocol
+from cassandra.numpy_support import get_numpy_protocol_handler
 
 assert not protocol.HAVE_CYTHON
 assert 'numpy' not in sys.modules
 assert 'cassandra.numpy_parser' not in sys.modules
+assert get_numpy_protocol_handler() is None
 
-from cassandra.protocol import NumpyProtocolHandler
+import warnings
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter('always', DeprecationWarning)
+    from cassandra.protocol import NumpyProtocolHandler
+assert caught
 
 assert NumpyProtocolHandler is None
-assert protocol.NumpyProtocolHandler is None
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter('always', DeprecationWarning)
+    assert protocol.NumpyProtocolHandler is None
+assert caught
 assert 'numpy' not in sys.modules
 assert 'cassandra.numpy_parser' not in sys.modules
 """, timeout=10)

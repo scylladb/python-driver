@@ -1,22 +1,26 @@
+import warnings
+
 try:
     from cassandra.row_parser import make_recv_results_rows
     HAVE_CYTHON = True
 except ImportError:
     HAVE_CYTHON = False
 
+from cassandra.numpy_support import numpy_available
+
 
 def __getattr__(name):
-    """Probe for optional NumPy support only when a caller asks for it."""
+    """Keep the deprecated ``HAVE_NUMPY`` attribute lazy for old callers."""
     if name != 'HAVE_NUMPY':
         raise AttributeError("module %r has no attribute %r" % (__name__, name))
 
-    try:
-        import numpy  # noqa: F401
-        have_numpy = True
-    except ImportError:
-        have_numpy = False
-
-    return globals().setdefault(name, have_numpy)
+    warnings.warn(
+        "cassandra.cython_deps.HAVE_NUMPY is deprecated; "
+        "use cassandra.numpy_support.numpy_available()",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return numpy_available()
 
 
 def __dir__():
