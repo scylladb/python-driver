@@ -6801,7 +6801,7 @@ class ResponseFuture(object):
         self._retry_aborted = False
         self._spec_execution_plan = speculative_execution_plan or self._spec_execution_plan
         self._make_query_plan()
-        self._event = Event()
+        self._event = None  # created by result() only; most async callers never wait
         self._errors = {}
         self._callbacks = []
         self._errbacks = []
@@ -6928,7 +6928,7 @@ class ResponseFuture(object):
 
     def _on_speculative_execute(self):
         self._timer = None
-        if not self._event.is_set():
+        if not self._is_final():
 
             # Check the deadline before the PYTHON-836 guard below. That guard
             # only exists to keep speculative queries from running ahead of the
@@ -7404,7 +7404,7 @@ class ResponseFuture(object):
         Otherwise, it may throw if the response has not been received.
         """
         # TODO: When timers are introduced, just make this wait
-        if not self._event.is_set():
+        if not self._is_final():
             raise DriverException("warnings cannot be retrieved before ResponseFuture is finalized")
         return self._warnings
 
@@ -7422,7 +7422,7 @@ class ResponseFuture(object):
         :return: :ref:`custom_payload`.
         """
         # TODO: When timers are introduced, just make this wait
-        if not self._event.is_set():
+        if not self._is_final():
             raise DriverException("custom_payload cannot be retrieved before ResponseFuture is finalized")
         return self._custom_payload
 
@@ -7450,7 +7450,8 @@ class ResponseFuture(object):
                 raise self._final_exception
             self._page_generation += 1
             self.message.paging_state = self._paging_state
-            self._event.clear()
+            if self._event is not None:
+                self._event.clear()
             self._final_result = _NOT_SET
             self._final_exception = None
             self._control_connection_query_attempted = False
@@ -7771,10 +7772,14 @@ class ResponseFuture(object):
                 "Got unexpected response type when preparing "
                 "statement on host %s: %s" % (host, response)))
 
+    def _is_final(self):
+        # A late response (e.g. speculative, or after client timeout) must not re-fire callbacks.
+        return self._final_result is not _NOT_SET or self._final_exception is not None
+
     def _set_final_result(self, response):
         self._cancel_timer()
         with self._callback_lock:
-            if self._retry_aborted:
+            if self._retry_aborted or self._is_final():
                 return
             self._final_result = response
             # save off current callbacks inside lock for execution outside it
@@ -7785,10 +7790,12 @@ class ResponseFuture(object):
                 partial(fn, response, *args, **kwargs)
                 for (fn, args, kwargs) in self._callbacks
             )
+            event = self._event
 
         if self._metrics is not None:
             self._metrics.request_timer.addValue(time.time() - self._start_time)
-        self._event.set()
+        if event is not None:
+            event.set()
 
         # apply each callback
         for callback_partial in to_call:
@@ -7809,6 +7816,8 @@ class ResponseFuture(object):
                         self._final_exception is not None:
                     return
                 self._retry_aborted = True
+            elif self._is_final():
+                return
             self._final_exception = response
             # save off current errbacks inside lock for execution outside it --
             # prevents case where _final_exception is set, then an errback is
@@ -7818,12 +7827,14 @@ class ResponseFuture(object):
                 partial(fn, response, *args, **kwargs)
                 for (fn, args, kwargs) in self._errbacks
             )
+            event = self._event
 
         if abort_retry:
             self._cancel_timer()
         if self._metrics is not None:
             self._metrics.request_timer.addValue(time.time() - self._start_time)
-        self._event.set()
+        if event is not None:
+            event.set()
 
         # apply each callback
         for callback_partial in to_call:
@@ -7930,7 +7941,14 @@ class ResponseFuture(object):
             ...     log.exception("Operation failed:")
 
         """
-        self._event.wait()
+        with self._callback_lock:
+            event = None
+            if not self._is_final():
+                if self._event is None:
+                    self._event = Event()
+                event = self._event
+        if event is not None:
+            event.wait()
         if self._final_result is not _NOT_SET:
             return ResultSet(self, self._final_result)
         else:
