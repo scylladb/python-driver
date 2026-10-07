@@ -139,6 +139,11 @@ parallel = true
 relative_files = true
 omit = [
     "cassandra/_version.py",
+    # DataStax Enterprise (DSE) / DataStax Astra only -- not supported by
+    # ScyllaDB, so not measured:
+    "cassandra/datastax/graph/*",  # DSE Graph (graphson, query, types, fluent)
+    "cassandra/graph/*",           # dse-driver compat re-exports of the above
+    "cassandra/datastax/cloud/*",  # Astra secure-connect bundle (`cloud=`)
     # Tests disabled until scylladb/python-driver#365 is resolved; drop this when re-enabled.
     "cassandra/column_encryption/*",
 ]
@@ -149,6 +154,26 @@ exclude_lines = [
     "pragma: no cover",
     "raise NotImplementedError",
     "if TYPE_CHECKING:",
+]
+# DSE/Astra-only code inside files shared with ScyllaDB. Matching the line that
+# opens a class/def/if excludes that whole block. Names are anchored so they
+# cannot match ScyllaDB code paths; leading indentation is matched with ` +`
+# rather than `\s*` so a match cannot span lines.
+exclude_also = [
+    # auth.py: DSE Kerberos (GSSAPI) and DseAuthenticator SASL negotiation
+    "^class (DSEGSSAPIAuthProvider|GSSAPIAuthenticator)\\b",
+    "^ +if self\\.server_authenticator_class == \"com\\.datastax\\.bdp\\.cassandra\\.auth\\.DseAuthenticator\":",
+    # cluster.py: DSE Graph execution and graph analytics routing
+    "^class (GraphExecutionProfile|GraphAnalyticsExecutionProfile)\\b",
+    "^    def (execute_graph|execute_graph_async|_maybe_set_graph_paging|_resolve_execution_profile_options|_transform_params|_target_analytics_master|_on_analytics_master_result)\\(",
+    # cluster.py / connection.py / protocol.py: DSE continuous paging
+    "^class (ContinuousPagingOptions|ContinuousPagingSession)\\b",
+    "^    def (_handle_continuous_paging_first_response|cancel_continuous_paging|new_continuous_paging_session|remove_continuous_paging_session|error_all_cp_sessions|_write_paging_options)\\(",
+    # cluster.py: Astra `cloud=` secure-connect-bundle setup
+    "^ +if cloud is not None:",
+    # metadata.py: DSE schema parsers, DSE Graph vertex/edge metadata, DSE RLAC
+    "^class (SchemaParserDSE60|SchemaParserDSE67|SchemaParserDSE68|TableMetadataDSE68|VertexMetadata|EdgeMetadata|RLACTableExtension)\\b",
+    "^ +if dse_version:",
 ]
 
 [tool.coverage.html]
