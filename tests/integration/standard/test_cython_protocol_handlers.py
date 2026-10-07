@@ -8,8 +8,9 @@ from itertools import count
 
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.concurrent import execute_concurrent_with_args
-from cassandra.cython_deps import HAVE_CYTHON, HAVE_NUMPY
-from cassandra.protocol import ProtocolHandler, LazyProtocolHandler, NumpyProtocolHandler
+from cassandra.cython_deps import HAVE_CYTHON
+from cassandra.numpy_support import numpy_available, get_numpy_protocol_handler
+from cassandra.protocol import ProtocolHandler, LazyProtocolHandler
 from cassandra.query import tuple_factory
 from tests import VERIFY_CYTHON
 from tests.integration import use_single_node, notprotocolv1, \
@@ -18,6 +19,8 @@ from tests.integration.datatype_utils import update_datatypes
 from tests.integration.standard.utils import (
     create_table_with_all_types, get_all_primitive_params, get_primitive_datatypes)
 from tests.unit.cython.utils import cythontest, numpytest
+
+NUMPY_PROTOCOL_HANDLER = get_numpy_protocol_handler()
 
 
 def setup_module():
@@ -85,7 +88,7 @@ class CythonProtocolHandlerTest(unittest.TestCase):
         Test Numpy-based parser that returns a NumPy array
         """
         # arrays = { 'a': arr1, 'b': arr2, ... }
-        result = get_data(NumpyProtocolHandler)
+        result = get_data(NUMPY_PROTOCOL_HANDLER)
         assert not result.has_more_pages
         self._verify_numpy_page(result[0])
 
@@ -100,7 +103,7 @@ class CythonProtocolHandlerTest(unittest.TestCase):
             execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
         )
         session = cluster.connect(keyspace="testspace")
-        session.client_protocol_handler = NumpyProtocolHandler
+        session.client_protocol_handler = NUMPY_PROTOCOL_HANDLER
         session.default_fetch_size = 2
 
         expected_pages = (self.N_ITEMS + session.default_fetch_size - 1) // session.default_fetch_size
@@ -138,7 +141,7 @@ class CythonProtocolHandlerTest(unittest.TestCase):
         """
         if VERIFY_CYTHON:
             assert HAVE_CYTHON
-            assert HAVE_NUMPY
+            assert numpy_available()
 
     def _verify_numpy_page(self, page):
         colnames = self.colnames
@@ -265,7 +268,7 @@ class NumpyWideTableTest(unittest.TestCase):
             execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
         )
         session = cluster.connect(keyspace="test_wide_table")
-        session.client_protocol_handler = NumpyProtocolHandler
+        session.client_protocol_handler = NUMPY_PROTOCOL_HANDLER
         session.default_fetch_size = 1000  # Request many rows per page
 
         results = session.execute("SELECT * FROM wide_table")
@@ -299,7 +302,7 @@ class NumpyWideTableTest(unittest.TestCase):
             execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
         )
         session = cluster.connect(keyspace="test_wide_table")
-        session.client_protocol_handler = NumpyProtocolHandler
+        session.client_protocol_handler = NUMPY_PROTOCOL_HANDLER
         session.default_fetch_size = None  # Let server control page sizes
 
         results = session.execute("SELECT * FROM wide_table")
@@ -340,7 +343,7 @@ class NumpyNullTest(BasicSharedKeyspaceUnitTestCase):
         @test_category data_types:serialization
         """
         s = self.session
-        s.client_protocol_handler = NumpyProtocolHandler
+        s.client_protocol_handler = NUMPY_PROTOCOL_HANDLER
 
         table = "%s.%s" % (self.keyspace_name, self.function_table_name)
         create_table_with_all_types(table, s, 10)

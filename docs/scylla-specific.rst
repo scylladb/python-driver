@@ -129,13 +129,13 @@ For example, with a table containing 1000 columns, you might receive only 30-50 
 .. code:: python
 
     from cassandra.cluster import Cluster
-    from cassandra.protocol import NumpyProtocolHandler
+    from cassandra.numpy_support import get_numpy_protocol_handler
     from cassandra.query import tuple_factory
 
     cluster = Cluster()
     session = cluster.connect(keyspace="mykeyspace")
     session.row_factory = tuple_factory
-    session.client_protocol_handler = NumpyProtocolHandler
+    session.client_protocol_handler = get_numpy_protocol_handler()
     session.default_fetch_size = None  # Let ScyllaDB control page sizes
 
     results = session.execute("SELECT * FROM wide_table")

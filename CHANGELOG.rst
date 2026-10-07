@@ -3,6 +3,8 @@ Unreleased
 
 Features
 --------
+* Add explicit ``cassandra.numpy_support.numpy_available()`` and
+  ``get_numpy_protocol_handler()`` accessors for optional NumPy use.
 * Expose concurrent execution through ``Session.execute_concurrent()`` and
   ``Session.execute_concurrent_with_args()``, and add
   ``Session.execute_concurrent_async()``, which returns a
@@ -28,6 +30,9 @@ Bug Fixes
 
 Behavior Changes
 ----------------
+* Accessing the legacy ``cassandra.cython_deps.HAVE_NUMPY`` or
+  ``cassandra.protocol.NumpyProtocolHandler`` attributes now emits
+  ``DeprecationWarning``. Both remain available and lazy.
 * Schema parser selection now uses the server's major version (and DSE's
   major and minor version), so prereleases such as ``4.0-SNAPSHOT``,
   ``6.8.0-SNAPSHOT``, and ``6.8.0.rc1`` select the parser of their release
