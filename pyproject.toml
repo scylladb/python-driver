@@ -137,7 +137,11 @@ source = ["cassandra"]
 branch = true
 parallel = true
 relative_files = true
-omit = ["cassandra/_version.py"]
+omit = [
+    "cassandra/_version.py",
+    # Tests disabled until scylladb/python-driver#365 is resolved; drop this when re-enabled.
+    "cassandra/column_encryption/*",
+]
 
 [tool.coverage.report]
 show_missing = true
