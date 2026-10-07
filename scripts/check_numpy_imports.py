@@ -39,7 +39,7 @@ def cython_numpy_imports(source, allow_cimport=False):
 def direct_imports(path):
     """Yield line numbers of disallowed NumPy imports in driver source."""
     source = path.read_text(encoding='utf-8')
-    if path.suffix == '.pyx':
+    if path.suffix in ('.pyx', '.pxd'):
         yield from cython_numpy_imports(source, allow_cimport=path == NUMPY_PARSER)
         return
 
@@ -57,7 +57,7 @@ def main():
     """Check all driver sources, including files untouched by this PR."""
     violations = []
     for path in sorted(DRIVER.rglob('*')):
-        if path.suffix not in ('.py', '.pyx') or path == GATEWAY:
+        if path.suffix not in ('.py', '.pyx', '.pxd') or path == GATEWAY:
             continue
         violations.extend((path.relative_to(ROOT), line) for line in direct_imports(path))
 

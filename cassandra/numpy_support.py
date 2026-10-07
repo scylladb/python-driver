@@ -14,7 +14,7 @@ _NUMPY_PROTOCOL_HANDLER = _NOT_CHECKED
 _NUMPY_HANDLER_LOCK = Lock()
 
 
-def get_numpy():
+def _get_numpy():
     """Import NumPy at most once, returning its module or ``None``."""
     global _NUMPY, _NUMPY_IMPORT_ERROR
     if _NUMPY is _NOT_CHECKED:
@@ -31,8 +31,8 @@ def get_numpy():
 
 
 def numpy_available():
-    """Return whether the optional NumPy module is available."""
-    return get_numpy() is not None
+    """Import NumPy if needed and return whether it is available."""
+    return _get_numpy() is not None
 
 
 def get_numpy_protocol_handler():
@@ -51,9 +51,9 @@ def get_numpy_protocol_handler():
     return _NUMPY_PROTOCOL_HANDLER
 
 
-def require_numpy():
+def _require_numpy():
     """Return NumPy or raise when an explicitly requested path needs it."""
-    numpy = get_numpy()
+    numpy = _get_numpy()
     if numpy is None:
         raise ImportError("NumPy is required for this operation") from _NUMPY_IMPORT_ERROR
     return numpy

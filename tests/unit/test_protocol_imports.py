@@ -31,13 +31,41 @@ assert 'cassandra.numpy_parser' not in sys.modules
 """, timeout=10)
 
 
+def test_ordinary_driver_module_imports_do_not_load_numpy():
+    run_isolated_subprocess("""
+import importlib
+from pathlib import Path
+
+import cassandra
+from cassandra import DependencyException
+driver = Path(cassandra.__file__).parent
+assert 'numpy' not in sys.modules
+
+modules = sorted({
+    '.'.join(path.relative_to(driver).with_suffix('').parts[:-1]
+             if path.stem == '__init__' else
+             path.relative_to(driver).with_suffix('').parts)
+    for path in driver.rglob('*')
+    if path.suffix in ('.py', '.pyx')
+})
+for module in modules:
+    if module in ('', 'numpy_parser'):
+        continue  # Explicit NumPy feature; importing it requests NumPy.
+    try:
+        importlib.import_module('cassandra.' + module)
+    except (ImportError, DependencyException):
+        pass  # Optional dependency is unavailable.
+    assert 'numpy' not in sys.modules, module
+""", timeout=30)
+
+
 def test_numpy_import_is_attempted_once_when_unavailable():
     run_isolated_subprocess("""
 import builtins
 from unittest.mock import patch
 
 sys.modules['numpy'] = None
-from cassandra.numpy_support import get_numpy, numpy_available, require_numpy
+from cassandra.numpy_support import _get_numpy, numpy_available, _require_numpy
 
 original_import = builtins.__import__
 attempts = []
@@ -48,11 +76,11 @@ def tracked_import(name, *args, **kwargs):
     return original_import(name, *args, **kwargs)
 
 with patch('builtins.__import__', tracked_import):
-    assert get_numpy() is None
-    assert get_numpy() is None
+    assert _get_numpy() is None
+    assert _get_numpy() is None
     assert not numpy_available()
     try:
-        require_numpy()
+        _require_numpy()
     except ImportError:
         pass
     else:
@@ -66,7 +94,7 @@ def test_require_numpy_preserves_import_failure():
     run_isolated_subprocess("""
 import builtins
 from unittest.mock import patch
-from cassandra.numpy_support import get_numpy, require_numpy
+from cassandra.numpy_support import _get_numpy, _require_numpy
 
 original_import = builtins.__import__
 failure = ImportError('missing libopenblas')
@@ -79,10 +107,10 @@ def broken_numpy_import(name, *args, **kwargs):
     return original_import(name, *args, **kwargs)
 
 with patch('builtins.__import__', broken_numpy_import):
-    assert get_numpy() is None
-    assert get_numpy() is None
+    assert _get_numpy() is None
+    assert _get_numpy() is None
     try:
-        require_numpy()
+        _require_numpy()
     except ImportError as exc:
         assert exc.__cause__ is failure
         assert str(exc.__cause__) == 'missing libopenblas'
@@ -100,7 +128,7 @@ from threading import Barrier, BrokenBarrierError, Thread
 from unittest.mock import patch
 
 sys.modules['numpy'] = None
-from cassandra.numpy_support import get_numpy
+from cassandra.numpy_support import _get_numpy
 
 start = Barrier(3)
 imports = Barrier(2)
@@ -119,7 +147,7 @@ def tracked_import(name, *args, **kwargs):
 
 def check_numpy():
     start.wait()
-    results.append(get_numpy())
+    results.append(_get_numpy())
 
 with patch('builtins.__import__', tracked_import):
     threads = [Thread(target=check_numpy) for _ in range(2)]

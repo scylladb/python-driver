@@ -28,6 +28,12 @@ def test_checker_rejects_cython_runtime_import_and_cimport(tmp_path):
     assert list(checker.direct_imports(source)) == [1, 2, 3, 4, 5]
 
 
+def test_checker_rejects_numpy_cimport_in_pxd(tmp_path):
+    source = tmp_path / 'module.pxd'
+    source.write_text('cimport numpy\nfrom numpy cimport ndarray\n')
+    assert list(checker.direct_imports(source)) == [1, 2]
+
+
 def test_checker_allows_cimport_only_in_numpy_parser(tmp_path, monkeypatch):
     source = tmp_path / 'numpy_parser.pyx'
     source.write_text('cimport numpy\nfrom numpy cimport ndarray\nimport numpy\n')
