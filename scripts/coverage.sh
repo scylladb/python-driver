@@ -58,7 +58,18 @@ status=0
 # EVENT_LOOP_MANAGER run, since it self-skips via ASYNCCORE_AVAILABLE on
 # Python 3.12+ (where the stdlib `asyncore` module was removed) and
 # otherwise runs normally here, gaining coverage on 3.9-3.11.
-uv run coverage run -m pytest tests/unit -v \
+#
+# `--with lz4` adds the optional `lz4` package (the compress-lz4 extra) to
+# this one step only, in a throwaway overlay on top of the project env, so
+# the lz4 compression paths (connection.py's lz4 import block, the
+# lz4-dependent test_segment.py tests) get measured. The integration step
+# below deliberately runs without it: Cluster.compression defaults to True
+# and LZ4 is only auto-negotiated when the `lz4` package is installed (see
+# #1088; the Cython lz4 codec isn't built here anyway), so it keeps
+# measuring the default, uncompressed behaviour most users get. The asyncio
+# reactor step needs no lz4 -- it doesn't exercise compression, and the lz4
+# import block already ran here.
+uv run --with lz4 coverage run -m pytest tests/unit -v \
     --ignore=tests/unit/column_encryption \
     --ignore=tests/unit/io/test_asyncioreactor.py \
     || status=1
