@@ -66,7 +66,7 @@ jobs:
              was_added=1
            elif [[ "${target}" == "macos-arm" ]]; then
              [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n  '{"os":"macos-14", "target": "macos-arm"}' >> /tmp/matrix.json
+             echo -n  '{"os":"macos-15", "target": "macos-arm"}' >> /tmp/matrix.json
              was_added=1
            fi
           done
@@ -167,14 +167,7 @@ jobs:
       - name: Overwrite for MacOS
         if: runner.os == 'MacOS'
         run: |
-          ##### Set MACOSX_DEPLOYMENT_TARGET
-          if [ "${{ matrix.os }}" == "macos-15-intel" ]; then
-            echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> $GITHUB_ENV;
-            echo "Enforcing target deployment for 15.0"
-          elif [ "${{ matrix.os }}" == "macos-14" ]; then
-            echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> $GITHUB_ENV;
-            echo "Enforcing target deployment for 14.0"
-          fi
+          echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
 
       - name: Build wheels
         if: matrix.target != 'linux-aarch64'
