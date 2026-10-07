@@ -92,7 +92,7 @@ class AES256ColumnEncryptionPolicyTest(unittest.TestCase):
             policy.add_column(coldesc, self._random_block(), None)
 
     def test_add_column_unknown_type_raises(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Type foobar is not a supported type"):
             policy = AES256ColumnEncryptionPolicy()
             coldesc = ColDesc('ks1','table1','col1')
             policy.add_column(coldesc, self._random_block(), "foobar")
@@ -112,7 +112,7 @@ class AES256ColumnEncryptionPolicyTest(unittest.TestCase):
             policy.encode_and_encrypt(coldesc, None)
 
     def test_encode_and_encrypt_unknown_coldesc_raises(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=r"Could not find ColData for ColDesc .*ks2"):
             policy = AES256ColumnEncryptionPolicy()
             coldesc = ColDesc('ks1','table1','col1')
             policy.add_column(coldesc, self._random_key(), "blob")
