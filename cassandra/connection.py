@@ -772,6 +772,8 @@ def defunct_on_error(f):
     return wrapper
 
 
+# Deprecated: the driver takes the CQL version from the server's OPTIONS response.
+# Kept because it is an externally importable symbol.
 DEFAULT_CQL_VERSION = '3.0.0'
 
 
