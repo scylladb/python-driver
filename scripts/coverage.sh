@@ -55,10 +55,21 @@ status=0
 
 # Unlike the asyncio reactor test below, tests/unit/io/test_asyncorereactor.py
 # is deliberately NOT in the --ignore list: it needs no separate
-# EVENT_LOOP_MANAGER run, since it self-skips via ASYNCCORE_AVAILABLE on
-# Python 3.12+ (where the stdlib `asyncore` module was removed) and
-# otherwise runs normally here, gaining coverage on 3.9-3.11.
-uv run coverage run -m pytest tests/unit -v \
+# EVENT_LOOP_MANAGER run. The stdlib `asyncore` module was removed in Python
+# 3.12 (PEP 594), so on 3.12+ the PyPI backport `pyasyncore` is added for
+# this step only; without it the file self-skips via ASYNCCORE_AVAILABLE and
+# cassandra/io/asyncorereactor.py goes unmeasured.
+#
+# It is deliberately NOT in the dev dependency group: the default reactor
+# order is libev -> asyncore -> asyncio (conn_fns in cassandra/cluster.py),
+# so with asyncore importable, any environment without libev (e.g. Windows
+# wheel tests, developer machines) would silently switch its default
+# connection class from asyncio to asyncore. `uv run --with` installs it
+# into a throwaway overlay, not the project env, so the asyncio step and
+# integration step below don't see it; libev is installed in this lane, so
+# DefaultConnection stays LibevConnection here either way.
+uv run --with "pyasyncore; python_version >= '3.12'" \
+    coverage run -m pytest tests/unit -v \
     --ignore=tests/unit/column_encryption \
     --ignore=tests/unit/io/test_asyncioreactor.py \
     || status=1
