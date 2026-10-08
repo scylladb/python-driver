@@ -144,6 +144,8 @@ omit = [
     "cassandra/datastax/graph/*",  # DSE Graph (graphson, query, types, fluent)
     "cassandra/graph/*",           # dse-driver compat re-exports of the above
     "cassandra/datastax/cloud/*",  # Astra secure-connect bundle (`cloud=`)
+    # Tests disabled until scylladb/python-driver#365 is resolved; drop this when re-enabled.
+    "cassandra/column_encryption/*",
 ]
 
 [tool.coverage.report]
