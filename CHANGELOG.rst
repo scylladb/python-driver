@@ -27,6 +27,9 @@ Bug Fixes
   replace, close, or misconfigure a live pool. Closing a pool with requests in
   flight could retry an already executed request, causing it to execute twice
   (#317).
+* Tablet updates no longer mutate a table's tablet list in place, so a
+  concurrent lookup cannot fail with ``IndexError``, miss its tablet, or route
+  to the wrong one (#1086).
 
 Behavior Changes
 ----------------
