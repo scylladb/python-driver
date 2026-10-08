@@ -113,6 +113,10 @@ except ImportError:
         log.debug("Neither the lz4 package nor the cython_lz4 extension could "
                   "be imported. LZ4 Compression will not be available")
 
+# compression=True picks lz4 only when the lz4 package is installed, as before
+# cython_lz4; without it, cython_lz4 serves only an explicit compression='lz4'.
+_explicit_only_compressions = frozenset() if lz4 is not None else frozenset(('lz4',))
+
 try:
     import snappy
 except ImportError:
@@ -1987,7 +1991,7 @@ class Connection(object):
                     # our locally supported compressions are ordered to prefer
                     # lz4, if available
                     for k in locally_supported_compressions.keys():
-                        if k in overlap:
+                        if k in overlap and k not in _explicit_only_compressions:
                             compression_type = k
                             break
 
@@ -1998,7 +2002,7 @@ class Connection(object):
                     log.debug("Snappy compression is not supported with protocol version %s and "
                               "checksumming. Consider installing lz4. Disabling compression.", self.protocol_version)
                     compression_type = None
-                else:
+                elif compression_type:
                     # set the decompressor here, but set the compressor only after
                     # a successful Ready message
                     self._compression_type = compression_type
