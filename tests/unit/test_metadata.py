@@ -969,6 +969,18 @@ class SchemaParserLookupTests(unittest.TestCase):
         get_parser.assert_called_once_with(
             connection, '3.11.0', None, 0.1, None, None)
 
+        metadata.remove_host(host)
+        replacement = Host(connection.endpoint, SimpleConvictionPolicy,
+                           host_id=uuid.uuid4())
+        replacement.release_version = '4.0.0'
+        metadata.add_or_return_host(replacement)
+        with patch('cassandra.metadata.get_schema_parser',
+                   return_value=parser) as get_parser:
+            metadata.refresh(connection, 0.1)
+
+        get_parser.assert_called_once_with(
+            connection, None, None, 0.1, None, None)
+
     def test_missing_release_version_with_dse_version_uses_dse_parser_without_warning(self):
         connection = Mock()
 
@@ -1162,6 +1174,69 @@ class AggregateToCQLTests(unittest.TestCase):
 
 
 class HostsTests(unittest.TestCase):
+    def test_replace_host_publishes_new_endpoint_owner(self):
+        metadata = Metadata()
+        endpoint = DefaultEndPoint('127.0.0.1')
+        old = Host(endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        replacement = Host(endpoint, SimpleConvictionPolicy,
+                           host_id=uuid.uuid4())
+        metadata.add_or_return_host(old)
+
+        host, new, replaced = metadata.add_or_replace_host(replacement)
+
+        assert host is replacement
+        assert new
+        assert replaced is old
+        assert metadata.get_host(endpoint) is replacement
+        assert metadata.get_host_by_host_id(old.host_id) is None
+
+    def test_host_identity_depends_on_host_id(self):
+        host_id = uuid.uuid4()
+        original = Host('127.0.0.1', SimpleConvictionPolicy, host_id=host_id)
+        moved = Host('127.0.0.2', SimpleConvictionPolicy, host_id=host_id)
+        reborn = Host('127.0.0.1', SimpleConvictionPolicy,
+                      host_id=uuid.uuid4())
+
+        assert original == moved
+        assert hash(original) == hash(moved)
+        assert original != reborn
+        assert len({original, moved, reborn}) == 2
+
+    def test_endpoint_index_survives_removal_of_previous_owner(self):
+        metadata = Metadata()
+        endpoint = DefaultEndPoint('127.0.0.1')
+        old = Host(endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        new = Host(endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        metadata.add_or_return_host(old)
+        metadata.add_or_return_host(new)
+
+        assert metadata.remove_host(old)
+        assert metadata.get_host(endpoint) is new
+        assert metadata.get_host_by_host_id(new.host_id) is new
+
+    def test_endpoint_index_survives_stale_host_id_removal(self):
+        metadata = Metadata()
+        endpoint = DefaultEndPoint('127.0.0.1')
+        host = Host(endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        metadata.add_or_return_host(host)
+
+        assert not metadata.remove_host_by_host_id(uuid.uuid4(), endpoint)
+        assert metadata.get_host(endpoint) is host
+
+    def test_endpoint_reindex_keeps_new_owner(self):
+        metadata = Metadata()
+        old_endpoint = DefaultEndPoint('127.0.0.1')
+        new_endpoint = DefaultEndPoint('127.0.0.2')
+        moved = Host(old_endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        replacement = Host(old_endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        metadata.add_or_return_host(moved)
+        metadata.add_or_return_host(replacement)
+
+        moved.endpoint = new_endpoint
+        metadata.update_host(moved, old_endpoint)
+        assert metadata.get_host(old_endpoint) is replacement
+        assert metadata.get_host(new_endpoint) is moved
+
     def test_iterate_all_hosts_and_modify(self):
         """
         PYTHON-572

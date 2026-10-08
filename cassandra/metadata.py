@@ -126,6 +126,8 @@ class Metadata(object):
         self.keyspaces = {}
         self.dbaas = False
         self._hosts = {}
+        # Secondary endpoint index for address-based discovery and events;
+        # _hosts (keyed by immutable host_id) owns host identity.
         self._host_id_by_endpoint = {}
         self._hosts_lock = RLock()
         self._tablets = Tablets({})
@@ -141,9 +143,8 @@ class Metadata(object):
                 metadata_request_timeout=None, **kwargs):
 
         host_id = getattr(connection, '_control_connection_host_id', None)
-        host = self.get_host_by_host_id(host_id) if host_id is not None else None
-        if host is None:
-            host = self.get_host(connection.original_endpoint)
+        host = (self.get_host_by_host_id(host_id) if host_id is not None
+                else self.get_host(connection.original_endpoint))
         server_version = host.release_version if host else None
         dse_version = host.dse_version if host else None
         parser = get_schema_parser(connection, server_version, dse_version, timeout, metadata_request_timeout, fetch_size)
@@ -350,23 +351,47 @@ class Metadata(object):
                 self._hosts[host.host_id] = host
                 return host, True
 
+    def add_or_replace_host(self, host, allow_replace=True):
+        """Publish a new host and retire the previous endpoint owner together.
+
+        Returns ``(host, new, replaced_host)``. Callers notify listeners only
+        after the replacement is visible in both host indexes.
+        """
+        with self._hosts_lock:
+            existing = self._hosts.get(host.host_id)
+            if existing is not None:
+                return existing, False, None
+
+            old_id = self._host_id_by_endpoint.get(host.endpoint)
+            if old_id is not None and not allow_replace:
+                raise ValueError("Replacing an endpoint owner requires host addition signaling")
+            replaced_host = self._hosts.pop(old_id, None)
+            self._hosts[host.host_id] = host
+            self._host_id_by_endpoint[host.endpoint] = host.host_id
+
+        if replaced_host is not None:
+            self._tablets.drop_tablets_by_host_id(replaced_host.host_id)
+        return host, True, replaced_host
+
     def remove_host(self, host):
         self._tablets.drop_tablets_by_host_id(host.host_id)
         with self._hosts_lock:
-            self._host_id_by_endpoint.pop(host.endpoint, False)
+            if self._host_id_by_endpoint.get(host.endpoint) == host.host_id:
+                self._host_id_by_endpoint.pop(host.endpoint)
             return bool(self._hosts.pop(host.host_id, False))
 
     def remove_host_by_host_id(self, host_id, endpoint=None):
         self._tablets.drop_tablets_by_host_id(host_id)
         with self._hosts_lock:
-            if endpoint and self._host_id_by_endpoint[endpoint] == host_id:
-                self._host_id_by_endpoint.pop(endpoint, False)
+            if endpoint and self._host_id_by_endpoint.get(endpoint) == host_id:
+                self._host_id_by_endpoint.pop(endpoint)
             return bool(self._hosts.pop(host_id, False))
 
     def update_host(self, host, old_endpoint):
         host, created = self.add_or_return_host(host)
         with self._hosts_lock:
-            self._host_id_by_endpoint.pop(old_endpoint, False)
+            if self._host_id_by_endpoint.get(old_endpoint) == host.host_id:
+                self._host_id_by_endpoint.pop(old_endpoint)
             self._host_id_by_endpoint[host.endpoint] = host.host_id
 
     def get_host(self, endpoint_or_address, port=None):

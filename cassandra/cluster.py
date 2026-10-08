@@ -2896,8 +2896,8 @@ class Cluster(object):
                  refresh_nodes=True, host_id=None,
                  reconcile_pools_on_failure=False):
         """
-        Called when adding initial contact points and when the control
-        connection subsequently discovers a new node.
+        Called when the control connection discovers a node. Resolve a known
+        host ID before considering the endpoint, which may have a new owner.
         Returns a Host instance, and a flag indicating whether it was new in
         the metadata.
 
@@ -2905,10 +2905,26 @@ class Cluster(object):
         same-endpoint replacement if creating the replacement pool fails.
         Intended for internal use only.
         """
-        with self.metadata._hosts_lock:
-            if endpoint in self.metadata._host_id_by_endpoint:
-                return self.metadata._hosts[self.metadata._host_id_by_endpoint[endpoint]], False
-        host, new = self.metadata.add_or_return_host(Host(endpoint, self.conviction_policy_factory, datacenter, rack, host_id=host_id))
+        if host_id is None:
+            existing_host = self.metadata.get_host(endpoint)
+            if existing_host is not None:
+                return existing_host, False
+
+        candidate = Host(endpoint, self.conviction_policy_factory, datacenter,
+                         rack, host_id=host_id)
+        host, new, replaced_host = self.metadata.add_or_replace_host(
+            candidate, allow_replace=signal)
+        if not new and host.endpoint != candidate.endpoint:
+            raise ValueError(
+                "Host %s moved from %s to %s; endpoint replacement is required"
+                % (host_id, host.endpoint, candidate.endpoint))
+
+        if replaced_host is not None:
+            log.info("Cassandra host %s removed", replaced_host)
+            # The replacement is already visible. Its addition owns pool
+            # reconciliation, so removal must not start a nested refresh.
+            self.on_remove(replaced_host, trigger_reconciliation=False)
+            reconcile_pools_on_failure = True
         if new and signal:
             log.info("New Cassandra host %r discovered", host)
             self.on_add(
@@ -6031,7 +6047,8 @@ class ControlConnection(object):
             else:
                 endpoint = factory_endpoint
 
-            host = self._cluster.metadata.get_host(endpoint)
+            host = existing_host
+            endpoint_owner = self._cluster.metadata.get_host(endpoint)
             datacenter = row.get("data_center")
             rack = row.get("rack")
             reconcile_pools_on_failure = False
@@ -6039,21 +6056,20 @@ class ControlConnection(object):
             # host_id is immutable. Preserve the existing replacement
             # behavior without folding endpoint-transition orchestration into
             # this identity change; coordinated moves belong to #923.
-            if host is not None and host.host_id != host_id:
+            if endpoint_owner is not None and endpoint_owner.host_id != host_id:
                 log.debug(
                     "[control connection] Replacing host %s at %s with host %s",
-                    host.host_id, endpoint, host_id)
-                # The addition below owns replacement pool creation. Avoid the
-                # removal callback racing it with a second creation attempt.
+                    endpoint_owner.host_id, endpoint, host_id)
+                # A new host's addition below owns pool creation. An existing
+                # host moving here uses the endpoint transition from #923.
+                # Avoid a removal callback racing either transition.
                 self._cluster.remove_host(
-                    host, trigger_reconciliation=False)
+                    endpoint_owner, trigger_reconciliation=False)
                 should_rebuild_token_map = True
-                host = None
-                reconcile_pools_on_failure = True
+                reconcile_pools_on_failure = host is None
 
-            if host is None:
-                host = existing_host
-                if host and host.endpoint != endpoint:
+            if host is not None:
+                if host.endpoint != endpoint:
                     log.debug("[control connection] Updating host ip from %s to %s for (%s)", host.endpoint, endpoint, host_id)
                     reconnector = host.get_and_set_reconnection_handler(None)
                     if reconnector:
@@ -6360,14 +6376,10 @@ class ControlConnection(object):
             if not schema_ver:
                 continue
             endpoint = self._cluster.endpoint_factory.create(row)
-            peer = self._cluster.metadata.get_host(endpoint)
-            if peer is None:
-                peer_by_host_id = self._cluster.metadata.get_host_by_host_id(
-                    row.get('host_id'))
-                if (peer_by_host_id is not None and
-                        isinstance(peer_by_host_id.endpoint,
-                                   UnixSocketEndPoint)):
-                    peer = peer_by_host_id
+            host_id = row.get('host_id')
+            peer = (self._cluster.metadata.get_host_by_host_id(host_id)
+                    if host_id is not None else
+                    self._cluster.metadata.get_host(endpoint))
             if peer and peer.is_up is not False:
                 versions[schema_ver].add(peer.endpoint)
 
@@ -6383,9 +6395,7 @@ class ControlConnection(object):
 
         host_id = getattr(connection, '_control_connection_host_id', None)
         if host_id is not None:
-            host = self._cluster.metadata.get_host_by_host_id(host_id)
-            if host is not None:
-                return host
+            return self._cluster.metadata.get_host_by_host_id(host_id)
 
         original_endpoint = getattr(connection, 'original_endpoint', None)
         if original_endpoint is not None:
@@ -6400,8 +6410,8 @@ class ControlConnection(object):
             return False
 
         host_id = getattr(connection, '_control_connection_host_id', None)
-        if host_id is not None and host_id == host.host_id:
-            return True
+        if host_id is not None:
+            return host_id == host.host_id
 
         return self._get_host_for_connection(connection) is host
 

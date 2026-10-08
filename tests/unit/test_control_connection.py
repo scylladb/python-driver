@@ -102,17 +102,24 @@ class MockMetadata(object):
 
     def update_host(self, host, old_endpoint):
         host, created = self.add_or_return_host(host)
-        self._host_id_by_endpoint.pop(old_endpoint, False)
+        if self._host_id_by_endpoint.get(old_endpoint) == host.host_id:
+            self._host_id_by_endpoint.pop(old_endpoint)
         self._host_id_by_endpoint[host.endpoint] = host.host_id
+
+    def remove_host(self, host):
+        if self._host_id_by_endpoint.get(host.endpoint) == host.host_id:
+            self._host_id_by_endpoint.pop(host.endpoint)
+        return bool(self.hosts.pop(host.host_id, False))
 
     def all_hosts_items(self):
         return list(self.hosts.items())
 
     def remove_host_by_host_id(self, host_id, endpoint=None):
-        if endpoint and self._host_id_by_endpoint[endpoint] == host_id:
-            self._host_id_by_endpoint.pop(endpoint, False)
-        self.removed_hosts.append(self.hosts.pop(host_id, False))
-        return bool(self.hosts.pop(host_id, False))
+        if endpoint and self._host_id_by_endpoint.get(endpoint) == host_id:
+            self._host_id_by_endpoint.pop(endpoint)
+        removed_host = self.hosts.pop(host_id, False)
+        self.removed_hosts.append(removed_host)
+        return bool(removed_host)
 
 
 class MockCluster(object):
@@ -369,6 +376,15 @@ class ControlConnectionTest(unittest.TestCase):
         host.is_up = True
         assert not self.control_connection._wait_for_schema_agreement()
         assert self.time.clock >= self.cluster.max_schema_agreement_wait
+
+    def test_schema_versions_do_not_attribute_old_host_id_to_reused_endpoint(self):
+        self.connection.peer_results[1][0][2] = 'different-version'
+        self.connection.peer_results[1][0][-1] = HOST_ID_4
+        peer_result, local_result = _node_meta_results(
+            self.connection.local_results, self.connection.peer_results)
+
+        assert self.control_connection._get_schema_mismatches(
+            peer_result, local_result, self.connection.endpoint) is None
 
 
     def test_wait_for_schema_agreement_none_timeout(self):
@@ -1463,7 +1479,7 @@ class ControlConnectionTest(unittest.TestCase):
         self.cluster.executor.submit.assert_called_once_with(
             self.control_connection._reconnect)
 
-    def test_down_matches_replacement_at_stale_control_endpoint(self):
+    def test_down_does_not_match_replacement_at_stale_control_endpoint(self):
         self.control_connection.refresh_node_list_and_token_map()
         old_host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
         endpoint = old_host.endpoint
@@ -1484,9 +1500,9 @@ class ControlConnectionTest(unittest.TestCase):
 
         self.control_connection._signal_error()
 
-        self.cluster.signal_connection_failure.assert_called_once_with(
-            replacement_host, connection_error, is_host_addition=False)
-        self.cluster.executor.submit.assert_not_called()
+        self.cluster.signal_connection_failure.assert_not_called()
+        self.cluster.executor.submit.assert_called_once_with(
+            self.control_connection._reconnect)
 
         self.control_connection.on_down(replacement_host)
 
@@ -1566,6 +1582,92 @@ class ControlConnectionTest(unittest.TestCase):
         assert self.cluster.metadata.get_host('192.168.1.6')
 
         assert 3 == len(self.cluster.metadata.all_hosts())
+
+    def test_change_ip_uses_host_id_even_when_endpoint_belongs_to_another_host(self):
+        old_host = self.cluster.metadata.get_host_by_host_id(HOST_ID_2)
+        displaced_host = self.cluster.metadata.get_host_by_host_id(HOST_ID_3)
+        new_endpoint = displaced_host.endpoint
+        self.connection.peer_results[1] = [
+            ["192.168.1.2", "10.0.0.5", "a", "dc1", "rack1",
+             ["2", "102", "202"], HOST_ID_2]]
+        self.connection.wait_for_responses = Mock(
+            return_value=_node_meta_results(
+                self.connection.local_results, self.connection.peer_results))
+
+        def remove_displaced(host, trigger_reconciliation=True):
+            self.cluster.metadata.remove_host(host)
+
+        self.cluster.remove_host = Mock(side_effect=remove_displaced)
+
+        self.control_connection.refresh_node_list_and_token_map()
+
+        assert self.cluster.metadata.get_host_by_host_id(HOST_ID_2) is old_host
+        assert old_host.endpoint == new_endpoint
+        assert self.cluster.metadata.get_host(new_endpoint) is old_host
+        assert self.cluster.metadata.get_host_by_host_id(HOST_ID_3) is None
+        assert old_host not in self.cluster.added_hosts
+
+    def test_add_host_resolves_by_host_id_before_endpoint(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.control_connection.shutdown()
+        cluster.on_remove = Mock()
+        endpoint = DefaultEndPoint('192.168.1.1')
+        moved_endpoint = DefaultEndPoint('192.168.1.9')
+
+        old, new = cluster.add_host(endpoint, signal=False, host_id=HOST_ID_2)
+        assert new
+        unknown_id, new = cluster.add_host(endpoint, signal=False)
+        assert unknown_id is old
+        assert not new
+        with self.assertRaisesRegex(ValueError, "endpoint replacement is required"):
+            cluster.add_host(moved_endpoint, signal=False, host_id=HOST_ID_2)
+        assert old.endpoint == endpoint
+        with self.assertRaisesRegex(ValueError, "requires host addition signaling"):
+            cluster.add_host(endpoint, signal=False, host_id=HOST_ID_4)
+        assert cluster.metadata.get_host(endpoint) is old
+
+        def check_replacement_visible(host, trigger_reconciliation):
+            assert host is old
+            assert not trigger_reconciliation
+            assert cluster.metadata.get_host(endpoint).host_id == HOST_ID_4
+            assert cluster.metadata.get_host_by_host_id(HOST_ID_2) is None
+
+        cluster.on_remove.side_effect = check_replacement_visible
+        cluster.on_add = Mock()
+        replacement, new = cluster.add_host(endpoint, host_id=HOST_ID_4)
+        assert new
+        assert replacement is not old
+        assert cluster.metadata.get_host(endpoint) is replacement
+        assert cluster.metadata.get_host_by_host_id(HOST_ID_2) is None
+        cluster.on_remove.assert_called_once_with(
+            old, trigger_reconciliation=False)
+
+    def test_add_host_replacement_notifies_after_publication(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.control_connection.shutdown()
+        endpoint = DefaultEndPoint('192.168.1.1')
+        old, _ = cluster.add_host(endpoint, signal=False, host_id=HOST_ID_2)
+        events = []
+
+        def on_remove(host, trigger_reconciliation):
+            assert cluster.metadata.get_host(endpoint).host_id == HOST_ID_4
+            assert not trigger_reconciliation
+            events.append(('remove', host))
+
+        def on_add(host, refresh_nodes, reconcile_pools_on_failure):
+            assert cluster.metadata.get_host(endpoint) is host
+            assert reconcile_pools_on_failure
+            events.append(('add', host))
+
+        cluster.on_remove = Mock(side_effect=on_remove)
+        cluster.on_add = Mock(side_effect=on_add)
+
+        replacement, new = cluster.add_host(endpoint, host_id=HOST_ID_4)
+
+        assert new
+        assert events == [('remove', old), ('add', replacement)]
 
     def test_same_endpoint_with_new_host_id_removes_old_session_pool(self):
         cluster = Cluster()
