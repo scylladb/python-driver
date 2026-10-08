@@ -34,6 +34,9 @@ from cassandra.connection import (ConnectionException, EndPoint,
                                   DefaultEndPoint, UnixSocketEndPoint)
 from cassandra.policies import HostDistance
 
+# Default for routing_tablet: "not looked up" (None means looked up, no tablet).
+_TABLET_NOT_LOOKED_UP = object()
+
 log = logging.getLogger(__name__)
 
 
@@ -515,7 +518,8 @@ class HostConnection(object):
 
         log.debug("Finished initializing connection for host %s", self.host)
 
-    def _get_connection_for_routing_key(self, routing_key=None, keyspace=None, table=None, routing_token=None):
+    def _get_connection_for_routing_key(self, routing_key=None, keyspace=None, table=None, routing_token=None,
+                                        routing_tablet=_TABLET_NOT_LOOKED_UP):
         if self.is_shutdown:
             raise ConnectionException(
                 "Pool for %s is shutdown" % (self.host,), self.host)
@@ -536,19 +540,19 @@ class HostConnection(object):
             if t is None and metadata.token_map is not None and metadata.can_support_partitioner():
                 t = metadata.token_map.token_class.from_key(routing_key)
             if t is not None and self.supports_tablet_routing and table is not None:
-                if keyspace is None:
-                    keyspace = self._keyspace
-
-                tablet = self._session.cluster.metadata._tablets.get_tablet_for_key(keyspace, table, t)
+                if routing_tablet is not _TABLET_NOT_LOOKED_UP:
+                    # The caller already did the lookup; None means no tablet.
+                    tablet = routing_tablet
+                else:
+                    if keyspace is None:
+                        keyspace = self._keyspace
+                    tablet = self._session.cluster.metadata._tablets.get_tablet_for_key(keyspace, table, t)
 
                 # In both V1 and V2 the request is sent to this host, so we pick
                 # the shard that this host owns for the tablet. Leader-aware host
                 # selection (V2) happens earlier, in the load balancing policy.
                 if tablet is not None:
-                    for replica in tablet.replicas:
-                        if replica[0] == self.host.host_id:
-                            shard_id = replica[1]
-                            break
+                    shard_id = tablet.get_replica_shard_id(self.host.host_id)
 
             if shard_id is None and t is not None:
                 shard_id = self.host.sharding_info.shard_id_from_token(t.value)
@@ -591,15 +595,16 @@ class HostConnection(object):
             return random.choice(active_connections)
         return random.choice(list(self._connections.values()))
 
-    def borrow_connection(self, timeout, routing_key=None, keyspace=None, table=None, routing_token=None):
-        conn = self._get_connection_for_routing_key(routing_key, keyspace, table, routing_token)
+    def borrow_connection(self, timeout, routing_key=None, keyspace=None, table=None, routing_token=None,
+                          routing_tablet=_TABLET_NOT_LOOKED_UP):
+        conn = self._get_connection_for_routing_key(routing_key, keyspace, table, routing_token, routing_tablet)
         start = time.time()
         remaining = timeout
         last_retry = False
         while True:
             if conn.is_closed:
                 # The connection might have been closed in the meantime - if so, try again
-                conn = self._get_connection_for_routing_key(routing_key, keyspace, table, routing_token)
+                conn = self._get_connection_for_routing_key(routing_key, keyspace, table, routing_token, routing_tablet)
             with conn.lock:
                 if (not conn.is_closed or last_retry) and conn.in_flight < conn.max_request_id:
                     # On last retry we ignore connection status, since it is better to return closed connection than

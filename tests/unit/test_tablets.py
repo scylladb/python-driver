@@ -1,6 +1,6 @@
 import unittest
 from io import BytesIO
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from cassandra import ConsistencyLevel, ProtocolVersion
 from cassandra.protocol import ExecuteMessage
@@ -20,7 +20,7 @@ class TabletsTest(unittest.TestCase):
         
         tablets.add_tablet("test_ks", "test_tb", Tablet(-6917529027641081857, -4611686018427387905, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-6917529027641081857, -4611686018427387905)])
 
@@ -29,7 +29,7 @@ class TabletsTest(unittest.TestCase):
 
         tablets.add_tablet("test_ks", "test_tb", Tablet(-8611686018427387905, -7917529027641081857, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-8611686018427387905, -7917529027641081857),
                                            (-6917529027641081857, -4611686018427387905)])
@@ -39,7 +39,7 @@ class TabletsTest(unittest.TestCase):
 
         tablets.add_tablet("test_ks", "test_tb", Tablet(-1, 2305843009213693951, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-6917529027641081857, -4611686018427387905),
                                            (-1, 2305843009213693951)])
@@ -50,7 +50,7 @@ class TabletsTest(unittest.TestCase):
         
         tablets.add_tablet("test_ks", "test_tb", Tablet(-4611686018427387905, -2305843009213693953, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-6917529027641081857, -4611686018427387905),
                                            (-4611686018427387905, -2305843009213693953),
@@ -64,7 +64,7 @@ class TabletsTest(unittest.TestCase):
         
         tablets.add_tablet("test_ks", "test_tb", Tablet(-3611686018427387905, -6, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-6917529027641081857, -4611686018427387905),
                                            (-3611686018427387905, -6),
@@ -76,7 +76,7 @@ class TabletsTest(unittest.TestCase):
         
         tablets.add_tablet("test_ks", "test_tb", Tablet(-8011686018427387905, -7987529027641081857, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-8011686018427387905, -7987529027641081857),
                                            (-6917529027641081857, -4611686018427387905)])
@@ -87,7 +87,7 @@ class TabletsTest(unittest.TestCase):
         
         tablets.add_tablet("test_ks", "test_tb", Tablet(-5011686018427387905, -2987529027641081857, None))
         
-        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))
+        tablets_list = tablets._tablets.get(("test_ks", "test_tb"))[0]
 
         self.compare_ranges(tablets_list, [(-8611686018427387905, -7917529027641081857),
                                            (-5011686018427387905, -2987529027641081857)])
@@ -97,9 +97,9 @@ class GetTabletForKeyTest(unittest.TestCase):
     """Tests for Tablets.get_tablet_for_key."""
 
     def test_found(self):
-        t1 = Tablet(0, 100, [("host1", 0)])
-        t2 = Tablet(100, 200, [("host2", 0)])
-        t3 = Tablet(200, 300, [("host3", 0)])
+        t1 = Tablet(0, 100, [(uuid4(), 0)])
+        t2 = Tablet(100, 200, [(uuid4(), 0)])
+        t3 = Tablet(200, 300, [(uuid4(), 0)])
         tablets = Tablets({("ks", "tb"): [t1, t2, t3]})
 
         class Token:
@@ -119,7 +119,7 @@ class GetTabletForKeyTest(unittest.TestCase):
         self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))
 
     def test_not_found_outside_range(self):
-        t1 = Tablet(100, 200, [("host1", 0)])
+        t1 = Tablet(100, 200, [(uuid4(), 0)])
         tablets = Tablets({("ks", "tb"): [t1]})
 
         class Token:
@@ -129,6 +129,94 @@ class GetTabletForKeyTest(unittest.TestCase):
         # Token value 50 is not > first_token (100) of the tablet whose
         # last_token (200) is >= 50, so no match.
         self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))
+
+
+class _Token:
+    def __init__(self, v):
+        self.value = v
+
+
+class TabletsCopyOnWriteTest(unittest.TestCase):
+    """Writers must publish a new (tablets, last_tokens) snapshot, never mutate one a lock-free reader may hold (#1086)."""
+
+    def _ranges(self, lst):
+        return [(t.first_token, t.last_token) for t in lst]
+
+    def _make(self):
+        h1, h2 = uuid4(), uuid4()
+        tablets = [Tablet(0, 100, [(h1, 0)]), Tablet(100, 200, [(h2, 0)]),
+                   Tablet(200, 300, [(h1, 0)]), Tablet(300, 400, [(h2, 0)])]
+        return Tablets({("ks", "tb"): tablets}), h1, h2
+
+    def _assert_consistent(self, entry):
+        tablets, last_tokens = entry
+        self.assertEqual([t.last_token for t in tablets], last_tokens)
+
+    def _assert_snapshot_unchanged(self, mutate, expected_after):
+        tablets, h1, h2 = self._make()
+        snapshot = tablets._tablets[("ks", "tb")]
+        before = (list(snapshot[0]), list(snapshot[1]))
+        mutate(tablets, h1, h2)
+        self.assertEqual(snapshot, before)
+        self._assert_consistent(tablets._tablets[("ks", "tb")])
+        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")][0]), expected_after)
+
+    def test_add_overlapping_tablet_keeps_snapshot(self):
+        self._assert_snapshot_unchanged(
+            lambda t, h1, h2: t.add_tablet("ks", "tb", Tablet(50, 350, [(h1, 0)])),
+            [(50, 350)])
+
+    def test_add_non_overlapping_tablet_keeps_snapshot(self):
+        self._assert_snapshot_unchanged(
+            lambda t, h1, h2: t.add_tablet("ks", "tb", Tablet(400, 500, [(h1, 0)])),
+            [(0, 100), (100, 200), (200, 300), (300, 400), (400, 500)])
+
+    def test_drop_tablets_by_host_id_keeps_snapshot(self):
+        self._assert_snapshot_unchanged(
+            lambda t, h1, h2: t.drop_tablets_by_host_id(h1),
+            [(100, 200), (300, 400)])
+
+    def test_drop_tablets_by_host_id(self):
+        tablets, h1, h2 = self._make()
+        tablets._tablets[("ks", "other")] = ([Tablet(0, 10, [(h2, 0)])], [10])
+        tablets.drop_tablets_by_host_id(h2)
+        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")][0]), [(0, 100), (200, 300)])
+        self._assert_consistent(tablets._tablets[("ks", "tb")])
+        self.assertNotIn(("ks", "other"), tablets._tablets)
+        self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", _Token(150)))
+        self.assertEqual(tablets.get_tablet_for_key("ks", "tb", _Token(250)).first_token, 200)
+
+    def _lookup_racing(self, write):
+        # The reader takes its snapshot, then reads t.value; the write lands in between.
+        tablets, h1, h2 = self._make()
+        snapshot = tablets._tablets[("ks", "tb")]
+        before = (list(snapshot[0]), list(snapshot[1]))
+        last = snapshot[0][3]
+
+        class RacingToken:
+            reads = 0
+
+            @property
+            def value(self):
+                RacingToken.reads += 1
+                write(tablets, h1, h2)
+                return 350
+
+        self.assertIs(tablets.get_tablet_for_key("ks", "tb", RacingToken()), last)
+        self.assertEqual(RacingToken.reads, 1)
+        self.assertEqual(snapshot, before)
+        self._assert_consistent(tablets._tablets[("ks", "tb")])
+        return tablets
+
+    def test_add_tablet_during_lookup(self):
+        tablets = self._lookup_racing(
+            lambda t, h1, h2: t.add_tablet("ks", "tb", Tablet(-1, 1000, [(h1, 0)])))
+        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")][0]), [(-1, 1000)])
+
+    def test_drop_tablets_by_host_id_during_lookup(self):
+        # Drops the tablet the reader is about to pick and shifts every later index.
+        tablets = self._lookup_racing(lambda t, h1, h2: t.drop_tablets_by_host_id(h2))
+        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")][0]), [(0, 100), (200, 300)])
 
 
 class TabletLeaderTest(unittest.TestCase):
@@ -214,7 +302,7 @@ class TabletVersionBlockTest(unittest.TestCase):
     def test_from_row_stores_tablet_version(self):
         """Tablet.from_row stores the tablet_version it is given (the V2 payload field)."""
         version = 0xDEADBEEFCAFEBABE
-        tablet = Tablet.from_row(-100, 100, [("host1", 0), ("host2", 1)], tablet_version=version)
+        tablet = Tablet.from_row(-100, 100, [(uuid4(), 0), (uuid4(), 1)], tablet_version=version)
         self.assertIsNotNone(tablet)
         self.assertEqual(tablet.tablet_version, version)
         self.assertEqual(tablet.first_token, -100)
@@ -279,3 +367,131 @@ class ExecuteMessageSerializationTest(unittest.TestCase):
         first_again = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=True))
         self.assertEqual(first, first_again)
         self.assertEqual(first, second_plain + bytes([0x3C]))
+
+class TabletFromRowTest(unittest.TestCase):
+    """Tests for Tablet.from_row, in particular that emptiness is detected
+    correctly regardless of whether `replicas` is a reusable sequence or a
+    one-shot iterator/generator."""
+
+    def test_empty_list_returns_none(self):
+        self.assertIsNone(Tablet.from_row(0, 100, []))
+
+    def test_empty_generator_returns_none(self):
+        # A generator is always truthy, even when empty, so a naive
+        # `if not replicas` check would fail to detect this case.
+        self.assertIsNone(Tablet.from_row(0, 100, (x for x in [])))
+
+    def test_none_returns_none(self):
+        self.assertIsNone(Tablet.from_row(0, 100, None))
+
+    def test_non_empty_list_builds_tablet(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        tablet = Tablet.from_row(0, 100, [(u1, 3), (u2, 7)])
+        self.assertIsNotNone(tablet)
+        self.assertEqual(tablet.replicas, ((u1, 3), (u2, 7)))
+        self.assertTrue(tablet.replica_contains_host_id(u1))
+        self.assertEqual(tablet.get_replica_shard_id(u2), 7)
+
+
+class TabletReplicaDictTest(unittest.TestCase):
+    """replica_contains_host_id / get_replica_shard_id lookups."""
+
+    def test_replica_contains_host_id(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        u3 = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertTrue(t.replica_contains_host_id(u1))
+        self.assertTrue(t.replica_contains_host_id(u2))
+        self.assertFalse(t.replica_contains_host_id(u3))
+
+    def test_replica_contains_host_id_false_when_no_replicas(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        t = Tablet(0, 100, None)
+        self.assertFalse(t.replica_contains_host_id(u1))
+
+    def test_get_replica_shard_id(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        u3 = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t = Tablet(0, 100, [(u1, 3), (u2, 7)])
+        self.assertEqual(t.get_replica_shard_id(u1), 3)
+        self.assertEqual(t.get_replica_shard_id(u2), 7)
+        self.assertIsNone(t.get_replica_shard_id(u3))
+
+    def test_none_host_id_is_not_a_replica(self):
+        # A host whose id is still unknown must be treated as a non-replica
+        # rather than raising (discovery/metadata transitions).
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        t = Tablet(0, 100, [(u1, 3)])
+        self.assertFalse(t.replica_contains_host_id(None))
+        self.assertIsNone(t.get_replica_shard_id(None))
+
+    def test_replica_lookup_from_iterator(self):
+        """Ensure replica lookups work correctly even when replicas is a
+        one-shot iterator (generator), not a reusable list."""
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+
+        def gen():
+            yield (u1, 3)
+            yield (u2, 7)
+
+        t = Tablet(0, 100, gen())
+        self.assertEqual(t.replicas, ((u1, 3), (u2, 7)))
+        self.assertEqual(t.get_replica_shard_id(u2), 7)
+
+
+class TabletHostIdInternTest(unittest.TestCase):
+    def test_equal_host_ids_share_one_object(self):
+        u = uuid4()
+        t1 = Tablet(0, 100, [(UUID(int=u.int), 0)])
+        t2 = Tablet(100, 200, [(UUID(int=u.int), 1)])
+        self.assertIs(t1.leader, t2.leader)
+        self.assertEqual(t1.leader, u)
+        self.assertIs(next(iter(t1._replica_dict)), next(iter(t2._replica_dict)))
+
+
+class DropTabletsByHostIdTest(unittest.TestCase):
+    """Tests for Tablets.drop_tablets_by_host_id batch-filter path."""
+
+    def test_drop_removes_matching_tablets(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u2 = UUID('87654321-4321-8765-4321-876543218765')
+        t1 = Tablet(0, 100, [(u1, 0)])
+        t2 = Tablet(100, 200, [(u2, 0)])
+        t3 = Tablet(200, 300, [(u1, 1), (u2, 1)])
+        tablets = Tablets({("ks", "tb"): [t1, t2, t3]})
+
+        tablets.drop_tablets_by_host_id(u1)
+
+        remaining, last_tokens = tablets._tablets[("ks", "tb")]
+        self.assertEqual(len(remaining), 1)
+        self.assertIs(remaining[0], t2)
+        self.assertEqual(last_tokens, [200])
+
+    def test_drop_none_host_id_is_noop(self):
+        t1 = Tablet(0, 100, [(uuid4(), 0)])
+        tablets = Tablets({("ks", "tb"): [t1]})
+        tablets.drop_tablets_by_host_id(None)
+        self.assertEqual(len(tablets._tablets[("ks", "tb")][0]), 1)
+
+    def test_drop_nonexistent_host_id_is_noop(self):
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        u_missing = UUID('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        t1 = Tablet(0, 100, [(u1, 0)])
+        tablets = Tablets({("ks", "tb"): [t1]})
+        tablets.drop_tablets_by_host_id(u_missing)
+        self.assertEqual(len(tablets._tablets[("ks", "tb")][0]), 1)
+
+    def test_drop_last_tablet_removes_table_keys(self):
+        # Dropping the only tablet of a table must not leave an empty entry (PR #651 cleanup).
+        u1 = UUID('12345678-1234-5678-1234-567812345678')
+        t1 = Tablet(0, 100, [(u1, 0)])
+        tablets = Tablets({("ks", "tb"): [t1]})
+
+        tablets.drop_tablets_by_host_id(u1)
+
+        self.assertNotIn(("ks", "tb"), tablets._tablets)
+        self.assertFalse(tablets.table_has_tablets("ks", "tb"))

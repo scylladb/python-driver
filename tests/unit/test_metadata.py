@@ -460,7 +460,7 @@ class DropTableMetadataTest(unittest.TestCase):
         keyspace = KeyspaceMetadata("ks", True, "NetworkTopologyStrategy", {"dc1": "1"})
         keyspace.tables["tb"] = TableMetadata("ks", "tb")
         self.metadata.keyspaces["ks"] = keyspace
-        self.metadata._tablets.add_tablet("ks", "tb", Tablet(0, 100, [("host1", 0)]))
+        self.metadata._tablets.add_tablet("ks", "tb", Tablet(0, 100, [(uuid.uuid4(), 0)]))
 
     def test_drop_table_invalidates_tablets(self):
         """Dropping a known table removes its tablet and table metadata."""
@@ -471,7 +471,7 @@ class DropTableMetadataTest(unittest.TestCase):
 
     def test_drop_table_invalidates_tablets_for_unknown_keyspace(self):
         """Dropping a table in an unknown keyspace still removes its tablet metadata."""
-        self.metadata._tablets.add_tablet("unknown", "tb", Tablet(0, 100, [("host1", 0)]))
+        self.metadata._tablets.add_tablet("unknown", "tb", Tablet(0, 100, [(uuid.uuid4(), 0)]))
         self.metadata._drop_table("unknown", "tb")
 
         assert self.metadata._tablets.table_has_tablets("unknown", "tb") is False
