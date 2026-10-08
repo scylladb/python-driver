@@ -1174,6 +1174,39 @@ class AggregateToCQLTests(unittest.TestCase):
 
 
 class HostsTests(unittest.TestCase):
+    def test_replace_host_endpoint_preserves_id_and_reindexes(self):
+        metadata = Metadata()
+        old_endpoint = DefaultEndPoint('127.0.0.1')
+        new_endpoint = DefaultEndPoint('127.0.0.2')
+        old = Host(old_endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        replacement = Host(new_endpoint, SimpleConvictionPolicy,
+                           host_id=old.host_id)
+        metadata.add_or_return_host(old)
+
+        metadata.replace_host_endpoint(old, replacement)
+
+        assert metadata.get_host_by_host_id(old.host_id) is replacement
+        assert metadata.get_host(old_endpoint) is None
+        assert metadata.get_host(new_endpoint) is replacement
+        assert not metadata.remove_host(old)
+        assert not metadata.remove_host_by_host_id(old.host_id, old_endpoint)
+        assert metadata.get_host_by_host_id(old.host_id) is replacement
+
+    def test_replace_host_endpoint_rejects_conflicting_owner(self):
+        metadata = Metadata()
+        old = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        owner = Host('127.0.0.2', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        replacement = Host(owner.endpoint, SimpleConvictionPolicy,
+                           host_id=old.host_id)
+        metadata.add_or_return_host(old)
+        metadata.add_or_return_host(owner)
+
+        with self.assertRaisesRegex(ValueError, "belongs to another host"):
+            metadata.replace_host_endpoint(old, replacement)
+
+        assert metadata.get_host(old.endpoint) is old
+        assert metadata.get_host(owner.endpoint) is owner
+
     def test_replace_host_publishes_new_endpoint_owner(self):
         metadata = Metadata()
         endpoint = DefaultEndPoint('127.0.0.1')

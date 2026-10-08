@@ -142,9 +142,14 @@ class Metadata(object):
     def refresh(self, connection, timeout, target_type=None, change_type=None, fetch_size=None,
                 metadata_request_timeout=None, **kwargs):
 
-        host_id = getattr(connection, '_control_connection_host_id', None)
-        host = (self.get_host_by_host_id(host_id) if host_id is not None
-                else self.get_host(connection.original_endpoint))
+        bound_host = vars(connection).get('_control_connection_host')
+        if bound_host is not None:
+            host = (bound_host if self.get_host_by_host_id(bound_host.host_id)
+                    is bound_host else None)
+        else:
+            host_id = getattr(connection, '_control_connection_host_id', None)
+            host = (self.get_host_by_host_id(host_id) if host_id is not None
+                    else self.get_host(connection.original_endpoint))
         server_version = host.release_version if host else None
         dse_version = host.dse_version if host else None
         parser = get_schema_parser(connection, server_version, dse_version, timeout, metadata_request_timeout, fetch_size)
@@ -373,19 +378,49 @@ class Metadata(object):
             self._tablets.drop_tablets_by_host_id(replaced_host.host_id)
         return host, True, replaced_host
 
-    def remove_host(self, host):
-        self._tablets.drop_tablets_by_host_id(host.host_id)
+    def replace_host_endpoint(self, old_host, replacement):
+        """Atomically replace a Host object after its endpoint changes.
+
+        The host ID remains the identity. A new object fences work attached to
+        the old endpoint; both endpoint indexes change under one lock.
+        """
+        if old_host.host_id != replacement.host_id:
+            raise ValueError("Endpoint replacement must preserve host_id")
+        if old_host.endpoint == replacement.endpoint:
+            raise ValueError("Endpoint replacement requires a new endpoint")
+
         with self._hosts_lock:
+            if self._hosts.get(old_host.host_id) is not old_host:
+                raise ValueError("Host is no longer current in metadata")
+            owner_id = self._host_id_by_endpoint.get(replacement.endpoint)
+            if owner_id is not None and owner_id != old_host.host_id:
+                raise ValueError("New endpoint belongs to another host")
+
+            if self._host_id_by_endpoint.get(old_host.endpoint) == old_host.host_id:
+                self._host_id_by_endpoint.pop(old_host.endpoint)
+            self._hosts[old_host.host_id] = replacement
+            self._host_id_by_endpoint[replacement.endpoint] = replacement.host_id
+
+    def remove_host(self, host):
+        with self._hosts_lock:
+            if self._hosts.get(host.host_id) is not host:
+                return False
             if self._host_id_by_endpoint.get(host.endpoint) == host.host_id:
                 self._host_id_by_endpoint.pop(host.endpoint)
-            return bool(self._hosts.pop(host.host_id, False))
+            self._hosts.pop(host.host_id)
+        self._tablets.drop_tablets_by_host_id(host.host_id)
+        return True
 
     def remove_host_by_host_id(self, host_id, endpoint=None):
-        self._tablets.drop_tablets_by_host_id(host_id)
         with self._hosts_lock:
+            host = self._hosts.get(host_id)
+            if host is None or (endpoint is not None and host.endpoint != endpoint):
+                return False
             if endpoint and self._host_id_by_endpoint.get(endpoint) == host_id:
                 self._host_id_by_endpoint.pop(endpoint)
-            return bool(self._hosts.pop(host_id, False))
+            self._hosts.pop(host_id)
+        self._tablets.drop_tablets_by_host_id(host_id)
+        return True
 
     def update_host(self, host, old_endpoint):
         host, created = self.add_or_return_host(host)

@@ -2915,9 +2915,10 @@ class Cluster(object):
         host, new, replaced_host = self.metadata.add_or_replace_host(
             candidate, allow_replace=signal)
         if not new and host.endpoint != candidate.endpoint:
-            raise ValueError(
-                "Host %s moved from %s to %s; endpoint replacement is required"
-                % (host_id, host.endpoint, candidate.endpoint))
+            if not signal:
+                raise ValueError("Endpoint replacement requires host addition signaling")
+            return self.replace_host_endpoint(
+                host, candidate.endpoint, datacenter, rack), False
 
         if replaced_host is not None:
             log.info("Cassandra host %s removed", replaced_host)
@@ -2932,6 +2933,39 @@ class Cluster(object):
                 reconcile_pools_on_failure=reconcile_pools_on_failure)
 
         return host, new
+
+    def replace_host_endpoint(self, host, endpoint, datacenter=None, rack=None):
+        """Move a host ID to a new endpoint with a fresh Host lifecycle.
+
+        The old object is retired permanently. Publishing a new object makes
+        in-flight pool and reconnection work on the old route fail its normal
+        lifecycle checks; sessions and policies see remove/add notifications.
+        """
+        replacement = Host(
+            endpoint, self.conviction_policy_factory,
+            datacenter if datacenter is not None else host.datacenter,
+            rack if rack is not None else host.rack, host_id=host.host_id)
+        self.metadata.replace_host_endpoint(host, replacement)
+
+        log.info("Cassandra host %s moved from %s to %s", host.host_id,
+                 host.endpoint, replacement.endpoint)
+        control_connection = self.control_connection
+        connection = control_connection._connection
+        bound_host = (vars(connection).get('_control_connection_host')
+                      if connection is not None else None)
+        reconnect_control = (
+            connection is not None and
+            (bound_host is host or
+             (bound_host is None and
+              control_connection._connection_matches_host(connection, host))) and
+            getattr(connection, 'original_endpoint', None) == host.endpoint)
+
+        self.on_remove(host, trigger_reconciliation=False)
+        self.on_add(replacement, refresh_nodes=False,
+                    reconcile_pools_on_failure=True)
+        if reconnect_control:
+            control_connection.reconnect()
+        return replacement
 
     def remove_host(self, host, trigger_reconciliation=True):
         """
@@ -6053,16 +6087,12 @@ class ControlConnection(object):
             rack = row.get("rack")
             reconcile_pools_on_failure = False
 
-            # host_id is immutable. Preserve the existing replacement
-            # behavior without folding endpoint-transition orchestration into
-            # this identity change; coordinated moves belong to #923.
             if endpoint_owner is not None and endpoint_owner.host_id != host_id:
                 log.debug(
                     "[control connection] Replacing host %s at %s with host %s",
                     endpoint_owner.host_id, endpoint, host_id)
-                # A new host's addition below owns pool creation. An existing
-                # host moving here uses the endpoint transition from #923.
-                # Avoid a removal callback racing either transition.
+                # A new host's addition or an endpoint transition below owns
+                # pool creation. Avoid a removal callback racing that work.
                 self._cluster.remove_host(
                     endpoint_owner, trigger_reconciliation=False)
                 should_rebuild_token_map = True
@@ -6071,15 +6101,9 @@ class ControlConnection(object):
             if host is not None:
                 if host.endpoint != endpoint:
                     log.debug("[control connection] Updating host ip from %s to %s for (%s)", host.endpoint, endpoint, host_id)
-                    reconnector = host.get_and_set_reconnection_handler(None)
-                    if reconnector:
-                        reconnector.cancel()
-                    self._cluster.on_down(host, is_host_addition=False, expect_host_to_be_down=True)
-
-                    old_endpoint = host.endpoint
-                    host.endpoint = endpoint
-                    self._cluster.metadata.update_host(host, old_endpoint)
-                    self._cluster.on_up(host)
+                    host = self._cluster.replace_host_endpoint(
+                        host, endpoint, datacenter, rack)
+                    should_rebuild_token_map = True
 
             if host is None:
                 log.debug("[control connection] Found new host to connect to: %s", endpoint)
@@ -6103,6 +6127,10 @@ class ControlConnection(object):
             if row is local_row:
                 host.listen_address = row.get("listen_address")
                 connection._control_connection_host_id = host_id
+                # Keep the exact Host lifecycle reached by this socket. A
+                # later endpoint move creates a new Host with the same ID.
+                if vars(connection).get('_control_connection_host') is None:
+                    connection._control_connection_host = host
 
             tokens = row.get("tokens", None)
             if partitioner and tokens and self._token_meta_enabled:
@@ -6393,6 +6421,12 @@ class ControlConnection(object):
         if connection is None:
             return None
 
+        bound_host = vars(connection).get('_control_connection_host')
+        if bound_host is not None:
+            current = self._cluster.metadata.get_host_by_host_id(
+                bound_host.host_id)
+            return bound_host if current is bound_host else None
+
         host_id = getattr(connection, '_control_connection_host_id', None)
         if host_id is not None:
             return self._cluster.metadata.get_host_by_host_id(host_id)
@@ -6408,6 +6442,10 @@ class ControlConnection(object):
     def _connection_matches_host(self, connection, host):
         if connection is None:
             return False
+
+        bound_host = vars(connection).get('_control_connection_host')
+        if bound_host is not None:
+            return bound_host is host
 
         host_id = getattr(connection, '_control_connection_host_id', None)
         if host_id is not None:

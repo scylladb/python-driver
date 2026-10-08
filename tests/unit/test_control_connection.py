@@ -106,7 +106,15 @@ class MockMetadata(object):
             self._host_id_by_endpoint.pop(old_endpoint)
         self._host_id_by_endpoint[host.endpoint] = host.host_id
 
+    def replace_host_endpoint(self, old_host, replacement):
+        if self._host_id_by_endpoint.get(old_host.endpoint) == old_host.host_id:
+            self._host_id_by_endpoint.pop(old_host.endpoint)
+        self.hosts[old_host.host_id] = replacement
+        self._host_id_by_endpoint[replacement.endpoint] = replacement.host_id
+
     def remove_host(self, host):
+        if self.hosts.get(host.host_id) is not host:
+            return False
         if self._host_id_by_endpoint.get(host.endpoint) == host.host_id:
             self._host_id_by_endpoint.pop(host.endpoint)
         return bool(self.hosts.pop(host.host_id, False))
@@ -115,6 +123,10 @@ class MockMetadata(object):
         return list(self.hosts.items())
 
     def remove_host_by_host_id(self, host_id, endpoint=None):
+        host = self.hosts.get(host_id)
+        if host is None or (endpoint is not None and host.endpoint != endpoint):
+            self.removed_hosts.append(False)
+            return False
         if endpoint and self._host_id_by_endpoint.get(endpoint) == host_id:
             self._host_id_by_endpoint.pop(endpoint)
         removed_host = self.hosts.pop(host_id, False)
@@ -151,6 +163,14 @@ class MockCluster(object):
 
     def remove_host(self, host, trigger_reconciliation=True):
         pass
+
+    def replace_host_endpoint(self, host, endpoint, datacenter, rack):
+        replacement = Host(
+            endpoint, SimpleConvictionPolicy, datacenter, rack,
+            host_id=host.host_id)
+        self.metadata.replace_host_endpoint(host, replacement)
+        host._is_removed = True
+        return replacement
 
     def on_up(self, host):
         pass
@@ -1560,9 +1580,7 @@ class ControlConnectionTest(unittest.TestCase):
 
     def test_change_ip(self):
         """
-        Tests node IPs are updated while the nodes themselves are not
-        removed or added when their IPs change (the node look up is based on
-        host id).
+        Node IP changes preserve host IDs and update address lookup.
         """
         del self.cluster.added_hosts[:]
         del self.connection.peer_results[:]
@@ -1583,6 +1601,39 @@ class ControlConnectionTest(unittest.TestCase):
 
         assert 3 == len(self.cluster.metadata.all_hosts())
 
+    def test_local_endpoint_move_reconnects_control_connection(self):
+        cluster = Cluster(load_balancing_policy=RoundRobinPolicy())
+        self.addCleanup(cluster.shutdown)
+        connection = MockConnection()
+        control = cluster.control_connection
+        control._connection = connection
+        control.reconnect = Mock()
+        control.refresh_node_list_and_token_map()
+        old_host = cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        old_endpoint = old_host.endpoint
+
+        connection.local_results[1][0][0] = '192.168.1.4'
+        connection.wait_for_responses = Mock(
+            return_value=_node_meta_results(
+                connection.local_results, connection.peer_results))
+        control.refresh_node_list_and_token_map()
+
+        replacement = cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        assert replacement is not old_host
+        assert replacement.endpoint == DefaultEndPoint('192.168.1.4')
+        assert cluster.metadata.get_host(old_endpoint) is None
+        assert old_host._is_removed
+        assert control._get_host_for_connection(connection) is None
+        assert not control._connection_matches_host(connection, replacement)
+        control.reconnect.assert_called_once_with()
+
+        cluster.signal_connection_failure = Mock()
+        connection.is_defunct = True
+        connection.last_error = ConnectionException('old route closed')
+        control._signal_error()
+        cluster.signal_connection_failure.assert_not_called()
+        assert control.reconnect.call_count == 2
+
     def test_change_ip_uses_host_id_even_when_endpoint_belongs_to_another_host(self):
         old_host = self.cluster.metadata.get_host_by_host_id(HOST_ID_2)
         displaced_host = self.cluster.metadata.get_host_by_host_id(HOST_ID_3)
@@ -1601,9 +1652,11 @@ class ControlConnectionTest(unittest.TestCase):
 
         self.control_connection.refresh_node_list_and_token_map()
 
-        assert self.cluster.metadata.get_host_by_host_id(HOST_ID_2) is old_host
-        assert old_host.endpoint == new_endpoint
-        assert self.cluster.metadata.get_host(new_endpoint) is old_host
+        moved_host = self.cluster.metadata.get_host_by_host_id(HOST_ID_2)
+        assert moved_host is not old_host
+        assert moved_host.host_id == old_host.host_id
+        assert moved_host.endpoint == new_endpoint
+        assert self.cluster.metadata.get_host(new_endpoint) is moved_host
         assert self.cluster.metadata.get_host_by_host_id(HOST_ID_3) is None
         assert old_host not in self.cluster.added_hosts
 
@@ -1620,7 +1673,7 @@ class ControlConnectionTest(unittest.TestCase):
         unknown_id, new = cluster.add_host(endpoint, signal=False)
         assert unknown_id is old
         assert not new
-        with self.assertRaisesRegex(ValueError, "endpoint replacement is required"):
+        with self.assertRaisesRegex(ValueError, "requires host addition signaling"):
             cluster.add_host(moved_endpoint, signal=False, host_id=HOST_ID_2)
         assert old.endpoint == endpoint
         with self.assertRaisesRegex(ValueError, "requires host addition signaling"):
@@ -1668,6 +1721,67 @@ class ControlConnectionTest(unittest.TestCase):
 
         assert new
         assert events == [('remove', old), ('add', replacement)]
+
+    def test_add_host_delegates_endpoint_move(self):
+        cluster = Cluster(load_balancing_policy=RoundRobinPolicy())
+        self.addCleanup(cluster.shutdown)
+        cluster.control_connection.shutdown()
+        old_endpoint = DefaultEndPoint('192.168.1.1')
+        new_endpoint = DefaultEndPoint('192.168.1.9')
+        old, _ = cluster.add_host(old_endpoint, signal=False, host_id=HOST_ID_2)
+
+        replacement, new = cluster.add_host(new_endpoint, host_id=HOST_ID_2)
+
+        assert not new
+        assert replacement is not old
+        assert replacement.host_id == old.host_id
+        assert cluster.metadata.get_host(old_endpoint) is None
+        assert cluster.metadata.get_host(new_endpoint) is replacement
+        assert old._is_removed
+
+    def test_endpoint_move_retires_old_host_and_pool(self):
+        cluster = Cluster(load_balancing_policy=RoundRobinPolicy())
+        self.addCleanup(cluster.shutdown)
+        cluster.control_connection.shutdown()
+        cluster._prepare_all_queries = Mock()
+        old_endpoint = DefaultEndPoint('192.168.1.1')
+        new_endpoint = DefaultEndPoint('192.168.1.9')
+        old, _ = cluster.add_host(old_endpoint, signal=False, host_id=HOST_ID_2)
+        old.set_up()
+        cluster.profile_manager.on_add(old)
+
+        old_pool = Mock(host=old, is_shutdown=False)
+        session = new_session_with_pool_state({old: old_pool})
+        session.cluster = cluster
+        session.is_shutdown = False
+
+        def submit(fn):
+            fn()
+            future = Future()
+            future.set_result(True)
+            return future
+
+        session.submit = submit
+        session.add_or_renew_pool = Mock(return_value=submit(lambda: None))
+        session.update_created_pools = Mock()
+        session.shutdown = Mock()
+        cluster.sessions.add(session)
+
+        replacement = cluster.replace_host_endpoint(old, new_endpoint)
+
+        assert replacement is not old
+        assert replacement.host_id == old.host_id
+        assert old._is_removed and old.is_up is False
+        assert replacement.is_up is True
+        assert cluster.metadata.get_host_by_host_id(HOST_ID_2) is replacement
+        assert cluster.metadata.get_host(old_endpoint) is None
+        assert cluster.metadata.get_host(new_endpoint) is replacement
+        assert old not in session._pools
+        old_pool.shutdown.assert_called_once_with()
+        session.add_or_renew_pool.assert_called_once_with(
+            replacement, is_host_addition=True,
+            on_add_reconnection=ANY)
+        assert list(cluster.profile_manager.default.load_balancing_policy.make_query_plan()) == [replacement]
 
     def test_same_endpoint_with_new_host_id_removes_old_session_pool(self):
         cluster = Cluster()
