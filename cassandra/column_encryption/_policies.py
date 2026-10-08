@@ -98,7 +98,7 @@ class AES256ColumnEncryptionPolicy(ColumnEncryptionPolicy):
         if not type:
             raise ValueError("Type supplied to add_column cannot be None")
         if type not in _cqltypes.keys():
-            raise ValueError("Type %s is not a supported type".format(type))
+            raise ValueError("Type {} is not a supported type".format(type))
         if not len(key) == AES256_KEY_SIZE_BYTES:
             raise ValueError("AES256 column encryption policy expects a 256-bit encryption key")
         self.coldata[coldesc] = ColData(key, _cqltypes[type])
@@ -113,7 +113,7 @@ class AES256ColumnEncryptionPolicy(ColumnEncryptionPolicy):
             raise ValueError("Object supplied to encode_and_encrypt cannot be None")
         coldata = self.coldata.get(coldesc)
         if not coldata:
-            raise ValueError("Could not find ColData for ColDesc %s".format(coldesc))
+            raise ValueError("Could not find ColData for ColDesc {}".format(coldesc))
         return self.encrypt(coldesc, coldata.type.serialize(obj, None))
 
     def cache_info(self):
