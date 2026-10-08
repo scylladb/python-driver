@@ -27,6 +27,9 @@ Bug Fixes
   replace, close, or misconfigure a live pool. Closing a pool with requests in
   flight could retry an already executed request, causing it to execute twice
   (#317).
+* The Cython LZ4 codec no longer releases the GIL for frames under 2 KiB.
+  Releasing it on every small frame forced GIL handoffs between driver threads,
+  costing more CPU and context switches than the compression itself.
 
 Behavior Changes
 ----------------
