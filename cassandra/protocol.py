@@ -16,6 +16,7 @@ from collections import namedtuple
 import logging
 import socket
 import sys as _sys
+import warnings
 from uuid import UUID
 
 import io
@@ -44,6 +45,7 @@ from cassandra.marshal import (int32_pack, int32_unpack, uint16_pack, uint16_unp
 from cassandra.policies import ColDesc
 from cassandra import WriteType
 from cassandra.cython_deps import HAVE_CYTHON
+from cassandra.numpy_support import get_numpy_protocol_handler
 from cassandra import util
 
 log = logging.getLogger(__name__)
@@ -1306,24 +1308,20 @@ else:
 
 
 def __getattr__(name):
-    """Build the optional NumPy handler only when it is explicitly requested."""
+    """Keep the deprecated ``NumpyProtocolHandler`` attribute for callers."""
     if name != 'NumpyProtocolHandler':
         raise AttributeError("module %r has no attribute %r" % (__name__, name))
+    from importlib.machinery import EXTENSION_SUFFIXES
 
-    module_dict = _sys.modules[__name__].__dict__
-    try:
-        return module_dict[name]
-    except KeyError:
-        pass
-
-    numpy_protocol_handler = None
-    if HAVE_CYTHON:
-        from cassandra.cython_deps import HAVE_NUMPY
-        if HAVE_NUMPY:
-            from cassandra.numpy_parser import NumpyParser
-            numpy_protocol_handler = cython_protocol_handler(NumpyParser())
-
-    return module_dict.setdefault(name, numpy_protocol_handler)
+    # Cython functions do not add a Python frame to the warnings stack.
+    compiled = _sys.modules[__name__].__file__.endswith(tuple(EXTENSION_SUFFIXES))
+    warnings.warn(
+        "cassandra.protocol.NumpyProtocolHandler is deprecated; "
+        "use cassandra.numpy_support.get_numpy_protocol_handler()",
+        DeprecationWarning,
+        stacklevel=1 if compiled else 2,
+    )
+    return get_numpy_protocol_handler()
 
 
 def __dir__():

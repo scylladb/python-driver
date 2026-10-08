@@ -55,21 +55,31 @@ status=0
 
 # Unlike the asyncio reactor test below, tests/unit/io/test_asyncorereactor.py
 # is deliberately NOT in the --ignore list: it needs no separate
-# EVENT_LOOP_MANAGER run, since it self-skips via ASYNCCORE_AVAILABLE on
-# Python 3.12+ (where the stdlib `asyncore` module was removed) and
-# otherwise runs normally here, gaining coverage on 3.9-3.11.
+# EVENT_LOOP_MANAGER run. The stdlib `asyncore` module was removed in Python
+# 3.12 (PEP 594), so on 3.12+ the PyPI backport `pyasyncore` is added for
+# this step only; without it the file self-skips via ASYNCCORE_AVAILABLE and
+# cassandra/io/asyncorereactor.py goes unmeasured.
 #
-# `--with lz4` adds the optional `lz4` package (the compress-lz4 extra) to
-# this one step only, in a throwaway overlay on top of the project env, so
-# the lz4 compression paths (connection.py's lz4 import block, the
-# lz4-dependent test_segment.py tests) get measured. The integration step
-# below deliberately runs without it: Cluster.compression defaults to True
-# and LZ4 is only auto-negotiated when the `lz4` package is installed (see
-# #1088; the Cython lz4 codec isn't built here anyway), so it keeps
-# measuring the default, uncompressed behaviour most users get. The asyncio
-# reactor step needs no lz4 -- it doesn't exercise compression, and the lz4
-# import block already ran here.
-uv run --with lz4 coverage run -m pytest tests/unit -v \
+# It is deliberately NOT in the dev dependency group: the default reactor
+# order is libev -> asyncore -> asyncio (conn_fns in cassandra/cluster.py),
+# so with asyncore importable, any environment without libev (e.g. Windows
+# wheel tests, developer machines) would silently switch its default
+# connection class from asyncio to asyncore. `uv run --with` installs it
+# into a throwaway overlay, not the project env, so the asyncio step and
+# integration step below don't see it; libev is installed in this lane, so
+# DefaultConnection stays LibevConnection here either way.
+#
+# `--with lz4` likewise adds the optional `lz4` package (the compress-lz4
+# extra) to this one step only, so the lz4 compression paths (connection.py's
+# lz4 import block, the lz4-dependent test_segment.py tests) get measured.
+# The integration step below deliberately runs without it:
+# Cluster.compression defaults to True and LZ4 is only auto-negotiated when
+# the `lz4` package is installed (see #1088; the Cython lz4 codec isn't built
+# here anyway), so it keeps measuring the default, uncompressed behaviour
+# most users get. The asyncio reactor step needs no lz4 -- it doesn't
+# exercise compression, and the lz4 import block already ran here.
+uv run --with lz4 --with "pyasyncore; python_version >= '3.12'" \
+    coverage run -m pytest tests/unit -v \
     --ignore=tests/unit/column_encryption \
     --ignore=tests/unit/io/test_asyncioreactor.py \
     || status=1

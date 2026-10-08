@@ -27,6 +27,20 @@ Design and Implementation Guidelines
 - Legacy ``cqlengine`` has varying degrees of overreaching client-side validation. Going forward, we will avoid client validation where server feedback is adequate and not overly expensive.
 - When writing tests, try to achieve maximal coverage in unit tests (where it is faster to run across many runtimes). Integration tests are good for things where we need to test server interaction, or where it is important to test across different server versions (emulating in unit tests would not be effective).
 
+Optional NumPy imports
+----------------------
+Ordinary driver imports must not import NumPy, even when it is installed.
+Explicit NumPy features may load it when called or accessed. Runtime imports
+of NumPy in ``cassandra/`` must go through ``cassandra.numpy_support``; do not
+import NumPy directly in another driver module, including inside a function.
+Use ``cassandra.numpy_support.numpy_available()`` to check availability and
+``cassandra.numpy_support.get_numpy_protocol_handler()`` to request the handler.
+The older ``HAVE_NUMPY`` and ``NumpyProtocolHandler`` attribute imports are
+deprecated and emit ``DeprecationWarning``.
+Run ``python3 scripts/check_numpy_imports.py`` and
+``uv run pytest tests/unit/test_protocol_imports.py`` when changing these paths.
+The NumPy import contract CI job runs both checks on pull requests.
+
 Dev setup
 =========
 

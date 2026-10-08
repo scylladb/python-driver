@@ -1,0 +1,41 @@
+name: NumPy import contract
+
+on:
+  push:
+    branches:
+      - master
+      - 'branch-**'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  numpy-import-contract:
+    name: NumPy import contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST: "yes"
+      CASS_DRIVER_NO_SKIP: "1"
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+    - name: Install uv
+      uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      with:
+        python-version: "3.13"
+        enable-cache: true
+    - name: Check production imports
+      run: python3 scripts/check_numpy_imports.py
+    - name: Install libev
+      run: sudo apt-get install libev4 libev-dev
+    - name: Build driver and install test dependencies
+      run: uv sync
+    - name: Verify NumPy is available
+      run: uv run python -c "import numpy"
+    - name: Test lazy imports and explicit access
+      run: uv run pytest -rf tests/unit/test_protocol_imports.py tests/unit/test_numpy_import_contract.py
