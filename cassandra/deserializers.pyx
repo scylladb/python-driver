@@ -245,13 +245,16 @@ cdef inline int subelem(
         Buffer *buf, Buffer *elem_buf, int* offset) except -1:
     """
     Read the next element from the buffer: first read the size (in bytes) of the
-    element, then fill elem_buf with a newly sliced buffer of this size (and the
-    right offset).
+    element, then fill elem_buf with a slice or a negative-size null sentinel.
     """
     cdef int32_t elemlen
 
     _unpack_len(buf, offset[0], &elemlen)
     offset[0] += sizeof(int32_t)
+    if elemlen < 0:
+        elem_buf.ptr = NULL
+        elem_buf.size = elemlen
+        return 0
     slice_buffer(buf, elem_buf, offset[0], elemlen)
     offset[0] += elemlen
     return 0
@@ -307,7 +310,8 @@ cdef _deserialize_map(Buffer *buf, int protocol_version,
         subelem(buf, &val_buf, &offset)
         key = from_binary(key_deserializer, &key_buf, protocol_version)
         val = from_binary(val_deserializer, &val_buf, protocol_version)
-        themap._insert_unchecked(key, to_bytes(&key_buf), val)
+        key_bytes = None if key_buf.size < 0 else to_bytes(&key_buf)
+        themap._insert_unchecked(key, key_bytes, val)
 
     return themap
 
