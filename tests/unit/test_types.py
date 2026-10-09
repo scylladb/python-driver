@@ -17,13 +17,13 @@ import datetime
 import tempfile
 import time
 import uuid
-from binascii import unhexlify
+from binascii import hexlify, unhexlify
 
 import cassandra
 from cassandra import util
 from cassandra.cqltypes import (
     CassandraType, DateRangeType, DateType, DecimalType,
-    EmptyValue, LongType, SetType, UTF8Type,
+    EmptyValue, LongType, SetType, UTF8Type, UserType,
     cql_typename, int8_pack, int64_pack, int64_unpack, lookup_casstype,
     lookup_casstype_simple, parse_casstype_args,
     int32_pack, Int32Type, ListType, MapType, VectorType,
@@ -191,6 +191,88 @@ class TypeTests(unittest.TestCase):
 
         assert UTF8Type == ctype.subtypes[2]
         assert [b'city', None, b'zip'] == ctype.names
+
+    def test_lookup_casstype_simple_is_cached_and_consistent(self):
+        """
+        lookup_casstype_simple() is decorated with functools.lru_cache().
+        Repeated calls with the same string must keep returning a type
+        that is equal to (and, for cache hits, literally the same object
+        as) what an uncached call would produce, and cache_info() should
+        reflect the hits/misses.
+        """
+        lookup_casstype_simple.cache_clear()
+
+        first = lookup_casstype_simple('Int32Type')
+        second = lookup_casstype_simple('Int32Type')
+        assert first is Int32Type
+        assert second is first
+
+        info = lookup_casstype_simple.cache_info()
+        assert info.hits >= 1
+        assert info.misses >= 1
+
+        # An unrecognized/custom type name is memoized too: repeated lookups
+        # of the same unknown name return the identical placeholder class.
+        custom_first = lookup_casstype_simple('com.example.MyCustomType')
+        custom_second = lookup_casstype_simple('com.example.MyCustomType')
+        assert custom_second is custom_first
+
+    def test_parse_casstype_args_is_cached_and_consistent(self):
+        """
+        parse_casstype_args() is decorated with functools.lru_cache(). The
+        same type string must always resolve to an equivalent (and, on a
+        cache hit, identical) type.
+        """
+        parse_casstype_args.cache_clear()
+        type_str = "org.apache.cassandra.db.marshal.MapType(org.apache.cassandra.db.marshal.UTF8Type,org.apache.cassandra.db.marshal.Int32Type)"
+
+        first = parse_casstype_args(type_str)
+        second = parse_casstype_args(type_str)
+        assert second is first
+        assert issubclass(first, MapType)
+        assert list(first.subtypes) == [UTF8Type, Int32Type]
+
+        info = parse_casstype_args.cache_info()
+        assert info.hits >= 1
+
+    def test_parse_casstype_args_udt_cache_invalidated_on_evict(self):
+        """
+        cassandra.cluster.Cluster.register_user_type() invalidates the
+        per-(keyspace, udt_name) class cache in UserType via
+        evict_udt_class(). Since parse_casstype_args() is now LRU-cached,
+        it must also stop returning the stale, pre-eviction class for a UDT
+        type string once evict_udt_class() has been called for that UDT --
+        otherwise the eviction would be silently masked by the cache.
+        """
+        keyspace = 'ks1'
+        udt_name = 'cache_invalidation_test_type'
+        field_name = 'a'
+        type_str = "org.apache.cassandra.db.marshal.UserType(%s,%s,%s:org.apache.cassandra.db.marshal.Int32Type)" % (
+            keyspace,
+            hexlify(udt_name.encode()).decode(),
+            hexlify(field_name.encode()).decode(),
+        )
+
+        parse_casstype_args.cache_clear()
+        try:
+            first = parse_casstype_args(type_str)
+            assert first.fieldnames == (field_name,)
+            assert first.subtypes == (Int32Type,)
+
+            # cache hit: identical object back
+            assert parse_casstype_args(type_str) is first
+
+            UserType.evict_udt_class(keyspace, udt_name)
+
+            # Must not be the stale, cached-before-eviction class.
+            second = parse_casstype_args(type_str)
+            assert second is not first
+            # ...but still correctly resolved.
+            assert second.fieldnames == (field_name,)
+            assert second.subtypes == (Int32Type,)
+        finally:
+            UserType.evict_udt_class(keyspace, udt_name)
+            parse_casstype_args.cache_clear()
 
     def test_parse_casstype_vector(self):
         ctype = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.FloatType, 3)")
