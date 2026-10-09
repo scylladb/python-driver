@@ -149,6 +149,12 @@ this reason. Modules that are Cython-only with no pure-Python fallback
 (``obj_parser``, ``numpy_parser``, ``row_parser``, and similar) are not built
 at all in that mode, so they are not measured by this script.
 
+CI runs the same script, integration suite included, in
+``.github/workflows/coverage.yml`` and uploads ``coverage.xml`` from every
+passing run to `Codecov <https://codecov.io/gh/scylladb/python-driver>`_,
+which comments the coverage delta on the pull request. Its statuses are
+informational, so a drop never blocks a merge.
+
 Running the Benchmarks
 ======================
 There needs to be a version of Scyll running locally so before running the benchmarks, if ccm is installed:
