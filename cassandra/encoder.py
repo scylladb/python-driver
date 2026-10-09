@@ -22,7 +22,6 @@ log = logging.getLogger(__name__)
 
 from binascii import hexlify
 from decimal import Decimal
-import calendar
 import datetime
 import math
 import types
@@ -31,6 +30,8 @@ import ipaddress
 
 from cassandra.util import (OrderedDict, OrderedMap, OrderedMapSerializedKey,
                             sortedset, Time, Date, Point, LineString, Polygon)
+
+_EPOCH_NAIVE = datetime.datetime(1970, 1, 1)
 
 
 def cql_quote(term):
@@ -140,8 +141,12 @@ class Encoder(object):
         Converts a :class:`datetime.datetime` object to a (string) integer timestamp
         with millisecond precision.
         """
-        timestamp = calendar.timegm(val.utctimetuple())
-        return str(timestamp * 1000 + getattr(val, 'microsecond', 0) // 1000)
+        utcoffset = val.utcoffset()
+        if utcoffset is not None:
+            val = val - utcoffset
+            val = val.replace(tzinfo=None)
+        td = val - _EPOCH_NAIVE
+        return str((td.days * 86400 + td.seconds) * 1000 + td.microseconds // 1000)
 
     def cql_encode_date(self, val):
         """

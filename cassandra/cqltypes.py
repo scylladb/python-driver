@@ -31,6 +31,7 @@ import ast
 from binascii import unhexlify
 import calendar
 from collections import namedtuple
+import datetime as _datetime_mod
 from decimal import Decimal
 import io
 from itertools import chain
@@ -62,6 +63,9 @@ cql_empty_type = 'empty'
 log = logging.getLogger(__name__)
 
 _number_types = frozenset((int, float))
+
+_EPOCH_NAIVE = _datetime_mod.datetime(1970, 1, 1)
+_EPOCH_DATE = _datetime_mod.date(1970, 1, 1)
 
 
 def _name_from_hex_string(encoded_name):
@@ -699,13 +703,20 @@ class DateType(_CassandraType):
     @staticmethod
     def serialize(v, protocol_version):
         try:
-            # v is datetime
-            timestamp_seconds = calendar.timegm(v.utctimetuple())
-            timestamp = timestamp_seconds * 1000 + getattr(v, 'microsecond', 0) // 1000
+            # v is a datetime; use integer arithmetic instead of
+            # calendar.timegm(v.utctimetuple()) to avoid allocating
+            # an intermediate struct_time object on every call.
+            utcoffset = v.utcoffset()
+            if utcoffset is not None:
+                v = v - utcoffset
+                v = v.replace(tzinfo=None)
+            td = v - _EPOCH_NAIVE
+            timestamp = (td.days * 86400 + td.seconds) * 1000 + td.microseconds // 1000
         except AttributeError:
             try:
-                timestamp = calendar.timegm(v.timetuple()) * 1000
-            except AttributeError:
+                td = v - _EPOCH_DATE
+                timestamp = td.days * 86400000
+            except (AttributeError, TypeError):
                 # Ints and floats are valid timestamps too
                 if type(v) not in _number_types:
                     raise TypeError('DateType arguments must be a datetime, date, or timestamp')
