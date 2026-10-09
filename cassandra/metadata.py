@@ -950,23 +950,28 @@ class KeyspaceMetadata(object):
         user_type_strings.append(user_type.export_as_string())
 
     def _add_table_metadata(self, table_metadata):
-        old_indexes = {}
-        old_meta = self.tables.get(table_metadata.name, None)
-        if old_meta:
+        name = table_metadata.name
+        indexes = table_metadata.indexes
+        tables = self.tables
+        old_meta = tables.get(name)
+
+        # note the intentional order of add before remove
+        # this makes sure the maps are never absent something that existed before this update
+        if indexes:
+            self.indexes.update(indexes)
+
+        if old_meta is not None:
             # views are not queried with table, so they must be transferred to new
             table_metadata.views = old_meta.views
             # indexes will be updated with what is on the new metadata
             old_indexes = old_meta.indexes
+            if old_indexes:
+                ks_indexes = self.indexes
+                for index_name in old_indexes:
+                    if index_name not in indexes:
+                        ks_indexes.pop(index_name, None)
 
-        # note the intentional order of add before remove
-        # this makes sure the maps are never absent something that existed before this update
-        for index_name, index_metadata in table_metadata.indexes.items():
-            self.indexes[index_name] = index_metadata
-
-        for index_name in (n for n in old_indexes if n not in table_metadata.indexes):
-            self.indexes.pop(index_name, None)
-
-        self.tables[table_metadata.name] = table_metadata
+        tables[name] = table_metadata
 
     def _drop_table_metadata(self, table_name):
         table_meta = self.tables.pop(table_name, None)
