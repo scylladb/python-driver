@@ -37,3 +37,31 @@ def test_read_eof():
     with pytest.raises(EOFError):
         reader.read(2)
     reader.read(1) # see that we can still read this
+
+def test_seek():
+    # seek() must reposition the reader so that a subsequent read() lands
+    # at the correct byte offset and returns the correct bytes -- this is
+    # the same repositioning row_parser.pyx relies on when it rewinds the
+    # reader on the recv_results_rows exception-recovery path.
+    cdef BytesIOReader reader = BytesIOReader(b'abcdef')
+    assert reader.read(4)[:4] == b'abcd'  # pos -> 4
+
+    reader.seek(1)
+    assert reader.read(3)[:3] == b'bcd'  # pos -> 4 again, via a different route
+
+    reader.seek(0)
+    assert reader.read(6)[:6] == b'abcdef'  # full rewind still reads correctly
+
+    reader.seek(6)
+    with pytest.raises(EOFError):
+        reader.read(1)
+
+def test_seek_out_of_range():
+    # seek() must reject offsets outside [0, size] -- a negative or
+    # past-end pos would let a later read() return bytes outside the buffer.
+    cdef BytesIOReader reader = BytesIOReader(b'abcdef')
+    with pytest.raises(ValueError):
+        reader.seek(-1)
+    with pytest.raises(ValueError):
+        reader.seek(7)
+    reader.seek(6)  # exactly at EOF is still valid
