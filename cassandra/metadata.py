@@ -98,6 +98,35 @@ Set of reserved keywords in CQL.
 _encoder = Encoder()
 
 
+class _SnapshotDict(dict):
+    """
+    A dict that iterates over an atomic snapshot, so another thread updating it
+    in place cannot raise ``RuntimeError: dictionary changed size during iteration``.
+    Lookups and writes are plain dict operations. ``keys()``/``values()``/``items()``
+    return views of the snapshot, not live views.
+    """
+    __slots__ = ()
+
+    # list(<dict view>) is one C call: atomic under the GIL, critical-sectioned on free-threaded builds.
+    def __iter__(self):
+        return iter(list(dict.keys(self)))
+
+    def __reversed__(self):
+        return reversed(list(dict.keys(self)))
+
+    def copy(self):
+        return dict(list(dict.items(self)))
+
+    def keys(self):
+        return self.copy().keys()
+
+    def values(self):
+        return self.copy().values()
+
+    def items(self):
+        return self.copy().items()
+
+
 class Metadata(object):
     """
     Holds a representation of the cluster schema and topology.
@@ -123,7 +152,7 @@ class Metadata(object):
     """ A boolean indicating if connected to a DBaaS cluster """
 
     def __init__(self):
-        self.keyspaces = {}
+        self.keyspaces = _SnapshotDict()
         self.dbaas = False
         self._hosts = {}
         self._host_id_by_endpoint = {}
@@ -182,8 +211,8 @@ class Metadata(object):
         # remove not-just-added keyspaces
         removed_keyspaces = [name for name in self.keyspaces.keys()
                              if name not in current_keyspaces]
-        self.keyspaces = dict((name, meta) for name, meta in self.keyspaces.items()
-                              if name in current_keyspaces)
+        self.keyspaces = _SnapshotDict((name, meta) for name, meta in self.keyspaces.items()
+                                       if name in current_keyspaces)
         for ksname in removed_keyspaces:
             self._keyspace_removed(ksname)
 
@@ -864,12 +893,12 @@ class KeyspaceMetadata(object):
         self.name = name
         self.durable_writes = durable_writes
         self.replication_strategy = ReplicationStrategy.create(strategy_class, strategy_options)
-        self.tables = {}
-        self.indexes = {}
-        self.user_types = {}
-        self.functions = {}
-        self.aggregates = {}
-        self.views = {}
+        self.tables = _SnapshotDict()
+        self.indexes = _SnapshotDict()
+        self.user_types = _SnapshotDict()
+        self.functions = _SnapshotDict()
+        self.aggregates = _SnapshotDict()
+        self.views = _SnapshotDict()
         self.graph_engine = graph_engine
         self._consistency_mode = _ConsistencyMode.EVENTUAL
 
@@ -1401,7 +1430,7 @@ class TableMetadata(object):
         self.options = {} if options is None else options
         self.comparator = None
         self.triggers = OrderedDict() if triggers is None else triggers
-        self.views = {}
+        self.views = _SnapshotDict()
         self.virtual = virtual
 
     def export_as_string(self):

@@ -17,7 +17,12 @@ import warnings
 from binascii import unhexlify
 import logging
 from unittest.mock import Mock, patch
+import copy
 import os
+import pickle
+import sys
+import threading
+import time
 import uuid
 
 import cassandra
@@ -36,6 +41,7 @@ from cassandra.metadata import (Murmur3Token, MD5Token,
                                 SchemaParserDSE60, SchemaParserDSE67, SchemaParserDSE68,
                                 SchemaParserV22, SchemaParserV3,
                                 SchemaParserV4,
+                                MaterializedViewMetadata, _SnapshotDict,
                                 _ConsistencyMode, _consistency_mode_from_string)
 from cassandra.policies import SimpleConvictionPolicy
 from cassandra.pool import Host
@@ -1231,3 +1237,200 @@ class MetadataHelpersTest(unittest.TestCase):
         # Round-trip: python_to_cqltype(cqltype_to_python(x)) == x
         round_tripped = python_to_cqltype(result)
         self.assertEqual(round_tripped, udt_input)
+
+
+_N = 300  # entries per add/drop pass; large enough that iterators overlap writes
+
+
+def _ks(name="ks"):
+    return KeyspaceMetadata(name, True, "SimpleStrategy", {"replication_factor": "1"})
+
+
+def _fn(i):
+    return Mock(keyspace="ks", signature="f%d(int)" % i)
+
+
+def _scenarios():
+    """(id, dict getter, add pass, drop pass) per converted dict; passes go through the real Metadata methods."""
+    md = Metadata()
+    ks = _ks()
+    md._update_keyspace(ks)
+    base = TableMetadata("ks", "base")
+    ks._add_table_metadata(base)
+    names = ["n%d" % i for i in range(_N)]
+
+    def table(i):
+        t = TableMetadata("ks", "t%d" % i)
+        t.indexes = {"i%d" % i: Mock()}
+        return t
+
+    def rebuild(count):
+        parser = Mock()
+        parser.get_all_keyspaces.side_effect = lambda: iter([_ks("k%d" % i) for i in range(count)])
+        md._rebuild_all(parser)
+
+    return md, rebuild, [
+        ("tables", lambda: ks.tables,
+         lambda: [ks._add_table_metadata(table(i)) for i in range(_N)],
+         lambda: [ks._drop_table_metadata("t%d" % i) for i in range(_N)]),
+        ("indexes", lambda: ks.indexes,
+         lambda: [ks._add_table_metadata(table(i)) for i in range(_N)],
+         lambda: [ks._drop_table_metadata("t%d" % i) for i in range(_N)]),
+        ("ks.views", lambda: ks.views,
+         lambda: [ks._add_view_metadata(MaterializedViewMetadata("ks", n, "base", True, "", {})) for n in names],
+         lambda: [ks._drop_table_metadata(n) for n in names]),
+        ("table.views", lambda: base.views,
+         lambda: [ks._add_view_metadata(MaterializedViewMetadata("ks", n, "base", True, "", {})) for n in names],
+         lambda: [ks._drop_table_metadata(n) for n in names]),
+        ("user_types", lambda: ks.user_types,
+         lambda: [md._update_type(UserType("ks", n, [], [])) for n in names],
+         lambda: [md._drop_type("ks", n) for n in names]),
+        ("functions", lambda: ks.functions,
+         lambda: [md._update_function(_fn(i)) for i in range(_N)],
+         lambda: [md._drop_function("ks", _fn(i)) for i in range(_N)]),
+        ("aggregates", lambda: ks.aggregates,
+         lambda: [md._update_aggregate(_fn(i)) for i in range(_N)],
+         lambda: [md._drop_aggregate("ks", _fn(i)) for i in range(_N)]),
+        ("keyspaces", lambda: md.keyspaces,
+         lambda: [md._update_keyspace(_ks("k%d" % i)) for i in range(_N)],
+         lambda: [md._drop_keyspace("k%d" % i) for i in range(_N)]),
+        # a full refresh also publishes a new dict at the end, so readers re-fetch it
+        ("keyspaces-rebuild", lambda: md.keyspaces,
+         lambda: rebuild(_N), lambda: rebuild(0)),
+    ]
+
+
+_READERS = {
+    "for": lambda d: [None for _ in d],
+    "keys": lambda d: [None for _ in d.keys()],
+    "values": lambda d: [None for _ in d.values()],
+    "items": lambda d: [None for k, v in d.items()],
+    "list": list,
+    "sorted": sorted,
+    "dictcomp": lambda d: {k: v for k, v in d.items()},
+}
+
+
+class SchemaDictsIterationRaceTest(unittest.TestCase):
+    """Iterating a schema dict must not raise while another thread updates it in place."""
+
+    def setUp(self):
+        self._interval = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        self.addCleanup(sys.setswitchinterval, self._interval)
+
+    def test_iteration_while_updating(self):
+        md, rebuild, scenarios = _scenarios()
+        for name, get, add, drop in scenarios:
+            for reader_name, reader in _READERS.items():
+                with self.subTest(dict=name, reader=reader_name):
+                    errors = []
+                    stop = threading.Event()
+
+                    def read():
+                        while not stop.is_set():
+                            try:
+                                reader(get())
+                            except Exception as e:  # noqa: BLE001
+                                errors.append(e)
+                                return
+
+                    threads = [threading.Thread(target=read) for _ in range(2)]
+                    for t in threads:
+                        t.start()
+                    deadline = time.monotonic() + 0.15
+                    try:
+                        # separate add and drop passes: a size-neutral add+drop would not raise
+                        while time.monotonic() < deadline and not errors:
+                            add()
+                            drop()
+                    finally:
+                        stop.set()
+                        for t in threads:
+                            t.join()
+                    assert not errors, errors[0]
+
+
+class SchemaDictsIdentityTest(unittest.TestCase):
+    """The schema dicts are long-lived, live objects that are updated in place."""
+
+    def test_dicts_keep_identity_across_updates(self):
+        md, rebuild, scenarios = _scenarios()
+        for name, get, add, drop in scenarios:
+            if name == "keyspaces-rebuild":
+                continue
+            with self.subTest(dict=name):
+                d = get()
+                add()
+                assert get() is d
+                assert len(d) > 0
+                drop()
+                assert get() is d
+
+    def test_rebuild_replaces_keyspaces_dict_with_snapshot_dict(self):
+        # a full refresh publishes a new keyspaces dict (the integration tests rely on this)
+        md, rebuild, _ = _scenarios()
+        before = md.keyspaces
+        rebuild(3)
+        assert md.keyspaces is not before
+        assert type(md.keyspaces) is _SnapshotDict
+        assert set(md.keyspaces) == {"k0", "k1", "k2"}
+
+    def test_update_keyspace_shares_dicts_with_old_metadata(self):
+        md = Metadata()
+        old = _ks()
+        md._update_keyspace(old)
+        new = _ks()
+        md._update_keyspace(new)
+        assert md.keyspaces["ks"] is new
+        for attr in ("tables", "indexes", "views", "user_types", "functions", "aggregates"):
+            assert getattr(new, attr) is getattr(old, attr)
+
+    def test_add_table_shares_views_with_old_table(self):
+        ks = _ks()
+        old = TableMetadata("ks", "t")
+        ks._add_table_metadata(old)
+        ks._add_view_metadata(MaterializedViewMetadata("ks", "v", "t", True, "", {}))
+        new = TableMetadata("ks", "t")
+        ks._add_table_metadata(new)
+        assert new.views is old.views
+        assert "v" in old.views
+
+    def test_dict_types(self):
+        md = Metadata()
+        ks = _ks()
+        t = TableMetadata("ks", "t")
+        for d in (md.keyspaces, ks.tables, ks.indexes, ks.views, ks.user_types,
+                  ks.functions, ks.aggregates, t.views):
+            assert type(d) is _SnapshotDict
+
+
+class SnapshotDictTest(unittest.TestCase):
+
+    def test_behaves_like_dict(self):
+        plain = {"a": 1, "b": 2}
+        d = _SnapshotDict(plain)
+        assert d == plain and plain == d
+        assert isinstance(d, dict)
+        assert repr(d) == repr(plain)
+        assert list(d) == list(reversed(list(reversed(d)))) == ["a", "b"]
+        assert list(d.items()) == [("a", 1), ("b", 2)]
+        assert list(d.values()) == [1, 2]
+        assert d.keys() == plain.keys() and list(d.keys()) == ["a", "b"]
+        assert dict(d) == plain and {**d} == plain
+        assert type(d.copy()) is dict and d.copy() == plain
+        assert d | {"c": 3} == {"a": 1, "b": 2, "c": 3}
+        assert _SnapshotDict.fromkeys("ab") == {"a": None, "b": None}
+        assert d["a"] == 1 and d.get("z") is None and "a" in d and len(d) == 2
+
+    def test_copy_and_pickle(self):
+        d = _SnapshotDict(a=1, b=2)
+        for clone in (copy.copy(d), copy.deepcopy(d), pickle.loads(pickle.dumps(d))):
+            assert type(clone) is _SnapshotDict and clone == d
+
+    def test_mutation_during_loop_is_allowed(self):
+        d = _SnapshotDict(a=1, b=2)
+        for k in d:
+            d[k + "x"] = 0
+            d.pop(k)
+        assert set(d) == {"ax", "bx"}
