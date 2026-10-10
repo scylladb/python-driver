@@ -23,7 +23,7 @@ from threading import Thread, Event, Lock
 from unittest.mock import Mock, NonCallableMagicMock, MagicMock
 
 from cassandra.cluster import Session, ShardAwareOptions
-from cassandra.connection import Connection, DefaultEndPoint
+from cassandra.connection import Connection, ConnectionException, ConnectionSendError, DefaultEndPoint
 from cassandra.pool import HostConnection
 from cassandra.pool import Host, NoConnectionsAvailable
 from cassandra.policies import HostDistance, SimpleConvictionPolicy
@@ -183,6 +183,45 @@ class _PoolTests(unittest.TestCase):
         host.signal_connection_failure.assert_not_called()
         assert conn.signaled_error
         assert not pool.is_shutdown
+        session.submit.assert_called_once_with(pool._replace, conn)
+
+    def test_signaled_error_still_shuts_down_when_configured(self):
+        host = Mock(spec=Host, address='ip1')
+        session = self.make_session()
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                            is_closed=False, max_request_id=100,
+                            signaled_error=False)
+        session.cluster.connection_factory.return_value = conn
+        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool.shutdown_on_error = True
+
+        pool.borrow_connection(timeout=0.01)
+        conn.is_defunct = True
+        conn.signaled_error = True
+        conn.last_error = ConnectionException('remote failure')
+        pool.return_connection(conn)
+
+        assert pool.is_shutdown
+
+    def test_local_send_error_skips_shutdown_when_configured(self):
+        host = Mock(spec=Host, address='ip1')
+        session = self.make_session()
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                            is_closed=False, max_request_id=100,
+                            signaled_error=False)
+        session.cluster.connection_factory.return_value = conn
+        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool.shutdown_on_error = True
+
+        pool.borrow_connection(timeout=0.01)
+        conn.is_defunct = True
+        conn.signaled_error = True
+        conn.last_error = ConnectionSendError('local queue failure')
+        pool.return_connection(conn)
+        pool.return_connection(conn, replace_only=True)
+
+        assert not pool.is_shutdown
+        host.signal_connection_failure.assert_not_called()
         session.submit.assert_called_once_with(pool._replace, conn)
 
     def test_return_defunct_connection_on_down_host(self):

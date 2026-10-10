@@ -7457,7 +7457,8 @@ class ResponseFuture(object):
             log.debug("Connection for host %s is busy, moving to the next host", host)
             self._errors[host] = exc
             if connection:
-                self._return_connection_after_send_failure(pool, connection, request_id)
+                self._return_connection_after_send_failure(
+                    pool, connection, request_id, previous_req_id)
         except ConnectionSendError as exc:
             log.debug("Error pushing request to host %s", host, exc_info=True)
             self._errors[host] = exc
@@ -7467,6 +7468,8 @@ class ResponseFuture(object):
                 with connection.lock:
                     connection._requests.pop(request_id, None)
                     connection.orphaned_request_ids.discard(request_id)
+                    if self._req_id == request_id:
+                        self._req_id = previous_req_id
                     # defunct() invokes other requests' callbacks synchronously.
                     # Their pool returns must not convict the host before this
                     # connection is replaced for a local send-queue failure.
@@ -7479,7 +7482,8 @@ class ResponseFuture(object):
             if self._metrics is not None:
                 self._metrics.on_connection_error()
             if connection:
-                self._return_connection_after_send_failure(pool, connection, request_id)
+                self._return_connection_after_send_failure(
+                    pool, connection, request_id, previous_req_id)
         finally:
             if request_id is not None and not request_sent and \
                     self._req_id == request_id:
@@ -7487,13 +7491,17 @@ class ResponseFuture(object):
 
         return None
 
-    def _return_connection_after_send_failure(self, pool, connection, request_id):
+    def _return_connection_after_send_failure(self, pool, connection, request_id,
+                                              previous_req_id):
         if request_id is not None:
             with connection.lock:
                 connection._requests.pop(request_id, None)
                 connection.orphaned_request_ids.discard(request_id)
                 connection.orphaned_threshold_reached = \
                     len(connection.orphaned_request_ids) >= connection.orphaned_threshold
+                # A new request may borrow this ID as soon as it is requeued.
+                if self._req_id == request_id:
+                    self._req_id = previous_req_id
                 if request_id not in connection.request_ids:
                     connection.request_ids.append(request_id)
         pool.return_connection(connection)

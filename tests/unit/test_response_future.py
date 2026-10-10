@@ -198,6 +198,36 @@ class ResponseFutureTests(unittest.TestCase):
         assert request_id in connection.request_ids
         assert not connection._requests
 
+    def test_failed_query_does_not_timeout_reused_request_id(self):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Connection('1.2.3.4')
+        connection._socket_writable = False
+        request_id = connection.request_ids.popleft()
+        connection.request_ids.clear()
+        connection.in_flight += 1
+        pool.borrow_connection.return_value = (connection, request_id)
+
+        rf = self.make_response_future(session)
+        rf._set_final_exception = Mock()
+        callback = Mock()
+
+        def return_connection(conn, stream_was_orphaned=False):
+            if stream_was_orphaned:
+                return
+            conn.in_flight -= 1
+            reused_id = conn.request_ids.popleft()
+            assert reused_id == request_id
+            conn._requests[reused_id] = (callback, ProtocolHandler.decode_message, None)
+            conn.in_flight += 1
+            rf._on_timeout()
+
+        pool.return_connection.side_effect = return_connection
+        assert rf._query('ip1') is None
+        assert request_id in connection._requests
+        assert request_id not in connection.orphaned_request_ids
+        callback.assert_not_called()
+
     def test_query_clears_timeout_orphan_when_encoding_fails(self):
         session = self.make_session()
         pool = session._pools.get.return_value

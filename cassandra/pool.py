@@ -30,7 +30,7 @@ except ImportError:
     from cassandra.util import WeakSet  # NOQA
 
 from cassandra import AuthenticationFailed
-from cassandra.connection import (ConnectionException, EndPoint,
+from cassandra.connection import (ConnectionException, ConnectionSendError, EndPoint,
                                   DefaultEndPoint, UnixSocketEndPoint)
 from cassandra.policies import HostDistance
 
@@ -631,7 +631,9 @@ class HostConnection(object):
                 self._stream_available_condition.notify()
 
         if connection.is_defunct or connection.is_closed:
-            if connection.signaled_error and not replace_only:
+            if connection.signaled_error and not replace_only and \
+                    (not self.shutdown_on_error or
+                     isinstance(connection.last_error, ConnectionSendError)):
                 return
 
             is_down = False
