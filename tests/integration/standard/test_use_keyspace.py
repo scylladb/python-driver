@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 import logging
 
@@ -8,6 +9,7 @@ from unittest.mock import patch
 
 from cassandra.connection import Connection
 from cassandra.cluster import Cluster
+from cassandra.pool import HostConnection
 from cassandra.policies import TokenAwarePolicy, RoundRobinPolicy, ConstantReconnectionPolicy
 
 from tests.integration import use_cluster, PROTOCOL_VERSION, local
@@ -72,3 +74,57 @@ class TestUseKeyspace(unittest.TestCase):
             session2.execute("USE test_set_keyspace")
             for i in range(200):
                 session2.execute(f"SELECT * FROM set_keyspace_slow_connection WHERE pk = 1")
+
+    def test_use_keyspace_while_shard_connections_open(self):
+        # Reproduces #1103: connect(ks) returns after the first connection
+        # and the other shard connections keep opening in the background
+        # with the old keyspace. A session-wide "USE" issued meanwhile must
+        # still end up on every pooled connection.
+        self.session.execute("CREATE KEYSPACE IF NOT EXISTS use_race_old WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+        self.session.execute("CREATE KEYSPACE IF NOT EXISTS use_race_new WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+        self.session.execute("CREATE TABLE IF NOT EXISTS use_race_new.t (pk int PRIMARY KEY)")
+
+        original_open = HostConnection._open_connection_to_missing_shard
+        original_set_keyspace_blocking = Connection.set_keyspace_blocking
+        in_shard_open = threading.local()
+        shard_conn_on_old_ks = threading.Event()
+        use_done = threading.Event()
+
+        def open_connection_to_missing_shard(pool, shard_id):
+            in_shard_open.active = True
+            try:
+                return original_open(pool, shard_id)
+            finally:
+                in_shard_open.active = False
+
+        def set_keyspace_blocking(conn, keyspace):
+            # Hold a background shard connection right after the pool read
+            # the old keyspace and before it is published, until the
+            # session-wide USE has finished.
+            if getattr(in_shard_open, "active", False) and keyspace == "use_race_old":
+                shard_conn_on_old_ks.set()
+                use_done.wait(10)
+            return original_set_keyspace_blocking(conn, keyspace)
+
+        cluster = Cluster(contact_points=["127.0.0.1"], protocol_version=PROTOCOL_VERSION)
+        try:
+            with patch.object(HostConnection, "_open_connection_to_missing_shard", open_connection_to_missing_shard), \
+                    patch.object(Connection, "set_keyspace_blocking", set_keyspace_blocking):
+                session = cluster.connect("use_race_old")
+                assert shard_conn_on_old_ks.wait(10), "no background shard connection was opened"
+                session.execute("USE use_race_new")
+                use_done.set()
+                for pool in list(session.get_pools()):
+                    for f in list(pool._shard_connections_futures):
+                        f.result(timeout=30)
+
+            stale = [(str(pool.host), conn.features.shard_id, conn.keyspace)
+                     for pool in list(session.get_pools())
+                     for conn in pool.get_connections()
+                     if conn.keyspace != "use_race_new"]
+            assert not stale, f"connections left on the old keyspace: {stale}"
+            for _ in range(100):
+                session.execute("SELECT * FROM t WHERE pk = 1")
+        finally:
+            use_done.set()
+            cluster.shutdown()
