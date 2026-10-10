@@ -6936,20 +6936,37 @@ class ResponseFuture(object):
             return
 
         conn_in_flight = None
-        if self._connection is not None:
+        connection = self._connection
+        if connection is not None:
             control_connection_request = \
-                self._connection.is_control_connection and \
+                connection.is_control_connection and \
                 self._control_connection_query_attempted
             if control_connection_request:
                 self._orphan_control_connection_request(
-                    self._connection, self._req_id)
+                    connection, self._req_id)
+            pool = None if control_connection_request else \
+                self.session._pools.get(self._current_host)
             try:
                 # A completed fallback stream may already have been reused by
                 # control traffic while this future waits for follow-up work.
                 # _orphan_control_connection_request() verifies ownership; if
                 # it does not own the stream, leave the current request alone.
                 if not control_connection_request:
-                    self._connection._requests.pop(self._req_id)
+                    retry_timeout = False
+                    with connection.lock:
+                        if self._connection is not connection:
+                            retry_timeout = True
+                        else:
+                            request_id = self._req_id
+                            connection._requests.pop(request_id)
+                            if (pool and not pool.is_shutdown) or \
+                                    connection.is_control_connection:
+                                connection.orphaned_request_ids.add(request_id)
+                                if len(connection.orphaned_request_ids) >= \
+                                        connection.orphaned_threshold:
+                                    connection.orphaned_threshold_reached = True
+                    if retry_timeout:
+                        return self._on_timeout(_attempts)
             # PYTHON-1044
             # This request might have been removed from the connection after the latter was defunct by heartbeat.
             # We should still raise OperationTimedOut to reject the future so that the main event thread will not
@@ -6959,35 +6976,22 @@ class ResponseFuture(object):
                 errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
                 self._set_final_exception(OperationTimedOut(errors, self._current_host,
                                                             timeout=self.timeout,
-                                                            in_flight=self._connection.in_flight))
+                                                            in_flight=connection.in_flight))
                 return
 
             # Capture connection stats before pool.return_connection() can alter state
-            conn_in_flight = self._connection.in_flight
+            conn_in_flight = connection.in_flight
 
             # Fallback requests never belong to a Session pool. A pool may
             # recover while the future waits for retry/schema work, but the
             # completed fallback stream must not be returned through that pool.
-            pool = None if control_connection_request else \
-                self.session._pools.get(self._current_host)
             if pool and not pool.is_shutdown:
                 # Do not return the stream ID to the pool yet. We cannot reuse it
                 # because the node might still be processing the query and will
                 # return a late response to that query - if we used such stream
                 # before the response to the previous query has arrived, the new
                 # query could get a response from the old query
-                with self._connection.lock:
-                    self._connection.orphaned_request_ids.add(self._req_id)
-                    if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
-                        self._connection.orphaned_threshold_reached = True
-
-                pool.return_connection(self._connection, stream_was_orphaned=True)
-            elif self._connection.is_control_connection and \
-                    not control_connection_request:
-                with self._connection.lock:
-                    self._connection.orphaned_request_ids.add(self._req_id)
-                    if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
-                        self._connection.orphaned_threshold_reached = True
+                pool.return_connection(connection, stream_was_orphaned=True)
 
         errors = self._errors
         if not errors:
@@ -7409,8 +7413,9 @@ class ResponseFuture(object):
             self._errors[host] = ConnectionException("Pool is shutdown")
             return None
 
+        previous_host = self._current_host
+        previous_connection = self._connection
         self._current_host = host
-
         connection = None
         previous_req_id = self._req_id
         request_id = None
@@ -7455,12 +7460,16 @@ class ResponseFuture(object):
             self._errors[host] = exc
             if self._metrics is not None:
                 self._metrics.on_connection_error()
-            if connection:
-                pool.return_connection(connection)
         finally:
-            if request_id is not None and not request_sent and \
-                    self._req_id == request_id:
-                self._req_id = previous_req_id
+            if request_id is not None and not request_sent:
+                with connection.lock:
+                    if self._connection is connection and self._req_id == request_id:
+                        self._connection = previous_connection
+                        self._current_host = previous_host
+                        self._req_id = previous_req_id
+                    connection.orphaned_request_ids.discard(request_id)
+                    connection.request_ids.append(request_id)
+                pool.return_connection(connection)
 
         return None
 

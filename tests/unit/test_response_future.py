@@ -24,7 +24,7 @@ from cassandra import ConsistencyLevel, InvalidRequest, Unavailable, SchemaTarge
 from cassandra.cluster import (Session, ResponseFuture, NoHostAvailable, ProtocolVersion,
                                ControlConnection, ControlConnectionQueryFallback, _NOT_SET)
 from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
-                                  ConnectionShutdown)
+                                  ConnectionShutdown, DefaultEndPoint)
 from cassandra.datastax.graph import SimpleGraphStatement
 from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessage,
                                 UnavailableErrorMessage, ResultMessage, QueryMessage,
@@ -94,6 +94,150 @@ class ResponseFutureTests(unittest.TestCase):
         query = SimpleStatement("SELECT * FROM foo")
         message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
         return ResponseFuture(session, message, query, 1)
+
+    def test_query_releases_borrowed_request_id_when_send_fails(self):
+        for failure in (ConnectionBusy("busy"), ConnectionException("write failed")):
+            with self.subTest(failure=failure):
+                session = self.make_session()
+                pool = session._pools.get.return_value
+                connection = Connection(DefaultEndPoint('127.0.0.1'))
+                initial_request_ids = set(connection.request_ids)
+                connection._socket_writable = True
+                if isinstance(failure, ConnectionBusy):
+                    connection._socket_writable = False
+                else:
+                    connection.push = Mock(side_effect=failure)
+
+                def borrow_connection(**kwargs):
+                    with connection.lock:
+                        connection.in_flight += 1
+                        return connection, connection.get_request_id()
+
+                def return_connection(conn):
+                    with conn.lock:
+                        conn.in_flight -= 1
+
+                pool.borrow_connection.side_effect = borrow_connection
+                pool.return_connection.side_effect = return_connection
+
+                rf = self.make_response_future(session)
+                assert rf._query('ip1') is None
+                assert connection.in_flight == 0
+                assert set(connection.request_ids) == initial_request_ids
+                assert len(connection.request_ids) == len(initial_request_ids)
+                assert not connection._requests
+                pool.return_connection.assert_called_once_with(connection)
+
+    def test_query_send_failure_retires_timed_out_stream(self):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Connection(DefaultEndPoint('127.0.0.1'))
+        initial_request_ids = set(connection.request_ids)
+        host = Mock(endpoint='127.0.0.1')
+
+        def borrow_connection(**kwargs):
+            with connection.lock:
+                connection.in_flight += 1
+                return connection, connection.get_request_id()
+
+        def return_connection(conn, stream_was_orphaned=False):
+            if not stream_was_orphaned:
+                with conn.lock:
+                    conn.in_flight -= 1
+
+        pool.borrow_connection.side_effect = borrow_connection
+        pool.return_connection.side_effect = return_connection
+        rf = self.make_response_future(session)
+
+        def send_msg(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = (cb, None, None)
+            rf._on_timeout()
+            connection._requests.pop(request_id, None)
+            raise ConnectionException('write failed')
+
+        connection.send_msg = send_msg
+        assert rf._query(host) is None
+        assert connection.in_flight == 0
+        assert set(connection.request_ids) == initial_request_ids
+        assert not connection.orphaned_request_ids
+        assert not connection._requests
+        assert pool.return_connection.call_count == 2
+
+    def test_query_send_failure_clears_timeout_target_before_id_reuse(self):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Connection(DefaultEndPoint('127.0.0.1'))
+        connection.request_ids.clear()
+        connection.request_ids.append(0)
+        host = Mock(endpoint='127.0.0.1')
+        callback = Mock()
+
+        def borrow_connection(**kwargs):
+            with connection.lock:
+                connection.in_flight += 1
+                return connection, connection.get_request_id()
+
+        rf = self.make_response_future(session)
+
+        def return_connection(conn):
+            with conn.lock:
+                conn.in_flight -= 1
+                reused_id = conn.get_request_id()
+                conn.in_flight += 1
+                conn._requests[reused_id] = (callback, None, None)
+            rf._on_timeout()
+            assert conn._requests[reused_id][0] is callback
+
+        pool.borrow_connection.side_effect = borrow_connection
+        pool.return_connection.side_effect = return_connection
+        connection.send_msg = Mock(side_effect=ConnectionBusy('busy'))
+
+        assert rf._query(host) is None
+        assert connection._requests[0][0] is callback
+        assert not connection.orphaned_request_ids
+        assert connection.in_flight == 1
+
+    def test_query_send_failure_restores_previous_timeout_connection(self):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        previous_connection = Connection(DefaultEndPoint('127.0.0.1'))
+        failed_connection = Connection(DefaultEndPoint('127.0.0.2'))
+        failed_connection.request_ids.clear()
+        failed_connection.request_ids.append(0)
+        previous_connection._requests[0] = (Mock(), None, None)
+        previous_connection.in_flight = 1
+        previous_host = Mock(endpoint='127.0.0.1')
+        failed_host = Mock(endpoint='127.0.0.2')
+        unrelated_callback = Mock()
+
+        def borrow_connection(**kwargs):
+            with failed_connection.lock:
+                failed_connection.in_flight += 1
+                return failed_connection, failed_connection.get_request_id()
+
+        def return_connection(conn, stream_was_orphaned=False):
+            if conn is failed_connection:
+                with conn.lock:
+                    conn.in_flight -= 1
+                    reused_id = conn.get_request_id()
+                    conn.in_flight += 1
+                    conn._requests[reused_id] = (unrelated_callback, None, None)
+
+        pool.borrow_connection.side_effect = borrow_connection
+        pool.return_connection.side_effect = return_connection
+        rf = self.make_response_future(session)
+        rf._connection = previous_connection
+        rf._current_host = previous_host
+        rf._req_id = 0
+        failed_connection.send_msg = Mock(side_effect=ConnectionBusy('busy'))
+
+        assert rf._query(failed_host) is None
+        assert rf._connection is previous_connection
+        assert rf._current_host is previous_host
+        assert rf._req_id == 0
+        rf._on_timeout()
+        assert failed_connection._requests[0][0] is unrelated_callback
+        assert not failed_connection.orphaned_request_ids
 
     def make_mock_response(self, col_names, rows):
         return Mock(spec=ResultMessage, kind=RESULT_KIND_ROWS, column_names=col_names, parsed_rows=rows, paging_state=None, col_types=None)
