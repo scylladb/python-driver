@@ -7318,6 +7318,7 @@ class ResponseFuture(object):
             with connection.lock:
                 connection._requests.pop(request_id, None)
             connection.defunct(exc)
+            control_connection.reconnect()
         except Exception as exc:
             log.debug("Error querying control connection", exc_info=True)
             self._errors[host] = exc
@@ -7467,7 +7468,7 @@ class ResponseFuture(object):
                     connection._requests.pop(request_id, None)
                     connection.orphaned_request_ids.discard(request_id)
                 connection.defunct(exc)
-                pool.return_connection(connection)
+                pool.return_connection(connection, replace_only=True)
         except Exception as exc:
             log.debug("Error querying host %s", host, exc_info=True)
             self._errors[host] = exc

@@ -166,6 +166,24 @@ class _PoolTests(unittest.TestCase):
         assert session.submit.call_args
         assert not pool.is_shutdown
 
+    def test_replace_only_does_not_mark_host_down(self):
+        host = Mock(spec=Host, address='ip1')
+        session = self.make_session()
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                            is_closed=False, max_request_id=100,
+                            signaled_error=False)
+        session.cluster.connection_factory.return_value = conn
+        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+
+        pool.borrow_connection(timeout=0.01)
+        conn.is_defunct = True
+        pool.return_connection(conn, replace_only=True)
+
+        host.signal_connection_failure.assert_not_called()
+        assert conn.signaled_error
+        assert not pool.is_shutdown
+        session.submit.assert_called_once_with(pool._replace, conn)
+
     def test_return_defunct_connection_on_down_host(self):
         host = Mock(spec=Host, address='ip1')
         session = self.make_session()

@@ -150,7 +150,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection.in_flight += 1
         pool.borrow_connection.return_value = (connection, request_id)
 
-        def return_connection(conn):
+        def return_connection(conn, replace_only=False):
+            assert replace_only
             with conn.lock:
                 conn.in_flight -= 1
 
@@ -161,7 +162,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf = ResponseFuture(session, message, query, 1)
 
         assert rf._query('ip1') is None
-        pool.return_connection.assert_called_once_with(connection)
+        pool.return_connection.assert_called_once_with(connection, replace_only=True)
         connection.close.assert_called_once_with()
         assert queued
         assert connection.is_defunct
@@ -950,12 +951,14 @@ class ResponseFutureTests(unittest.TestCase):
         session = self._make_fallback_session(keyspace=None)
         connection = self.make_control_connection()
         session.cluster.control_connection._connection = connection
+        session.cluster.control_connection.reconnect = Mock()
         session.cluster.get_control_connection_host.return_value = Mock(endpoint=connection.endpoint)
         connection.send_msg.side_effect = ConnectionSendError('wake failed', connection.endpoint)
 
         rf = self.make_response_future(session)
         assert not rf.send_request()
         connection.defunct.assert_called_once()
+        session.cluster.control_connection.reconnect.assert_called_once_with()
         assert not connection._requests
         assert not rf._control_connection_requests
 
