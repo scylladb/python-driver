@@ -2825,6 +2825,48 @@ class ControlConnectionTest(unittest.TestCase):
         assert 1 == len(self.cluster.metadata.removed_hosts)
         assert self.cluster.metadata.removed_hosts[0].address == "192.168.1.2"
 
+    def test_refresh_removal_waits_for_host_up_completion(self):
+        self.control_connection.refresh_node_list_and_token_map()
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_3)
+        del self.connection.peer_results[1][1]
+        callback_lock = host._down_callbacks_lock
+        removal_attempted = Event()
+        refresh_finished = Event()
+
+        class AttemptTrackingLock(object):
+
+            def __enter__(self):
+                removal_attempted.set()
+                callback_lock.acquire()
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                callback_lock.release()
+
+        host._down_callbacks_lock = AttemptTrackingLock()
+
+        def refresh():
+            try:
+                self.control_connection.refresh_node_list_and_token_map()
+            finally:
+                refresh_finished.set()
+
+        refresh_thread = Thread(target=refresh)
+        callback_lock.acquire()
+        try:
+            refresh_thread.start()
+            assert removal_attempted.wait(5)
+            assert self.cluster.metadata.get_host_by_host_id(HOST_ID_3) is host
+            assert not refresh_finished.is_set()
+        finally:
+            callback_lock.release()
+            if refresh_thread.ident is not None:
+                refresh_thread.join(5)
+
+        assert not refresh_thread.is_alive()
+        assert refresh_finished.is_set()
+        assert self.cluster.metadata.get_host_by_host_id(HOST_ID_3) is None
+
     def test_refresh_nodes_and_tokens_timeout(self):
 
         def bad_wait_for_responses(*args, **kwargs):
