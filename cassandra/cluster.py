@@ -1589,8 +1589,11 @@ class Cluster(object):
                     "SSL hostname verification (check_hostname=True) is currently incompatible "
                     "with client_routes_config. When using client routes, connections "
                     "go through NLB proxies whose addresses won't match server "
-                    "certificates. Disable hostname verification by setting "
-                    "ssl_context.check_hostname = False."
+                    "certificates. Disable hostname verification in the SSL "
+                    "context or ssl_options, while retaining CA verification. "
+                    "See the Client Routes TLS guide: "
+                    "https://python-driver.docs.scylladb.com/master/"
+                    "connectivity/client-routes.html#tls"
                 )
 
             ssl_enabled = ssl_context is not None or ssl_options is not None

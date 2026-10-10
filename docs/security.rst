@@ -59,6 +59,11 @@ resolved ip address. If this validation needs to be done against the FQDN, consi
 as described in the following examples or implement your own :class:`~.connection.EndPoint` and
 :class:`~.connection.EndPointFactory`.
 
+For TLS through proxy endpoints discovered with Client Routes, see the
+:ref:`Client Routes TLS configuration <client-routes>` before enabling hostname
+checking. ScyllaDB Cloud node certificates may identify the broadcast RPC IP
+rather than the proxy address.
+
 
 The following examples assume you have generated your Scylla certificate and
 keystore files with these instructions:
