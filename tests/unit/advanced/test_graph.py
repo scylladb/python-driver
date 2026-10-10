@@ -23,6 +23,7 @@ from cassandra.graph import (SimpleGraphStatement, GraphOptions, Result,
                        graph_result_row_factory, single_object_row_factory,
                        Vertex, Edge, Path, VertexProperty)
 from cassandra.datastax.graph.query import _graph_options
+from cassandra.datastax.graph.graphson import GraphSON2Serializer
 from tests.util import assertRegex
 import pytest
 
@@ -412,3 +413,14 @@ class GraphRowFactoryTests(unittest.TestCase):
         for i, res in enumerate(results):
             assert isinstance(res, Result)
             assert res.value == i
+
+
+class GraphSONSerializerTests(unittest.TestCase):
+
+    def test_graphson2_serializer_error_includes_type(self):
+        class Unserializable(object):
+            pass
+
+        with pytest.raises(ValueError) as exc_info:
+            GraphSON2Serializer().serialize(Unserializable())
+        assert 'Unserializable' in str(exc_info.value)
