@@ -147,11 +147,16 @@ class ResponseFutureTests(unittest.TestCase):
         connection.push = Mock(side_effect=push)
 
         request_id = connection.request_ids.popleft()
-        connection.in_flight += 1
+        other_request_id = connection.request_ids.popleft()
+        connection.in_flight += 2
         pool.borrow_connection.return_value = (connection, request_id)
+        connection._requests[other_request_id] = (
+            lambda error: pool.return_connection(connection),
+            ProtocolHandler.decode_message, None)
 
         def return_connection(conn, replace_only=False):
-            assert replace_only
+            if not replace_only:
+                assert conn.signaled_error
             with conn.lock:
                 conn.in_flight -= 1
 
@@ -162,7 +167,8 @@ class ResponseFutureTests(unittest.TestCase):
         rf = ResponseFuture(session, message, query, 1)
 
         assert rf._query('ip1') is None
-        pool.return_connection.assert_called_once_with(connection, replace_only=True)
+        assert [call.kwargs for call in pool.return_connection.call_args_list] == \
+            [{}, {'replace_only': True}]
         connection.close.assert_called_once_with()
         assert queued
         assert connection.is_defunct
@@ -196,6 +202,7 @@ class ResponseFutureTests(unittest.TestCase):
         session = self.make_session()
         pool = session._pools.get.return_value
         connection = Connection('1.2.3.4')
+        connection.orphaned_threshold = 1
         request_id = connection.request_ids.popleft()
         connection.in_flight += 1
         pool.borrow_connection.return_value = (connection, request_id)
@@ -211,6 +218,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         def encode(*args, **kwargs):
             rf._on_timeout()
+            assert connection.orphaned_threshold_reached
             raise ConnectionException("encoding failed")
 
         rf._protocol_handler = Mock(encode_message=encode)
@@ -218,6 +226,7 @@ class ResponseFutureTests(unittest.TestCase):
         assert connection.in_flight == 0
         assert request_id in connection.request_ids
         assert request_id not in connection.orphaned_request_ids
+        assert not connection.orphaned_threshold_reached
         assert not connection._requests
 
     def test_set_keyspace_result(self):

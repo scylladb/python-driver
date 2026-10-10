@@ -7467,6 +7467,10 @@ class ResponseFuture(object):
                 with connection.lock:
                     connection._requests.pop(request_id, None)
                     connection.orphaned_request_ids.discard(request_id)
+                    # defunct() invokes other requests' callbacks synchronously.
+                    # Their pool returns must not convict the host before this
+                    # connection is replaced for a local send-queue failure.
+                    connection.signaled_error = True
                 connection.defunct(exc)
                 pool.return_connection(connection, replace_only=True)
         except Exception as exc:
@@ -7488,6 +7492,8 @@ class ResponseFuture(object):
             with connection.lock:
                 connection._requests.pop(request_id, None)
                 connection.orphaned_request_ids.discard(request_id)
+                connection.orphaned_threshold_reached = \
+                    len(connection.orphaned_request_ids) >= connection.orphaned_threshold
                 if request_id not in connection.request_ids:
                     connection.request_ids.append(request_id)
         pool.return_connection(connection)

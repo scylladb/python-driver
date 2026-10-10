@@ -177,6 +177,7 @@ class _PoolTests(unittest.TestCase):
 
         pool.borrow_connection(timeout=0.01)
         conn.is_defunct = True
+        conn.signaled_error = True  # Other callbacks may return before replacement.
         pool.return_connection(conn, replace_only=True)
 
         host.signal_connection_failure.assert_not_called()

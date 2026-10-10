@@ -631,7 +631,7 @@ class HostConnection(object):
                 self._stream_available_condition.notify()
 
         if connection.is_defunct or connection.is_closed:
-            if connection.signaled_error and (replace_only or not self.shutdown_on_error):
+            if connection.signaled_error and not replace_only:
                 return
 
             is_down = False
