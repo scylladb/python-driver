@@ -56,6 +56,7 @@ from cassandra import (ConsistencyLevel, AuthenticationFailed, OperationTimedOut
 from cassandra.auth import _proxy_execute_key, PlainTextAuthProvider
 from cassandra.client_routes import ClientRoutesChangeType, ClientRoutesConfig, _ClientRoutesHandler
 from cassandra.connection import (ClientRoutesEndPointFactory, ConnectionException, ConnectionShutdown,
+                                  ConnectionSendError,
                                   ConnectionHeartbeat, ProtocolVersionUnsupported,
                                   EndPoint, DefaultEndPoint, DefaultEndPointFactory,
                                   SniEndPointFactory, UnixSocketEndPoint,
@@ -6940,6 +6941,8 @@ class ResponseFuture(object):
             control_connection_request = \
                 self._connection.is_control_connection and \
                 self._control_connection_query_attempted
+            pool = None if control_connection_request else \
+                self.session._pools.get(self._current_host)
             if control_connection_request:
                 self._orphan_control_connection_request(
                     self._connection, self._req_id)
@@ -6949,7 +6952,14 @@ class ResponseFuture(object):
                 # _orphan_control_connection_request() verifies ownership; if
                 # it does not own the stream, leave the current request alone.
                 if not control_connection_request:
-                    self._connection._requests.pop(self._req_id)
+                    with self._connection.lock:
+                        self._connection._requests.pop(self._req_id)
+                        if (pool and not pool.is_shutdown) or \
+                                self._connection.is_control_connection:
+                            self._connection.orphaned_request_ids.add(self._req_id)
+                            if len(self._connection.orphaned_request_ids) >= \
+                                    self._connection.orphaned_threshold:
+                                self._connection.orphaned_threshold_reached = True
             # PYTHON-1044
             # This request might have been removed from the connection after the latter was defunct by heartbeat.
             # We should still raise OperationTimedOut to reject the future so that the main event thread will not
@@ -6968,26 +6978,13 @@ class ResponseFuture(object):
             # Fallback requests never belong to a Session pool. A pool may
             # recover while the future waits for retry/schema work, but the
             # completed fallback stream must not be returned through that pool.
-            pool = None if control_connection_request else \
-                self.session._pools.get(self._current_host)
             if pool and not pool.is_shutdown:
                 # Do not return the stream ID to the pool yet. We cannot reuse it
                 # because the node might still be processing the query and will
                 # return a late response to that query - if we used such stream
                 # before the response to the previous query has arrived, the new
                 # query could get a response from the old query
-                with self._connection.lock:
-                    self._connection.orphaned_request_ids.add(self._req_id)
-                    if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
-                        self._connection.orphaned_threshold_reached = True
-
                 pool.return_connection(self._connection, stream_was_orphaned=True)
-            elif self._connection.is_control_connection and \
-                    not control_connection_request:
-                with self._connection.lock:
-                    self._connection.orphaned_request_ids.add(self._req_id)
-                    if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
-                        self._connection.orphaned_threshold_reached = True
 
         errors = self._errors
         if not errors:
@@ -7313,6 +7310,14 @@ class ResponseFuture(object):
         except ConnectionBusy as exc:
             log.debug("Control connection is busy")
             self._errors[host] = exc
+        except ConnectionSendError as exc:
+            log.debug("Error pushing request to control connection", exc_info=True)
+            self._errors[host] = exc
+            if self._metrics is not None:
+                self._metrics.on_connection_error()
+            with connection.lock:
+                connection._requests.pop(request_id, None)
+            connection.defunct(exc)
         except Exception as exc:
             log.debug("Error querying control connection", exc_info=True)
             self._errors[host] = exc
@@ -7452,6 +7457,17 @@ class ResponseFuture(object):
             self._errors[host] = exc
             if connection:
                 self._return_connection_after_send_failure(pool, connection, request_id)
+        except ConnectionSendError as exc:
+            log.debug("Error pushing request to host %s", host, exc_info=True)
+            self._errors[host] = exc
+            if self._metrics is not None:
+                self._metrics.on_connection_error()
+            if connection:
+                with connection.lock:
+                    connection._requests.pop(request_id, None)
+                    connection.orphaned_request_ids.discard(request_id)
+                connection.defunct(exc)
+                pool.return_connection(connection)
         except Exception as exc:
             log.debug("Error querying host %s", host, exc_info=True)
             self._errors[host] = exc
@@ -7470,6 +7486,7 @@ class ResponseFuture(object):
         if request_id is not None:
             with connection.lock:
                 connection._requests.pop(request_id, None)
+                connection.orphaned_request_ids.discard(request_id)
                 if request_id not in connection.request_ids:
                     connection.request_ids.append(request_id)
         pool.return_connection(connection)
