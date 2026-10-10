@@ -12,6 +12,13 @@ Features
 
 Bug Fixes
 ---------
+* Fix a rare ``RuntimeError: dictionary changed size during iteration`` when a
+  thread iterates schema metadata (``Metadata.keyspaces``, ``KeyspaceMetadata.tables``,
+  ``views``, ``indexes``, ``user_types``, ``functions``, ``aggregates`` or
+  ``TableMetadata.views``, e.g. via ``Metadata.export_schema_as_string()``) while a
+  schema refresh updates them; more likely on free-threaded Python. These dicts remain
+  the same long-lived objects updated in place, but now iterate over a snapshot, so
+  ``keys()``, ``values()`` and ``items()`` return a snapshot rather than a live view.
 * Avoid loading optional NumPy during ordinary driver imports. NumPy is now
   loaded only when ``NumpyProtocolHandler`` is explicitly requested (#1067).
 * Improve ``cassandra.util.Version`` parsing, ordering, and hashing for Cassandra
