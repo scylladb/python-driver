@@ -413,6 +413,225 @@ class ClusterTest(unittest.TestCase):
         listener.on_up.assert_not_called()
         assert not host._currently_handling_node_up
 
+    def test_retired_host_up_future_cannot_touch_replacement(self):
+        for outcome in ('success', 'failure', 'exception'):
+            with self.subTest(outcome=outcome):
+                cluster = Cluster()
+                self.addCleanup(cluster.shutdown)
+                cluster.profile_manager = Mock()
+                cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+                cluster.control_connection.on_up = Mock()
+                cluster.control_connection.on_down = Mock()
+                cluster.control_connection.on_remove = Mock()
+                cluster._prepare_all_queries = Mock()
+                cluster._start_reconnector = Mock()
+
+                host = Host('127.0.0.1', SimpleConvictionPolicy,
+                            host_id=uuid.uuid4())
+                cluster.metadata.add_or_return_host(host)
+                host.set_down()
+                future = Future()
+                session = new_session_with_pool_state()
+                session.add_or_renew_pool = Mock(return_value=future)
+                session.on_remove = Mock()
+                session.update_created_pools = Mock()
+                session.remove_pool = Mock(wraps=session.remove_pool)
+                cluster.sessions = (session,)
+                listener = Mock()
+                cluster.register_listener(listener)
+
+                cluster.on_up(host)
+                cluster.remove_host(host)
+                replacement = Host('127.0.0.1', SimpleConvictionPolicy,
+                                   host_id=host.host_id)
+                assert replacement is not host
+                cluster.metadata.add_or_return_host(replacement)
+                replacement_pool = Mock(host=replacement, is_shutdown=False)
+                session._pools[replacement] = replacement_pool
+                remove_count = session.remove_pool.call_count
+
+                if outcome == 'exception':
+                    future.set_exception(RuntimeError('pool failed'))
+                else:
+                    future.set_result(outcome == 'success')
+
+                assert host.is_up is False
+                assert not host._currently_handling_node_up
+                assert cluster.metadata.get_host_by_host_id(host.host_id) is replacement
+                assert session._pools[replacement] is replacement_pool
+                assert session.remove_pool.call_count == remove_count
+                session.update_created_pools.assert_not_called()
+                replacement_pool.shutdown.assert_not_called()
+                listener.on_up.assert_not_called()
+                listener.on_down.assert_not_called()
+                cluster.profile_manager.on_down.assert_not_called()
+                cluster.control_connection.on_down.assert_not_called()
+                cluster._start_reconnector.assert_not_called()
+
+    def test_retired_host_up_without_future_is_discarded(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_remove = Mock()
+        cluster._prepare_all_queries = Mock()
+        host = Host('127.0.0.1', SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        host.set_down()
+        session = Mock()
+        session.add_or_renew_pool.side_effect = lambda *_args, **_kwargs: (
+            cluster.remove_host(host))
+        cluster.sessions = (session,)
+
+        cluster.on_up(host)
+
+        assert host.is_up is False
+        assert not host._currently_handling_node_up
+
+    def test_retired_host_synchronous_up_failure_skips_cleanup(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster.control_connection.on_remove = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster._start_reconnector = Mock()
+        host = Host('127.0.0.1', SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        host.set_down()
+        session = Mock()
+
+        def remove_then_fail(*_args, **_kwargs):
+            cluster.remove_host(host)
+            raise RuntimeError('pool scheduling failed')
+
+        session.add_or_renew_pool.side_effect = remove_then_fail
+        cluster.sessions = (session,)
+
+        with self.assertLogs('cassandra.cluster', level='ERROR'):
+            with self.assertRaisesRegex(RuntimeError, 'pool scheduling failed'):
+                cluster.on_up(host)
+
+        assert host.is_up is False
+        assert not host._currently_handling_node_up
+        cluster.profile_manager.on_down.assert_not_called()
+        cluster.control_connection.on_down.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
+
+    def test_remove_waits_for_inflight_up_completion(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_remove = Mock()
+        cluster._prepare_all_queries = Mock()
+        host = Host('127.0.0.1', SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        host.set_down()
+        future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = future
+        cluster.sessions = (session,)
+        callback_started = Event()
+        release_callback = Event()
+        removal_attempted = Event()
+        removal_finished = Event()
+        callback_order = []
+
+        def on_listener_up(_host):
+            callback_started.set()
+            assert release_callback.wait(5)
+            callback_order.append('up')
+
+        listener = Mock()
+        listener.on_up.side_effect = on_listener_up
+        listener.on_remove.side_effect = lambda _host: callback_order.append('remove')
+        cluster.register_listener(listener)
+        cluster.on_up(host)
+
+        callback_lock = host._down_callbacks_lock
+        remove_thread = None
+
+        class AttemptTrackingLock(object):
+
+            def __enter__(self):
+                if threading.current_thread() is remove_thread:
+                    removal_attempted.set()
+                callback_lock.acquire()
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                callback_lock.release()
+
+        host._down_callbacks_lock = AttemptTrackingLock()
+        completion_thread = Thread(target=lambda: future.set_result(True))
+
+        def remove_host():
+            try:
+                cluster.remove_host(host)
+            finally:
+                removal_finished.set()
+
+        remove_thread = Thread(target=remove_host)
+        completion_thread.start()
+        try:
+            assert callback_started.wait(5)
+            remove_thread.start()
+            assert removal_attempted.wait(5)
+            assert not removal_finished.is_set()
+        finally:
+            release_callback.set()
+            completion_thread.join(5)
+            if remove_thread.ident is not None:
+                remove_thread.join(5)
+
+        assert not completion_thread.is_alive()
+        assert not remove_thread.is_alive()
+        assert callback_order.index('up') < callback_order.index('remove')
+        session.update_created_pools.assert_called_once_with()
+        assert host._is_removed
+
+    def test_reentrant_removal_stops_up_completion(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_remove = Mock()
+        cluster._prepare_all_queries = Mock()
+        host = Host('127.0.0.1', SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        host.set_down()
+        future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = future
+        cluster.sessions = (session,)
+        removing_listener = Mock()
+        removing_listener.on_up.side_effect = cluster.remove_host
+        following_listener = Mock()
+        cluster.register_listener(removing_listener)
+        cluster.register_listener(following_listener)
+        cluster._listeners = SimpleNamespace(
+            copy=lambda: (removing_listener, following_listener))
+        cluster.on_up(host)
+
+        future.set_result(True)
+
+        assert host._is_removed
+        assert host.is_up is False
+        assert not host._currently_handling_node_up
+        session.update_created_pools.assert_not_called()
+        assert (removing_listener.on_up.call_count +
+                following_listener.on_up.call_count) == 1
+
     def test_remove_host_continues_after_policy_callback_failure(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)
