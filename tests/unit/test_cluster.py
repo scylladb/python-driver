@@ -413,6 +413,34 @@ class ClusterTest(unittest.TestCase):
         listener.on_up.assert_not_called()
         assert not host._currently_handling_node_up
 
+    def test_remove_host_continues_after_policy_callback_failure(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.control_connection.shutdown()
+        host, _ = cluster.add_host(
+            DefaultEndPoint('127.0.0.1'), signal=False,
+            host_id=uuid.uuid4())
+        cluster.profile_manager.on_remove = Mock(
+            side_effect=RuntimeError('policy removal failed'))
+        session = Mock()
+        cluster.sessions = (session,)
+        listener = Mock()
+        cluster.register_listener(listener)
+        cluster.control_connection.on_remove = Mock()
+
+        with self.assertLogs('cassandra.cluster', level='ERROR'):
+            cluster.remove_host(
+                host, trigger_reconciliation=False,
+                suppress_callback_errors=True)
+
+        assert cluster.metadata.get_host_by_host_id(host.host_id) is None
+        assert host._is_removed
+        session.on_remove.assert_called_once_with(
+            host, trigger_reconciliation=False)
+        listener.on_remove.assert_called_once_with(host)
+        cluster.control_connection.on_remove.assert_called_once_with(
+            host, trigger_reconciliation=False)
+
     def test_failed_replacement_add_removes_partial_pools_and_reconnects(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)
@@ -4717,6 +4745,20 @@ class SessionTest(unittest.TestCase):
         assert session.remove_pool(same_host_at_another_endpoint) is shutdown_future
         assert session._pools == {}
         session.cluster.executor.submit.assert_called_once_with(pool.shutdown)
+
+    def test_remove_pool_closes_pool_when_shutdown_submission_fails(self):
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        pool = Mock(host=host)
+        session = new_session_with_pool_state({host: pool})
+        session.cluster = Mock()
+        session.cluster.executor.submit.side_effect = RuntimeError('executor stopped')
+        session.is_shutdown = False
+
+        with pytest.raises(RuntimeError, match='executor stopped'):
+            session.remove_pool(host)
+
+        assert session._pools == {}
+        pool.shutdown.assert_called_once_with()
 
     def test_pool_renewal_uses_pool_host_not_retained_dict_key(self):
         host_id = uuid.uuid4()
