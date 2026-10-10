@@ -30,7 +30,7 @@ except ImportError:
     from cassandra.util import WeakSet  # NOQA
 
 from cassandra import AuthenticationFailed
-from cassandra.connection import (ConnectionException, EndPoint,
+from cassandra.connection import (ConnectionException, ConnectionSendError, EndPoint,
                                   DefaultEndPoint, UnixSocketEndPoint)
 from cassandra.policies import HostDistance
 
@@ -622,7 +622,8 @@ class HostConnection(object):
 
         raise NoConnectionsAvailable("All request IDs are currently in use")
 
-    def return_connection(self, connection, stream_was_orphaned=False):
+    def return_connection(self, connection, stream_was_orphaned=False,
+                          replace_only=False):
         if not stream_was_orphaned:
             with connection.lock:
                 connection.in_flight -= 1
@@ -630,17 +631,24 @@ class HostConnection(object):
                 self._stream_available_condition.notify()
 
         if connection.is_defunct or connection.is_closed:
-            if connection.signaled_error and not self.shutdown_on_error:
+            if connection.signaled_error and not replace_only and \
+                    (not self.shutdown_on_error or
+                     isinstance(connection.last_error, ConnectionSendError)):
                 return
 
             is_down = False
-            if not connection.signaled_error:
+            if replace_only:
+                # A local send-queue failure says nothing about host health.
+                # Mark the connection handled so later callbacks do not report
+                # this failure to the host conviction policy.
+                connection.signaled_error = True
+            elif not connection.signaled_error:
                 log.debug("Defunct or closed connection (%s) returned to pool, potentially "
                           "marking host %s as down", id(connection), self.host)
                 is_down = self.host.signal_connection_failure(connection.last_error)
                 connection.signaled_error = True
 
-            if self.shutdown_on_error and not is_down:
+            if self.shutdown_on_error and not is_down and not replace_only:
                 is_down = True
 
             if is_down:

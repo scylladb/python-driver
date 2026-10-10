@@ -608,6 +608,12 @@ class ConnectionShutdown(ConnectionException):
     pass
 
 
+class ConnectionSendError(ConnectionException):
+    """A push failed after request bytes might have been queued."""
+
+    pass
+
+
 class ProtocolVersionUnsupported(ConnectionException):
     """
     Server rejected startup message due to unsupported protocol version
@@ -1640,7 +1646,11 @@ class Connection(object):
             self._segment_codec.encode(buffer, msg)
             msg = buffer.getvalue()
 
-        self.push(msg)
+        try:
+            self.push(msg)
+        except Exception as exc:
+            raise ConnectionSendError("Failed to push request on %s" % self.endpoint,
+                                      self.endpoint) from exc
         return len(msg)
 
     def wait_for_response(self, msg, timeout=None, **kwargs):
