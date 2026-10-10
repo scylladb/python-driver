@@ -482,6 +482,7 @@ class ConnectionTest(unittest.TestCase):
         assert len(c.request_ids) == initial_request_ids
         assert not c._requests
 
+
 class DerivedConnectionLimitsTest(unittest.TestCase):
     """
     max_request_id and orphaned_threshold are derived from max_in_flight, which
