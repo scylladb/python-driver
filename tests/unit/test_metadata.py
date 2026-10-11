@@ -33,13 +33,12 @@ from cassandra.metadata import (Murmur3Token, MD5Token,
                                 _UnknownStrategy, ColumnMetadata, TableMetadata,
                                 IndexMetadata, Function, Aggregate,
                                 Metadata, TokenMap, ReplicationFactor,
-                                SchemaParserDSE60, SchemaParserDSE67, SchemaParserDSE68,
                                 SchemaParserV22, SchemaParserV3,
-                                SchemaParserV4,
+                                SchemaParserV4, TableMetadataV3,
+                                RegisteredTableExtension, _RegisteredExtensionType,
                                 _ConsistencyMode, _consistency_mode_from_string)
 from cassandra.policies import SimpleConvictionPolicy
 from cassandra.pool import Host
-from cassandra.protocol import QueryMessage
 from cassandra.tablets import Tablet
 from tests.util import assertCountEqual
 import pytest
@@ -620,6 +619,65 @@ CREATE TYPE test.b (
 );""" == keyspace.export_as_string()
 
 
+class TableMetadataV3ToCQLTest(unittest.TestCase):
+
+    @staticmethod
+    def _table(options=None):
+        table = TableMetadataV3('ks', 'tbl', options=options)
+        pk = ColumnMetadata(table, 'k', 'int')
+        table.columns['k'] = pk
+        table.columns['v'] = ColumnMetadata(table, 'v', 'text')
+        table.partition_key.append(pk)
+        return table
+
+    def test_as_cql_query_formats_map_and_scalar_options(self):
+        table = self._table(options={
+            'compaction': {'class': 'SizeTieredCompactionStrategy'},
+            'comment': None,
+            'gc_grace_seconds': 864000,
+        })
+
+        assert table.as_cql_query() == (
+            "CREATE TABLE ks.tbl (k int PRIMARY KEY, v text) WITH "
+            "compaction = {'class': 'SizeTieredCompactionStrategy'} "
+            "AND gc_grace_seconds = 864000")
+
+    def test_as_cql_query_formatted(self):
+        assert self._table(options={'comment': 'c'}).as_cql_query(formatted=True) == (
+            "CREATE TABLE ks.tbl (\n"
+            "    k int PRIMARY KEY,\n"
+            "    v text\n"
+            ") WITH comment = 'c'")
+
+    def test_registered_extension_cql_follows_table(self):
+        class _TestExtension(RegisteredTableExtension):
+            name = 'unit_test_ext'
+
+            @classmethod
+            def after_table_cql(cls, table_meta, ext_key, ext_blob):
+                return "-- %s %s %s;" % (table_meta.name, ext_key, ext_blob.decode('utf-8'))
+
+        try:
+            assert _RegisteredExtensionType._extension_registry['unit_test_ext'] is _TestExtension
+            table = self._table()
+            table.extensions = {'unit_test_ext': b'blob', 'unregistered_ext': b'x'}
+
+            exported = table.export_as_string()
+
+            assert exported.endswith(";\n\n-- tbl unit_test_ext blob;")
+            assert 'unregistered_ext' not in exported
+        finally:
+            del _RegisteredExtensionType._extension_registry['unit_test_ext']
+
+    def test_keyspace_strips_qualified_strategy_class(self):
+        keyspace = KeyspaceMetadata(
+            'ks', True, 'org.apache.cassandra.locator.NetworkTopologyStrategy', {'dc1': 1})
+
+        assert keyspace.as_cql_query() == (
+            "CREATE KEYSPACE ks WITH replication = "
+            "{'class': 'NetworkTopologyStrategy', 'dc1': '1'}  AND durable_writes = true")
+
+
 class KeyspaceConsistencyTabletInvalidationTest(unittest.TestCase):
     """
     Metadata._update_keyspace must drop cached tablets when a keyspace's
@@ -864,24 +922,6 @@ class SchemaParserLookupTests(unittest.TestCase):
 
                 assert isinstance(parser, parser_class)
 
-    def test_dse_versions_use_matching_parser(self):
-        for dse_version, parser_class in (
-                ('6.8.0', SchemaParserDSE68),
-                ('6.8.0-SNAPSHOT', SchemaParserDSE68),
-                ('6.8.0.rc1', SchemaParserDSE68),
-                ('6.7.0', SchemaParserDSE67),
-                ('6.7.0-SNAPSHOT', SchemaParserDSE67),
-                ('6.7.0.rc1', SchemaParserDSE67),
-                ('6.0.0', SchemaParserDSE60),
-                ('6.0.0-SNAPSHOT', SchemaParserDSE60),
-                ('6.0.0.rc1', SchemaParserDSE60),
-                ('5.1.20', SchemaParserV4)):
-            with self.subTest(dse_version=dse_version):
-                parser = get_schema_parser(
-                    Mock(), '4.0.0', dse_version, 0.1, None)
-
-                assert type(parser) is parser_class
-
     def test_missing_versions_fall_back_to_v22_parser(self):
         connection = Mock()
         connection.wait_for_response.return_value = (False, None)
@@ -903,8 +943,7 @@ class SchemaParserLookupTests(unittest.TestCase):
         def mock_system_local(query, *args, **kwargs):
             if "release_version" in query.query:
                 return (True, response("release_version", release_version))
-            # Scylla and Cassandra reject the unknown dse_version column
-            return (False, Exception("Undefined column name dse_version"))
+            raise AssertionError("unexpected query: %s" % query.query)
 
         connection = Mock()
         connection.wait_for_response.side_effect = mock_system_local
@@ -936,6 +975,8 @@ class SchemaParserLookupTests(unittest.TestCase):
             parser = get_schema_parser(connection, None, None, 0.1, None)
 
         assert type(parser) is SchemaParserV3
+        # Only release_version is read; the DSE-only dse_version is not queried.
+        assert connection.wait_for_response.call_count == 1
 
     def test_empty_release_version_is_read_from_system_local(self):
         connection = self._system_local_connection('3.0.8')
@@ -980,35 +1021,6 @@ class SchemaParserLookupTests(unittest.TestCase):
 
         get_parser.assert_called_once_with(
             connection, None, None, 0.1, None, None)
-
-    def test_missing_release_version_with_dse_version_uses_dse_parser_without_warning(self):
-        connection = Mock()
-
-        release_version_resp = Mock()
-        release_version_resp.column_names = ["release_version"]
-        release_version_resp.parsed_rows = [[None]]
-
-        dse_version_resp = Mock()
-        dse_version_resp.column_names = ["dse_version"]
-        dse_version_resp.parsed_rows = [["6.8.0"]]
-
-        def mock_system_local(query, *args, **kwargs):
-            if not isinstance(query, QueryMessage):
-                raise RuntimeError("first argument should be a QueryMessage")
-            if "release_version" in query.query:
-                return (True, release_version_resp)
-            if "dse_version" in query.query:
-                return (True, dse_version_resp)
-            raise RuntimeError("unexpected query")
-
-        connection.wait_for_response.side_effect = mock_system_local
-
-        with self.assertNoLogs('cassandra.metadata', level='WARNING'):
-            parser = get_schema_parser(connection, None, None, 0.1, None)
-
-        assert isinstance(parser, SchemaParserDSE68)
-        message = connection.wait_for_response.call_args[0][0]
-        assert "system.local" in message.query
 
 
 class UnicodeIdentifiersTests(unittest.TestCase):

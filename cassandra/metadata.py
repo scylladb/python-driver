@@ -146,8 +146,7 @@ class Metadata(object):
         host = (self.get_host_by_host_id(host_id) if host_id is not None
                 else self.get_host(connection.original_endpoint))
         server_version = host.release_version if host else None
-        dse_version = host.dse_version if host else None
-        parser = get_schema_parser(connection, server_version, dse_version, timeout, metadata_request_timeout, fetch_size)
+        parser = get_schema_parser(connection, server_version, None, timeout, metadata_request_timeout, fetch_size)
 
         if not target_type:
             self._rebuild_all(parser)
@@ -868,11 +867,6 @@ class KeyspaceMetadata(object):
     .. versionadded:: 3.15
     """
 
-    graph_engine = None
-    """
-    A string indicating whether a graph engine is enabled for this keyspace (Core/Classic).
-    """
-
     _consistency_mode = _ConsistencyMode.EVENTUAL
     """
     The consistency mode of the keyspace, derived from the the ``consistency``
@@ -885,7 +879,7 @@ class KeyspaceMetadata(object):
     _exc_info = None
     """ set if metadata parsing failed """
 
-    def __init__(self, name, durable_writes, strategy_class, strategy_options, graph_engine=None):
+    def __init__(self, name, durable_writes, strategy_class, strategy_options):
         self.name = name
         self.durable_writes = durable_writes
         self.replication_strategy = ReplicationStrategy.create(strategy_class, strategy_options)
@@ -895,28 +889,19 @@ class KeyspaceMetadata(object):
         self.functions = {}
         self.aggregates = {}
         self.views = {}
-        self.graph_engine = graph_engine
         self._consistency_mode = _ConsistencyMode.EVENTUAL
-
-    @property
-    def is_graph_enabled(self):
-        return self.graph_engine is not None
 
     def export_as_string(self):
         """
         Returns a CQL query string that can be used to recreate the entire keyspace,
         including user-defined types and tables.
         """
-        # Make sure tables with vertex are exported before tables with edges
-        tables_with_vertex = [t for t in self.tables.values() if hasattr(t, 'vertex') and t.vertex]
-        other_tables = [t for t in self.tables.values() if t not in tables_with_vertex]
-
         cql = "\n\n".join(
             [self.as_cql_query() + ';'] +
             self.user_type_strings() +
             [f.export_as_string() for f in self.functions.values()] +
             [a.export_as_string() for a in self.aggregates.values()] +
-            [t.export_as_string() for t in tables_with_vertex + other_tables])
+            [t.export_as_string() for t in self.tables.values()])
 
         if self._exc_info:
             import traceback
@@ -953,8 +938,6 @@ class KeyspaceMetadata(object):
             ret = ret + (" AND consistency = '%s'" % self._consistency_mode.value)
 
         ret = ret + (' AND durable_writes = %s' % ("true" if self.durable_writes else "false"))
-        if self.graph_engine is not None:
-            ret = ret + (" AND graph_engine = '%s'" % self.graph_engine)
         return ret
 
     def user_type_strings(self):
@@ -1587,10 +1570,7 @@ class TableMetadataV3(TableMetadata):
     """
     compaction_options = {}
 
-    option_maps = [
-        'compaction', 'compression', 'caching',
-        'nodesync'  # added DSE 6.0
-    ]
+    option_maps = ['compaction', 'compression', 'caching']
 
     @property
     def is_cql_compatible(self):
@@ -1615,52 +1595,6 @@ class TableMetadataV3(TableMetadata):
                 ret.append("%s = %s" % (name, protect_value(value)))
 
         return list(sorted(ret))
-
-
-class TableMetadataDSE68(TableMetadataV3):
-
-    vertex = None
-    """A :class:`.VertexMetadata` instance, if graph enabled"""
-
-    edge = None
-    """A :class:`.EdgeMetadata` instance, if graph enabled"""
-
-    def as_cql_query(self, formatted=False):
-        ret = super(TableMetadataDSE68, self).as_cql_query(formatted)
-
-        if self.vertex:
-            ret += " AND VERTEX LABEL %s" % protect_name(self.vertex.label_name)
-
-        if self.edge:
-            ret += " AND EDGE LABEL %s" % protect_name(self.edge.label_name)
-
-            ret += self._export_edge_as_cql(
-                self.edge.from_label,
-                self.edge.from_partition_key_columns,
-                self.edge.from_clustering_columns, "FROM")
-
-            ret += self._export_edge_as_cql(
-                self.edge.to_label,
-                self.edge.to_partition_key_columns,
-                self.edge.to_clustering_columns, "TO")
-
-        return ret
-
-    @staticmethod
-    def _export_edge_as_cql(label_name, partition_keys,
-                            clustering_columns, keyword):
-        ret = " %s %s(" % (keyword, protect_name(label_name))
-
-        if len(partition_keys) == 1:
-            ret += protect_name(partition_keys[0])
-        else:
-            ret += "(%s)" % ", ".join([protect_name(k) for k in partition_keys])
-
-        if clustering_columns:
-            ret += ", %s" % ", ".join([protect_name(k) for k in clustering_columns])
-        ret += ")"
-
-        return ret
 
 
 class TableExtensionInterface(object):
@@ -3064,14 +2998,6 @@ class SchemaParserV3(SchemaParserV22):
         return type_string
 
 
-class SchemaParserDSE60(SchemaParserV3):
-    """
-    For DSE 6.0+
-    """
-    recognized_table_options = (SchemaParserV3.recognized_table_options +
-                                ("nodesync",))
-
-
 class SchemaParserV4(SchemaParserV3):
 
     recognized_table_options = (
@@ -3235,213 +3161,6 @@ class SchemaParserV4(SchemaParserV3):
         return super(SchemaParserV4, SchemaParserV4)._build_keyspace_metadata_internal(row)
 
 
-class SchemaParserDSE67(SchemaParserV4):
-    """
-    For DSE 6.7+
-    """
-    recognized_table_options = (SchemaParserV4.recognized_table_options +
-                                ("nodesync",))
-
-
-class SchemaParserDSE68(SchemaParserDSE67):
-    """
-    For DSE 6.8+
-    """
-
-    _SELECT_VERTICES = "SELECT * FROM system_schema.vertices"
-    _SELECT_EDGES = "SELECT * FROM system_schema.edges"
-
-    _table_metadata_class = TableMetadataDSE68
-
-    def __init__(self, connection, timeout, fetch_size, metadata_request_timeout):
-        super(SchemaParserDSE68, self).__init__(connection, timeout, fetch_size, metadata_request_timeout)
-        self.keyspace_table_vertex_rows = defaultdict(lambda: defaultdict(list))
-        self.keyspace_table_edge_rows = defaultdict(lambda: defaultdict(list))
-
-    def get_all_keyspaces(self):
-        for keyspace_meta in super(SchemaParserDSE68, self).get_all_keyspaces():
-            self._build_graph_metadata(keyspace_meta)
-            yield keyspace_meta
-
-    def get_table(self, keyspaces, keyspace, table):
-        table_meta = super(SchemaParserDSE68, self).get_table(keyspaces, keyspace, table)
-        cl = ConsistencyLevel.ONE
-        where_clause = bind_params(" WHERE keyspace_name = %%s AND %s = %%s" % (self._table_name_col), (keyspace, table), _encoder)
-        vertices_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_VERTICES + where_clause, self.metadata_request_timeout),
-            consistency_level=cl,
-        )
-        edges_query = QueryMessage(
-            query=maybe_add_timeout_to_query(self._SELECT_EDGES + where_clause, self.metadata_request_timeout),
-            consistency_level=cl,
-        )
-
-        (vertices_success, vertices_result), (edges_success, edges_result) \
-            = self.connection.wait_for_responses(vertices_query, edges_query, timeout=self.timeout, fail_on_error=False)
-        vertices_result = self._handle_results(vertices_success, vertices_result)
-        edges_result = self._handle_results(edges_success, edges_result)
-
-        try:
-            if vertices_result:
-                table_meta.vertex = self._build_table_vertex_metadata(vertices_result[0])
-            elif edges_result:
-                table_meta.edge = self._build_table_edge_metadata(keyspaces[keyspace], edges_result[0])
-        except Exception:
-            table_meta.vertex = None
-            table_meta.edge = None
-            table_meta._exc_info = sys.exc_info()
-            log.exception("Error while parsing graph metadata for table %s.%s.", keyspace, table)
-
-        return table_meta
-
-    @staticmethod
-    def _build_keyspace_metadata_internal(row):
-        name = row["keyspace_name"]
-        durable_writes = row.get("durable_writes", None)
-        replication = dict(row.get("replication")) if 'replication' in row else {}
-        replication_class = replication.pop("class") if 'class' in replication else None
-        graph_engine = row.get("graph_engine", None)
-        return KeyspaceMetadata(name, durable_writes, replication_class, replication, graph_engine)
-
-    def _build_graph_metadata(self, keyspace_meta):
-
-        def _build_table_graph_metadata(table_meta):
-            for row in self.keyspace_table_vertex_rows[keyspace_meta.name][table_meta.name]:
-                table_meta.vertex = self._build_table_vertex_metadata(row)
-
-            for row in self.keyspace_table_edge_rows[keyspace_meta.name][table_meta.name]:
-                table_meta.edge = self._build_table_edge_metadata(keyspace_meta, row)
-
-        try:
-            # Make sure we process vertices before edges
-            for table_meta in [t for t in keyspace_meta.tables.values()
-                               if t.name in self.keyspace_table_vertex_rows[keyspace_meta.name]]:
-                _build_table_graph_metadata(table_meta)
-
-            # all other tables...
-            for table_meta in [t for t in keyspace_meta.tables.values()
-                               if t.name not in self.keyspace_table_vertex_rows[keyspace_meta.name]]:
-                _build_table_graph_metadata(table_meta)
-        except Exception:
-            # schema error, remove all graph metadata for this keyspace
-            for t in keyspace_meta.tables.values():
-                t.edge = t.vertex = None
-            keyspace_meta._exc_info = sys.exc_info()
-            log.exception("Error while parsing graph metadata for keyspace %s", keyspace_meta.name)
-
-    @staticmethod
-    def _build_table_vertex_metadata(row):
-        return VertexMetadata(row.get("keyspace_name"), row.get("table_name"),
-                              row.get("label_name"))
-
-    @staticmethod
-    def _build_table_edge_metadata(keyspace_meta, row):
-        from_table = row.get("from_table")
-        from_table_meta = keyspace_meta.tables.get(from_table)
-        from_label = from_table_meta.vertex.label_name
-        to_table = row.get("to_table")
-        to_table_meta = keyspace_meta.tables.get(to_table)
-        to_label = to_table_meta.vertex.label_name
-
-        return EdgeMetadata(
-            row.get("keyspace_name"), row.get("table_name"),
-            row.get("label_name"), from_table, from_label,
-            row.get("from_partition_key_columns"),
-            row.get("from_clustering_columns"), to_table, to_label,
-            row.get("to_partition_key_columns"),
-            row.get("to_clustering_columns"))
-
-    def _query_all(self):
-        cl = ConsistencyLevel.ONE
-        queries = [
-            # copied from v4
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_KEYSPACES, self.metadata_request_timeout),
-                         consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TABLES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_COLUMNS, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TYPES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_FUNCTIONS, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_AGGREGATES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_TRIGGERS, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_INDEXES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIEWS, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIRTUAL_KEYSPACES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIRTUAL_TABLES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VIRTUAL_COLUMNS, self.metadata_request_timeout), consistency_level=cl),
-            # dse6.8 only
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_VERTICES, self.metadata_request_timeout), consistency_level=cl),
-            QueryMessage(query=maybe_add_timeout_to_query(self._SELECT_EDGES, self.metadata_request_timeout), consistency_level=cl)
-        ]
-
-        responses = self.connection.wait_for_responses(
-            *queries, timeout=self.timeout, fail_on_error=False)
-        (
-            # copied from V4
-            (ks_success, ks_result),
-            (table_success, table_result),
-            (col_success, col_result),
-            (types_success, types_result),
-            (functions_success, functions_result),
-            (aggregates_success, aggregates_result),
-            (triggers_success, triggers_result),
-            (indexes_success, indexes_result),
-            (views_success, views_result),
-            (virtual_ks_success, virtual_ks_result),
-            (virtual_table_success, virtual_table_result),
-            (virtual_column_success, virtual_column_result),
-            # dse6.8 responses
-            (vertices_success, vertices_result),
-            (edges_success, edges_result)
-        ) = responses
-
-        # copied from V4
-        self.keyspaces_result = self._handle_results(ks_success, ks_result)
-        self.tables_result = self._handle_results(table_success, table_result)
-        self.columns_result = self._handle_results(col_success, col_result)
-        self.triggers_result = self._handle_results(triggers_success, triggers_result)
-        self.types_result = self._handle_results(types_success, types_result)
-        self.functions_result = self._handle_results(functions_success, functions_result)
-        self.aggregates_result = self._handle_results(aggregates_success, aggregates_result)
-        self.indexes_result = self._handle_results(indexes_success, indexes_result)
-        self.views_result = self._handle_results(views_success, views_result)
-
-        # These tables don't exist in some DSE versions reporting 4.X so we can
-        # ignore them if we got an error
-        self.virtual_keyspaces_result = self._handle_results(
-            virtual_ks_success, virtual_ks_result,
-            expected_failures=(InvalidRequest,)
-        )
-        self.virtual_tables_result = self._handle_results(
-            virtual_table_success, virtual_table_result,
-            expected_failures=(InvalidRequest,)
-        )
-        self.virtual_columns_result = self._handle_results(
-            virtual_column_success, virtual_column_result,
-            expected_failures=(InvalidRequest,)
-        )
-
-        # dse6.8-only results
-        self.vertices_result = self._handle_results(vertices_success, vertices_result)
-        self.edges_result = self._handle_results(edges_success, edges_result)
-
-        self._aggregate_results()
-
-    def _aggregate_results(self):
-        super(SchemaParserDSE68, self)._aggregate_results()
-
-        m = self.keyspace_table_vertex_rows
-        for row in self.vertices_result:
-            ksname = row["keyspace_name"]
-            cfname = row['table_name']
-            m[ksname][cfname].append(row)
-
-        m = self.keyspace_table_edge_rows
-        for row in self.edges_result:
-            ksname = row["keyspace_name"]
-            cfname = row['table_name']
-            m[ksname][cfname].append(row)
-
-
 class MaterializedViewMetadata(object):
     """
     A representation of a materialized view on a table
@@ -3550,82 +3269,6 @@ class MaterializedViewMetadata(object):
         return self.as_cql_query(formatted=True) + ";"
 
 
-class VertexMetadata(object):
-    """
-    A representation of a vertex on a table
-    """
-
-    keyspace_name = None
-    """ A string name of the keyspace. """
-
-    table_name = None
-    """ A string name of the table this vertex is on. """
-
-    label_name = None
-    """ A string name of the label of this vertex."""
-
-    def __init__(self, keyspace_name, table_name, label_name):
-        self.keyspace_name = keyspace_name
-        self.table_name = table_name
-        self.label_name = label_name
-
-
-class EdgeMetadata(object):
-    """
-    A representation of an edge on a table
-    """
-
-    keyspace_name = None
-    """A string name of the keyspace """
-
-    table_name = None
-    """A string name of the table this edge is on"""
-
-    label_name = None
-    """A string name of the label of this edge"""
-
-    from_table = None
-    """A string name of the from table of this edge (incoming vertex)"""
-
-    from_label = None
-    """A string name of the from table label of this edge (incoming vertex)"""
-
-    from_partition_key_columns = None
-    """The columns that match the partition key of the incoming vertex table."""
-
-    from_clustering_columns = None
-    """The columns that match the clustering columns of the incoming vertex table."""
-
-    to_table = None
-    """A string name of the to table of this edge (outgoing vertex)"""
-
-    to_label = None
-    """A string name of the to table label of this edge (outgoing vertex)"""
-
-    to_partition_key_columns = None
-    """The columns that match the partition key of the outgoing vertex table."""
-
-    to_clustering_columns = None
-    """The columns that match the clustering columns of the outgoing vertex table."""
-
-    def __init__(
-            self, keyspace_name, table_name, label_name, from_table,
-            from_label, from_partition_key_columns, from_clustering_columns,
-            to_table, to_label, to_partition_key_columns,
-            to_clustering_columns):
-        self.keyspace_name = keyspace_name
-        self.table_name = table_name
-        self.label_name = label_name
-        self.from_table = from_table
-        self.from_label = from_label
-        self.from_partition_key_columns = from_partition_key_columns
-        self.from_clustering_columns = from_clustering_columns
-        self.to_table = to_table
-        self.to_label = to_label
-        self.to_partition_key_columns = to_partition_key_columns
-        self.to_clustering_columns = to_clustering_columns
-
-
 def _query_column_from_system_local(connection, column_name, timeout, metadata_request_timeout):
     success, local_result = connection.wait_for_response(
         QueryMessage(
@@ -3651,30 +3294,19 @@ def get_column_from_system_local(connection, column_name: str, timeout, metadata
 def get_schema_parser(connection, server_version, dse_version, timeout, metadata_request_timeout, fetch_size=None):
     """Select the schema parser for the server's release line.
 
-    Cassandra and Scylla schema families are selected by major version; DSE
-    families are selected by major and minor version. Prerelease maturity does
-    not imply the preceding schema family, so versions such as
-    ``6.8.0-SNAPSHOT`` and ``6.8.0.rc1`` correctly select DSE68.
+    Cassandra and Scylla schema families are selected by major version.
+
+    ``dse_version`` is ignored: the DataStax Enterprise (DSE) schema parsers
+    were removed. It is kept so existing positional callers keep working.
     """
     missing_release_version_reason = None
-    if not server_version and not dse_version:
+    if not server_version:
         server_version, error = _query_column_from_system_local(
             connection, "release_version", timeout, metadata_request_timeout)
-        dse_version = get_column_from_system_local(connection, "dse_version", timeout, metadata_request_timeout)
         if not server_version:
             missing_release_version_reason = error or "empty value"
 
     version = Version(server_version or "0.0")
-    if dse_version:
-        v = Version(dse_version)
-        dse_release = (v.major, v.minor)
-        if dse_release >= (6, 8):
-            return SchemaParserDSE68(connection, timeout, fetch_size, metadata_request_timeout)
-        elif dse_release >= (6, 7):
-            return SchemaParserDSE67(connection, timeout, fetch_size, metadata_request_timeout)
-        elif dse_release >= (6, 0):
-            return SchemaParserDSE60(connection, timeout, fetch_size, metadata_request_timeout)
-
     if version.major >= 4:
         return SchemaParserV4(connection, timeout, fetch_size, metadata_request_timeout)
     elif version.major >= 3:
@@ -3701,14 +3333,6 @@ def _cql_from_cass_type(cass_type):
         return cass_type.cql_parameterized_type()
 
 
-class RLACTableExtension(RegisteredTableExtension):
-    name = "DSE_RLACA"
-
-    @classmethod
-    def after_table_cql(cls, table_meta, ext_key, ext_blob):
-        return "RESTRICT ROWS ON %s.%s USING %s;" % (protect_name(table_meta.keyspace_name),
-                                                     protect_name(table_meta.name),
-                                                     protect_name(ext_blob.decode('utf-8')))
 NO_VALID_REPLICA = object()
 
 
