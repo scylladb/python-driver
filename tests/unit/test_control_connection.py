@@ -135,6 +135,7 @@ class MockCluster(object):
 
     def __init__(self):
         self.metadata = MockMetadata()
+        self.sessions = []
         self.added_hosts = []
         self.scheduler = Mock(spec=_Scheduler)
         self.executor = Mock(spec=ThreadPoolExecutor)
@@ -1637,6 +1638,23 @@ class ControlConnectionTest(unittest.TestCase):
         assert self.cluster.metadata.get_host(new_endpoint) is old_host
         assert self.cluster.metadata.get_host_by_host_id(HOST_ID_3) is None
         assert old_host not in self.cluster.added_hosts
+
+    def test_endpoint_change_renews_pool_when_down_event_is_discounted(self):
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_2)
+        session = self._discount_down_for(host)
+        self.connection.peer_results[1] = [
+            ["192.168.1.9", "10.0.0.9", "a", "dc1", "rack1",
+             ["1", "101", "201"], HOST_ID_2]]
+        self.connection.wait_for_responses = Mock(
+            return_value=_node_meta_results(
+                self.connection.local_results, self.connection.peer_results))
+
+        self.control_connection.refresh_node_list_and_token_map()
+
+        assert host.is_up
+        assert host.endpoint == DefaultEndPoint('192.168.1.9')
+        session.add_or_renew_pool.assert_called_once_with(
+            host, is_host_addition=False)
 
     def test_moving_endpoint_owner_is_not_removed(self):
         moved_host = self.cluster.metadata.get_host_by_host_id(HOST_ID_2)

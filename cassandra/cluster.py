@@ -6151,13 +6151,22 @@ class ControlConnection(object):
                     reconnector = host.get_and_set_reconnection_handler(None)
                     if reconnector:
                         reconnector.cancel()
-                    self._cluster.on_down(host, is_host_addition=False, expect_host_to_be_down=True)
+                    down_dispatched = self._cluster.on_down(
+                        host, is_host_addition=False,
+                        expect_host_to_be_down=True)
 
                     with host.lock:
                         old_endpoint = host.endpoint
                         host.endpoint = endpoint
                     self._cluster.metadata.update_host(host, old_endpoint)
                     self._cluster.on_up(host)
+                    # A live pool can discount the DOWN event. In that case
+                    # on_up sees an already-up host and does not replace its
+                    # connections, which still point at the old endpoint.
+                    if not down_dispatched and host.is_up:
+                        for session in tuple(self._cluster.sessions):
+                            session.add_or_renew_pool(
+                                host, is_host_addition=False)
 
             if host is None:
                 log.debug("[control connection] Found new host to connect to: %s", endpoint)
@@ -7453,33 +7462,33 @@ class ResponseFuture(object):
                     routing_token=self._routing_token)
             else:
                 connection, request_id = pool.borrow_connection(timeout=2.0)
-            # Pool replacement takes the session lock; endpoint updates take
-            # the host lock. Keep both until send begins so ownership cannot
-            # change between the final check and the send.
-            with self.session._lock:
-                with host.lock if isinstance(host, Host) else nullcontext():
-                    if (pool.is_shutdown or
-                            self.session._pools.get(host) is not pool or
-                            not self.session._pool_matches_host(host, pool)):
-                        self._errors[host] = ConnectionException(
-                            "Pool changed while borrowing connection")
-                        return None
-                    result_meta = self._bound_result_metadata
+            # Pool publication/removal and endpoint updates take the host
+            # lock. Keep it until send begins so ownership cannot change
+            # between the final check and the send. Other hosts can send in
+            # parallel.
+            with host.lock if isinstance(host, Host) else nullcontext():
+                if (pool.is_shutdown or
+                        self.session._pools.get(host) is not pool or
+                        not self.session._pool_matches_host(host, pool)):
+                    self._errors[host] = ConnectionException(
+                        "Pool changed while borrowing connection")
+                    return None
+                result_meta = self._bound_result_metadata
 
-                    if cb is None:
-                        cb = partial(self._set_result, host, connection, pool,
-                                     page_generation=self._page_generation)
+                if cb is None:
+                    cb = partial(self._set_result, host, connection, pool,
+                                 page_generation=self._page_generation)
 
-                    # The timeout must see the pool and stream selected here.
-                    self._connection = connection
-                    self._request_pool = pool
-                    self._req_id = request_id
-                    self.request_encoded_size = connection.send_msg(
-                        message, request_id, cb=cb,
-                        encoder=self._protocol_handler.encode_message,
-                        decoder=self._protocol_handler.decode_message,
-                        result_metadata=result_meta)
-                    request_sent = True
+                # The timeout must see the pool and stream selected here.
+                self._connection = connection
+                self._request_pool = pool
+                self._req_id = request_id
+                self.request_encoded_size = connection.send_msg(
+                    message, request_id, cb=cb,
+                    encoder=self._protocol_handler.encode_message,
+                    decoder=self._protocol_handler.decode_message,
+                    result_metadata=result_meta)
+                request_sent = True
             self.attempted_hosts.append(host)
             return request_id
         except NoConnectionsAvailable as exc:

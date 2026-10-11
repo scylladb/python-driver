@@ -180,9 +180,44 @@ class ResponseFutureTests(unittest.TestCase):
         threads[0].join(1)
         assert host.endpoint != old_endpoint
 
+    def test_sends_to_different_hosts_can_progress_together(self):
+        first_host = Host('127.0.0.1', SimpleConvictionPolicy,
+                          host_id=uuid.uuid4())
+        second_host = Host('127.0.0.2', SimpleConvictionPolicy,
+                           host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(first_host)
+        first_pool, first_connection = self.make_owned_pool(first_host)
+        second_pool, second_connection = self.make_owned_pool(second_host)
+        session._pools = {first_host: first_pool, second_host: second_pool}
+        first_send_started = Event()
+        release_first_send = Event()
+        first_result = []
+
+        def slow_send(message, stream_id, cb, **kwargs):
+            first_send_started.set()
+            assert release_first_send.wait(2)
+            first_connection._requests[stream_id] = cb
+            return 128
+
+        first_connection.send_msg.side_effect = slow_send
+        first_future = self.make_response_future(session)
+        second_future = self.make_response_future(session)
+        first_thread = Thread(
+            target=lambda: first_result.append(first_future._query(first_host)))
+        first_thread.start()
+        try:
+            assert first_send_started.wait(1)
+            assert second_future._query(second_host) == 1
+            assert first_thread.is_alive()
+            second_connection.send_msg.assert_called_once()
+        finally:
+            release_first_send.set()
+            first_thread.join(2)
+        assert not first_thread.is_alive()
+        assert first_result == [1]
+
     def make_basic_session(self):
         s = Mock(spec=Session)
-        s._lock = RLock()
         s.keyspace = None
         s.is_shutdown = False
         s.row_factory = lambda col_names, rows: [(col_names, rows)]
