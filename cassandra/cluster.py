@@ -3050,7 +3050,7 @@ class Cluster(object):
         try:
             self.scheduler.schedule(delay, self.retry_failed_endpoint_add, host)
         except Exception:
-            # The topology refresh remains a fallback if scheduling fails.
+            # A later topology refresh can retry scheduling this addition.
             log.exception("Error scheduling addition retry for moved host %s",
                           host)
 
@@ -6409,7 +6409,11 @@ class ControlConnection(object):
             self._cluster.metadata.update_host(host, old_endpoint=endpoint)
             if (host_id not in moved_hosts and
                     getattr(host, '_endpoint_add_retry_pending', False)):
-                self._cluster.retry_failed_endpoint_add(host)
+                # Query preparation in on_add can block on a slow node.
+                # Keep the topology refresh moving while the scheduler runs
+                # the retry under the host's callback lock.
+                self._cluster.scheduler.schedule_unique(
+                    0, self._cluster.retry_failed_endpoint_add, host)
 
         for old_host_id, old_host in self._cluster.metadata.all_hosts_items():
             if old_host_id not in found_host_ids:

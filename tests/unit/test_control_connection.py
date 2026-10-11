@@ -2363,6 +2363,8 @@ class ControlConnectionTest(unittest.TestCase):
         cluster = Cluster(load_balancing_policy=RoundRobinPolicy())
         self.addCleanup(cluster.shutdown)
         cluster.control_connection.shutdown()
+        cluster.scheduler.schedule = Mock(return_value=True)
+        cluster.scheduler.schedule_unique = Mock()
         endpoints = [DefaultEndPoint('192.168.1.%s' % i)
                      for i in (1, 2, 3)]
         old_2, _ = cluster.add_host(endpoints[0], signal=False, host_id=HOST_ID_2)
@@ -2403,7 +2405,7 @@ class ControlConnectionTest(unittest.TestCase):
         cluster.control_connection.reconnect.assert_called_once_with()
 
         # A subsequent topology result observes the same endpoints. It must
-        # still retry the failed add, without replacing either Host again.
+        # queue the retry without blocking token-map rebuild on query prep.
         refreshed_connection = MockConnection()
         refreshed_connection.peer_results[1][0][0] = '192.168.1.2'
         refreshed_connection.peer_results[1][1][0] = '192.168.1.3'
@@ -2413,7 +2415,15 @@ class ControlConnectionTest(unittest.TestCase):
         cluster.control_connection._connection = refreshed_connection
         cluster.control_connection.refresh_node_list_and_token_map()
 
-        assert added[:3] == [new_2, new_3, new_2]
+        assert added.count(new_2) == 1
+        assert new_2._endpoint_add_retry_pending
+        assert cluster.metadata.token_map is not None
+        cluster.scheduler.schedule_unique.assert_called_once_with(
+            0, cluster.retry_failed_endpoint_add, new_2)
+        cluster.scheduler.schedule_unique.call_args.args[1](
+            *cluster.scheduler.schedule_unique.call_args.args[2:])
+
+        assert added.count(new_2) == 2
         assert not new_2._endpoint_add_retry_pending
         assert new_2.is_up
         assert new_2 in cluster.profile_manager.default.load_balancing_policy.make_query_plan()
