@@ -2350,8 +2350,8 @@ class Cluster(object):
             if futures:
                 return
 
-        # Removal takes this lock before unpublishing the host, so a current
-        # completion cannot be overtaken between validation and callbacks.
+        # Removal and replacement hold this lock while unpublishing the host,
+        # so an UP completion cannot outlive its metadata identity.
         with host._down_callbacks_lock:
             try:
                 if not self._is_current_host(host):

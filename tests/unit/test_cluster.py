@@ -598,6 +598,84 @@ class ClusterTest(unittest.TestCase):
         session.update_created_pools.assert_called_once_with()
         assert host._is_removed
 
+    def test_replacement_waits_for_inflight_up_completion(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_remove = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster.on_add = Mock()
+        host = Host('127.0.0.1', SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        host.set_down()
+        future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = future
+        cluster.sessions = (session,)
+        callback_started = Event()
+        release_callback = Event()
+        replacement_attempted = Event()
+        replacement_finished = Event()
+        callback_order = []
+
+        def on_listener_up(_host):
+            callback_started.set()
+            assert release_callback.wait(5)
+            callback_order.append('up')
+
+        listener = Mock()
+        listener.on_up.side_effect = on_listener_up
+        listener.on_remove.side_effect = lambda _host: callback_order.append('remove')
+        cluster.register_listener(listener)
+        cluster.on_up(host)
+
+        callback_lock = host._down_callbacks_lock
+        replacement_thread = None
+
+        class AttemptTrackingLock(object):
+
+            def __enter__(self):
+                if threading.current_thread() is replacement_thread:
+                    replacement_attempted.set()
+                callback_lock.acquire()
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                callback_lock.release()
+
+        host._down_callbacks_lock = AttemptTrackingLock()
+        completion_thread = Thread(target=lambda: future.set_result(True))
+
+        def replace_host():
+            try:
+                cluster.add_host(host.endpoint, host_id=uuid.uuid4())
+            finally:
+                replacement_finished.set()
+
+        replacement_thread = Thread(target=replace_host)
+        completion_thread.start()
+        try:
+            assert callback_started.wait(5)
+            replacement_thread.start()
+            assert replacement_attempted.wait(5)
+            assert cluster.metadata.get_host_by_host_id(host.host_id) is host
+            assert not replacement_finished.is_set()
+        finally:
+            release_callback.set()
+            completion_thread.join(5)
+            if replacement_thread.ident is not None:
+                replacement_thread.join(5)
+
+        assert not completion_thread.is_alive()
+        assert not replacement_thread.is_alive()
+        assert replacement_finished.is_set()
+        assert callback_order.index('up') < callback_order.index('remove')
+        assert cluster.metadata.get_host_by_host_id(host.host_id) is None
+        assert cluster.metadata.get_host(host.endpoint).host_id != host.host_id
+
     def test_reentrant_removal_stops_up_completion(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)

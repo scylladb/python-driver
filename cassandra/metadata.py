@@ -16,6 +16,7 @@ from binascii import unhexlify
 from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Mapping
+from contextlib import nullcontext
 from enum import Enum
 from functools import total_ordering
 from hashlib import md5
@@ -362,17 +363,31 @@ class Metadata(object):
         Returns ``(host, new, replaced_host)``. Callers notify listeners only
         after the replacement is visible in both host indexes.
         """
-        with self._hosts_lock:
-            existing = self._hosts.get(host.host_id)
-            if existing is not None:
-                return existing, False, None
+        while True:
+            with self._hosts_lock:
+                old_id = self._host_id_by_endpoint.get(host.endpoint)
+                expected_owner = self._hosts.get(old_id)
 
-            old_id = self._host_id_by_endpoint.get(host.endpoint)
-            if old_id is not None and not allow_replace:
-                raise ValueError("Replacing an endpoint owner requires host addition signaling")
-            replaced_host = self._hosts.pop(old_id, None)
-            self._hosts[host.host_id] = host
-            self._host_id_by_endpoint[host.endpoint] = host.host_id
+            # UP completion acquires the old host lock before looking up its
+            # metadata identity. Acquire locks in that order here too.
+            owner_lock = (expected_owner._down_callbacks_lock if expected_owner
+                          is not None else nullcontext())
+            with owner_lock:
+                with self._hosts_lock:
+                    old_id = self._host_id_by_endpoint.get(host.endpoint)
+                    if self._hosts.get(old_id) is not expected_owner:
+                        continue
+
+                    existing = self._hosts.get(host.host_id)
+                    if existing is not None:
+                        return existing, False, None
+
+                    if old_id is not None and not allow_replace:
+                        raise ValueError("Replacing an endpoint owner requires host addition signaling")
+                    replaced_host = self._hosts.pop(old_id, None)
+                    self._hosts[host.host_id] = host
+                    self._host_id_by_endpoint[host.endpoint] = host.host_id
+                    break
 
         if replaced_host is not None:
             self._tablets.drop_tablets_by_host_id(replaced_host.host_id)
