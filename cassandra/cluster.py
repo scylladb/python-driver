@@ -6165,6 +6165,7 @@ class ControlConnection(object):
                     # connections, which still point at the old endpoint.
                     if not down_dispatched and host.is_up:
                         for session in tuple(self._cluster.sessions):
+                            session.remove_pool(host)
                             session.add_or_renew_pool(
                                 host, is_host_addition=False)
 
@@ -7479,16 +7480,22 @@ class ResponseFuture(object):
                     cb = partial(self._set_result, host, connection, pool,
                                  page_generation=self._page_generation)
 
-                # The timeout must see the pool and stream selected here.
-                self._connection = connection
-                self._request_pool = pool
-                self._req_id = request_id
-                self.request_encoded_size = connection.send_msg(
-                    message, request_id, cb=cb,
-                    encoder=self._protocol_handler.encode_message,
-                    decoder=self._protocol_handler.decode_message,
-                    result_metadata=result_meta)
-                request_sent = True
+                # Timeout reads the connection, pool, and stream under this
+                # lock. Keep it until send_msg installs the callback, so it
+                # cannot observe a partial attempt or an unsent stream.
+                connection.lock.acquire()
+                try:
+                    self._connection = connection
+                    self._request_pool = pool
+                    self._req_id = request_id
+                    self.request_encoded_size = connection.send_msg(
+                        message, request_id, cb=cb,
+                        encoder=self._protocol_handler.encode_message,
+                        decoder=self._protocol_handler.decode_message,
+                        result_metadata=result_meta)
+                    request_sent = True
+                finally:
+                    connection.lock.release()
             self.attempted_hosts.append(host)
             return request_id
         except NoConnectionsAvailable as exc:

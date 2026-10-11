@@ -216,6 +216,38 @@ class ResponseFutureTests(unittest.TestCase):
         assert not first_thread.is_alive()
         assert first_result == [1]
 
+    def test_timeout_waits_for_send_to_install_callback(self):
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(host)
+        pool, connection = self.make_owned_pool(host)
+        session._pools[host] = pool
+        rf = self.make_response_future(session)
+        timeout_started = Event()
+        timeout_done = Event()
+        timeout_threads = []
+
+        def send_msg(message, stream_id, cb, **kwargs):
+            def timeout():
+                timeout_started.set()
+                rf._on_timeout()
+                timeout_done.set()
+
+            thread = Thread(target=timeout)
+            timeout_threads.append(thread)
+            thread.start()
+            assert timeout_started.wait(1)
+            assert not timeout_done.wait(0.01)
+            connection._requests[stream_id] = cb
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+        assert rf._query(host) == 1
+        assert timeout_done.wait(1)
+        timeout_threads[0].join(1)
+        pool.return_connection.assert_called_once_with(
+            connection, stream_was_orphaned=True)
+        assert connection.orphaned_request_ids == {1}
+
     def make_basic_session(self):
         s = Mock(spec=Session)
         s.keyspace = None
@@ -1307,11 +1339,22 @@ class ResponseFutureTests(unittest.TestCase):
         assert not rf.attempted_hosts
         assert rf._req_id == 11
         rf._start_time = time.time() - 5
-        rf._on_speculative_execute()
+        timeout_started = Event()
+
+        def timeout():
+            timeout_started.set()
+            rf._on_speculative_execute()
+
+        timeout_thread = Thread(target=timeout)
+        timeout_thread.start()
+        assert timeout_started.wait(1)
+        assert timeout_thread.is_alive()
 
         release_send.set()
         send_thread.join(5)
+        timeout_thread.join(5)
         assert not send_thread.is_alive()
+        assert not timeout_thread.is_alive()
         assert send_result == [True]
         assert 11 not in connection._requests
         assert 11 in connection.orphaned_request_ids
