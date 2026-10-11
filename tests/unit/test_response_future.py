@@ -40,10 +40,11 @@ class ResponseFutureTests(unittest.TestCase):
 
     class _EndpointSwapOnExitLock(object):
 
-        def __init__(self, host, new_endpoint):
+        def __init__(self, host, new_endpoint, swap_after=1):
             self._lock = RLock()
             self._host = host
             self._new_endpoint = new_endpoint
+            self._swap_after = swap_after
             self._exits = 0
 
         def __enter__(self):
@@ -53,7 +54,7 @@ class ResponseFutureTests(unittest.TestCase):
         def __exit__(self, exc_type, exc_value, traceback):
             self._lock.release()
             self._exits += 1
-            if self._exits == 1:
+            if self._exits == self._swap_after:
                 self._host.endpoint = self._new_endpoint
 
     def make_basic_session(self):
@@ -704,7 +705,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection = Mock(spec=Connection, lock=RLock(), _requests={}, request_ids=deque(),
                           orphaned_request_ids=set(), orphaned_threshold=256, in_flight=1)
         old_pool.borrow_connection.return_value = (connection, 1)
-        session._get_pool_by_host_identity.side_effect = [old_pool, replacement_pool]
+        session._lock = RLock()
+        session._get_pool_by_host_identity.side_effect = [old_pool, old_pool, replacement_pool]
 
         rf = self.make_response_future(session)
         rf.send_request()
@@ -814,6 +816,71 @@ class ResponseFutureTests(unittest.TestCase):
         assert list(connection.request_ids) == [1]
         assert connection.in_flight == 0
         assert isinstance(rf._errors[host], ConnectionException)
+
+    def test_query_releases_request_id_after_same_endpoint_pool_replacement(self):
+        session = self.make_basic_session()
+        host = Host(DefaultEndPoint('127.0.0.1'), SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        old_pool = self.make_pool()
+        old_pool.host = host
+        old_pool.endpoint = host.endpoint
+        replacement_pool = self.make_pool()
+        replacement_pool.host = host
+        replacement_pool.endpoint = host.endpoint
+        connection = Mock(spec=Connection, lock=RLock(), request_ids=deque(),
+                          in_flight=1)
+
+        session._lock = RLock()
+        session._pools = {host: old_pool}
+        session._endpoints_match = Session._endpoints_match.__get__(session, Session)
+        session._pool_matches_expected = Session._pool_matches_expected.__get__(session, Session)
+        session._get_pool_by_host_identity = Session._get_pool_by_host_identity.__get__(session, Session)
+        session.cluster._endpoints_match.side_effect = Cluster._endpoints_match
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [host]
+
+        def borrow_connection(**kwargs):
+            with session._lock:
+                session._pools[host] = replacement_pool
+            return connection, 1
+
+        old_pool.borrow_connection.side_effect = borrow_connection
+        rf = self.make_response_future(session)
+
+        assert not rf.send_request()
+        connection.send_msg.assert_not_called()
+        old_pool.return_connection.assert_called_once_with(connection)
+        replacement_pool.return_connection.assert_not_called()
+        assert list(connection.request_ids) == [1]
+        assert isinstance(rf._errors[host], ConnectionException)
+
+    def test_query_queues_before_endpoint_lock_is_released(self):
+        session = self.make_basic_session()
+        host = Host(DefaultEndPoint('127.0.0.1'), SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        old_endpoint = host.endpoint
+        pool = self.make_pool()
+        pool.host = host
+        pool.endpoint = old_endpoint
+        connection = Mock(spec=Connection)
+        pool.borrow_connection.return_value = (connection, 1)
+        queued_at = []
+        connection.send_msg.side_effect = lambda *args, **kwargs: queued_at.append(host.endpoint)
+
+        session._lock = RLock()
+        session._pools = {host: pool}
+        session._endpoints_match = Session._endpoints_match.__get__(session, Session)
+        session._pool_matches_expected = Session._pool_matches_expected.__get__(session, Session)
+        session._get_pool_by_host_identity = Session._get_pool_by_host_identity.__get__(session, Session)
+        session.cluster._endpoints_match.side_effect = Cluster._endpoints_match
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [host]
+        host.lock = self._EndpointSwapOnExitLock(
+            host, DefaultEndPoint('127.0.0.2'), swap_after=3)
+
+        rf = self.make_response_future(session)
+
+        assert rf.send_request()
+        assert queued_at == [old_endpoint]
+        assert host.endpoint != old_endpoint
 
     def test_single_host_query_plan_exhausted_after_one_retry(self):
         """

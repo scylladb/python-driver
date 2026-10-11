@@ -25,7 +25,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait as wait_futures
 from copy import copy
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from functools import partial, reduce, wraps
 from itertools import groupby, count, chain
@@ -5697,33 +5697,38 @@ class ResponseFuture(object):
             else:
                 connection, request_id = pool.borrow_connection(timeout=2.0)
 
-            if expected_endpoint is not None:
-                with host.lock:
-                    endpoint_changed = not self.session._endpoints_match(
-                        host.endpoint, expected_endpoint)
-                if endpoint_changed:
-                    try:
-                        with connection.lock:
-                            connection.request_ids.append(request_id)
-                        pool.return_connection(connection)
-                    finally:
-                        connection = None
-                    self._errors[host] = ConnectionException(
-                        "Host endpoint changed while borrowing connection")
-                    return None
-
-            self._connection = connection
-            self._connection_pool = pool
-
             result_meta = self.prepared_statement.result_metadata if self.prepared_statement else []
-
             if cb is None:
                 cb = partial(self._set_result, host, connection, pool)
 
-            self.request_encoded_size = connection.send_msg(message, request_id, cb=cb,
-                                                            encoder=self._protocol_handler.encode_message,
-                                                            decoder=self._protocol_handler.decode_message,
-                                                            result_metadata=result_meta)
+            stale_pool = False
+            with self.session._lock if expected_endpoint is not None else nullcontext():
+                with host.lock if expected_endpoint is not None else nullcontext():
+                    stale_pool = expected_endpoint is not None and (
+                        not self.session._endpoints_match(host.endpoint, expected_endpoint)
+                        or self.session._get_pool_by_host_identity(
+                            host, expected_endpoint=expected_endpoint) is not pool
+                        or pool.is_shutdown)
+                    if not stale_pool:
+                        self._connection = connection
+                        self._connection_pool = pool
+                        self.request_encoded_size = connection.send_msg(
+                            message, request_id, cb=cb,
+                            encoder=self._protocol_handler.encode_message,
+                            decoder=self._protocol_handler.decode_message,
+                            result_metadata=result_meta)
+
+            if stale_pool:
+                try:
+                    with connection.lock:
+                        connection.request_ids.append(request_id)
+                    pool.return_connection(connection)
+                finally:
+                    connection = None
+                self._errors[host] = ConnectionException(
+                    "Host endpoint or pool changed while borrowing connection")
+                return None
+
             self.attempted_hosts.append(host)
             return request_id
         except NoConnectionsAvailable as exc:
