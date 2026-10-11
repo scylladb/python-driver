@@ -147,8 +147,42 @@ class ResponseFutureTests(unittest.TestCase):
         old_connection.send_msg.assert_called_once()
         assert rf._request_pool is new_pool
 
+    def test_endpoint_change_waits_until_send_begins(self):
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(host)
+        pool, connection = self.make_owned_pool(host)
+        session._pools[host] = pool
+        old_endpoint = host.endpoint
+        change_started = Event()
+        change_done = Event()
+        threads = []
+
+        def send_msg(message, stream_id, cb, **kwargs):
+            def change_endpoint():
+                change_started.set()
+                with host.lock:
+                    host.endpoint = DefaultEndPoint('127.0.0.2')
+                change_done.set()
+
+            thread = Thread(target=change_endpoint)
+            threads.append(thread)
+            thread.start()
+            assert change_started.wait(1)
+            assert not change_done.wait(0.01)
+            assert host.endpoint == old_endpoint
+            connection._requests[stream_id] = cb
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+        rf = self.make_response_future(session)
+        assert rf._query(host) == 1
+        assert change_done.wait(1)
+        threads[0].join(1)
+        assert host.endpoint != old_endpoint
+
     def make_basic_session(self):
         s = Mock(spec=Session)
+        s._lock = RLock()
         s.keyspace = None
         s.is_shutdown = False
         s.row_factory = lambda col_names, rows: [(col_names, rows)]

@@ -23,6 +23,7 @@ from enum import Enum
 from binascii import hexlify
 from collections import defaultdict
 from collections.abc import Mapping
+from contextlib import nullcontext
 from concurrent.futures import (Future, InvalidStateError, ThreadPoolExecutor,
                                 FIRST_COMPLETED, wait as wait_futures)
 from copy import copy
@@ -6152,8 +6153,9 @@ class ControlConnection(object):
                         reconnector.cancel()
                     self._cluster.on_down(host, is_host_addition=False, expect_host_to_be_down=True)
 
-                    old_endpoint = host.endpoint
-                    host.endpoint = endpoint
+                    with host.lock:
+                        old_endpoint = host.endpoint
+                        host.endpoint = endpoint
                     self._cluster.metadata.update_host(host, old_endpoint)
                     self._cluster.on_up(host)
 
@@ -7451,28 +7453,33 @@ class ResponseFuture(object):
                     routing_token=self._routing_token)
             else:
                 connection, request_id = pool.borrow_connection(timeout=2.0)
-            if (pool.is_shutdown or
-                    self.session._pools.get(host) is not pool or
-                    not self.session._pool_matches_host(host, pool)):
-                self._errors[host] = ConnectionException("Pool changed while borrowing connection")
-                return None
-            result_meta = self._bound_result_metadata
+            # Pool replacement takes the session lock; endpoint updates take
+            # the host lock. Keep both until send begins so ownership cannot
+            # change between the final check and the send.
+            with self.session._lock:
+                with host.lock if isinstance(host, Host) else nullcontext():
+                    if (pool.is_shutdown or
+                            self.session._pools.get(host) is not pool or
+                            not self.session._pool_matches_host(host, pool)):
+                        self._errors[host] = ConnectionException(
+                            "Pool changed while borrowing connection")
+                        return None
+                    result_meta = self._bound_result_metadata
 
-            if cb is None:
-                cb = partial(self._set_result, host, connection, pool,
-                             page_generation=self._page_generation)
+                    if cb is None:
+                        cb = partial(self._set_result, host, connection, pool,
+                                     page_generation=self._page_generation)
 
-            # Record the stream before send_msg() starts. Encoding or pushing a
-            # message can overlap the deadline timer; the timeout must be able
-            # to detach the callback send_msg() has installed for this stream.
-            self._connection = connection
-            self._request_pool = pool
-            self._req_id = request_id
-            self.request_encoded_size = connection.send_msg(message, request_id, cb=cb,
-                                                            encoder=self._protocol_handler.encode_message,
-                                                            decoder=self._protocol_handler.decode_message,
-                                                            result_metadata=result_meta)
-            request_sent = True
+                    # The timeout must see the pool and stream selected here.
+                    self._connection = connection
+                    self._request_pool = pool
+                    self._req_id = request_id
+                    self.request_encoded_size = connection.send_msg(
+                        message, request_id, cb=cb,
+                        encoder=self._protocol_handler.encode_message,
+                        decoder=self._protocol_handler.decode_message,
+                        result_metadata=result_meta)
+                    request_sent = True
             self.attempted_hosts.append(host)
             return request_id
         except NoConnectionsAvailable as exc:
