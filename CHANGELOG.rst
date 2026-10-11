@@ -12,6 +12,15 @@ Removed
   ``graph`` extra (``gremlinpython``). ScyllaDB has no graph engine, so these
   APIs could not work against it, and the fluent API could not be imported with
   the ``gremlinpython`` versions the ``graph`` extra allowed.
+* DataStax Enterprise (DSE)-only schema parsing has been removed:
+  ``SchemaParserDSE60``, ``SchemaParserDSE67``, ``SchemaParserDSE68``,
+  ``TableMetadataDSE68``, ``VertexMetadata``, ``EdgeMetadata``,
+  ``KeyspaceMetadata.graph_engine`` (including the ``graph_engine``
+  constructor argument and ``KeyspaceMetadata.is_graph_enabled``) and
+  ``RLACTableExtension``. ScyllaDB never reports ``dse_version``, so these were
+  never used against it. The ``dse_version`` argument of
+  ``get_schema_parser()`` is now ignored, and the driver no longer queries
+  ``system.local.dse_version`` when ``release_version`` is unknown.
 
 Bug Fixes
 ---------
