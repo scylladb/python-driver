@@ -7446,7 +7446,6 @@ class ResponseFuture(object):
 
         previous_host = self._current_host
         previous_connection = self._connection
-        self._current_host = host
         connection = None
         previous_req_id = self._req_id
         previous_pool = self._request_pool
@@ -7485,6 +7484,7 @@ class ResponseFuture(object):
                 # cannot observe a partial attempt or an unsent stream.
                 connection.lock.acquire()
                 try:
+                    self._current_host = host
                     self._connection = connection
                     self._request_pool = pool
                     self._req_id = request_id

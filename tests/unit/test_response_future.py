@@ -131,6 +131,33 @@ class ResponseFutureTests(unittest.TestCase):
         assert connection.in_flight == 0
         assert list(connection.request_ids) == [1]
         connection.send_msg.assert_not_called()
+        assert rf._current_host is None
+
+    def test_stale_borrow_preserves_previous_attempt_state(self):
+        first_host = Host('127.0.0.1', SimpleConvictionPolicy,
+                          host_id=uuid.uuid4())
+        second_host = Host('127.0.0.2', SimpleConvictionPolicy,
+                           host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(first_host)
+        first_pool, first_connection = self.make_owned_pool(first_host)
+        second_pool, second_connection = self.make_owned_pool(second_host)
+        session._pools = {first_host: first_pool, second_host: second_pool}
+        rf = self.make_response_future(session)
+        assert rf._query(first_host) == 1
+        borrow = second_pool.borrow_connection.side_effect
+
+        def change_endpoint(**kwargs):
+            result = borrow(**kwargs)
+            second_host.endpoint = DefaultEndPoint('127.0.0.3')
+            return result
+
+        second_pool.borrow_connection.side_effect = change_endpoint
+        assert rf._query(second_host) is None
+        assert rf._current_host is first_host
+        assert rf._connection is first_connection
+        assert rf._request_pool is first_pool
+        assert rf._req_id == 1
+        second_connection.send_msg.assert_not_called()
 
     def test_retry_uses_replacement_pool(self):
         host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
