@@ -3,6 +3,19 @@ Object Mapper
 
 cqlengine is the Cassandra CQL 3 Object Mapper packaged with this driver
 
+.. note::
+
+    cqlengine is in maintenance mode: it gets bug fixes, but no new features.
+    For new projects, use `coodie <https://github.com/scylladb/coodie>`_, a
+    Pydantic v2 based object mapper for ScyllaDB and Cassandra with sync and
+    asyncio APIs, built on top of this driver.
+
+    Existing cqlengine projects can follow the
+    `migration guide <https://scylladb.github.io/coodie/migration/from-cqlengine.html>`_.
+    coodie keeps the table, type and index names cqlengine created, so no data
+    migration is needed. `Argus <https://github.com/scylladb/argus>`_, ScyllaDB's
+    test tracking system, moved all of its models from cqlengine to coodie this way.
+
 :ref:`Jump to Getting Started <getting-started>`
 
 Contents
