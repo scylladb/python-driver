@@ -57,6 +57,7 @@ from cassandra import (ConsistencyLevel, AuthenticationFailed, OperationTimedOut
 from cassandra.auth import _proxy_execute_key, PlainTextAuthProvider
 from cassandra.client_routes import ClientRoutesChangeType, ClientRoutesConfig, _ClientRoutesHandler
 from cassandra.connection import (ClientRoutesEndPointFactory, ConnectionException, ConnectionShutdown,
+                                  ConnectionSendError,
                                   ConnectionHeartbeat, ProtocolVersionUnsupported,
                                   EndPoint, DefaultEndPoint, DefaultEndPointFactory,
                                   SniEndPointFactory, UnixSocketEndPoint,
@@ -7565,6 +7566,15 @@ class ResponseFuture(object):
         except ConnectionBusy as exc:
             log.debug("Control connection is busy")
             self._errors[host] = exc
+        except ConnectionSendError as exc:
+            log.debug("Error pushing request to control connection", exc_info=True)
+            self._errors[host] = exc
+            if self._metrics is not None:
+                self._metrics.on_connection_error()
+            with connection.lock:
+                connection._requests.pop(request_id, None)
+            connection.defunct(exc)
+            control_connection.return_connection(connection)
         except Exception as exc:
             log.debug("Error querying control connection", exc_info=True)
             self._errors[host] = exc
@@ -7671,6 +7681,7 @@ class ResponseFuture(object):
         previous_pool = self._request_pool
         request_id = None
         request_sent = False
+        replace_failed_connection = False
         try:
             # TODO get connectTimeout from cluster settings
             if self.query:
@@ -7724,6 +7735,27 @@ class ResponseFuture(object):
         except ConnectionBusy as exc:
             log.debug("Connection for host %s is busy, moving to the next host", host)
             self._errors[host] = exc
+        except ConnectionSendError as exc:
+            log.debug("Error pushing request to host %s", host, exc_info=True)
+            self._errors[host] = exc
+            if self._metrics is not None:
+                self._metrics.on_connection_error()
+            if connection:
+                with connection.lock:
+                    connection._requests.pop(request_id, None)
+                    connection.orphaned_request_ids.discard(request_id)
+                    if self._connection is connection and self._req_id == request_id:
+                        self._connection = previous_connection
+                        self._current_host = previous_host
+                        self._req_id = previous_req_id
+                        self._request_pool = previous_pool
+                # Claim the local failure before defunct() invokes other
+                # requests' callbacks. If another reactor already retired the
+                # connection, preserve its host failure reporting.
+                connection.defunct(exc)
+                with connection.lock:
+                    replace_failed_connection = (
+                        connection.is_defunct and connection.last_error is exc)
         except Exception as exc:
             log.debug("Error querying host %s", host, exc_info=True)
             self._errors[host] = exc
@@ -7737,9 +7769,14 @@ class ResponseFuture(object):
                         self._current_host = previous_host
                         self._req_id = previous_req_id
                         self._request_pool = previous_pool
+                    connection._requests.pop(request_id, None)
                     connection.orphaned_request_ids.discard(request_id)
-                    connection.request_ids.append(request_id)
-                pool.return_connection(connection)
+                    if not connection.is_defunct:
+                        connection.request_ids.append(request_id)
+                if replace_failed_connection:
+                    pool.return_connection(connection, replace_only=True)
+                else:
+                    pool.return_connection(connection)
 
         return None
 
