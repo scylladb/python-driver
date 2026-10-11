@@ -43,6 +43,238 @@ import pytest
 
 class ResponseFutureTests(unittest.TestCase):
 
+    def make_owned_pool_session(self, host):
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [host]
+        session._pool_matches_host.side_effect = (
+            lambda selected, pool: Session._pool_matches_host(session, selected, pool))
+        session._pools = {}
+        return session
+
+    def make_owned_pool(self, host, request_id=1):
+        connection = Mock(spec=Connection)
+        connection.lock = RLock()
+        connection._requests = {}
+        connection.request_ids = deque()
+        connection.orphaned_request_ids = set()
+        connection.orphaned_threshold = 256
+        connection.orphaned_threshold_reached = False
+        connection.in_flight = 0
+        connection.is_control_connection = False
+
+        def borrow_connection(**kwargs):
+            connection.in_flight += 1
+            return connection, request_id
+
+        def return_connection(conn, stream_was_orphaned=False):
+            if not stream_was_orphaned:
+                conn.in_flight -= 1
+
+        def send_msg(message, stream_id, cb, **kwargs):
+            connection._requests[stream_id] = cb
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+        pool = Mock(host=host, endpoint=host.endpoint, is_shutdown=False)
+        pool.borrow_connection.side_effect = borrow_connection
+        pool.return_connection.side_effect = return_connection
+        return pool, connection
+
+    def test_timeout_returns_stream_to_borrowed_pool_after_replacement(self):
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(host)
+        old_pool, connection = self.make_owned_pool(host)
+        session._pools[host] = old_pool
+        rf = self.make_response_future(session)
+        assert rf._query(host) == 1
+
+        new_pool, _ = self.make_owned_pool(host)
+        session._pools[host] = new_pool
+        rf._on_timeout()
+
+        old_pool.return_connection.assert_called_once_with(
+            connection, stream_was_orphaned=True)
+        new_pool.return_connection.assert_not_called()
+        assert connection.orphaned_request_ids == {1}
+
+    def test_query_rejects_changed_endpoint_and_equal_replacement_host(self):
+        host_id = uuid.uuid4()
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=host_id)
+        session = self.make_owned_pool_session(host)
+        pool, connection = self.make_owned_pool(host)
+        session._pools[host] = pool
+        rf = self.make_response_future(session)
+
+        replacement = Host('127.0.0.1', SimpleConvictionPolicy, host_id=host_id)
+        assert rf._query(replacement) is None
+        host.endpoint = DefaultEndPoint('127.0.0.2')
+        assert rf._query(host) is None
+        pool.borrow_connection.assert_not_called()
+        connection.send_msg.assert_not_called()
+
+    def test_query_restores_borrowed_stream_when_endpoint_changes_during_borrow(self):
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(host)
+        pool, connection = self.make_owned_pool(host)
+        session._pools[host] = pool
+        borrow = pool.borrow_connection.side_effect
+
+        def change_endpoint(**kwargs):
+            result = borrow(**kwargs)
+            host.endpoint = DefaultEndPoint('127.0.0.2')
+            return result
+
+        pool.borrow_connection.side_effect = change_endpoint
+        rf = self.make_response_future(session)
+        assert rf._query(host) is None
+        pool.return_connection.assert_called_once_with(connection)
+        assert connection.in_flight == 0
+        assert list(connection.request_ids) == [1]
+        connection.send_msg.assert_not_called()
+        assert rf._current_host is None
+
+    def test_stale_borrow_preserves_previous_attempt_state(self):
+        first_host = Host('127.0.0.1', SimpleConvictionPolicy,
+                          host_id=uuid.uuid4())
+        second_host = Host('127.0.0.2', SimpleConvictionPolicy,
+                           host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(first_host)
+        first_pool, first_connection = self.make_owned_pool(first_host)
+        second_pool, second_connection = self.make_owned_pool(second_host)
+        session._pools = {first_host: first_pool, second_host: second_pool}
+        rf = self.make_response_future(session)
+        assert rf._query(first_host) == 1
+        borrow = second_pool.borrow_connection.side_effect
+
+        def change_endpoint(**kwargs):
+            result = borrow(**kwargs)
+            second_host.endpoint = DefaultEndPoint('127.0.0.3')
+            return result
+
+        second_pool.borrow_connection.side_effect = change_endpoint
+        assert rf._query(second_host) is None
+        assert rf._current_host is first_host
+        assert rf._connection is first_connection
+        assert rf._request_pool is first_pool
+        assert rf._req_id == 1
+        second_connection.send_msg.assert_not_called()
+
+    def test_retry_uses_replacement_pool(self):
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(host)
+        old_pool, old_connection = self.make_owned_pool(host)
+        session._pools[host] = old_pool
+        rf = self.make_response_future(session)
+        assert rf._query(host) == 1
+
+        new_pool, new_connection = self.make_owned_pool(host, request_id=2)
+        session._pools[host] = new_pool
+        assert rf._query(host) == 2
+        new_connection.send_msg.assert_called_once()
+        old_connection.send_msg.assert_called_once()
+        assert rf._request_pool is new_pool
+
+    def test_endpoint_change_waits_until_send_begins(self):
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(host)
+        pool, connection = self.make_owned_pool(host)
+        session._pools[host] = pool
+        old_endpoint = host.endpoint
+        change_started = Event()
+        change_done = Event()
+        threads = []
+
+        def send_msg(message, stream_id, cb, **kwargs):
+            def change_endpoint():
+                change_started.set()
+                with host.lock:
+                    host.endpoint = DefaultEndPoint('127.0.0.2')
+                change_done.set()
+
+            thread = Thread(target=change_endpoint)
+            threads.append(thread)
+            thread.start()
+            assert change_started.wait(1)
+            assert not change_done.wait(0.01)
+            assert host.endpoint == old_endpoint
+            connection._requests[stream_id] = cb
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+        rf = self.make_response_future(session)
+        assert rf._query(host) == 1
+        assert change_done.wait(1)
+        threads[0].join(1)
+        assert host.endpoint != old_endpoint
+
+    def test_sends_to_different_hosts_can_progress_together(self):
+        first_host = Host('127.0.0.1', SimpleConvictionPolicy,
+                          host_id=uuid.uuid4())
+        second_host = Host('127.0.0.2', SimpleConvictionPolicy,
+                           host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(first_host)
+        first_pool, first_connection = self.make_owned_pool(first_host)
+        second_pool, second_connection = self.make_owned_pool(second_host)
+        session._pools = {first_host: first_pool, second_host: second_pool}
+        first_send_started = Event()
+        release_first_send = Event()
+        first_result = []
+
+        def slow_send(message, stream_id, cb, **kwargs):
+            first_send_started.set()
+            assert release_first_send.wait(2)
+            first_connection._requests[stream_id] = cb
+            return 128
+
+        first_connection.send_msg.side_effect = slow_send
+        first_future = self.make_response_future(session)
+        second_future = self.make_response_future(session)
+        first_thread = Thread(
+            target=lambda: first_result.append(first_future._query(first_host)))
+        first_thread.start()
+        try:
+            assert first_send_started.wait(1)
+            assert second_future._query(second_host) == 1
+            assert first_thread.is_alive()
+            second_connection.send_msg.assert_called_once()
+        finally:
+            release_first_send.set()
+            first_thread.join(2)
+        assert not first_thread.is_alive()
+        assert first_result == [1]
+
+    def test_timeout_waits_for_send_to_install_callback(self):
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(host)
+        pool, connection = self.make_owned_pool(host)
+        session._pools[host] = pool
+        rf = self.make_response_future(session)
+        timeout_started = Event()
+        timeout_done = Event()
+        timeout_threads = []
+
+        def send_msg(message, stream_id, cb, **kwargs):
+            def timeout():
+                timeout_started.set()
+                rf._on_timeout()
+                timeout_done.set()
+
+            thread = Thread(target=timeout)
+            timeout_threads.append(thread)
+            thread.start()
+            assert timeout_started.wait(1)
+            assert not timeout_done.wait(0.01)
+            connection._requests[stream_id] = cb
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+        assert rf._query(host) == 1
+        assert timeout_done.wait(1)
+        timeout_threads[0].join(1)
+        pool.return_connection.assert_called_once_with(
+            connection, stream_was_orphaned=True)
+        assert connection.orphaned_request_ids == {1}
+
     def make_basic_session(self):
         s = Mock(spec=Session)
         s.keyspace = None
@@ -254,7 +486,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf = self.make_response_future(session)
         rf.send_request()
 
-        rf.session._pools.get.assert_called_once_with('ip1')
+        rf.session._pools.get.assert_any_call('ip1')
         pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
 
         connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
@@ -447,7 +679,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf = ResponseFuture(session, message, query, 1, retry_policy=retry_policy)
         rf.send_request()
 
-        rf.session._pools.get.assert_called_once_with('ip1')
+        rf.session._pools.get.assert_any_call('ip1')
         pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
         connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
 
@@ -482,7 +714,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf.message.consistency_level = ConsistencyLevel.QUORUM
         rf.send_request()
 
-        rf.session._pools.get.assert_called_once_with('ip1')
+        rf.session._pools.get.assert_any_call('ip1')
         pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
         connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
         assert ConsistencyLevel.QUORUM == rf.message.consistency_level
@@ -517,7 +749,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf = self.make_response_future(session)
         rf.send_request()
-        rf.session._pools.get.assert_called_once_with('ip1')
+        rf.session._pools.get.assert_any_call('ip1')
 
         result = Mock(spec=IsBootstrappingErrorMessage, info={})
         host = Mock()
@@ -553,7 +785,7 @@ class ResponseFutureTests(unittest.TestCase):
         message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
         rf = ResponseFuture(session, message, query, 1, retry_policy=ExponentialBackoffRetryPolicy(2))
         rf.send_request()
-        rf.session._pools.get.assert_called_once_with('ip1')
+        rf.session._pools.get.assert_any_call('ip1')
 
         result = Mock(spec=IsBootstrappingErrorMessage, info={})
         host = Mock()
@@ -1134,11 +1366,22 @@ class ResponseFutureTests(unittest.TestCase):
         assert not rf.attempted_hosts
         assert rf._req_id == 11
         rf._start_time = time.time() - 5
-        rf._on_speculative_execute()
+        timeout_started = Event()
+
+        def timeout():
+            timeout_started.set()
+            rf._on_speculative_execute()
+
+        timeout_thread = Thread(target=timeout)
+        timeout_thread.start()
+        assert timeout_started.wait(1)
+        assert timeout_thread.is_alive()
 
         release_send.set()
         send_thread.join(5)
+        timeout_thread.join(5)
         assert not send_thread.is_alive()
+        assert not timeout_thread.is_alive()
         assert send_result == [True]
         assert 11 not in connection._requests
         assert 11 in connection.orphaned_request_ids
@@ -1780,7 +2023,7 @@ class ResponseFutureTests(unittest.TestCase):
         pool_shutdown.is_shutdown = True
         pool_ok = self.make_pool()
         pool_ok.is_shutdown = False
-        session._pools.get.side_effect = [pool_shutdown, pool_ok]
+        session._pools.get.side_effect = [pool_shutdown, pool_ok, pool_ok]
 
         rf = self.make_response_future(session)
         rf.send_request()
@@ -1805,7 +2048,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection = Mock(spec=Connection)
         second_pool.borrow_connection.return_value = (connection, 1)
 
-        session._pools.get.side_effect = [first_pool, second_pool]
+        session._pools.get.side_effect = [first_pool, second_pool, second_pool]
 
         rf = self.make_response_future(session)
         rf.send_request()
@@ -2156,7 +2399,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf.send_request()
         
         # Verify initial request was sent
-        rf.session._pools.get.assert_called_once_with(specific_host)
+        rf.session._pools.get.assert_any_call(specific_host)
         pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
         connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
         

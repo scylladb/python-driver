@@ -298,6 +298,28 @@ class HostConnectionTests(_PoolTests):
     PoolImpl = HostConnection
     uses_single_connection = True
 
+    def test_replacement_connection_uses_pool_endpoint(self):
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        session = self.make_session()
+        session.keyspace = None
+        first = HashableMock(spec=Connection)
+        first.features.shard_id = 0
+        first.features.sharding_info = None
+        first.features.tablets_routing_v1 = False
+        first.features.tablets_routing_v2 = False
+        replacement = HashableMock(spec=Connection)
+        replacement.features.shard_id = 0
+        session.cluster.connection_factory.side_effect = [first, replacement]
+        pool = HostConnection(host, HostDistance.LOCAL, session)
+
+        original_endpoint = host.endpoint
+        host.endpoint = DefaultEndPoint('127.0.0.2')
+        pool._replace(first)
+
+        assert pool.endpoint == original_endpoint
+        assert session.cluster.connection_factory.call_args.args[0] == original_endpoint
+        pool.shutdown()
+
     def test_fast_shutdown(self):
         class MockSession(MagicMock):
             is_shutdown = False

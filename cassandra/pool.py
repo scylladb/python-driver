@@ -466,6 +466,7 @@ class HostConnection(object):
 
     def __init__(self, host, host_distance, session):
         self.host = host
+        self.endpoint = host.endpoint
         self.host_distance = host_distance
         self._session = weakref.proxy(session)
         self._lock = Lock()
@@ -499,7 +500,7 @@ class HostConnection(object):
             return
 
         log.debug("Initializing connection for host %s", self.host)
-        first_connection = session.cluster.connection_factory(self.host.endpoint, on_orphaned_stream_released=self.on_orphaned_stream_released)
+        first_connection = session.cluster.connection_factory(self.endpoint, on_orphaned_stream_released=self.on_orphaned_stream_released)
         log.debug("First connection created to %s for shard_id=%s", self.host, first_connection.features.shard_id)
         self._connections[first_connection.features.shard_id] = first_connection
         self._keyspace = session.keyspace
@@ -690,13 +691,13 @@ class HostConnection(object):
                     self._connecting.add(connection.features.shard_id)
                     self._session.submit(self._open_connection_to_missing_shard, connection.features.shard_id)
                 else:
-                    connection = self._session.cluster.connection_factory(self.host.endpoint,
+                    connection = self._session.cluster.connection_factory(self.endpoint,
                                                                           on_orphaned_stream_released=self.on_orphaned_stream_released)
                     if self._keyspace:
                         connection.set_keyspace_blocking(self._keyspace)
                     self._connections[connection.features.shard_id] = connection
             except Exception:
-                log.warning("Failed reconnecting %s. Retrying." % (self.host.endpoint,))
+                log.warning("Failed reconnecting %s. Retrying." % (self.endpoint,))
                 self._session.submit(self._replace, connection)
             else:
                 self._is_replacing = False
@@ -769,7 +770,7 @@ class HostConnection(object):
         Explicit ssl_options={}, like ssl_context, marks the cluster SSL-enabled.
         Unix sockets bypass advertised TCP ports and source-port shard targeting.
         """
-        if isinstance(self.host.endpoint, UnixSocketEndPoint):
+        if isinstance(self.endpoint, UnixSocketEndPoint):
             return None
 
         if (self.advanced_shardaware_block_until and self.advanced_shardaware_block_until > time.time()) or \
@@ -781,10 +782,10 @@ class HostConnection(object):
 
         endpoint = None
         if ssl_enabled and self.host.sharding_info.shard_aware_port_ssl:
-            endpoint = copy.copy(self.host.endpoint)
+            endpoint = copy.copy(self.endpoint)
             endpoint._port = self.host.sharding_info.shard_aware_port_ssl
         elif not ssl_enabled and self.host.sharding_info.shard_aware_port:
-            endpoint = copy.copy(self.host.endpoint)
+            endpoint = copy.copy(self.endpoint)
             endpoint._port = self.host.sharding_info.shard_aware_port
 
         if endpoint is not None:
@@ -792,7 +793,7 @@ class HostConnection(object):
             # credentials, so it offers and refreshes the session cached for
             # the node rather than one of its own.
             endpoint._tls_session_cache_key_override = \
-                self.host.endpoint.tls_session_cache_key
+                self.endpoint.tls_session_cache_key
 
         return endpoint
 
@@ -824,12 +825,12 @@ class HostConnection(object):
                 conn = self._session.cluster.connection_factory(shard_aware_endpoint, host_conn=self, on_orphaned_stream_released=self.on_orphaned_stream_released,
                                                                 shard_id=shard_id,
                                                                 total_shards=self.host.sharding_info.shards_count)
-                conn.original_endpoint = self.host.endpoint
+                conn.original_endpoint = self.endpoint
             except Exception as exc:
                 log.error("Failed to open connection to %s, on shard_id=%i: %s", self.host, shard_id, exc)
                 raise
         else:
-            conn = self._session.cluster.connection_factory(self.host.endpoint, host_conn=self, on_orphaned_stream_released=self.on_orphaned_stream_released)
+            conn = self._session.cluster.connection_factory(self.endpoint, host_conn=self, on_orphaned_stream_released=self.on_orphaned_stream_released)
 
         log.debug(
             "Received a connection %s for shard_id=%i on host %s",

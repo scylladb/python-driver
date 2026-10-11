@@ -23,6 +23,7 @@ from enum import Enum
 from binascii import hexlify
 from collections import defaultdict
 from collections.abc import Mapping
+from contextlib import nullcontext
 from concurrent.futures import (Future, InvalidStateError, ThreadPoolExecutor,
                                 FIRST_COMPLETED, wait as wait_futures)
 from copy import copy
@@ -4290,6 +4291,13 @@ class Session(object):
             pool_generations = self._pool_generations = {}
         return pool_generations.get(host), self._pools.get(host)
 
+    def _pool_matches_host(self, host, pool):
+        # Host equality is based on host_id, so an equal replacement Host can
+        # retrieve a pool created for a different object and endpoint.
+        pool_state = vars(pool)
+        return (pool_state.get('host', host) is host and
+                pool_state.get('endpoint', host.endpoint) == host.endpoint)
+
     def _pool_intents_locked(self):
         pool_intents = self._pool_intents
         if pool_intents is None:
@@ -4337,9 +4345,10 @@ class Session(object):
         return intent
 
     def _owns_pool_generation_locked(self, host, generation,
-                                     expected_pool):
+                                     expected_pool, endpoint=_NOT_SET):
         return (not self.is_shutdown and
                 not host._is_removed and
+                (endpoint is _NOT_SET or host.endpoint == endpoint) and
                 self._pool_generations.get(host) is generation and
                 self._pools.get(host) is expected_pool)
 
@@ -4353,7 +4362,8 @@ class Session(object):
             not host._is_removed and
             current_pool is not None and
             current_pool is not expected_pool and
-            not current_pool.is_shutdown)
+            not current_pool.is_shutdown and
+            self._pool_matches_host(host, current_pool))
         if (retained_pool_is_live and
                 current_intent is intent):
             current_pool.host_distance = distance
@@ -4370,14 +4380,15 @@ class Session(object):
 
     def _handle_pool_creation_failure(self, host, generation,
                                       expected_pool, intent, distance,
-                                      dispatch_failure, owning_result):
+                                      dispatch_failure, owning_result,
+                                      endpoint=_NOT_SET):
         with self._lock:
             with host.lock:
                 owns_intent = (
                     self._pool_intents_locked().get(host) is intent)
                 if (not owns_intent or
                         not self._owns_pool_generation_locked(
-                            host, generation, expected_pool)):
+                            host, generation, expected_pool, endpoint)):
                     return self._stale_pool_creation_result_locked(
                         host, expected_pool, intent, distance)
                 self._pool_generations[host] = object()
@@ -4460,7 +4471,8 @@ class Session(object):
                                 is_direct_add and
                                 current_pool is not None and
                                 current_pool is not claimed_pool and
-                                not current_pool.is_shutdown)
+                                not current_pool.is_shutdown and
+                                self._pool_matches_host(host, current_pool))
                             if distance == HostDistance.IGNORED:
                                 intent.distance = distance
                                 pool_host = getattr(
@@ -4489,7 +4501,8 @@ class Session(object):
                                 if state_changed:
                                     live_pool = (
                                         current_pool is not None and
-                                        not current_pool.is_shutdown)
+                                        not current_pool.is_shutdown and
+                                        self._pool_matches_host(host, current_pool))
                                     if live_pool:
                                         current_pool.host_distance = distance
                                     terminal_result = bool(live_pool)
@@ -4536,11 +4549,13 @@ class Session(object):
                 return removed_future
             break
 
+        endpoint = host.endpoint
+
         def run_add_or_renew_pool():
             with self._lock:
                 with host.lock:
                     if not self._owns_pool_generation_locked(
-                            host, generation, expected_pool):
+                            host, generation, expected_pool, endpoint):
                         return self._stale_pool_creation_result_locked(
                             host, expected_pool, intent, distance,
                             ignored_intent_is_success=True)
@@ -4586,12 +4601,12 @@ class Session(object):
                     None if on_add_reconnection is not None else False)
                 return self._handle_pool_creation_failure(
                     host, generation, expected_pool, intent, distance,
-                    dispatch_authentication_failure, owning_result)
+                    dispatch_authentication_failure, owning_result, endpoint)
             except Exception as conn_exc:
                 connection_errors.append(conn_exc)
                 return self._handle_pool_creation_failure(
                     host, generation, expected_pool, intent, distance,
-                    dispatch_connection_failure, False)
+                    dispatch_connection_failure, False, endpoint)
 
             while True:
                 publish_pool = False
@@ -4600,7 +4615,7 @@ class Session(object):
                 with self._lock:
                     with host.lock:
                         if not self._owns_pool_generation_locked(
-                                host, generation, expected_pool):
+                                host, generation, expected_pool, endpoint):
                             stale_candidate = True
                             stale_result = \
                                 self._stale_pool_creation_result_locked(
@@ -4659,7 +4674,7 @@ class Session(object):
                     try:
                         return self._handle_pool_creation_failure(
                             host, generation, expected_pool, intent, distance,
-                            dispatch_keyspace_failure, False)
+                            dispatch_keyspace_failure, False, endpoint)
                     finally:
                         new_pool.shutdown()
 
@@ -6136,12 +6151,23 @@ class ControlConnection(object):
                     reconnector = host.get_and_set_reconnection_handler(None)
                     if reconnector:
                         reconnector.cancel()
-                    self._cluster.on_down(host, is_host_addition=False, expect_host_to_be_down=True)
+                    down_dispatched = self._cluster.on_down(
+                        host, is_host_addition=False,
+                        expect_host_to_be_down=True)
 
-                    old_endpoint = host.endpoint
-                    host.endpoint = endpoint
+                    with host.lock:
+                        old_endpoint = host.endpoint
+                        host.endpoint = endpoint
                     self._cluster.metadata.update_host(host, old_endpoint)
                     self._cluster.on_up(host)
+                    # A live pool can discount the DOWN event. In that case
+                    # on_up sees an already-up host and does not replace its
+                    # connections, which still point at the old endpoint.
+                    if not down_dispatched and host.is_up:
+                        for session in tuple(self._cluster.sessions):
+                            session.remove_pool(host)
+                            session.add_or_renew_pool(
+                                host, is_host_addition=False)
 
             if host is None:
                 log.debug("[control connection] Found new host to connect to: %s", endpoint)
@@ -6837,6 +6863,7 @@ class ResponseFuture(object):
     _errbacks = None
     _current_host = None
     _connection = None
+    _request_pool = None
     _query_retries = 0
     _start_time = None
     _metrics = None
@@ -6944,8 +6971,7 @@ class ResponseFuture(object):
             if control_connection_request:
                 self._orphan_control_connection_request(
                     connection, self._req_id)
-            pool = None if control_connection_request else \
-                self.session._pools.get(self._current_host)
+            pool = None
             try:
                 # A completed fallback stream may already have been reused by
                 # control traffic while this future waits for follow-up work.
@@ -6958,6 +6984,7 @@ class ResponseFuture(object):
                             retry_timeout = True
                         else:
                             request_id = self._req_id
+                            pool = self._request_pool
                             connection._requests.pop(request_id)
                             if (pool and not pool.is_shutdown) or \
                                     connection.is_control_connection:
@@ -7290,6 +7317,7 @@ class ResponseFuture(object):
             with control_connection._application_query_lock:
                 self._control_connection_requests[(connection, request_id)] = cb
                 self._connection = connection
+                self._request_pool = None
                 self._req_id = request_id
 
             log.debug("No usable node pools; falling back to control connection for host %s", host)
@@ -7412,12 +7440,15 @@ class ResponseFuture(object):
         elif pool.is_shutdown:
             self._errors[host] = ConnectionException("Pool is shutdown")
             return None
+        elif not self.session._pool_matches_host(host, pool):
+            self._errors[host] = ConnectionException("Pool does not belong to host endpoint")
+            return None
 
         previous_host = self._current_host
         previous_connection = self._connection
-        self._current_host = host
         connection = None
         previous_req_id = self._req_id
+        previous_pool = self._request_pool
         request_id = None
         request_sent = False
         try:
@@ -7431,22 +7462,40 @@ class ResponseFuture(object):
                     routing_token=self._routing_token)
             else:
                 connection, request_id = pool.borrow_connection(timeout=2.0)
-            self._connection = connection
-            result_meta = self._bound_result_metadata
+            # Pool publication/removal and endpoint updates take the host
+            # lock. Keep it until send begins so ownership cannot change
+            # between the final check and the send. Other hosts can send in
+            # parallel.
+            with host.lock if isinstance(host, Host) else nullcontext():
+                if (pool.is_shutdown or
+                        self.session._pools.get(host) is not pool or
+                        not self.session._pool_matches_host(host, pool)):
+                    self._errors[host] = ConnectionException(
+                        "Pool changed while borrowing connection")
+                    return None
+                result_meta = self._bound_result_metadata
 
-            if cb is None:
-                cb = partial(self._set_result, host, connection, pool,
-                             page_generation=self._page_generation)
+                if cb is None:
+                    cb = partial(self._set_result, host, connection, pool,
+                                 page_generation=self._page_generation)
 
-            # Record the stream before send_msg() starts. Encoding or pushing a
-            # message can overlap the deadline timer; the timeout must be able
-            # to detach the callback send_msg() has installed for this stream.
-            self._req_id = request_id
-            self.request_encoded_size = connection.send_msg(message, request_id, cb=cb,
-                                                            encoder=self._protocol_handler.encode_message,
-                                                            decoder=self._protocol_handler.decode_message,
-                                                            result_metadata=result_meta)
-            request_sent = True
+                # Timeout reads the connection, pool, and stream under this
+                # lock. Keep it until send_msg installs the callback, so it
+                # cannot observe a partial attempt or an unsent stream.
+                connection.lock.acquire()
+                try:
+                    self._current_host = host
+                    self._connection = connection
+                    self._request_pool = pool
+                    self._req_id = request_id
+                    self.request_encoded_size = connection.send_msg(
+                        message, request_id, cb=cb,
+                        encoder=self._protocol_handler.encode_message,
+                        decoder=self._protocol_handler.decode_message,
+                        result_metadata=result_meta)
+                    request_sent = True
+                finally:
+                    connection.lock.release()
             self.attempted_hosts.append(host)
             return request_id
         except NoConnectionsAvailable as exc:
@@ -7467,6 +7516,7 @@ class ResponseFuture(object):
                         self._connection = previous_connection
                         self._current_host = previous_host
                         self._req_id = previous_req_id
+                        self._request_pool = previous_pool
                     connection.orphaned_request_ids.discard(request_id)
                     connection.request_ids.append(request_id)
                 pool.return_connection(connection)

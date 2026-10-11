@@ -2621,6 +2621,22 @@ class SessionPoolRaceTest(unittest.TestCase):
         assert session._pools == {host: winner}
         winner.shutdown.assert_not_called()
 
+    def test_pool_creation_discards_result_after_endpoint_change(self):
+        host = self._host()
+        candidate = self._pool(host)
+        session = self._session(workers=1)
+        factory = self._blocking_pool_factory(candidate)
+
+        with patch('cassandra.cluster.HostConnection', side_effect=factory):
+            future = session.add_or_renew_pool(host, is_host_addition=True)
+            assert factory.creation_started.wait(5)
+            host.endpoint = DefaultEndPoint('127.0.0.2')
+            factory.release_creation.set()
+            assert future.result(timeout=5) is False
+
+        assert session._pools == {}
+        candidate.shutdown.assert_called_once_with()
+
     def test_direct_add_invalidates_older_ignored_reconciliation(self):
         host = self._host()
         winner = self._pool(host)
