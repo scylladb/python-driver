@@ -856,15 +856,16 @@ class ControlConnectionQueryFallback(enum.Enum):
     rejected. The binding is released once every session holding it has been
     shut down or garbage collected and its fallback requests have drained,
     after which a later session may take it over. A session without a keyspace
-    cannot take over a binding that left the shared connection in a keyspace,
-    because CQL offers no way back to "no keyspace"; that case is rejected with
-    :class:`.InvalidRequest`.
+    cannot use the prior connection state for ordinary queries when another
+    keyspace was selected: CQL offers no way back to "no keyspace". An explicit
+    ``USE`` from an already-created sole fallback Session may select a new
+    keyspace instead.
 
-    An explicit ``USE`` statement -- including the one
-    :meth:`.Session.set_keyspace` executes -- is rejected with
-    :class:`.InvalidRequest` on the fallback path, because it would change the
-    keyspace of the shared connection under every other session using it. The
-    keyspace has to be chosen when the session is created.
+    An explicit ``USE`` statement, including :meth:`.Session.set_keyspace`,
+    may change the binding when its Session is the only one using fallback.
+    A second Session cannot use the shared connection during the change.
+    Queries already in flight from the changing Session may observe either
+    keyspace; wait for them before changing keyspaces if ordering matters.
 
     The fallback path is not used for requests targeted to an explicit host.
     """
@@ -5031,11 +5032,9 @@ class Session(object):
         Set the default keyspace for all queries made through this Session.
         This operation blocks until complete.
 
-        Raises :class:`.InvalidRequest` when the session uses the
-        control-connection fallback path (see
-        :class:`.ControlConnectionQueryFallback`), where the keyspace of the
-        shared connection cannot be changed; create a Session with the wanted
-        keyspace instead.
+        On the control-connection fallback path, raises
+        :class:`.InvalidRequest` if another Session is using the shared
+        connection or another keyspace change is in progress.
         """
         self.execute('USE %s' % (protect_name(keyspace),))
 
@@ -5575,6 +5574,9 @@ class ControlConnection(object):
         self._application_session_claims = {}
         self._application_requests_in_flight = 0
         self._application_orphaned_requests = set()
+        self._application_keyspace_change = None
+        self._application_internal_keyspace_changes = set()
+        self._application_keyspace_waiters = []
 
     def connect(self):
         if self._is_shutdown:
@@ -5638,7 +5640,7 @@ class ControlConnection(object):
             log.debug("[control connection] Control connection is shut down, closing new connection %r", orphan)
             orphan.close()
 
-    def _attach_application_session(self, keyspace, session):
+    def _attach_application_session(self, keyspace, session, changing_keyspace=False):
         """Bind application use of the control connection to ``keyspace``.
 
         The first fallback ``Session`` takes the binding; other Sessions may
@@ -5655,6 +5657,12 @@ class ControlConnection(object):
 
             other_sessions = any(
                 other is not session for other in self._application_sessions)
+            if self._application_keyspace_change is not None and \
+                    self._application_keyspace_change[2] is not session:
+                return ("Control-connection fallback is already attached; "
+                        "keyspace change is in progress")
+            if changing_keyspace and other_sessions:
+                return "Cannot change keyspace while another Session uses control-connection fallback"
             current_connection_has_orphans = \
                 self._current_connection_has_application_orphans()
             binding_is_busy = self._application_requests_in_flight or \
@@ -5672,7 +5680,7 @@ class ControlConnection(object):
                         "keyspace %r; cannot use it from a Session using "
                         "keyspace %r" % (self._application_keyspace, keyspace))
 
-            if keyspace is None:
+            if keyspace is None and not changing_keyspace:
                 # Reclaiming from a gone Session cannot undo the USE it left on
                 # the shared connection: CQL has no way back to "no keyspace".
                 leftover = self._leftover_application_keyspace()
@@ -5685,6 +5693,40 @@ class ControlConnection(object):
             self._application_keyspace = keyspace
             self._application_sessions.add(session)
             return None
+
+    def _begin_application_keyspace_change(self, connection, request_id, session):
+        with self._application_query_lock:
+            if self._application_keyspace_change is not None:
+                return False
+            self._application_keyspace_change = (connection, request_id, session)
+            return True
+
+    def _finish_application_keyspace_change(self, connection, request_id):
+        with self._application_query_lock:
+            change = self._application_keyspace_change
+            if change is not None and change[:2] == (connection, request_id):
+                self._application_keyspace_change = None
+
+    def _finish_internal_keyspace_change(self, connection, request_id):
+        with self._application_query_lock:
+            self._application_internal_keyspace_changes.discard(
+                (connection, request_id))
+            if self._application_internal_keyspace_changes:
+                return
+            waiters = self._application_keyspace_waiters
+            self._application_keyspace_waiters = []
+        for future, host in waiters:
+            if future._is_final():
+                continue
+            try:
+                submitted = future.session.submit(
+                    future._retry_task, False, host)
+            except Exception as exc:
+                future._set_final_exception(exc)
+            else:
+                if submitted is None:
+                    future._set_final_exception(ConnectionShutdown(
+                        "Session shut down before changing keyspace"))
 
     def _discard_application_session(self, session):
         """Undo an attachment when its first fallback request was not sent."""
@@ -7143,6 +7185,7 @@ class ResponseFuture(object):
         # the id so a later timeout cannot detach an unrelated request that
         # reused the same stream.
         self._control_connection_requests = {}
+        self._control_connection_keyspace_change = None
         self.attempted_hosts = []
         self._start_timer()
         self._continuous_paging_state = continuous_paging_state
@@ -7441,6 +7484,16 @@ class ResponseFuture(object):
             self._control_connection_requests.pop(orphan_key, None)
             control_connection._application_requests_in_flight -= 1
             control_connection._application_orphaned_requests.add(orphan_key)
+            if orphan_key in control_connection._application_internal_keyspace_changes:
+                connection.defunct(ConnectionException(
+                    "Timed out setting control-connection keyspace", connection.endpoint))
+                control_connection._finish_internal_keyspace_change(
+                    connection, request_id)
+            if control_connection._application_keyspace_change is not None and \
+                    control_connection._application_keyspace_change[:2] == orphan_key:
+                control_connection._application_keyspace_change = None
+                connection.defunct(ConnectionException(
+                    "Timed out changing control-connection keyspace", connection.endpoint))
             return True
 
     def _is_keyspace_change_query(self, message=None):
@@ -7469,16 +7522,23 @@ class ResponseFuture(object):
         use_message = QueryMessage(
             query='USE %s' % protect_name(keyspace),
             consistency_level=ConsistencyLevel.ONE)
+        control_connection = self.session.cluster.control_connection
 
         def keyspace_set(response):
             if isinstance(response, ResultMessage) and response.kind == RESULT_KIND_SET_KEYSPACE:
                 connection.keyspace = response.new_keyspace
+                control_connection._finish_internal_keyspace_change(
+                    connection, request_id)
                 if self._send_control_connection_message(
                         message=message, cb=cb, connection=connection, host=host) is None:
                     self._control_connection_failed()
             elif isinstance(response, ErrorMessage):
+                control_connection._finish_internal_keyspace_change(
+                    connection, request_id)
                 self._set_final_exception(response.to_exception())
             elif isinstance(response, ConnectionException):
+                control_connection._finish_internal_keyspace_change(
+                    connection, request_id)
                 self._errors[host] = response
                 # Known limitation: this retry goes around the RetryPolicy and
                 # _query_retries, because both are keyed to the user's statement
@@ -7488,19 +7548,31 @@ class ResponseFuture(object):
                 # retry machinery shared with the pooled path would be the fix.
                 self.session.submit(self._retry_task, False, host)
             elif isinstance(response, Exception):
+                control_connection._finish_internal_keyspace_change(
+                    connection, request_id)
                 self._set_final_exception(response)
             else:
+                control_connection._finish_internal_keyspace_change(
+                    connection, request_id)
                 self._set_final_exception(ConnectionException(
                     "Unexpected response while setting the control-connection keyspace: %r" %
                     (response,), connection.endpoint))
 
         # Returns None on failure; send_request() turns that into the final
         # NoHostAvailable. Setting it here too would fire every errback twice.
-        return self._send_control_connection_message(
+        sent = self._send_control_connection_message(
             message=use_message, cb=keyspace_set, connection=connection,
             host=host, record_attempt=False, record_size=False,
             request_id=request_id,
             provisional_session=provisional_session)
+        if sent is None:
+            control_connection._finish_internal_keyspace_change(
+                connection, request_id)
+            if not isinstance(self._errors.get(host),
+                              (ConnectionBusy, NoConnectionsAvailable)):
+                connection.defunct(ConnectionException(
+                    "Failed sending control-connection keyspace setup", connection.endpoint))
+        return sent
 
     def _send_control_connection_message(self, message=None, cb=None, connection=None,
                                          host=None, record_attempt=True, record_size=True,
@@ -7599,11 +7671,7 @@ class ResponseFuture(object):
                 "Control connection is not connected")
             return None
 
-        if self._is_keyspace_change_query(message):
-            self._set_final_exception(InvalidRequest(
-                "Cannot change keyspace while using control-connection fallback; "
-                "create a Session with the attached keyspace instead"))
-            return _NOT_SET
+        changing_keyspace = self._is_keyspace_change_query(message)
 
         # Hold this from binding through borrowing a stream. The send itself is
         # outside the lock so protocol encoding cannot stall response handling.
@@ -7616,9 +7684,26 @@ class ResponseFuture(object):
                 return None
 
             keyspace = self.session.keyspace
+            if changing_keyspace and control_connection._application_keyspace_change is not None:
+                self._set_final_exception(InvalidRequest(
+                    "A control-connection keyspace change is already in progress"))
+                return _NOT_SET
+            if changing_keyspace and \
+                    control_connection._application_internal_keyspace_changes:
+                control_connection._prune_application_sessions()
+                if any(other is not self.session for other in
+                       control_connection._application_sessions):
+                    self._set_final_exception(InvalidRequest(
+                        "Cannot change keyspace while another Session uses "
+                        "control-connection fallback"))
+                else:
+                    control_connection._application_keyspace_waiters.append(
+                        (self, host))
+                return _NOT_SET
             new_application_session = \
                 self.session not in control_connection._application_sessions
-            conflict = control_connection._attach_application_session(keyspace, self.session)
+            conflict = control_connection._attach_application_session(
+                keyspace, self.session, changing_keyspace=changing_keyspace)
             if conflict is not None:
                 self._set_final_exception(InvalidRequest(conflict))
                 return _NOT_SET
@@ -7646,7 +7731,74 @@ class ResponseFuture(object):
                     self._metrics.on_connection_error()
                 return None
 
-        if keyspace is not None and connection.keyspace != keyspace:
+            # Capture this while holding the binding lock. A concurrent USE
+            # may finish before this request reaches the send path; using the
+            # later marker state would issue an internal USE for the old
+            # session keyspace and undo the completed change.
+            overlapping_change = control_connection._application_keyspace_change
+            needs_internal_use = (not changing_keyspace and
+                                  overlapping_change is None and
+                                  keyspace is not None and
+                                  connection.keyspace != keyspace)
+            if changing_keyspace:
+                control_connection._begin_application_keyspace_change(
+                    connection, request_id, self.session)
+            elif needs_internal_use:
+                control_connection._application_internal_keyspace_changes.add(
+                    (connection, request_id))
+
+        if changing_keyspace:
+            def keyspace_changed(response):
+                if isinstance(response, ResultMessage):
+                    if response.kind != RESULT_KIND_SET_KEYSPACE:
+                        error = ConnectionException(
+                            "Unexpected result while changing control-connection keyspace",
+                            connection.endpoint)
+                        control_connection._finish_application_keyspace_change(
+                            connection, request_id)
+                        connection.defunct(error)
+                        self._set_final_exception(error)
+                        return
+                    with control_connection._application_query_lock:
+                        control_connection._application_keyspace = response.new_keyspace
+                        self.session.keyspace = response.new_keyspace
+                    # _set_result may finish through an asynchronous pool
+                    # callback. Hold the marker until the future completes.
+                    self._control_connection_keyspace_change = \
+                        (control_connection, connection, request_id)
+                else:
+                    control_connection._finish_application_keyspace_change(
+                        connection, request_id)
+                try:
+                    self._set_result(host, connection, None, response,
+                                     page_generation=self._page_generation)
+                finally:
+                    if self._is_final():
+                        # A timeout may have finalized this future while the
+                        # reply callback was already running.
+                        self._finish_control_connection_keyspace_change()
+
+            sent = self._send_control_connection_message(
+                message=message, cb=keyspace_changed, connection=connection,
+                host=host, request_id=request_id,
+                provisional_session=provisional_session)
+            if sent is None:
+                control_connection._finish_application_keyspace_change(
+                    connection, request_id)
+                if not isinstance(self._errors.get(host),
+                                  (ConnectionBusy, NoConnectionsAvailable)):
+                    connection.defunct(ConnectionException(
+                        "Failed sending control-connection keyspace change", connection.endpoint))
+            return sent
+
+        if overlapping_change is not None and \
+                overlapping_change[2] is self.session:
+            return self._send_control_connection_message(
+                message=message, cb=cb, connection=connection, host=host,
+                request_id=request_id,
+                provisional_session=provisional_session)
+
+        if needs_internal_use:
             return self._set_control_connection_keyspace(
                 connection, host, keyspace, message=message, cb=cb,
                 request_id=request_id,
@@ -7684,15 +7836,18 @@ class ResponseFuture(object):
         replace_failed_connection = False
         try:
             # TODO get connectTimeout from cluster settings
+            borrow_options = {'allow_keyspace_mismatch': True} \
+                if self._is_keyspace_change_query(message) else {}
             if self.query:
                 # Pass the ring token computed once for this request so the pool
                 # can select the shard without re-hashing the routing key.
                 connection, request_id = pool.borrow_connection(
                     timeout=2.0, routing_key=self.query.routing_key,
                     keyspace=self.query.keyspace, table=self.query.table,
-                    routing_token=self._routing_token)
+                    routing_token=self._routing_token, **borrow_options)
             else:
-                connection, request_id = pool.borrow_connection(timeout=2.0)
+                connection, request_id = pool.borrow_connection(
+                    timeout=2.0, **borrow_options)
             # Pool publication/removal and endpoint updates take the host
             # lock. Keep it until send begins so ownership cannot change
             # between the final check and the send. Other hosts can send in
@@ -8183,7 +8338,16 @@ class ResponseFuture(object):
         # A late response (e.g. speculative, or after client timeout) must not re-fire callbacks.
         return self._final_result is not _NOT_SET or self._final_exception is not None
 
+    def _finish_control_connection_keyspace_change(self):
+        change = self._control_connection_keyspace_change
+        if change is not None:
+            self._control_connection_keyspace_change = None
+            control_connection, connection, request_id = change
+            control_connection._finish_application_keyspace_change(
+                connection, request_id)
+
     def _set_final_result(self, response):
+        self._finish_control_connection_keyspace_change()
         self._cancel_timer()
         with self._callback_lock:
             if self._retry_aborted or self._is_final():
@@ -8208,6 +8372,7 @@ class ResponseFuture(object):
 
     def _set_final_exception(self, response,
                              retry_abort_generation=_NOT_SET):
+        self._finish_control_connection_keyspace_change()
         abort_retry = retry_abort_generation is not _NOT_SET
         if not abort_retry:
             self._cancel_timer()
