@@ -26,7 +26,7 @@ from cassandra.application_info import ApplicationInfoBase
 from cassandra.cluster import Cluster
 from cassandra.connection import (Connection, HEADER_DIRECTION_TO_CLIENT, ProtocolError,
                                   locally_supported_compressions, ConnectionHeartbeat, HeartbeatFuture, _Frame, Timer, TimerManager,
-                                  ConnectionException, ConnectionShutdown, ConnectionBusy, DefaultEndPoint, ShardAwarePortGenerator,
+                                  ConnectionException, ConnectionSendError, ConnectionShutdown, ConnectionBusy, DefaultEndPoint, ShardAwarePortGenerator,
                                   DRIVER_NAME, DRIVER_VERSION)
 from cassandra.driver_config import DRIVER_CONFIG_OPTION, SESSION_ID_OPTION
 from cassandra.ssl_session_cache import SSLSessionCache
@@ -43,6 +43,45 @@ import pytest
 
 
 class ConnectionTest(unittest.TestCase):
+
+    def test_defunct_exposes_error_with_defunct_state(self):
+        connection = self.make_connection()
+        error = ConnectionSendError('send failed', connection.endpoint)
+        connection.close = Mock()
+        connection.error_all_cp_sessions = Mock()
+        connection.error_all_requests = Mock()
+
+        def observe_defunct_state(*args, **kwargs):
+            assert connection.is_defunct
+            assert connection.last_error is error
+
+        with patch('cassandra.connection.log.debug',
+                   side_effect=observe_defunct_state):
+            connection.defunct(error)
+
+        assert connection.signaled_error
+
+    def test_defunct_accepts_one_argument_in_subclass(self):
+        class LegacyConnection(Connection):
+            def defunct(self, exc):
+                return super().defunct(exc)
+
+        connection = LegacyConnection(DefaultEndPoint('1.2.3.4'))
+        connection.close = Mock()
+        error = ConnectionSendError('write failed', connection.endpoint)
+
+        connection.defunct(error)
+
+        assert connection.is_defunct
+        assert connection.signaled_error
+
+    def test_defunct_does_not_mark_remote_error_as_signaled(self):
+        connection = self.make_connection()
+        connection.close = Mock()
+
+        connection.defunct(ConnectionException('read failed'))
+
+        assert not connection.signaled_error
 
     def make_connection(self, **kwargs):
         c = Connection(DefaultEndPoint('1.2.3.4'), **kwargs)
@@ -471,16 +510,38 @@ class ConnectionTest(unittest.TestCase):
 
     def test_wait_for_responses_releases_request_id_when_send_raises_after_registration(self):
         c = self.make_connection()
+        c.close = Mock()
         c.push = Mock(side_effect=ConnectionException("write failed"))
         initial_in_flight = c.in_flight
         initial_request_ids = len(c.request_ids)
 
-        with pytest.raises(ConnectionException):
+        with pytest.raises(ConnectionSendError):
             c.wait_for_responses(QueryMessage("SELECT * FROM system.local", ConsistencyLevel.ONE))
 
+        assert c.is_defunct
+        c.close.assert_called_once_with()
         assert c.in_flight == initial_in_flight
         assert len(c.request_ids) == initial_request_ids
         assert not c._requests
+
+    def test_wait_for_responses_retires_connection_after_later_push_fails(self):
+        c = self.make_connection()
+        c.close = Mock()
+        c.push = Mock(side_effect=[None, ConnectionException("write failed")])
+        messages = [QueryMessage("SELECT * FROM system.local", ConsistencyLevel.ONE) for _ in range(3)]
+        initial_request_ids = len(c.request_ids)
+
+        with pytest.raises(ConnectionSendError):
+            c.wait_for_responses(*messages)
+
+        assert c.push.call_count == 2
+        assert c.is_defunct
+        c.close.assert_called_once_with()
+        assert c.in_flight == 0
+        assert len(c.request_ids) == initial_request_ids - 1
+        assert not c._requests
+        with pytest.raises(ConnectionShutdown):
+            c.wait_for_responses(messages[0])
 
 
 class DerivedConnectionLimitsTest(unittest.TestCase):
@@ -858,7 +919,8 @@ class ConnectionHeartbeatTest(unittest.TestCase):
         max_connection = Mock(spec=Connection, host='localhost',
                               lock=Lock(),
                               max_request_id=in_flight - 1, in_flight=in_flight,
-                              is_idle=True, is_defunct=False, is_closed=False)
+                              is_idle=True, is_defunct=False, is_closed=False,
+                              is_control_connection=False)
         holder = get_holders.return_value[0]
         holder.get_connections.return_value.append(max_connection)
 
@@ -870,7 +932,22 @@ class ConnectionHeartbeatTest(unittest.TestCase):
         assert max_connection.send_msg.call_count == 0
         max_connection.defunct.assert_has_calls([call(ANY)] * get_holders.call_count)
         holder.return_connection.assert_has_calls(
-            [call(max_connection)] * get_holders.call_count)
+            [call(max_connection, heartbeat_failed=True)] * get_holders.call_count)
+
+    def test_control_connection_heartbeat_failure_uses_control_owner_api(self, *args):
+        connection = Mock(spec=Connection, endpoint=DefaultEndPoint('localhost'),
+                          lock=Lock(), max_request_id=0, in_flight=1,
+                          is_idle=True, is_defunct=False, is_closed=False,
+                          is_control_connection=True)
+        get_holders = self.make_get_holders(1)
+        holder = get_holders.return_value[0]
+        holder.get_connections.return_value.append(connection)
+
+        self.run_heartbeat(get_holders, count=1)
+
+        connection.defunct.assert_called_with(ANY)
+        holder.return_connection.assert_has_calls(
+            [call(connection)] * get_holders.call_count)
 
     def test_heartbeat_future_releases_request_id_when_send_fails(self, *args):
         connection = Connection(DefaultEndPoint('1.2.3.4'))
@@ -910,6 +987,7 @@ class ConnectionHeartbeatTest(unittest.TestCase):
                           lock=Lock(),
                           in_flight=0, is_idle=True,
                           is_defunct=False, is_closed=False,
+                          is_control_connection=False,
                           get_request_id=lambda: request_id,
                           send_msg=Mock(side_effect=send_msg))
         holder = get_holders.return_value[0]
@@ -924,7 +1002,7 @@ class ConnectionHeartbeatTest(unittest.TestCase):
         assert isinstance(exc, ConnectionException)
         assertRegex(exc.args[0], r'^Received unexpected response to OptionsMessage.*')
         holder.return_connection.assert_has_calls(
-            [call(connection)] * get_holders.call_count)
+            [call(connection, heartbeat_failed=True)] * get_holders.call_count)
 
     def test_timeout(self, *args):
         request_id = 999
@@ -940,6 +1018,7 @@ class ConnectionHeartbeatTest(unittest.TestCase):
                           lock=Lock(),
                           in_flight=0, is_idle=True,
                           is_defunct=False, is_closed=False,
+                          is_control_connection=False,
                           get_request_id=lambda: request_id,
                           send_msg=Mock(side_effect=send_msg))
         holder = get_holders.return_value[0]
@@ -957,7 +1036,7 @@ class ConnectionHeartbeatTest(unittest.TestCase):
         assert exc.timeout == 0.05
         assert isinstance(exc.in_flight, int)
         holder.return_connection.assert_has_calls(
-            [call(connection)] * get_holders.call_count)
+            [call(connection, heartbeat_failed=True)] * get_holders.call_count)
 
 
 class TimerTest(unittest.TestCase):

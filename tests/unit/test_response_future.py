@@ -24,7 +24,8 @@ from cassandra import ConsistencyLevel, InvalidRequest, Unavailable, SchemaTarge
 from cassandra.cluster import (Session, ResponseFuture, NoHostAvailable, ProtocolVersion,
                                ControlConnection, ControlConnectionQueryFallback, _NOT_SET)
 from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
-                                  ConnectionShutdown, DefaultEndPoint)
+                                  ConnectionSendError, ConnectionShutdown,
+                                  DefaultEndPoint)
 from cassandra.datastax.graph import SimpleGraphStatement
 from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessage,
                                 UnavailableErrorMessage, ResultMessage, QueryMessage,
@@ -61,6 +62,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection.orphaned_threshold_reached = False
         connection.in_flight = 0
         connection.is_control_connection = False
+        connection.is_defunct = False
 
         def borrow_connection(**kwargs):
             connection.in_flight += 1
@@ -334,6 +336,7 @@ class ResponseFutureTests(unittest.TestCase):
                 pool = session._pools.get.return_value
                 connection = Connection(DefaultEndPoint('127.0.0.1'))
                 initial_request_ids = set(connection.request_ids)
+                connection.orphaned_threshold_reached = True
                 connection._socket_writable = True
                 if isinstance(failure, ConnectionBusy):
                     connection._socket_writable = False
@@ -345,7 +348,7 @@ class ResponseFutureTests(unittest.TestCase):
                         connection.in_flight += 1
                         return connection, connection.get_request_id()
 
-                def return_connection(conn):
+                def return_connection(conn, replace_only=False):
                     with conn.lock:
                         conn.in_flight -= 1
 
@@ -358,6 +361,7 @@ class ResponseFutureTests(unittest.TestCase):
                 assert set(connection.request_ids) == initial_request_ids
                 assert len(connection.request_ids) == len(initial_request_ids)
                 assert not connection._requests
+                assert connection.orphaned_threshold_reached
                 pool.return_connection.assert_called_once_with(connection)
 
     def test_query_send_failure_retires_timed_out_stream(self):
@@ -507,6 +511,84 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(None, None, None, object())
         with pytest.raises(ConnectionException):
             rf.result()
+
+    def test_query_retires_connection_when_push_fails_after_queueing(self):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Connection('1.2.3.4')
+        connection.close = Mock()
+        queued = []
+
+        def push(data):
+            queued.append(data)
+            raise ConnectionException("wake failed")
+
+        connection.push = Mock(side_effect=push)
+        base_defunct = connection.defunct
+
+        def defunct_override(exc):
+            base_defunct(exc)
+
+        connection.defunct = defunct_override
+
+        request_id = connection.request_ids.popleft()
+        other_request_id = connection.request_ids.popleft()
+        connection.in_flight += 2
+        pool.borrow_connection.return_value = (connection, request_id)
+        connection._requests[other_request_id] = (
+            lambda error: pool.return_connection(connection),
+            ProtocolHandler.decode_message, None)
+
+        def return_connection(conn, replace_only=False):
+            if not replace_only:
+                assert conn.signaled_error
+            with conn.lock:
+                conn.in_flight -= 1
+
+        pool.return_connection.side_effect = return_connection
+
+        query = SimpleStatement("SELECT * FROM foo")
+        message = QueryMessage(query=query.query_string, consistency_level=ConsistencyLevel.ONE)
+        rf = ResponseFuture(session, message, query, 1)
+        previous_connection = Connection('5.6.7.8')
+        previous_pool = Mock()
+        rf._connection = previous_connection
+        rf._current_host = 'previous_host'
+        rf._req_id = 7
+        rf._request_pool = previous_pool
+
+        assert rf._query('ip1') is None
+        assert [call.kwargs for call in pool.return_connection.call_args_list] == \
+            [{}, {'replace_only': True}]
+        connection.close.assert_called_once_with()
+        assert queued
+        assert connection.is_defunct
+        assert connection.in_flight == 0
+        assert request_id not in connection.request_ids
+        assert not connection._requests
+        assert rf._connection is previous_connection
+        assert rf._current_host == 'previous_host'
+        assert rf._req_id == 7
+        assert rf._request_pool is previous_pool
+
+    def test_query_preserves_other_defunct_failure_after_push_error(self):
+        session = self.make_session()
+        pool = session._pools.get.return_value
+        connection = Connection('1.2.3.4')
+        request_id = connection.request_ids.popleft()
+        connection.in_flight += 1
+        pool.borrow_connection.return_value = (connection, request_id)
+
+        def send_msg(*args, **kwargs):
+            connection.defunct(ConnectionException('socket failed'))
+            raise ConnectionSendError('push failed', connection.endpoint)
+
+        connection.send_msg = send_msg
+        rf = self.make_response_future(session)
+        assert rf._query('ip1') is None
+        assert not connection.signaled_error
+        assert connection.last_error.args[0] == 'socket failed'
+        pool.return_connection.assert_called_once_with(connection)
 
     def test_query_releases_request_id_when_connection_is_busy(self):
         session = self.make_session()
@@ -1317,6 +1399,43 @@ class ResponseFutureTests(unittest.TestCase):
         assert not session.cluster.control_connection._application_sessions
         assert session.cluster.control_connection._get_application_keyspace() is _NOT_SET
         assert session.cluster.control_connection._application_requests_in_flight == 0
+
+    def test_control_connection_fallback_retires_connection_on_push_failure(self):
+        session = self._make_fallback_session(keyspace=None)
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        session.cluster.control_connection.reconnect = Mock()
+        session.cluster.control_connection.return_connection = Mock(
+            wraps=session.cluster.control_connection.return_connection)
+        session.cluster.get_control_connection_host.return_value = Mock(endpoint=connection.endpoint)
+        connection.send_msg.side_effect = ConnectionSendError('wake failed', connection.endpoint)
+
+        rf = self.make_response_future(session)
+        assert not rf.send_request()
+        connection.defunct.assert_called_once()
+        session.cluster.control_connection.return_connection.assert_called_once_with(connection)
+        assert not connection._requests
+        assert not rf._control_connection_requests
+
+    def test_control_connection_fallback_does_not_reconnect_replacement(self):
+        session = self._make_fallback_session(keyspace=None)
+        control_connection = session.cluster.control_connection
+        connection = self.make_control_connection()
+        replacement = self.make_control_connection()
+        control_connection._connection = connection
+        session.cluster.get_control_connection_host.return_value = Mock(
+            endpoint=connection.endpoint)
+
+        def fail_after_replacement(*args, **kwargs):
+            control_connection._connection = replacement
+            raise ConnectionSendError('wake failed', connection.endpoint)
+
+        connection.send_msg.side_effect = fail_after_replacement
+        control_connection.reconnect = Mock()
+
+        rf = self.make_response_future(session)
+        assert not rf.send_request()
+        control_connection.reconnect.assert_not_called()
 
     def test_control_connection_fallback_concurrent_send_preserves_session(self):
         session = self._make_fallback_session(keyspace='ks1')
