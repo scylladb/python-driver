@@ -157,6 +157,10 @@ _GRAPH_PAGING_MIN_DSE_VERSION = Version('6.8.0')
 _NOT_SET = object()
 
 
+class _EndpointMoveRejected(ValueError):
+    """A batch could not publish because its metadata snapshot went stale."""
+
+
 def _cancel_and_notify(future):
     # A bare Future's cancel() doesn't wake concurrent.futures.wait() callers;
     # only set_running_or_notify_cancel() does (executors call it themselves).
@@ -2881,8 +2885,9 @@ class Cluster(object):
 
         notify(self.profile_manager.on_remove, host)
         for session in tuple(self.sessions):
-            notify(session.on_remove, host,
-                   trigger_reconciliation=trigger_reconciliation)
+            if not notify(session.on_remove, host,
+                          trigger_reconciliation=trigger_reconciliation):
+                notify(session.remove_pool, host)
         for listener in self.listeners:
             notify(listener.on_remove, host)
         notify(self.control_connection.on_remove, host,
@@ -2909,16 +2914,20 @@ class Cluster(object):
 
     def add_host(self, endpoint, datacenter=None, rack=None, signal=True,
                  refresh_nodes=True, host_id=None,
-                 reconcile_pools_on_failure=False):
+                 reconcile_pools_on_failure=False,
+                 replace_existing_id=True):
         """
         Called when the control connection discovers a node. Resolve a known
         host ID before considering the endpoint, which may have a new owner.
         Returns a Host instance, and a flag indicating whether it was new in
-        the metadata. Raises ``ValueError`` when an existing host ID is seen
-        at another endpoint or replacement signaling is disabled.
+        the metadata. A known host ID at another endpoint goes through the
+        endpoint replacement path when signaling is enabled; otherwise it
+        raises ``ValueError``.
 
         ``reconcile_pools_on_failure`` restores reconciliation deferred by a
         same-endpoint replacement if creating the replacement pool fails.
+        ``replace_existing_id=False`` fences a topology row whose host ID
+        appeared after that refresh captured its host snapshot.
         Intended for internal use only.
         """
         if host_id is None:
@@ -2931,9 +2940,12 @@ class Cluster(object):
         host, new, replaced_host = self.metadata._add_or_replace_host(
             candidate, allow_replace=signal)
         if not new and host.endpoint != candidate.endpoint:
-            raise ValueError(
-                "Host %s moved from %s to %s; endpoint replacement is required"
-                % (host_id, host.endpoint, candidate.endpoint))
+            if not signal:
+                raise ValueError("Endpoint replacement requires host addition signaling")
+            if not replace_existing_id:
+                raise ValueError("Endpoint replacement is disabled for this host addition")
+            return self.replace_host_endpoint(
+                host, candidate.endpoint, datacenter, rack), False
 
         if replaced_host is not None:
             log.info("Cassandra host %s removed", replaced_host)
@@ -2953,6 +2965,118 @@ class Cluster(object):
                 reconcile_pools_on_failure=reconcile_pools_on_failure)
 
         return host, new
+
+    def replace_host_endpoint(self, host, endpoint, datacenter=None, rack=None):
+        """Move a host ID to a new endpoint with a fresh Host lifecycle.
+
+        The old object is retired permanently. Publishing a new object makes
+        in-flight pool and reconnection work on the old route fail its normal
+        lifecycle checks; sessions and policies see remove/add notifications.
+        """
+        return self.replace_hosts_endpoints(
+            [(host, endpoint, datacenter, rack)])[0]
+
+    def replace_hosts_endpoints(self, moves):
+        """Publish all moving Hosts before retiring and adding their routes."""
+        replacements = []
+        for host, endpoint, datacenter, rack in moves:
+            replacement = Host(
+                endpoint, self.conviction_policy_factory,
+                datacenter if datacenter is not None else host.datacenter,
+                rack if rack is not None else host.rack, host_id=host.host_id)
+            # Lifecycle state belongs to the old route, but node metadata
+            # must already be visible when removal/addition callbacks run.
+            for name in (
+                    'broadcast_address', 'broadcast_port',
+                    'broadcast_rpc_address', 'broadcast_rpc_port',
+                    'listen_address', 'listen_port', 'release_version',
+                    'dse_version', 'dse_workload', 'dse_workloads',
+                    'sharding_info'):
+                setattr(replacement, name, getattr(host, name))
+            replacements.append((host, replacement))
+        control_connection = self.control_connection
+        connection = control_connection._connection
+        bound_host = (vars(connection).get('_control_connection_host')
+                      if connection is not None else None)
+        if connection is not None and bound_host is None:
+            for host, _ in replacements:
+                if (self.metadata.get_host_by_host_id(host.host_id) is host and
+                        control_connection._connection_matches_host(connection, host)):
+                    # Resolve an unbound socket while the old endpoint index
+                    # still identifies the lifecycle it actually reached.
+                    connection._control_connection_host = host
+                    bound_host = host
+                    break
+        try:
+            self.metadata.replace_host_endpoints(replacements)
+        except ValueError as exc:
+            raise _EndpointMoveRejected(str(exc)) from exc
+        reconnect_control = connection is not None and any(
+            bound_host is host or
+            (bound_host is None and
+             control_connection._connection_matches_host(connection, host))
+            for host, _ in replacements)
+
+        for host, replacement in replacements:
+            log.info("Cassandra host %s moved from %s to %s", host.host_id,
+                     host.endpoint, replacement.endpoint)
+            self.on_remove(host, trigger_reconciliation=False,
+                           suppress_callback_errors=True)
+        try:
+            for _, replacement in replacements:
+                try:
+                    self.on_add(replacement, refresh_nodes=False,
+                                reconcile_pools_on_failure=True)
+                except Exception:
+                    log.exception("Error notifying addition of moved host %s",
+                                  replacement)
+                    with replacement.lock:
+                        replacement._endpoint_add_retry_pending = True
+                    self._schedule_failed_endpoint_add_retry(replacement)
+        finally:
+            if reconnect_control:
+                control_connection.reconnect()
+        return [replacement for _, replacement in replacements]
+
+    def _schedule_failed_endpoint_add_retry(self, host):
+        if self.is_shutdown:
+            return
+        with host.lock:
+            if host._is_removed:
+                return
+            attempts = getattr(host, '_endpoint_add_retry_attempts', 0)
+            host._endpoint_add_retry_attempts = attempts + 1
+        delay = min(30, 2 ** min(attempts, 5))
+        try:
+            self.scheduler.schedule(delay, self.retry_failed_endpoint_add, host)
+        except Exception:
+            # The topology refresh remains a fallback if scheduling fails.
+            log.exception("Error scheduling addition retry for moved host %s",
+                          host)
+
+    def retry_failed_endpoint_add(self, host):
+        """Retry a published endpoint replacement whose synchronous add failed."""
+        # Removal uses this same lock to make the old lifecycle terminal.
+        # Keep policy/pool setup ordered before that removal or skip it.
+        with host._down_callbacks_lock:
+            if self.metadata.get_host_by_host_id(host.host_id) is not host:
+                return
+            with host.lock:
+                if (host._is_removed or
+                        not getattr(host, '_endpoint_add_retry_pending', False)):
+                    return
+                # Claim this retry so overlapping topology refreshes do not
+                # run policy and pool setup for the same Host at once.
+                host._endpoint_add_retry_pending = False
+            try:
+                self.on_add(host, refresh_nodes=False,
+                            reconcile_pools_on_failure=True)
+            except Exception:
+                log.exception("Error retrying addition of moved host %s", host)
+                with host.lock:
+                    if not host._is_removed:
+                        host._endpoint_add_retry_pending = True
+                self._schedule_failed_endpoint_add_retry(host)
 
     def remove_host(self, host, trigger_reconciliation=True,
                     suppress_callback_errors=False):
@@ -6087,15 +6211,95 @@ class ControlConnection(object):
             existing_host = self._cluster.metadata.get_host_by_host_id(host_id)
             accepted_rows.append((row, factory_endpoint, host_id, existing_host))
 
+        # Determine all moves from the same topology snapshot, then publish
+        # them together. An endpoint may be released by a later row (including
+        # a swap), so row-by-row replacement cannot establish ownership.
+        moves = []
+        for row, factory_endpoint, host_id, existing_host in accepted_rows:
+            if (existing_host is None or existing_host._is_removed or
+                    self._cluster.metadata.get_host_by_host_id(host_id)
+                    is not existing_host):
+                continue
+            if (isinstance(existing_host.endpoint, UnixSocketEndPoint) and
+                    not (local_row is not None and row is not local_row and
+                         existing_host.endpoint == connection.original_endpoint)):
+                endpoint = existing_host.endpoint
+            else:
+                endpoint = factory_endpoint
+            if endpoint != existing_host.endpoint:
+                moves.append((existing_host, endpoint,
+                              row.get("data_center"), row.get("rack")))
+
+        moving_ids = {host.host_id for host, _, _, _ in moves}
+        # A stationary owner cannot release its endpoint. Prune dependent
+        # moves as well, since their sources then remain occupied.
+        while True:
+            valid_moves = []
+            for move in moves:
+                owner = self._cluster.metadata.get_host(move[1])
+                if (owner is None or owner.host_id in moving_ids or
+                        owner.host_id not in found_host_ids):
+                    valid_moves.append(move)
+            valid_ids = {host.host_id for host, _, _, _ in valid_moves}
+            if valid_ids == moving_ids:
+                break
+            moves, moving_ids = valid_moves, valid_ids
+
+        # Owners absent from this snapshot can be retired before publication.
+        for _, endpoint, _, _ in moves:
+            owner = self._cluster.metadata.get_host(endpoint)
+            if owner is not None and owner.host_id not in found_host_ids:
+                self._cluster.remove_host(
+                    owner, trigger_reconciliation=False,
+                    suppress_callback_errors=True)
+                should_rebuild_token_map = True
+
+        moved_hosts = {}
+        rejected_move_ids = set()
+        if moves:
+            try:
+                replacements = self._cluster.replace_hosts_endpoints(moves)
+            except _EndpointMoveRejected:
+                log.warning(
+                    "[control connection] Endpoint moves changed during refresh; skipping stale batch",
+                    exc_info=True)
+                # Keep each source at its current route for this snapshot.
+                # Rebuild tokens from rows that still match current Hosts.
+                rejected_move_ids = moving_ids.copy()
+                moves = []
+                moving_ids.clear()
+            else:
+                moved_hosts = {host.host_id: replacement
+                               for (host, _, _, _), replacement in zip(moves, replacements)}
+            should_rebuild_token_map = True
+
         # Move known hosts before adding new ones. A new host may take an
         # endpoint that a known host releases in this same topology result.
         accepted_rows.sort(key=lambda item: item[3] is None)
         for row, factory_endpoint, host_id, existing_host in accepted_rows:
+            replacement = moved_hosts.get(host_id)
+            if (replacement is not None and
+                    (self._cluster.metadata.get_host_by_host_id(host_id)
+                     is not replacement or replacement._is_removed)):
+                log.debug("[control connection] Skipping stale moved host %s", host_id)
+                current_host = self._cluster.metadata.get_host_by_host_id(host_id)
+                tokens = row.get("tokens")
+                if (current_host is not None and not current_host._is_removed and
+                        partitioner and tokens and self._token_meta_enabled):
+                    token_map[current_host] = tokens
+                should_rebuild_token_map = True
+                continue
             if (existing_host is not None and
+                    host_id not in moved_hosts and
                     (self._cluster.metadata.get_host_by_host_id(host_id)
                      is not existing_host or
                      existing_host._is_removed)):
                 log.debug("[control connection] Skipping stale row for host %s", host_id)
+                current_host = self._cluster.metadata.get_host_by_host_id(host_id)
+                tokens = row.get("tokens")
+                if (current_host is not None and not current_host._is_removed and
+                        partitioner and tokens and self._token_meta_enabled):
+                    token_map[current_host] = tokens
                 should_rebuild_token_map = True
                 continue
 
@@ -6113,61 +6317,45 @@ class ControlConnection(object):
             else:
                 endpoint = factory_endpoint
 
-            host = existing_host
+            host = moved_hosts.get(host_id, existing_host)
+            if (host is existing_host and host is not None and
+                    host_id not in moving_ids and endpoint != host.endpoint):
+                if host_id not in rejected_move_ids:
+                    log.warning(
+                        "[control connection] Retaining host %s at %s: endpoint %s remains occupied",
+                        host_id, host.endpoint, endpoint)
+                endpoint = host.endpoint
             endpoint_owner = self._cluster.metadata.get_host(endpoint)
             datacenter = row.get("data_center")
             rack = row.get("rack")
             reconcile_pools_on_failure = False
 
-            # host_id is immutable. Known-host endpoint moves remain below;
-            # coordinated lifecycle replacement is tracked by #923.
             if endpoint_owner is not None and endpoint_owner.host_id != host_id:
-                if endpoint_owner.host_id in found_host_ids:
-                    if host is None:
-                        log.warning(
-                            "[control connection] Skipping host %s: endpoint %s still belongs to host %s",
-                            host_id, endpoint, endpoint_owner.host_id)
-                        continue
-                else:
-                    log.debug(
-                        "[control connection] Replacing host %s at %s with host %s",
-                        endpoint_owner.host_id, endpoint, host_id)
-                    if host is not None:
-                        # The existing host's endpoint transition owns pool
-                        # follow-up. Avoid a removal callback racing it.
-                        self._cluster.remove_host(
-                            endpoint_owner, trigger_reconciliation=False,
-                            suppress_callback_errors=True)
-                        should_rebuild_token_map = True
-                    else:
-                        # add_host publishes the new owner before notifying
-                        # removal and reconciles pools if addition fails.
-                        reconcile_pools_on_failure = True
-
-            if host is not None:
-                if host.endpoint != endpoint:
+                if host is not None or endpoint_owner.host_id in found_host_ids:
+                    log.warning(
+                        "[control connection] Skipping host %s: endpoint %s belongs to host %s",
+                        host_id, endpoint, endpoint_owner.host_id)
+                    current_host = self._cluster.metadata.get_host_by_host_id(host_id)
+                    tokens = row.get("tokens")
+                    if (current_host is not None and not current_host._is_removed and
+                            partitioner and tokens and self._token_meta_enabled):
+                        token_map[current_host] = tokens
                     should_rebuild_token_map = True
-                    log.debug("[control connection] Updating host ip from %s to %s for (%s)", host.endpoint, endpoint, host_id)
-                    reconnector = host.get_and_set_reconnection_handler(None)
-                    if reconnector:
-                        reconnector.cancel()
-                    down_dispatched = self._cluster.on_down(
-                        host, is_host_addition=False,
-                        expect_host_to_be_down=True)
+                    continue
+                # add_host publishes the new owner before notifying removal
+                # and reconciles pools if addition fails.
+                reconcile_pools_on_failure = True
 
-                    with host.lock:
-                        old_endpoint = host.endpoint
-                        host.endpoint = endpoint
-                    self._cluster.metadata.update_host(host, old_endpoint)
-                    self._cluster.on_up(host)
-                    # A live pool can discount the DOWN event. In that case
-                    # on_up sees an already-up host and does not replace its
-                    # connections, which still point at the old endpoint.
-                    if not down_dispatched and host.is_up:
-                        for session in tuple(self._cluster.sessions):
-                            session.remove_pool(host)
-                            session.add_or_renew_pool(
-                                host, is_host_addition=False)
+            if host is not None and host.endpoint != endpoint:
+                log.warning("[control connection] Skipping host %s: endpoint changed during refresh",
+                            host_id)
+                current_host = self._cluster.metadata.get_host_by_host_id(host_id)
+                tokens = row.get("tokens")
+                if (current_host is not None and not current_host._is_removed and
+                        partitioner and tokens and self._token_meta_enabled):
+                    token_map[current_host] = tokens
+                should_rebuild_token_map = True
+                continue
 
             if host is None:
                 log.debug("[control connection] Found new host to connect to: %s", endpoint)
@@ -6175,14 +6363,19 @@ class ControlConnection(object):
                     host, _ = self._cluster.add_host(
                         endpoint, datacenter=datacenter, rack=rack, signal=True,
                         refresh_nodes=False, host_id=host_id,
-                        reconcile_pools_on_failure=reconcile_pools_on_failure)
+                        reconcile_pools_on_failure=reconcile_pools_on_failure,
+                        replace_existing_id=False)
                 except ValueError:
                     current_host = self._cluster.metadata.get_host_by_host_id(host_id)
                     if current_host is None or current_host.endpoint == endpoint:
                         raise
                     log.warning(
-                        "[control connection] Host %s moved to %s during refresh; retrying on next refresh",
+                        "[control connection] Host %s moved to %s during refresh; skipping stale row",
                         host_id, current_host.endpoint)
+                    tokens = row.get("tokens")
+                    if partitioner and tokens and self._token_meta_enabled:
+                        token_map[current_host] = tokens
+                    should_rebuild_token_map = True
                     continue
                 should_rebuild_token_map = True
             else:
@@ -6199,11 +6392,24 @@ class ControlConnection(object):
 
             if row is local_row:
                 host.listen_address = row.get("listen_address")
+                connection._control_connection_host_id = host_id
+                # Keep the exact Host lifecycle reached by this socket. A
+                # later endpoint move creates a new Host with the same ID.
+                bound_host = vars(connection).get('_control_connection_host')
+                if (bound_host is None or
+                        (bound_host.host_id == host_id and
+                         bound_host.endpoint == host.endpoint and
+                         self._cluster.metadata.get_host_by_host_id(host_id)
+                         is not bound_host)):
+                    connection._control_connection_host = host
 
             tokens = row.get("tokens", None)
             if partitioner and tokens and self._token_meta_enabled:
                 token_map[host] = tokens
             self._cluster.metadata.update_host(host, old_endpoint=endpoint)
+            if (host_id not in moved_hosts and
+                    getattr(host, '_endpoint_add_retry_pending', False)):
+                self._cluster.retry_failed_endpoint_add(host)
 
         for old_host_id, old_host in self._cluster.metadata.all_hosts_items():
             if old_host_id not in found_host_ids:
@@ -6490,6 +6696,12 @@ class ControlConnection(object):
         if connection is None:
             return None
 
+        bound_host = vars(connection).get('_control_connection_host')
+        if bound_host is not None:
+            current = self._cluster.metadata.get_host_by_host_id(
+                bound_host.host_id)
+            return bound_host if current is bound_host else None
+
         host_id = getattr(connection, '_control_connection_host_id', None)
         if host_id is not None:
             return self._cluster.metadata.get_host_by_host_id(host_id)
@@ -6505,6 +6717,10 @@ class ControlConnection(object):
     def _connection_matches_host(self, connection, host):
         if connection is None:
             return False
+
+        bound_host = vars(connection).get('_control_connection_host')
+        if bound_host is not None:
+            return bound_host is host
 
         host_id = getattr(connection, '_control_connection_host_id', None)
         if host_id is not None:
