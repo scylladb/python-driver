@@ -7517,6 +7517,7 @@ class ResponseFuture(object):
                         self._current_host = previous_host
                         self._req_id = previous_req_id
                         self._request_pool = previous_pool
+                    connection._requests.pop(request_id, None)
                     connection.orphaned_request_ids.discard(request_id)
                     connection.request_ids.append(request_id)
                 pool.return_connection(connection)
