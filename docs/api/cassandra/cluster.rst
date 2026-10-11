@@ -125,22 +125,7 @@ Clusters and Sessions
    .. autoattribute:: consistency_level
       :annotation: = LOCAL_ONE
 
-.. autoclass:: GraphExecutionProfile (load_balancing_policy=_NOT_SET, retry_policy=None, consistency_level=ConsistencyLevel.LOCAL_ONE, serial_consistency_level=None, request_timeout=30.0, row_factory=None, graph_options=None, continuous_paging_options=_NOT_SET)
-   :members:
-
-.. autoclass:: GraphAnalyticsExecutionProfile (load_balancing_policy=None, retry_policy=None, consistency_level=ConsistencyLevel.LOCAL_ONE, serial_consistency_level=None, request_timeout=3600. * 24. * 7., row_factory=None, graph_options=None)
-   :members:
-
 .. autodata:: EXEC_PROFILE_DEFAULT
-   :annotation:
-
-.. autodata:: EXEC_PROFILE_GRAPH_DEFAULT
-   :annotation:
-
-.. autodata:: EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT
-   :annotation:
-
-.. autodata:: EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT
    :annotation:
 
 .. autoclass:: Session ()
@@ -176,10 +161,6 @@ Clusters and Sessions
    .. automethod:: execute_concurrent_with_args(statement, parameters, *args, **kwargs)
 
    .. automethod:: execute_concurrent_async(statements_and_parameters[, concurrency][, raise_on_first_error][, execution_profile])
-
-   .. automethod:: execute_graph(statement[, parameters][, trace][, execution_profile=EXEC_PROFILE_GRAPH_DEFAULT][, execute_as])
-
-   .. automethod:: execute_graph_async(statement[, parameters][, trace][, execution_profile=EXEC_PROFILE_GRAPH_DEFAULT][, execute_as])
 
    .. automethod:: prepare(statement)
 
