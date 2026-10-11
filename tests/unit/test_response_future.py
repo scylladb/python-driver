@@ -25,7 +25,6 @@ from cassandra.cluster import (Session, ResponseFuture, NoHostAvailable, Protoco
                                ControlConnection, ControlConnectionQueryFallback, _NOT_SET)
 from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
                                   ConnectionShutdown, DefaultEndPoint)
-from cassandra.datastax.graph import SimpleGraphStatement
 from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessage,
                                 UnavailableErrorMessage, ResultMessage, QueryMessage,
                                 ExecuteMessage,
@@ -1769,17 +1768,6 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf._is_keyspace_change_query(indented_use)
         assert not rf._is_keyspace_change_query(indented_select)
         assert time.time() - start < 2
-
-    def test_control_connection_fallback_does_not_treat_graph_use_as_cql(self):
-        session = self.make_basic_session()
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = []
-        graph_query = SimpleGraphStatement(
-            'use(TimeCategory) { g.V().count() }')
-        message = QueryMessage(query=graph_query.query,
-                               consistency_level=ConsistencyLevel.ONE)
-        rf = ResponseFuture(session, message, graph_query, 1)
-
-        assert not rf._is_keyspace_change_query()
 
     def test_control_connection_fallback_use_failure_reports_error_once(self):
         session = self.make_basic_session()

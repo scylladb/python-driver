@@ -2,7 +2,7 @@
 name = "scylla-driver"
 description = "Scylla Driver for Apache Cassandra"
 authors = [{ name = "ScyllaDB" }]
-keywords = ["cassandra", "cql", "orm", "dse", "graph"]
+keywords = ["cassandra", "cql", "orm", "dse"]
 classifiers = [
     'Development Status :: 5 - Production/Stable',
     'Intended Audience :: Developers',
@@ -32,7 +32,6 @@ requires-python = ">=3.10"
 "Issues" = "https://github.com/scylladb/python-driver/issues"
 
 [project.optional-dependencies]
-graph = ['gremlinpython>=3.7.4,<4']
 cle = ['cryptography>=42.0']
 compress-lz4 = ['lz4']
 compress-snappy = ['python-snappy']
@@ -66,10 +65,7 @@ packages = [
     'cassandra',
     'cassandra.io',
     'cassandra.cqlengine',
-    'cassandra.graph',
     'cassandra.datastax',
-    'cassandra.datastax.graph',
-    'cassandra.datastax.graph.fluent',
     'cassandra.datastax.cloud',
     'cassandra.scylla',
     'cassandra.column_encryption',
@@ -141,8 +137,6 @@ omit = [
     "cassandra/_version.py",
     # DataStax Enterprise (DSE) / DataStax Astra only -- not supported by
     # ScyllaDB, so not measured:
-    "cassandra/datastax/graph/*",  # DSE Graph (graphson, query, types, fluent)
-    "cassandra/graph/*",           # dse-driver compat re-exports of the above
     "cassandra/datastax/cloud/*",  # Astra secure-connect bundle (`cloud=`)
     # Tests disabled until scylladb/python-driver#365 is resolved; drop this when re-enabled.
     "cassandra/column_encryption/*",
@@ -163,9 +157,6 @@ exclude_also = [
     # auth.py: DSE Kerberos (GSSAPI) and DseAuthenticator SASL negotiation
     "^class (DSEGSSAPIAuthProvider|GSSAPIAuthenticator)\\b",
     "^ +if self\\.server_authenticator_class == \"com\\.datastax\\.bdp\\.cassandra\\.auth\\.DseAuthenticator\":",
-    # cluster.py: DSE Graph execution and graph analytics routing
-    "^class (GraphExecutionProfile|GraphAnalyticsExecutionProfile)\\b",
-    "^    def (execute_graph|execute_graph_async|_maybe_set_graph_paging|_resolve_execution_profile_options|_transform_params|_target_analytics_master|_on_analytics_master_result)\\(",
     # cluster.py / connection.py / protocol.py: DSE continuous paging
     "^class (ContinuousPagingOptions|ContinuousPagingSession)\\b",
     "^    def (_handle_continuous_paging_first_response|cancel_continuous_paging|new_continuous_paging_session|remove_continuous_paging_session|error_all_cp_sessions|_write_paging_options)\\(",
