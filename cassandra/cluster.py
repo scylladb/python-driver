@@ -2320,12 +2320,23 @@ class Cluster(object):
                 session.user_type_registered(keyspace, udt_name, klass)
 
     def _cleanup_failed_on_up_handling(self, host):
+        if not self._is_current_host(host):
+            return
         self.profile_manager.on_down(host)
+        if not self._is_current_host(host):
+            return
         self.control_connection.on_down(host)
         for session in tuple(self.sessions):
+            if not self._is_current_host(host):
+                return
             session.remove_pool(host)
 
-        self._start_reconnector(host, is_host_addition=False)
+        if self._is_current_host(host):
+            self._start_reconnector(host, is_host_addition=False)
+
+    def _is_current_host(self, host):
+        return (not host._is_removed and
+                self.metadata.get_host_by_host_id(host.host_id) is host)
 
     def _on_up_future_completed(self, host, futures, results, lock, finished_future):
         with lock:
@@ -2339,33 +2350,43 @@ class Cluster(object):
             if futures:
                 return
 
-        try:
-            # all futures have completed at this point
-            for exc in [f for f in results if isinstance(f, Exception)]:
-                log.error("Unexpected failure while marking node %s up:", host, exc_info=exc)
-                self._cleanup_failed_on_up_handling(host)
-                return
+        # Removal and replacement hold this lock while unpublishing the host,
+        # so an UP completion cannot outlive its metadata identity.
+        with host._down_callbacks_lock:
+            try:
+                if not self._is_current_host(host):
+                    return
 
-            if not all(results):
-                log.debug("Connection pool could not be created, not marking node %s up", host)
-                self._cleanup_failed_on_up_handling(host)
-                return
+                # all futures have completed at this point
+                for exc in [f for f in results if isinstance(f, Exception)]:
+                    log.error("Unexpected failure while marking node %s up:", host, exc_info=exc)
+                    self._cleanup_failed_on_up_handling(host)
+                    return
 
-            log.info("Connection pools established for node %s", host)
-            # mark the host as up and notify all listeners
-            with host.lock:
-                host.set_up()
-                host._pending_host_addition = False
-                host._pending_host_addition_callback = None
-            for listener in self.listeners:
-                listener.on_up(host)
-        finally:
-            with host.lock:
-                host._currently_handling_node_up = False
+                if not all(results):
+                    log.debug("Connection pool could not be created, not marking node %s up", host)
+                    self._cleanup_failed_on_up_handling(host)
+                    return
 
-        # see if there are any pools to add or remove now that the host is marked up
-        for session in tuple(self.sessions):
-            session.update_created_pools()
+                log.info("Connection pools established for node %s", host)
+                # mark the host as up and notify all listeners
+                with host.lock:
+                    host.set_up()
+                    host._pending_host_addition = False
+                    host._pending_host_addition_callback = None
+                for listener in self.listeners:
+                    if not self._is_current_host(host):
+                        return
+                    listener.on_up(host)
+
+                # see if there are any pools to add or remove now that the host is marked up
+                for session in tuple(self.sessions):
+                    if not self._is_current_host(host):
+                        return
+                    session.update_created_pools()
+            finally:
+                with host.lock:
+                    host._currently_handling_node_up = False
 
     def on_up(self, host):
         """
@@ -2376,7 +2397,7 @@ class Cluster(object):
 
         log.debug("Waiting to acquire lock for handling up status of node %s", host)
         with host.lock:
-            if host._is_removed:
+            if not self._is_current_host(host):
                 log.debug("Ignoring up status for removed host %s", host)
                 return
 
@@ -2435,18 +2456,22 @@ class Cluster(object):
             for future in futures:
                 future.cancel()
 
-            self._cleanup_failed_on_up_handling(host)
-
-            with host.lock:
-                host._currently_handling_node_up = False
+            with host._down_callbacks_lock:
+                try:
+                    self._cleanup_failed_on_up_handling(host)
+                finally:
+                    with host.lock:
+                        host._currently_handling_node_up = False
             raise
         else:
             if not have_future:
-                with host.lock:
-                    host.set_up()
-                    host._pending_host_addition = False
-                    host._pending_host_addition_callback = None
-                    host._currently_handling_node_up = False
+                with host._down_callbacks_lock:
+                    with host.lock:
+                        if self._is_current_host(host):
+                            host.set_up()
+                            host._pending_host_addition = False
+                            host._pending_host_addition_callback = None
+                        host._currently_handling_node_up = False
 
         # for testing purposes
         return futures
@@ -2861,17 +2886,16 @@ class Cluster(object):
         if self.is_shutdown:
             return
 
+        self._retire_host(host)
+        self._notify_host_removed(host, trigger_reconciliation,
+                                  suppress_callback_errors)
+
+    def _notify_host_removed(self, host, trigger_reconciliation,
+                             suppress_callback_errors):
+        if self.is_shutdown:
+            return
+
         log.debug("[cluster] Removing host %s", host)
-        # A Host object is never re-added after lifecycle removal; a later
-        # discovery creates a new object, even when it carries the same ID.
-        # Serialize the terminal transition with DOWN callbacks that already
-        # validated this Host, then mark it before removing its pools.
-        with host._down_callbacks_lock:
-            with host.lock:
-                host._is_removed = True
-                host.set_down()
-                host._pending_host_addition = False
-                host._pending_host_addition_callback = None
 
         def notify(callback, *args, **kwargs):
             if not suppress_callback_errors:
@@ -2897,6 +2921,18 @@ class Cluster(object):
         reconnection_handler = host.get_and_set_reconnection_handler(None)
         if reconnection_handler:
             notify(reconnection_handler.cancel)
+
+    @staticmethod
+    def _retire_host(host):
+        # A Host object is never re-added after lifecycle removal; a later
+        # discovery creates a new object, even when it carries the same ID.
+        # Serialize this transition with DOWN callbacks before pool removal.
+        with host._down_callbacks_lock:
+            with host.lock:
+                host._is_removed = True
+                host.set_down()
+                host._pending_host_addition = False
+                host._pending_host_addition_callback = None
 
     def signal_connection_failure(self, host, connection_exc,
                                   is_host_addition,
@@ -3090,11 +3126,18 @@ class Cluster(object):
         ``suppress_callback_errors`` keeps replacement cleanup moving if a
         removal listener raises.
         """
-        if host and self.metadata.remove_host(host):
-            log.info("Cassandra host %s removed", host)
-            self.on_remove(
-                host, trigger_reconciliation=trigger_reconciliation,
-                suppress_callback_errors=suppress_callback_errors)
+        if host:
+            # Unpublish and retire the host under the callback lock so UP and
+            # DOWN completion see a terminal state. Run callbacks after release.
+            with host._down_callbacks_lock:
+                if (self._is_current_host(host) and
+                        self.metadata.remove_host(host)):
+                    self._retire_host(host)
+                    log.info("Cassandra host %s removed", host)
+                else:
+                    return
+            self._notify_host_removed(
+                host, trigger_reconciliation, suppress_callback_errors)
 
     def register_listener(self, listener):
         """
@@ -6420,7 +6463,10 @@ class ControlConnection(object):
             if old_host_id not in found_host_ids:
                 should_rebuild_token_map = True
                 log.debug("[control connection] Removing host not found in peers metadata: %r", old_host)
-                self._cluster.metadata.remove_host_by_host_id(old_host_id, old_host.endpoint)
+                # This metadata-only removal must not overtake UP completion.
+                with old_host._down_callbacks_lock:
+                    if self._cluster.metadata.get_host_by_host_id(old_host_id) is old_host:
+                        self._cluster.metadata.remove_host_by_host_id(old_host_id, old_host.endpoint)
 
         log.debug("[control connection] Finished fetching ring info")
         if partitioner and should_rebuild_token_map:
