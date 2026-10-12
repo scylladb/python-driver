@@ -16,7 +16,7 @@ from binascii import unhexlify
 from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Mapping
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from enum import Enum
 from functools import total_ordering
 from hashlib import md5
@@ -411,32 +411,41 @@ class Metadata(object):
         replacements = list(replacements)
         source_ids = set()
         destinations = set()
-        with self._hosts_lock:
-            for old_host, replacement in replacements:
-                if old_host.host_id != replacement.host_id:
-                    raise ValueError("Endpoint replacement must preserve host_id")
-                if old_host.endpoint == replacement.endpoint:
-                    raise ValueError("Endpoint replacement requires a new endpoint")
-                if old_host.host_id in source_ids:
-                    raise ValueError("Host appears more than once in endpoint replacement")
-                if replacement.endpoint in destinations:
-                    raise ValueError("Endpoint appears more than once in endpoint replacement")
-                if self._hosts.get(old_host.host_id) is not old_host:
-                    raise ValueError("Host is no longer current in metadata")
-                source_ids.add(old_host.host_id)
-                destinations.add(replacement.endpoint)
+        # UP completion takes a source host's callback lock before checking
+        # metadata identity. Take every source lock in a stable order before
+        # publishing the batch, then release them before lifecycle callbacks.
+        with ExitStack() as locks:
+            for old_host, _ in sorted(
+                    replacements,
+                    key=lambda pair: (str(pair[0].host_id), id(pair[0]))):
+                locks.enter_context(old_host._down_callbacks_lock)
+            with self._hosts_lock:
+                for old_host, replacement in replacements:
+                    if old_host.host_id != replacement.host_id:
+                        raise ValueError("Endpoint replacement must preserve host_id")
+                    if old_host.endpoint == replacement.endpoint:
+                        raise ValueError("Endpoint replacement requires a new endpoint")
+                    if old_host.host_id in source_ids:
+                        raise ValueError("Host appears more than once in endpoint replacement")
+                    if replacement.endpoint in destinations:
+                        raise ValueError(
+                            "Endpoint appears more than once in endpoint replacement")
+                    if self._hosts.get(old_host.host_id) is not old_host:
+                        raise ValueError("Host is no longer current in metadata")
+                    source_ids.add(old_host.host_id)
+                    destinations.add(replacement.endpoint)
 
-            for old_host, replacement in replacements:
-                owner_id = self._host_id_by_endpoint.get(replacement.endpoint)
-                if owner_id is not None and owner_id not in source_ids:
-                    raise ValueError("New endpoint belongs to another host")
+                for old_host, replacement in replacements:
+                    owner_id = self._host_id_by_endpoint.get(replacement.endpoint)
+                    if owner_id is not None and owner_id not in source_ids:
+                        raise ValueError("New endpoint belongs to another host")
 
-            for old_host, _ in replacements:
-                if self._host_id_by_endpoint.get(old_host.endpoint) == old_host.host_id:
-                    self._host_id_by_endpoint.pop(old_host.endpoint)
-            for _, replacement in replacements:
-                self._hosts[replacement.host_id] = replacement
-                self._host_id_by_endpoint[replacement.endpoint] = replacement.host_id
+                for old_host, _ in replacements:
+                    if self._host_id_by_endpoint.get(old_host.endpoint) == old_host.host_id:
+                        self._host_id_by_endpoint.pop(old_host.endpoint)
+                for _, replacement in replacements:
+                    self._hosts[replacement.host_id] = replacement
+                    self._host_id_by_endpoint[replacement.endpoint] = replacement.host_id
 
     def remove_host(self, host):
         with self._hosts_lock:

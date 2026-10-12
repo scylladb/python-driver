@@ -709,6 +709,84 @@ class ClusterTest(unittest.TestCase):
         assert cluster.metadata.get_host_by_host_id(host.host_id) is None
         assert cluster.metadata.get_host(host.endpoint).host_id != host.host_id
 
+    def test_endpoint_move_waits_for_inflight_up_completion(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_remove = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster.on_add = Mock()
+        host = Host(DefaultEndPoint('127.0.0.1'), SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        host.set_down()
+        future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = future
+        cluster.sessions = (session,)
+        callback_started = Event()
+        release_callback = Event()
+        move_attempted = Event()
+        callback_order = []
+
+        def on_listener_up(_host):
+            callback_started.set()
+            assert release_callback.wait(5)
+            callback_order.append('up')
+
+        listener = Mock()
+        listener.on_up.side_effect = on_listener_up
+        listener.on_remove.side_effect = lambda _host: callback_order.append('remove')
+        cluster.register_listener(listener)
+        cluster.on_up(host)
+
+        callback_lock = host._down_callbacks_lock
+        move_thread = None
+
+        class AttemptTrackingLock(object):
+
+            def __enter__(self):
+                if threading.current_thread() is move_thread:
+                    move_attempted.set()
+                callback_lock.acquire()
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                callback_lock.release()
+
+        host._down_callbacks_lock = AttemptTrackingLock()
+        completion_thread = Thread(target=lambda: future.set_result(True))
+        move_errors = []
+
+        def move_host():
+            try:
+                cluster.replace_host_endpoint(
+                    host, DefaultEndPoint('127.0.0.2'))
+            except Exception as exc:
+                move_errors.append(exc)
+
+        move_thread = Thread(target=move_host)
+        completion_thread.start()
+        try:
+            assert callback_started.wait(5)
+            move_thread.start()
+            assert move_attempted.wait(5)
+            assert cluster.metadata.get_host_by_host_id(host.host_id) is host
+        finally:
+            release_callback.set()
+            completion_thread.join(5)
+            if move_thread.ident is not None:
+                move_thread.join(5)
+
+        assert not completion_thread.is_alive()
+        assert not move_thread.is_alive()
+        assert not move_errors
+        assert callback_order.index('up') < callback_order.index('remove')
+        assert host._is_removed
+        assert cluster.metadata.get_host_by_host_id(host.host_id) is not host
+
     def test_reentrant_removal_stops_up_completion(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)
