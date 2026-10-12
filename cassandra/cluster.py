@@ -2886,17 +2886,16 @@ class Cluster(object):
         if self.is_shutdown:
             return
 
+        self._retire_host(host)
+        self._notify_host_removed(host, trigger_reconciliation,
+                                  suppress_callback_errors)
+
+    def _notify_host_removed(self, host, trigger_reconciliation,
+                             suppress_callback_errors):
+        if self.is_shutdown:
+            return
+
         log.debug("[cluster] Removing host %s", host)
-        # A Host object is never re-added after lifecycle removal; a later
-        # discovery creates a new object, even when it carries the same ID.
-        # Serialize the terminal transition with DOWN callbacks that already
-        # validated this Host, then mark it before removing its pools.
-        with host._down_callbacks_lock:
-            with host.lock:
-                host._is_removed = True
-                host.set_down()
-                host._pending_host_addition = False
-                host._pending_host_addition_callback = None
 
         def notify(callback, *args, **kwargs):
             if not suppress_callback_errors:
@@ -2922,6 +2921,18 @@ class Cluster(object):
         reconnection_handler = host.get_and_set_reconnection_handler(None)
         if reconnection_handler:
             notify(reconnection_handler.cancel)
+
+    @staticmethod
+    def _retire_host(host):
+        # A Host object is never re-added after lifecycle removal; a later
+        # discovery creates a new object, even when it carries the same ID.
+        # Serialize this transition with DOWN callbacks before pool removal.
+        with host._down_callbacks_lock:
+            with host.lock:
+                host._is_removed = True
+                host.set_down()
+                host._pending_host_addition = False
+                host._pending_host_addition_callback = None
 
     def signal_connection_failure(self, host, connection_exc,
                                   is_host_addition,
@@ -3116,15 +3127,17 @@ class Cluster(object):
         removal listener raises.
         """
         if host:
-            # Share the callback lock with UP and DOWN completion. Keep it
-            # through on_remove so completion sees a fully retired host.
+            # Unpublish and retire the host under the callback lock so UP and
+            # DOWN completion see a terminal state. Run callbacks after release.
             with host._down_callbacks_lock:
                 if (self._is_current_host(host) and
                         self.metadata.remove_host(host)):
+                    self._retire_host(host)
                     log.info("Cassandra host %s removed", host)
-                    self.on_remove(
-                        host, trigger_reconciliation=trigger_reconciliation,
-                        suppress_callback_errors=suppress_callback_errors)
+                else:
+                    return
+            self._notify_host_removed(
+                host, trigger_reconciliation, suppress_callback_errors)
 
     def register_listener(self, listener):
         """

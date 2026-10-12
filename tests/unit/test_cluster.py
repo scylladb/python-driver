@@ -598,6 +598,39 @@ class ClusterTest(unittest.TestCase):
         session.update_created_pools.assert_called_once_with()
         assert host._is_removed
 
+    def test_remove_releases_callback_lock_before_notifications(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.control_connection.on_remove = Mock()
+        host = Host('127.0.0.1', SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        lock_acquired = Event()
+
+        def on_listener_remove(_host):
+            assert cluster.metadata.get_host_by_host_id(host.host_id) is None
+            assert host._is_removed
+
+            def acquire_callback_lock():
+                with host._down_callbacks_lock:
+                    lock_acquired.set()
+
+            lock_thread = Thread(target=acquire_callback_lock)
+            lock_thread.start()
+            assert lock_acquired.wait(2)
+            lock_thread.join(2)
+            assert not lock_thread.is_alive()
+
+        listener = Mock()
+        listener.on_remove.side_effect = on_listener_remove
+        cluster.register_listener(listener)
+
+        cluster.remove_host(host)
+
+        listener.on_remove.assert_called_once_with(host)
+        cluster.control_connection.on_remove.assert_called_once_with(
+            host, trigger_reconciliation=True)
+
     def test_replacement_waits_for_inflight_up_completion(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)
