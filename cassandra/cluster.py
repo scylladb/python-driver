@@ -5482,7 +5482,7 @@ class ResponseFuture(object):
     _errbacks = None
     _current_host = None
     _connection = None
-    _connection_pool = None
+    _current_request = None
     _query_retries = 0
     _start_time = None
     _metrics = None
@@ -5553,7 +5553,8 @@ class ResponseFuture(object):
         set in those cases, where ``_on_timeout`` reschedules itself.
         """
         # PYTHON-853: for short timeouts, we sometimes race with our __init__
-        if self._connection is None and _attempts < 3:
+        current_request = self._current_request
+        if current_request is None and _attempts < 3:
             self._timer = self.session.cluster.connection_class.create_timer(
                 0.01,
                 partial(self._on_timeout, _attempts=_attempts + 1)
@@ -5561,9 +5562,10 @@ class ResponseFuture(object):
             return
 
         conn_in_flight = None
-        if self._connection is not None:
+        if current_request is not None:
+            connection, pool, request_id = current_request
             try:
-                self._connection._requests.pop(self._req_id)
+                connection._requests.pop(request_id)
             # PYTHON-1044
             # This request might have been removed from the connection after the latter was defunct by heartbeat.
             # We should still raise OperationTimedOut to reject the future so that the main event thread will not
@@ -5573,25 +5575,24 @@ class ResponseFuture(object):
                 errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
                 self._set_final_exception(OperationTimedOut(errors, self._current_host,
                                                             timeout=self.timeout,
-                                                            in_flight=self._connection.in_flight))
+                                                            in_flight=connection.in_flight))
                 return
 
             # Capture connection stats before pool.return_connection() can alter state
-            conn_in_flight = self._connection.in_flight
+            conn_in_flight = connection.in_flight
 
-            pool = self._connection_pool
             if pool and not pool.is_shutdown:
                 # Do not return the stream ID to the pool yet. We cannot reuse it
                 # because the node might still be processing the query and will
                 # return a late response to that query - if we used such stream
                 # before the response to the previous query has arrived, the new
                 # query could get a response from the old query
-                with self._connection.lock:
-                    self._connection.orphaned_request_ids.add(self._req_id)
-                    if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
-                        self._connection.orphaned_threshold_reached = True
+                with connection.lock:
+                    connection.orphaned_request_ids.add(request_id)
+                    if len(connection.orphaned_request_ids) >= connection.orphaned_threshold:
+                        connection.orphaned_threshold_reached = True
 
-                pool.return_connection(self._connection, stream_was_orphaned=True)
+                pool.return_connection(connection, stream_was_orphaned=True)
 
         errors = self._errors
         if not errors:
@@ -5724,12 +5725,12 @@ class ResponseFuture(object):
                 return None
 
             self._connection = connection
-            self._connection_pool = pool
             self.request_encoded_size = connection.send_msg(
                 message, request_id, cb=cb,
                 encoder=self._protocol_handler.encode_message,
                 decoder=self._protocol_handler.decode_message,
                 result_metadata=result_meta)
+            self._current_request = (connection, pool, request_id)
 
             self.attempted_hosts.append(host)
             return request_id

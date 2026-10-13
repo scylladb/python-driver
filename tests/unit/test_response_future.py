@@ -706,7 +706,14 @@ class ResponseFutureTests(unittest.TestCase):
                           orphaned_request_ids=set(), orphaned_threshold=256, in_flight=1)
         old_pool.borrow_connection.return_value = (connection, 1)
         session._lock = RLock()
-        session._get_pool_by_host_identity.side_effect = [old_pool, old_pool, replacement_pool]
+        old_endpoint = host.endpoint
+
+        def lookup_pool(_host, expected_endpoint=None):
+            if expected_endpoint is not None or host.endpoint == old_endpoint:
+                return old_pool
+            return replacement_pool
+
+        session._get_pool_by_host_identity.side_effect = lookup_pool
 
         rf = self.make_response_future(session)
         rf.send_request()
@@ -719,6 +726,36 @@ class ResponseFutureTests(unittest.TestCase):
         replacement_pool.return_connection.assert_not_called()
         old_pool.return_connection.assert_called_once_with(
             connection, stream_was_orphaned=True)
+
+    def test_timeout_keeps_connection_pool_and_request_id_from_one_attempt(self):
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = []
+        rf = self.make_response_future(session)
+        first_pool = self.make_pool()
+        second_pool = self.make_pool()
+        first_connection = Mock(spec=Connection, lock=RLock(),
+                                orphaned_request_ids=set(), orphaned_threshold=256,
+                                in_flight=1)
+        second_connection = Mock(spec=Connection)
+
+        class InterleavingRequests(dict):
+            def pop(self, request_id):
+                rf._connection = second_connection
+                rf._req_id = 2
+                rf._current_request = (second_connection, second_pool, 2)
+                return super().pop(request_id)
+
+        first_connection._requests = InterleavingRequests({1: object()})
+        rf._connection = first_connection
+        rf._req_id = 1
+        rf._current_request = (first_connection, first_pool, 1)
+
+        rf._on_timeout()
+
+        first_pool.return_connection.assert_called_once_with(
+            first_connection, stream_was_orphaned=True)
+        second_pool.return_connection.assert_not_called()
+        assert first_connection.orphaned_request_ids == {1}
 
     def test_query_does_not_borrow_stale_pool_after_endpoint_swap(self):
         session = self.make_basic_session()
@@ -911,7 +948,7 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf.send_request()
         assert queued_at == [host.endpoint]
         assert host.endpoint != old_endpoint
-        assert rf._connection_pool is pool
+        assert rf._current_request == (connection, pool, 1)
 
     def test_single_host_query_plan_exhausted_after_one_retry(self):
         """
