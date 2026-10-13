@@ -853,6 +853,36 @@ class ResponseFutureTests(unittest.TestCase):
         assert list(connection.request_ids) == [1]
         assert isinstance(rf._errors[host], ConnectionException)
 
+    def test_query_releases_request_id_when_pool_shuts_down_during_borrow(self):
+        session = self.make_basic_session()
+        host = Host(DefaultEndPoint('127.0.0.1'), SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        pool = self.make_pool()
+        pool.host = host
+        pool.endpoint = host.endpoint
+        connection = Mock(spec=Connection, lock=RLock(), request_ids=deque())
+
+        session._lock = RLock()
+        session._pools = {host: pool}
+        session._endpoints_match = Session._endpoints_match.__get__(session, Session)
+        session._pool_matches_expected = Session._pool_matches_expected.__get__(session, Session)
+        session._get_pool_by_host_identity = Session._get_pool_by_host_identity.__get__(session, Session)
+        session.cluster._endpoints_match.side_effect = Cluster._endpoints_match
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [host]
+
+        def borrow_connection(**kwargs):
+            pool.is_shutdown = True
+            return connection, 1
+
+        pool.borrow_connection.side_effect = borrow_connection
+        rf = self.make_response_future(session)
+
+        assert not rf.send_request()
+        connection.send_msg.assert_not_called()
+        pool.return_connection.assert_called_once_with(connection)
+        assert list(connection.request_ids) == [1]
+        assert isinstance(rf._errors[host], ConnectionException)
+
     def test_query_uses_original_pool_when_endpoint_changes_after_validation(self):
         session = self.make_basic_session()
         host = Host(DefaultEndPoint('127.0.0.1'), SimpleConvictionPolicy,
