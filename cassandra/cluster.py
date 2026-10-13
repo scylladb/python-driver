@@ -2351,7 +2351,9 @@ class Cluster(object):
     def _on_up_future_completed(self, host, futures, results, lock, finished_future,
                                 generation=None):
         with lock:
-            futures.discard(finished_future)
+            if finished_future not in futures:
+                return
+            futures.remove(finished_future)
 
             try:
                 results.append(finished_future.result())
@@ -2381,6 +2383,7 @@ class Cluster(object):
             log.info("Connection pools established for node %s", host)
             if not self._lifecycle.mark_ready(host, readiness_generation=generation):
                 return
+            self._notify_pending_add(host, generation)
             for listener in self.listeners:
                 if not self._lifecycle.dispatch_current(
                         host, listener.on_up, readiness_generation=generation):
@@ -2485,7 +2488,15 @@ class Cluster(object):
         else:
             if not have_future:
                 try:
-                    self._lifecycle.mark_ready(host, readiness_generation=generation)
+                    if self._lifecycle.mark_ready(host, readiness_generation=generation):
+                        # Preserve the existing no-pool UP behavior unless it
+                        # must finish an outstanding discovery notification.
+                        if self._notify_pending_add(host, generation):
+                            for listener in self.listeners:
+                                if not self._lifecycle.dispatch_current(
+                                        host, listener.on_up,
+                                        readiness_generation=generation):
+                                    return
                 finally:
                     self._lifecycle.finish_up(host, generation)
 
@@ -2644,20 +2655,25 @@ class Cluster(object):
 
     def on_add(self, host, refresh_nodes=True,
                reconcile_pools_on_failure=False,
-               set_up_if_ignored=False):
+               set_up_if_ignored=False, _retry_callback_errors=None):
+        if _retry_callback_errors is None:
+            _retry_callback_errors = reconcile_pools_on_failure
         on_add_reconnection = None
         if reconcile_pools_on_failure:
             on_add_reconnection = partial(
                 self.on_add, refresh_nodes=True,
                 reconcile_pools_on_failure=True, set_up_if_ignored=True)
+            if not _retry_callback_errors:
+                on_add_reconnection.keywords['_retry_callback_errors'] = False
 
         def deliver(host, generation):
             try:
                 self._on_add(host, generation, refresh_nodes,
                              reconcile_pools_on_failure, set_up_if_ignored,
-                             on_add_reconnection)
+                             on_add_reconnection, _retry_callback_errors)
             except Exception:
-                self._on_add_preparation_failed(host)
+                self._on_add_preparation_failed(
+                    host, _retry_callback_errors, generation)
                 raise
         with self._lifecycle.transaction():
             # Preserve discovery intent even if DOWN supersedes this queued
@@ -2668,7 +2684,10 @@ class Cluster(object):
 
     def _on_add(self, host, generation, refresh_nodes=True,
                 reconcile_pools_on_failure=False,
-                set_up_if_ignored=False, on_add_reconnection=None):
+                set_up_if_ignored=False, on_add_reconnection=None,
+                retry_callback_errors=None):
+        if retry_callback_errors is None:
+            retry_callback_errors = reconcile_pools_on_failure
         if self.is_shutdown:
             return
 
@@ -2682,6 +2701,8 @@ class Cluster(object):
                 self.on_add, refresh_nodes=True,
                 reconcile_pools_on_failure=True,
                 set_up_if_ignored=True)
+            if not retry_callback_errors:
+                on_add_reconnection.keywords['_retry_callback_errors'] = False
 
         with host.lock:
             if (not self._lifecycle.readiness_is_current(host, generation) or
@@ -2691,14 +2712,20 @@ class Cluster(object):
 
         log.debug("Handling new host %r and notifying listeners", host)
 
-        self.profile_manager.on_add(host)
-        if not self._lifecycle.readiness_is_current(host, generation):
+        try:
+            self.profile_manager.on_add(host)
+            if not self._lifecycle.readiness_is_current(host, generation):
+                return
+            self.control_connection.on_add(host, refresh_nodes)
+            if not self._lifecycle.readiness_is_current(host, generation):
+                return
+            distance = self.profile_manager.distance(host)
+        except Exception:
+            if retry_callback_errors:
+                raise
+            log.exception("Error in host addition policy/control callback for %s", host)
+            self._lifecycle.abandon_addition(host, generation, addition_token)
             return
-        self.control_connection.on_add(host, refresh_nodes)
-        if not self._lifecycle.readiness_is_current(host, generation):
-            return
-
-        distance = self.profile_manager.distance(host)
         if not self._lifecycle.readiness_is_current(host, generation):
             return
         if distance != HostDistance.IGNORED:
@@ -2706,18 +2733,28 @@ class Cluster(object):
                 host, partial(self._on_add_prepared, host, distance,
                               reconcile_pools_on_failure, set_up_if_ignored,
                               on_add_reconnection, generation, addition_token),
-                partial(self._on_add_preparation_failed, host))
+                partial(self._on_add_preparation_failed, host,
+                        retry_callback_errors, generation, addition_token))
             return
         self._on_add_prepared(host, distance, reconcile_pools_on_failure,
                               set_up_if_ignored, on_add_reconnection, generation,
                               addition_token)
 
-    def _on_add_preparation_failed(self, host):
-        # Keep the ADD readiness reservation until the retry owns pool setup.
-        if self._is_current_host(host):
-            with host.lock:
-                host._endpoint_add_retry_pending = True
-            self._schedule_failed_endpoint_add_retry(host)
+    def _on_add_preparation_failed(self, host, retry_callback_errors=True,
+                                   generation=None, addition_token=None):
+        # Keep the ADD reservation only while this attempt still owns recovery.
+        # UP can supersede scheduled retries without changing DOWN's generation.
+        with host.lock:
+            if (not self._lifecycle.readiness_is_current(host, generation) or
+                    host.is_up or host._currently_handling_node_up or
+                    (addition_token is not None and
+                     not self._lifecycle.addition_is_current(host, addition_token))):
+                return
+            host._endpoint_add_retry_pending = True
+            # Preparation retries retain replacement-style pool cleanup,
+            # but must not turn ordinary ADD callback errors into retries.
+            host._endpoint_add_retry_callback_errors = retry_callback_errors
+        self._schedule_failed_endpoint_add_retry(host)
 
     def _on_add_prepared(self, host, distance, reconcile_pools_on_failure,
                          set_up_if_ignored, on_add_reconnection, generation,
@@ -2875,19 +2912,25 @@ class Cluster(object):
                 addition_token=addition_token):
             return
 
-        for listener in self.listeners:
-            try:
-                if not self._lifecycle.dispatch_current(
-                        host, listener.on_add, readiness_generation=generation):
-                    return
-            except Exception:
-                log.exception("Error in host addition listener for %s", host)
+        self._notify_pending_add(host, generation)
 
         # see if there are any pools to add or remove now that the host is marked up
         for session in tuple(self.sessions):
             if not self._lifecycle.readiness_is_current(host, generation):
                 return
             session.update_created_pools()
+
+    def _notify_pending_add(self, host, generation):
+        if not self._lifecycle.claim_addition_notification(host, generation):
+            return False
+        for listener in self.listeners:
+            try:
+                if not self._lifecycle.dispatch_current(
+                        host, listener.on_add, readiness_generation=generation):
+                    break
+            except Exception:
+                log.exception("Error in host addition listener for %s", host)
+        return True
 
     def on_remove(self, host, trigger_reconciliation=True,
                   suppress_callback_errors=False, refresh_nodes=True):
@@ -3070,15 +3113,16 @@ class Cluster(object):
             # Claim this retry so overlapping topology refreshes do not
             # run policy and pool setup for the same Host at once.
             host._endpoint_add_retry_pending = False
+            retry_callback_errors = getattr(
+                host, '_endpoint_add_retry_callback_errors', True)
         try:
             self._on_add(host, generation, refresh_nodes=False,
-                         reconcile_pools_on_failure=True)
+                         reconcile_pools_on_failure=True,
+                         retry_callback_errors=retry_callback_errors)
         except Exception:
             log.exception("Error retrying addition of moved host %s", host)
-            with host.lock:
-                if not host._is_removed:
-                    host._endpoint_add_retry_pending = True
-            self._schedule_failed_endpoint_add_retry(host)
+            self._on_add_preparation_failed(
+                host, retry_callback_errors, generation)
 
     def remove_host(self, host, trigger_reconciliation=True,
                     suppress_callback_errors=False, refresh_nodes=True):

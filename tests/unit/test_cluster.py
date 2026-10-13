@@ -2052,14 +2052,14 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         assert self.host.is_up
         assert not self.host._pending_host_addition
         assert self.host._pending_host_addition_callback is None
-        listener.on_up.assert_called_once_with(self.host)
+        assert listener.method_calls == [call.on_add(self.host), call.on_up(self.host)]
 
         cluster.on_down(self.host, is_host_addition=False)
         down_task, *args = cluster.executor.submit.call_args.args
         down_task(*args)
 
         assert not self.host._reconnection_handler.is_host_addition
-        listener.on_add.assert_not_called()
+        listener.on_add.assert_called_once_with(self.host)
 
     def test_successful_add_resolves_pending_state_before_listener(self):
         cluster = Cluster()
@@ -6751,3 +6751,412 @@ def test_superseded_add_failure_cannot_remove_new_up_pool(up_already_complete, r
         assert not host._currently_handling_node_up
     finally:
         cluster.shutdown()
+
+
+@pytest.fixture
+def pending_discovery_cluster():
+    cluster = Cluster()
+    cluster.profile_manager = Mock()
+    cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+    cluster.control_connection.on_add = Mock()
+    cluster.control_connection.on_up = Mock()
+    cluster._start_reconnector = Mock()
+    cluster.scheduler.schedule = Mock()
+    host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+    cluster.metadata.add_or_return_host(host)
+    listener = Mock()
+    cluster.register_listener(listener)
+    try:
+        yield cluster, host, listener
+    finally:
+        cluster.shutdown()
+
+
+@pytest.mark.parametrize("add_result", [True, False])
+@pytest.mark.parametrize("up_pool", ["pending", "none", "ignored"])
+def test_up_completes_pending_listener_add(pending_discovery_cluster, add_result, up_pool):
+    cluster, host, listener = pending_discovery_cluster
+    add_future, up_future = Future(), Future()
+    session = Mock()
+    session.add_or_renew_pool.side_effect = [
+        add_future, up_future if up_pool == "pending" else None]
+    cluster.sessions = (session,)
+    cluster.on_add(host, refresh_nodes=False)
+    if up_pool == "ignored":
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+    cluster.on_up(host)
+    if up_pool == "pending":
+        up_future.set_result(True)
+    add_future.set_result(add_result)
+    cluster.on_up(host)
+    assert listener.method_calls == [call.on_add(host), call.on_up(host)]
+    cluster.profile_manager.on_add.assert_called_once_with(host)
+    cluster.control_connection.on_add.assert_called_once_with(host, False)
+    assert not host._lifecycle_pending
+    assert not host._pending_host_addition
+
+
+@pytest.mark.parametrize("failure", ["policy", "control", "distance"])
+def test_ordinary_add_callback_failure_releases_recovery(pending_discovery_cluster, failure):
+    cluster, host, listener = pending_discovery_cluster
+    callback = {"policy": cluster.profile_manager.on_add,
+                "control": cluster.control_connection.on_add,
+                "distance": cluster.profile_manager.distance}[failure]
+    callback.side_effect = RuntimeError("application callback failed")
+    host.set_down()
+    cluster.on_add(host, refresh_nodes=False)
+    cluster.scheduler.schedule.assert_not_called()
+    cluster._start_reconnector.assert_not_called()
+    assert not host._lifecycle_pending
+    assert not host._pending_host_addition
+    assert host._pending_host_addition_callback is None
+    listener.on_add.assert_not_called()
+    callback.side_effect = None
+    cluster.on_up(host)
+    assert listener.method_calls == [call.on_add(host), call.on_up(host)]
+    assert cluster.profile_manager.on_add.call_count == 1
+
+
+@pytest.mark.parametrize("action", ["remove", "down", "raise"])
+def test_up_pending_add_listener_reentry(pending_discovery_cluster, action):
+    cluster, host, listener = pending_discovery_cluster
+    add_future, up_future = Future(), Future()
+    session = Mock()
+    session.add_or_renew_pool.side_effect = [add_future, up_future]
+    cluster.sessions = (session,)
+    cluster._discount_down_events = False
+    if action == "remove":
+        listener.on_add.side_effect = cluster.remove_host
+    elif action == "down":
+        listener.on_add.side_effect = lambda h: cluster.on_down(h, False)
+    else:
+        listener.on_add.side_effect = RuntimeError("listener failed")
+    cluster.on_add(host, refresh_nodes=False)
+    cluster.on_up(host)
+    up_future.set_result(True)
+    add_future.set_result(True)
+    listener.on_add.assert_called_once_with(host)
+    if action == "raise":
+        listener.on_up.assert_called_once_with(host)
+    else:
+        listener.on_up.assert_not_called()
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_add_preparation_failure_keeps_retry(pending_discovery_cluster, replacement):
+    cluster, host, listener = pending_discovery_cluster
+    cluster._prepare_host = Mock(side_effect=RuntimeError("preparation failed"))
+    cluster.on_add(host, reconcile_pools_on_failure=replacement)
+    assert host._lifecycle_pending
+    assert host._pending_host_addition
+    assert host._pending_host_addition_notification
+    assert host._endpoint_add_retry_pending
+    cluster.scheduler.schedule.assert_called_once_with(
+        1, cluster.retry_failed_endpoint_add, host)
+    listener.on_add.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["policy", "control", "distance"])
+def test_replacement_add_callback_failure_keeps_retry(pending_discovery_cluster, failure):
+    cluster, host, listener = pending_discovery_cluster
+    callback = {"policy": cluster.profile_manager.on_add,
+                "control": cluster.control_connection.on_add,
+                "distance": cluster.profile_manager.distance}[failure]
+    callback.side_effect = RuntimeError("application callback failed")
+    cluster.on_add(host, reconcile_pools_on_failure=True)
+    assert host._lifecycle_pending
+    assert host._pending_host_addition
+    assert host._endpoint_add_retry_pending
+    cluster.scheduler.schedule.assert_called_once_with(
+        1, cluster.retry_failed_endpoint_add, host)
+    listener.on_add.assert_not_called()
+
+
+def test_callback_failure_allows_explicit_add_recovery(pending_discovery_cluster):
+    cluster, host, listener = pending_discovery_cluster
+    cluster.profile_manager.on_add.side_effect = RuntimeError("callback failed")
+    cluster.on_add(host)
+    assert host._pending_host_addition_notification
+    cluster.profile_manager.on_add.side_effect = None
+    cluster.on_add(host)
+    listener.on_add.assert_called_once_with(host)
+    assert not host._pending_host_addition_notification
+    assert cluster.profile_manager.on_add.call_count == 2
+    cluster.scheduler.schedule.assert_not_called()
+
+
+@pytest.mark.parametrize("terminal", ["remove", "shutdown"])
+def test_abandoned_discovery_cleared_on_terminal_state(pending_discovery_cluster, terminal):
+    cluster, host, listener = pending_discovery_cluster
+    cluster.profile_manager.on_add.side_effect = RuntimeError("callback failed")
+    cluster.on_add(host)
+    assert host._pending_host_addition_notification
+    if terminal == "remove":
+        cluster.remove_host(host)
+    else:
+        cluster.shutdown()
+    assert not host._pending_host_addition_notification
+    cluster.on_up(host)
+    listener.on_add.assert_not_called()
+
+
+def test_failed_up_keeps_abandoned_discovery(pending_discovery_cluster):
+    cluster, host, listener = pending_discovery_cluster
+    cluster.profile_manager.on_add.side_effect = RuntimeError("callback failed")
+    cluster.on_add(host)
+    session = Mock()
+    failed, succeeded = Future(), Future()
+    session.add_or_renew_pool.side_effect = [failed, succeeded]
+    cluster.sessions = (session,)
+    cluster.on_up(host)
+    failed.set_result(False)
+    listener.on_add.assert_not_called()
+    assert host._pending_host_addition_notification
+    cluster.on_up(host)
+    succeeded.set_result(True)
+    assert listener.method_calls == [call.on_add(host), call.on_up(host)]
+    assert not host._pending_host_addition_notification
+    cluster.profile_manager.on_add.assert_called_once_with(host)
+
+
+def test_down_after_callback_failure_recovers_without_policy_add(pending_discovery_cluster):
+    cluster, host, listener = pending_discovery_cluster
+    cluster.profile_manager.on_add.side_effect = RuntimeError("callback failed")
+    cluster.on_add(host)
+    cluster._discount_down_events = False
+    # Use the real reconnect admission to check that discovery notification
+    # alone does not turn an ordinary DOWN into an ADD callback retry.
+    del cluster._start_reconnector
+    cluster._make_connection_factory = Mock(return_value=Mock())
+    submitted = []
+    cluster.executor.submit = lambda fn, *args, **kwargs: submitted.append(
+        (fn, args, kwargs))
+    cluster.on_down(host, False, expect_host_to_be_down=True)
+    assert len(submitted) == 1
+    task, args, kwargs = submitted.pop()
+    task(*args, **kwargs)
+    handler = host._reconnection_handler
+    assert handler is not None
+    assert not handler.is_host_addition
+    assert host._pending_host_addition_notification
+    handler.on_up(host)
+    assert listener.method_calls[-2:] == [call.on_add(host), call.on_up(host)]
+    cluster.profile_manager.on_add.assert_called_once_with(host)
+
+
+def test_up_duplicate_completion_does_not_repeat_notifications(pending_discovery_cluster):
+    cluster, host, listener = pending_discovery_cluster
+    add_future, up_future = Future(), Future()
+    session = Mock()
+    session.add_or_renew_pool.side_effect = [add_future, up_future]
+    cluster.sessions = (session,)
+    cluster.on_add(host)
+    cluster.on_up(host)
+    callback = up_future._done_callbacks[0]
+    up_future.set_result(True)
+    callback(up_future)
+    add_future.set_result(True)
+    assert listener.method_calls == [call.on_add(host), call.on_up(host)]
+
+
+def test_callback_failure_releases_pool_reconciliation(pending_discovery_cluster):
+    cluster, host, listener = pending_discovery_cluster
+    cluster.profile_manager.on_add.side_effect = RuntimeError("callback failed")
+    host.set_down()
+    cluster.on_add(host)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session.is_shutdown = False
+    session._profile_manager = cluster.profile_manager
+    session._profile_manager.distance.reset_mock()
+    session.update_created_pools()
+    # Reconciliation is admitted, but normal down-host checks still prevent
+    # connecting until explicit liveness recovery; discovery is only a notice.
+    session._profile_manager.distance.assert_called_once_with(host)
+    assert not session._pool_intents
+    assert host._pending_host_addition_notification
+    listener.on_add.assert_not_called()
+
+
+@pytest.mark.parametrize("distance", [HostDistance.LOCAL, HostDistance.IGNORED])
+def test_up_without_pending_discovery_preserves_no_pool_behavior(pending_discovery_cluster, distance):
+    cluster, host, listener = pending_discovery_cluster
+    cluster.profile_manager.distance.return_value = distance
+    cluster.on_up(host)
+    assert host.is_up
+    assert not host._currently_handling_node_up
+    listener.on_add.assert_not_called()
+    listener.on_up.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["remove", "down"])
+def test_add_callback_error_cannot_clear_new_lifecycle_owner(pending_discovery_cluster, action):
+    cluster, host, listener = pending_discovery_cluster
+    cluster._discount_down_events = False
+    cluster.executor.submit = Mock(return_value=Future())
+
+    def callback(host):
+        if action == "remove":
+            cluster.remove_host(host)
+        else:
+            cluster.on_down(host, False, expect_host_to_be_down=True)
+        raise RuntimeError("callback failed after reentry")
+
+    cluster.profile_manager.on_add.side_effect = callback
+    cluster.on_add(host)
+    cluster.scheduler.schedule.assert_not_called()
+    listener.on_add.assert_not_called()
+    if action == "remove":
+        assert not host._pending_host_addition_notification
+        assert not host._lifecycle_pending
+    else:
+        assert host._pending_host_addition_notification
+        assert host._pending_host_addition
+        cluster._start_reconnector.assert_called_once()
+        assert host.is_up is False
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_preparation_retry_preserves_callback_failure_policy(pending_discovery_cluster, replacement):
+    cluster, host, listener = pending_discovery_cluster
+    cluster._prepare_host = Mock(side_effect=RuntimeError("preparation failed"))
+    cluster.on_add(host, reconcile_pools_on_failure=replacement)
+    assert host._endpoint_add_retry_pending
+    cluster.scheduler.schedule.reset_mock()
+    cluster.profile_manager.on_add.side_effect = RuntimeError("callback failed")
+    cluster.retry_failed_endpoint_add(host)
+    listener.on_add.assert_not_called()
+    assert host._pending_host_addition_notification
+    if replacement:
+        assert host._endpoint_add_retry_pending
+        assert host._lifecycle_pending
+        cluster.scheduler.schedule.assert_called_once()
+    else:
+        assert not host._endpoint_add_retry_pending
+        assert not host._lifecycle_pending
+        assert not host._pending_host_addition
+        cluster.scheduler.schedule.assert_not_called()
+
+
+def test_ordinary_preparation_retry_keeps_policy_through_reconnection(pending_discovery_cluster):
+    cluster, host, listener = pending_discovery_cluster
+    cluster._prepare_host = Mock(side_effect=RuntimeError("preparation failed"))
+    cluster.on_add(host)
+    cluster._prepare_host.side_effect = lambda host, ready, failed: ready()
+    session = Mock()
+    pool_future = Future()
+    session.add_or_renew_pool.return_value = pool_future
+    cluster.sessions = (session,)
+    cluster.retry_failed_endpoint_add(host)
+    recovery = host._pending_host_addition_callback
+    assert recovery.keywords['_retry_callback_errors'] is False
+    pool_future.set_result(False)
+    cluster.scheduler.schedule.reset_mock()
+    cluster.profile_manager.on_add.side_effect = RuntimeError("callback failed")
+    recovery(host)
+    cluster.scheduler.schedule.assert_not_called()
+    assert not host._lifecycle_pending
+    assert not host._pending_host_addition
+    assert host._pending_host_addition_notification
+    listener.on_add.assert_not_called()
+
+
+def test_callback_failure_cancels_previous_add_recovery(pending_discovery_cluster):
+    cluster, host, listener = pending_discovery_cluster
+    cluster._prepare_host = Mock(side_effect=RuntimeError("preparation failed"))
+    cluster.on_add(host)
+    scheduled_retry = cluster.scheduler.schedule.call_args.args[1]
+    reconnector = Mock()
+    host._reconnection_handler = reconnector
+    down_generation = host._down_event_generation
+    cluster.profile_manager.on_add.side_effect = RuntimeError("callback failed")
+    cluster.on_add(host)
+    assert not host._endpoint_add_retry_pending
+    assert host._reconnection_handler is None
+    assert host._down_event_generation != down_generation
+    reconnector.cancel.assert_called_once_with()
+    cluster.profile_manager.on_add.reset_mock()
+    scheduled_retry(host)
+    cluster.profile_manager.on_add.assert_not_called()
+    assert host._pending_host_addition_notification
+
+
+@pytest.mark.parametrize('replacement', [False, True])
+@pytest.mark.parametrize('up_state', ['pending', 'success', 'failed'])
+@pytest.mark.parametrize('queued', [False, True])
+def test_up_supersedes_scheduled_add_retry(pending_discovery_cluster, replacement, up_state, queued):
+    cluster, host, listener = pending_discovery_cluster
+    cluster._prepare_host = Mock(side_effect=RuntimeError('preparation failed'))
+    cluster.on_add(host, reconcile_pools_on_failure=replacement)
+    scheduled = cluster.scheduler.schedule.call_args
+    cluster._prepare_host.side_effect = lambda h, ready, failed: ready()
+    session = Mock()
+    up_future = Future()
+    session.add_or_renew_pool.return_value = up_future
+    cluster.sessions = (session,)
+    if queued:
+        with cluster._lifecycle.transaction():
+            cluster.on_up(host)
+            scheduled.args[1](*scheduled.args[2:])
+    else:
+        cluster.on_up(host)
+    assert not host._endpoint_add_retry_pending
+    if up_state != 'pending':
+        up_future.set_result(up_state == 'success')
+    scheduled.args[1](*scheduled.args[2:])
+    cluster.profile_manager.on_add.assert_called_once_with(host)
+    cluster.control_connection.on_add.assert_called_once()
+    if up_state == 'failed':
+        cluster._start_reconnector.assert_called_once()
+        assert host._pending_host_addition_notification
+        recovered = Future()
+        recovered.set_result(True)
+        session.add_or_renew_pool.return_value = recovered
+        cluster.on_up(host)
+    elif up_state == 'pending':
+        up_future.set_result(True)
+    assert listener.method_calls == [call.on_add(host), call.on_up(host)]
+
+
+def test_obsolete_add_preparation_failure_cannot_restore_retry(pending_discovery_cluster):
+    cluster, host, listener = pending_discovery_cluster
+    continuations = []
+    cluster._prepare_host = lambda h, ready, failed: continuations.append((ready, failed))
+    cluster.on_add(host)
+    add_ready, add_failed = continuations.pop()
+    cluster.on_up(host)
+    up_ready, up_failed = continuations.pop()
+    add_failed()
+    cluster.scheduler.schedule.assert_not_called()
+    up_ready()
+    add_failed()
+    cluster.scheduler.schedule.assert_not_called()
+    assert listener.method_calls == [call.on_add(host), call.on_up(host)]
+
+
+@pytest.mark.parametrize('replacement', [False, True])
+def test_failed_up_retains_fresh_add_reconnection_after_retry_supersession(pending_discovery_cluster, replacement):
+    cluster, host, listener = pending_discovery_cluster
+    cluster._prepare_host = Mock(side_effect=RuntimeError('preparation failed'))
+    cluster.on_add(host, reconcile_pools_on_failure=replacement)
+    scheduled = cluster.scheduler.schedule.call_args
+    cluster._prepare_host.side_effect = lambda h, ready, failed: ready()
+    del cluster._start_reconnector
+    cluster._make_connection_factory = Mock(return_value=Mock())
+    session = Mock()
+    up_future, recovery_future = Future(), Future()
+    session.add_or_renew_pool.side_effect = [up_future, recovery_future]
+    cluster.sessions = (session,)
+    cluster.on_up(host)
+    up_future.set_result(False)
+    handler = host._reconnection_handler
+    assert handler is not None
+    assert handler.is_host_addition
+    scheduled.args[1](*scheduled.args[2:])
+    cluster.profile_manager.on_add.assert_called_once_with(host)
+    handler.on_reconnection(Mock())
+    recovery_future.set_result(True)
+    listener.on_add.assert_called_once_with(host)
+    assert cluster.profile_manager.on_add.call_count == 2
+    assert host.is_up
+    assert not host._endpoint_add_retry_pending

@@ -250,8 +250,17 @@ thread removes its host. The nested refresh publishes metadata and appends its
 notifications; it does not recursively invoke a replacement's addition inside
 an unfinished removal callback. Consequently metadata can be newer than the
 notifications currently being delivered, and pool availability can lag metadata
-publication. A newly published host remains reserved for its addition operation
-until lifecycle initialization finishes.
+publication. A newly published host remains reserved while its addition
+operation owns recovery. If UP supersedes an unfinished or failed ADD, a
+successful UP delivers the pending listener ``on_add`` once before ``on_up``.
+It does not repeat the policy or control-connection ADD callbacks.
+
+For ordinary ADD, policy and control-connection callback failures are logged
+without automatic callback retries. They release the recovery reservation;
+the pending listener discovery notification is retained for a later successful
+ADD or UP. Partially applied callback effects are not rolled back. Transport
+and preparation retries continue, and replacement ADD retains its existing
+callback retry behavior.
 
 Retirement is terminal for a Host object. An already-running callback may
 finish after retirement, but queued stale UP, DOWN and ADD work is discarded.

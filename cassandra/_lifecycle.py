@@ -113,6 +113,7 @@ class LifecycleCoordinator:
                     host._pending_location_token = None
                     host._lifecycle_pending = False
                     host._pending_host_addition = False
+                    host._pending_host_addition_notification = False
                     host._pending_host_addition_callback = None
                     host._currently_handling_node_up = False
                     host._currently_handling_node_down = False
@@ -173,6 +174,9 @@ class LifecycleCoordinator:
                 return False
             host._currently_handling_node_up = True
             host._addition_token = None
+            # UP owns recovery now; old scheduled ADD work must not replay
+            # callbacks while UP is pending or after it completes.
+            host._endpoint_add_retry_pending = False
             return True
 
     @staticmethod
@@ -388,6 +392,7 @@ class LifecycleCoordinator:
     def remember_addition(host, on_reconnection=None):
         """Retain addition intent across retries; callers hold host.lock."""
         host._pending_host_addition = True
+        host._pending_host_addition_notification = True
         if on_reconnection is not None:
             host._pending_host_addition_callback = on_reconnection
 
@@ -398,6 +403,35 @@ class LifecycleCoordinator:
                     (addition_token is None or
                      self.addition_is_current(host, addition_token))):
                 host._lifecycle_pending = False
+
+    def abandon_addition(self, host, generation, addition_token):
+        """Release callback recovery ownership, retaining only discovery notice.
+
+        Future explicit ADD/UP can finish discovery. Ordinary pool reconciliation
+        is no longer reserved, and DOWN recovery must not replay failed ADD
+        policy/control callbacks automatically.
+        """
+        with host.lock:
+            if (self.readiness_is_current(host, generation) and
+                    self.addition_is_current(host, addition_token)):
+                host._addition_token = None
+                host._lifecycle_pending = False
+                host._pending_host_addition = False
+                host._pending_host_addition_callback = None
+                host._endpoint_add_retry_pending = False
+                reconnector = self.supersede_down(host)
+            else:
+                return
+        if reconnector:
+            reconnector.cancel()
+
+    def claim_addition_notification(self, host, generation):
+        with host.lock:
+            if (not self.readiness_is_current(host, generation) or
+                    not host._pending_host_addition_notification):
+                return False
+            host._pending_host_addition_notification = False
+            return True
 
     def mark_ready(self, host, set_up=True, readiness_generation=None,
                    addition_token=None):
@@ -415,6 +449,7 @@ class LifecycleCoordinator:
             if set_up:
                 host.is_up = True
             host._addition_token = None
+            host._endpoint_add_retry_pending = False
             host._lifecycle_pending = False
             host._pending_host_addition = False
             host._pending_host_addition_callback = None
@@ -433,6 +468,7 @@ class LifecycleCoordinator:
             self._retired[id(host)] = host
             host.set_down()
             host._pending_host_addition = False
+            host._pending_host_addition_notification = False
             host._pending_host_addition_callback = None
             host._lifecycle_pending = False
             host._pending_location = None

@@ -162,6 +162,7 @@ class Host(object):
     _down_event_generation = 0
     _lifecycle_pending = False
     _pending_host_addition = False
+    _pending_host_addition_notification = False
     _pending_host_addition_callback = None
 
     sharding_info = None
