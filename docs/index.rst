@@ -33,7 +33,7 @@ Contents
     Working with results of conditional requests
 
 :doc:`object-mapper`
-    Introduction to the integrated object mapper, cqlengine
+    Introduction to the integrated object mapper, cqlengine (in maintenance mode, see `coodie <https://github.com/scylladb/coodie>`_ for new projects)
 
 :doc:`performance`
     Tips for getting good performance.
