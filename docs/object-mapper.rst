@@ -16,6 +16,13 @@ cqlengine is the Cassandra CQL 3 Object Mapper packaged with this driver
     migration is needed. `Argus <https://github.com/scylladb/argus>`_, ScyllaDB's
     test tracking system, moved all of its models from cqlengine to coodie this way.
 
+    Importing ``cassandra.cqlengine`` emits a ``DeprecationWarning`` with this
+    advice. To silence it in an existing project::
+
+        import warnings
+        warnings.filterwarnings("ignore", category=DeprecationWarning,
+                                message="cassandra.cqlengine is in maintenance mode")
+
 :ref:`Jump to Getting Started <getting-started>`
 
 Contents
