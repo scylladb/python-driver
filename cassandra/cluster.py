@@ -5701,6 +5701,8 @@ class ResponseFuture(object):
             if cb is None:
                 cb = partial(self._set_result, host, connection, pool)
 
+            # Fence changes during borrow. A later replacement may race with
+            # send_msg, but response and timeout cleanup use this borrowed pool.
             stale_pool = False
             with self.session._lock if expected_endpoint is not None else nullcontext():
                 with host.lock if expected_endpoint is not None else nullcontext():
@@ -5709,14 +5711,6 @@ class ResponseFuture(object):
                         or self.session._get_pool_by_host_identity(
                             host, expected_endpoint=expected_endpoint) is not pool
                         or pool.is_shutdown)
-                    if not stale_pool:
-                        self._connection = connection
-                        self._connection_pool = pool
-                        self.request_encoded_size = connection.send_msg(
-                            message, request_id, cb=cb,
-                            encoder=self._protocol_handler.encode_message,
-                            decoder=self._protocol_handler.decode_message,
-                            result_metadata=result_meta)
 
             if stale_pool:
                 try:
@@ -5728,6 +5722,14 @@ class ResponseFuture(object):
                 self._errors[host] = ConnectionException(
                     "Host endpoint or pool changed while borrowing connection")
                 return None
+
+            self._connection = connection
+            self._connection_pool = pool
+            self.request_encoded_size = connection.send_msg(
+                message, request_id, cb=cb,
+                encoder=self._protocol_handler.encode_message,
+                decoder=self._protocol_handler.decode_message,
+                result_metadata=result_meta)
 
             self.attempted_hosts.append(host)
             return request_id

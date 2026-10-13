@@ -853,7 +853,7 @@ class ResponseFutureTests(unittest.TestCase):
         assert list(connection.request_ids) == [1]
         assert isinstance(rf._errors[host], ConnectionException)
 
-    def test_query_queues_before_endpoint_lock_is_released(self):
+    def test_query_uses_original_pool_when_endpoint_changes_after_validation(self):
         session = self.make_basic_session()
         host = Host(DefaultEndPoint('127.0.0.1'), SimpleConvictionPolicy,
                     host_id=uuid.uuid4())
@@ -879,8 +879,9 @@ class ResponseFutureTests(unittest.TestCase):
         rf = self.make_response_future(session)
 
         assert rf.send_request()
-        assert queued_at == [old_endpoint]
+        assert queued_at == [host.endpoint]
         assert host.endpoint != old_endpoint
+        assert rf._connection_pool is pool
 
     def test_single_host_query_plan_exhausted_after_one_retry(self):
         """
