@@ -403,6 +403,27 @@ class ConnectionTest(unittest.TestCase):
         assert query_msg.query == 'USE "my""ks"', (
             "Double quotes in keyspace name must be escaped as double-double quotes")
 
+    def test_set_keyspace_async_failed_send_returns_reserved_stream(self):
+        for failure, should_defunct in ((ConnectionBusy('busy'), False),
+                                        (RuntimeError('unknown write'), True)):
+            with self.subTest(failure=failure):
+                c = self.make_connection()
+                c.in_flight = 0
+                c.get_request_id = Mock(return_value=7)
+                c.send_msg = Mock(side_effect=failure)
+                c.defunct = Mock()
+
+                with pytest.raises(type(failure)):
+                    c.set_keyspace_async('ks', Mock())
+
+                assert c.in_flight == 0
+                returned_request_id = c.request_ids.pop()
+                assert returned_request_id == 7
+                if should_defunct:
+                    c.defunct.assert_called_once()
+                else:
+                    c.defunct.assert_not_called()
+
     def test_send_msg_passes_negotiated_features_to_encoder(self):
         """
         send_msg must hand the connection's negotiated ProtocolFeatures to the

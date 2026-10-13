@@ -2227,9 +2227,20 @@ class Connection(object):
 
         # We've incremented self.in_flight above, so we "have permission" to
         # acquire a new request id
-        request_id = self.get_request_id()
-
-        self.send_msg(query, request_id, process_result)
+        request_id = None
+        try:
+            with self.lock:
+                request_id = self.get_request_id()
+            self.send_msg(query, request_id, process_result)
+        except Exception as exc:
+            with self.lock:
+                self.in_flight -= 1
+                if request_id is not None:
+                    self.request_ids.append(request_id)
+            if not isinstance(exc, ConnectionBusy):
+                self.defunct(ConnectionException(
+                    "Failed sending keyspace change: %r" % (exc,), self.endpoint))
+            raise
 
     @property
     def is_idle(self):

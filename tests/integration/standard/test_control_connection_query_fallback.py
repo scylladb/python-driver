@@ -161,6 +161,36 @@ class ControlConnectionQueryFallbackIntegrationTests(unittest.TestCase):
         assert {row.value for row in select_one.result()} == {'one', 'prepared-one'}
         assert self.cluster.control_connection._connection is control_connection
 
+    def test_single_session_can_change_keyspace_with_use(self):
+        self._bootstrap_keyspaces('fallback_ks_one', 'fallback_ks_two', tables=(
+            'CREATE TABLE fallback_ks_two.items (id int PRIMARY KEY, value text)',))
+
+        for mode in (ControlConnectionQueryFallback.SkipPoolCreation,
+                     ControlConnectionQueryFallback.Fallback):
+            with self.subTest(mode=mode):
+                cluster = TestCluster(
+                    allow_control_connection_query_fallback=mode,
+                    connect_timeout=1)
+                try:
+                    session = cluster.connect()
+                    # Cassandra may provide a usable broadcast RPC endpoint;
+                    # hide its pools briefly to exercise the Fallback mode.
+                    pools = session._pools
+                    if mode is ControlConnectionQueryFallback.Fallback:
+                        session._pools = {}
+                    try:
+                        session.execute('USE fallback_ks_one')
+                        assert session.keyspace == 'fallback_ks_one'
+                        session.set_keyspace('fallback_ks_two')
+                        assert session.keyspace == 'fallback_ks_two'
+                        session.execute("INSERT INTO items (id, value) VALUES (1, 'two')")
+                        assert session.execute(
+                            'SELECT value FROM items WHERE id = 1').one().value == 'two'
+                    finally:
+                        session._pools = pools
+                finally:
+                    cluster.shutdown()
+
     def test_shared_control_connection_keyspace_is_reclaimed_after_shutdown(self):
         self._bootstrap_keyspaces('fallback_ks_one', 'fallback_ks_two')
 

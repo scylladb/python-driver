@@ -20,10 +20,10 @@ from cassandra.shard_info import _ShardingInfo
 
 import unittest
 from threading import Thread, Event, Lock
-from unittest.mock import Mock, NonCallableMagicMock, MagicMock
+from unittest.mock import Mock, NonCallableMagicMock, MagicMock, patch
 
 from cassandra.cluster import Session, ShardAwareOptions
-from cassandra.connection import Connection, ConnectionException, ConnectionSendError, DefaultEndPoint
+from cassandra.connection import Connection, ConnectionBusy, ConnectionException, ConnectionSendError, DefaultEndPoint
 from cassandra.pool import HostConnection
 from cassandra.pool import Host, NoConnectionsAvailable
 from cassandra.policies import HostDistance, SimpleConvictionPolicy
@@ -398,6 +398,195 @@ class HostConnectionTests(_PoolTests):
         assert pool.endpoint == original_endpoint
         assert session.cluster.connection_factory.call_args.args[0] == original_endpoint
         pool.shutdown()
+
+    def test_borrow_rejects_unsynchronized_connection_without_waiting(self):
+        host = Mock(spec=Host, address='ip1')
+        session = self.make_session()
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                            is_closed=False, max_request_id=100, lock=Lock())
+        session.cluster.connection_factory.return_value = conn
+        pool = HostConnection(host, HostDistance.LOCAL, session)
+        pool._keyspace = 'newks'
+        conn.keyspace = 'foobarkeyspace'
+        conn.set_keyspace_blocking.side_effect = \
+            lambda keyspace: setattr(conn, 'keyspace', keyspace)
+        with patch.object(pool._stream_available_condition, 'wait',
+                          side_effect=AssertionError('borrow blocked the reactor')):
+            with pytest.raises(NoConnectionsAvailable, match='current session keyspace'):
+                pool.borrow_connection(timeout=1)
+
+        pool._sync_keyspace(conn)
+        borrowed, _ = pool.borrow_connection(timeout=1)
+        assert borrowed is conn
+        pool.return_connection(borrowed)
+
+    def test_failed_keyspace_change_can_be_corrected_by_use(self):
+        host = Mock(spec=Host, address='ip1')
+        session = self.make_session()
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                            is_closed=False, max_request_id=100, lock=Lock())
+        session.cluster.connection_factory.return_value = conn
+        pool = HostConnection(host, HostDistance.LOCAL, session)
+
+        errors = []
+        pool._set_keyspace_for_all_conns(
+            'missing_ks', lambda _pool, pool_errors: errors.extend(pool_errors))
+        conn.in_flight = 1
+        conn.set_keyspace_async.call_args.args[1](
+            conn, ConnectionException('keyspace unavailable', host.endpoint))
+        assert errors
+        assert conn.keyspace == 'foobarkeyspace'
+        with pytest.raises(NoConnectionsAvailable):
+            pool.borrow_connection(timeout=0)
+
+        borrowed, _ = pool.borrow_connection(
+            timeout=0, allow_keyspace_mismatch=True)
+        assert borrowed is conn
+        pool.return_connection(borrowed)
+
+    def test_failed_keyspace_send_still_completes_pool_callback(self):
+        host = Mock(spec=Host, address='ip1')
+        session = self.make_session()
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                            is_closed=False, max_request_id=100, lock=Lock())
+        session.cluster.connection_factory.return_value = conn
+        pool = HostConnection(host, HostDistance.LOCAL, session)
+        error = ConnectionBusy('send blocked')
+        conn.set_keyspace_async.side_effect = error
+        callback = Mock()
+
+        pool._set_keyspace_for_all_conns('newks', callback)
+
+        callback.assert_called_once_with(pool, [error])
+        assert conn.in_flight == 0
+        assert pool._keyspace == 'newks'
+
+    def test_stale_shard_uses_aligned_connection(self):
+        host = Mock(spec=Host, address='ip1')
+        session = self.make_session()
+        stale = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                             is_closed=False, max_request_id=100, lock=Lock())
+        stale.features.shard_id = 0
+        session.cluster.connection_factory.return_value = stale
+        pool = HostConnection(host, HostDistance.LOCAL, session)
+        aligned = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                               is_closed=False, max_request_id=100, lock=Lock())
+        aligned.features.shard_id = 1
+        aligned.keyspace = 'newks'
+        pool._connections[1] = aligned
+        pool._keyspace = 'newks'
+        pool._get_connection_for_routing_key = Mock(return_value=stale)
+
+        borrowed, _ = pool.borrow_connection(timeout=0)
+        assert borrowed is aligned
+        pool.return_connection(borrowed)
+
+    def test_published_connection_catches_newer_keyspace(self):
+        host = Mock(spec=Host, address='ip1')
+        session = self.make_session()
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                            is_closed=False, max_request_id=100, lock=Lock())
+        session.cluster.connection_factory.return_value = conn
+        pool = HostConnection(host, HostDistance.LOCAL, session)
+        conn.keyspace = None
+
+        def set_keyspace(keyspace):
+            if keyspace == 'foobarkeyspace':
+                pool._keyspace = 'newks'
+            conn.keyspace = keyspace
+
+        conn.set_keyspace_blocking.side_effect = set_keyspace
+        pool._sync_keyspace(conn)
+        assert [call.args[0] for call in conn.set_keyspace_blocking.call_args_list[-2:]] == \
+            ['foobarkeyspace', 'newks']
+        assert conn.keyspace == pool._keyspace
+
+    def test_async_keyspace_reply_reapplies_current_target(self):
+        host = Mock(spec=Host, address='ip1')
+        session = self.make_session()
+        conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                            is_closed=False, max_request_id=100, lock=Lock())
+        session.cluster.connection_factory.return_value = conn
+        pool = HostConnection(host, HostDistance.LOCAL, session)
+        finished = []
+
+        pool._set_keyspace_for_all_conns(
+            'older', lambda _pool, errors: finished.append(errors))
+        older_callback = conn.set_keyspace_async.call_args.args[1]
+        pool._keyspace = 'newer'
+        conn.keyspace = 'older'
+        conn.in_flight = 1
+        older_callback(conn, None)
+
+        assert not finished
+        assert conn.in_flight == 0
+        assert conn.set_keyspace_async.call_args.args[0] == 'newer'
+        newer_callback = conn.set_keyspace_async.call_args.args[1]
+        conn.keyspace = 'newer'
+        conn.in_flight = 1
+        newer_callback(conn, None)
+        assert finished == [[]]
+        assert conn.in_flight == 0
+        assert conn.keyspace == pool._keyspace
+
+    def test_failed_replacement_keyspace_sync_removes_connection(self):
+        host = Mock(spec=Host, address='ip1', sharding_info=None)
+        session = self.make_session()
+        session.cluster.shard_aware_options.disable = True
+        old_conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                                is_closed=False, max_request_id=100, lock=Lock())
+        old_conn.features.shard_id = 0
+        old_conn.features.sharding_info = None
+        new_conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                                is_closed=False, max_request_id=100, lock=Lock())
+        new_conn.features.shard_id = 0
+        session.cluster.connection_factory.side_effect = [old_conn, new_conn]
+        pool = HostConnection(host, HostDistance.LOCAL, session)
+
+        def set_keyspace(keyspace):
+            if keyspace == 'foobarkeyspace':
+                new_conn.keyspace = keyspace
+                pool._keyspace = 'newks'
+            else:
+                raise ConnectionException('sync failed', host.endpoint)
+
+        new_conn.set_keyspace_blocking.side_effect = set_keyspace
+        pool._replace(old_conn)
+
+        assert 0 not in pool._connections
+        new_conn.close.assert_called_once()
+        session.submit.assert_called_once_with(pool._replace, new_conn)
+
+    def test_failed_shard_keyspace_sync_allows_retry(self):
+        host = Mock(spec=Host, address='ip1', sharding_info=None)
+        session = self.make_session()
+        first_conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                                  is_closed=False, max_request_id=100, lock=Lock())
+        first_conn.features.shard_id = 0
+        first_conn.features.sharding_info = None
+        shard_conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
+                                  is_closed=False, max_request_id=100, lock=Lock())
+        shard_conn.features.shard_id = 1
+        session.cluster.connection_factory.side_effect = [first_conn, shard_conn]
+        pool = HostConnection(host, HostDistance.LOCAL, session)
+        host.sharding_info = Mock(shards_count=2)
+        pool._get_shard_aware_endpoint = Mock(return_value=None)
+        pool._connecting.add(1)
+
+        def set_keyspace(keyspace):
+            if keyspace == 'foobarkeyspace':
+                shard_conn.keyspace = keyspace
+                pool._keyspace = 'newks'
+            else:
+                raise ConnectionException('sync failed', host.endpoint)
+
+        shard_conn.set_keyspace_blocking.side_effect = set_keyspace
+        with pytest.raises(ConnectionException, match='sync failed'):
+            pool._open_connection_to_missing_shard(1)
+
+        assert 1 not in pool._connections
+        assert 1 not in pool._connecting
+        shard_conn.close.assert_called_once()
 
     def test_fast_shutdown(self):
         class MockSession(MagicMock):
