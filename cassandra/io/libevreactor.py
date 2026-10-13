@@ -126,6 +126,17 @@ class LibevLoop(object):
                     # all Connections have been closed, no active watchers
                     log.debug("All Connections currently closed, event loop ended")
                     self._started = False
+                    # A connection may have been closed after the last
+                    # _loop_will_run() pass, which is where closed
+                    # connections' sockets are closed. No reactor thread
+                    # will run it again for them, so close them here.
+                    # This happens under the lock, so a new reactor thread
+                    # can't be touching the watchers concurrently. On
+                    # shutdown, _cleanup() closes all connections itself.
+                    if not self._shutdown:
+                        to_stop = self._closed_conns
+                        self._closed_conns = set()
+                        self._close_conns(to_stop)
                     break
 
     def _cleanup(self):
@@ -199,11 +210,34 @@ class LibevLoop(object):
             new_live_conns.discard(conn)
             self._live_conns = new_live_conns
 
+            if not self._started and not self._shutdown:
+                # No reactor thread is running to close the socket in
+                # _loop_will_run(), and none is going to start for an
+                # already-closed connection, so close it here. Holding
+                # the lock ensures no reactor thread starts meanwhile.
+                # On shutdown, _cleanup() closes all connections itself.
+                self._close_conns((conn,))
+                return
+
             new_closed_conns = self._closed_conns.copy()
             new_closed_conns.add(conn)
             self._closed_conns = new_closed_conns
 
         self._notifier.send()
+
+    @staticmethod
+    def _close_conns(conns):
+        for conn in conns:
+            if conn._write_watcher:
+                conn._write_watcher.stop()
+                # clear reference cycles from IO callback
+                del conn._write_watcher
+            if conn._read_watcher:
+                conn._read_watcher.stop()
+                # clear reference cycles from IO callback
+                del conn._read_watcher
+            conn._socket.close()
+            log.debug("Closed socket to %s", conn.endpoint)
 
     def _loop_will_run(self, prepare):
         changed = False
@@ -235,17 +269,7 @@ class LibevLoop(object):
                 to_stop = self._closed_conns
                 self._closed_conns = set()
 
-            for conn in to_stop:
-                if conn._write_watcher:
-                    conn._write_watcher.stop()
-                    # clear reference cycles from IO callback
-                    del conn._write_watcher
-                if conn._read_watcher:
-                    conn._read_watcher.stop()
-                    # clear reference cycles from IO callback
-                    del conn._read_watcher
-                conn._socket.close()
-                log.debug("Closed socket to %s", conn.endpoint)
+            self._close_conns(to_stop)
 
             changed = True
 

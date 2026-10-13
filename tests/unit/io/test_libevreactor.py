@@ -268,6 +268,65 @@ class LibevLoopRaceTest(unittest.TestCase):
         self.assertEqual(calls['n'], 2)
         self.assertFalse(loop._started)
 
+    def test_connection_destroyed_before_exit_check_is_closed(self):
+        """
+        A connection may be closed after the reactor's last
+        _loop_will_run() pass - which is where the sockets of closed
+        connections are closed - and just before its exit check. The
+        reactor then exits because _live_conns is empty, so it must close
+        that connection's socket itself, or nobody ever will.
+
+        @jira_ticket GH-1131
+        """
+        loop = LibevLoop()
+
+        conn = Mock()
+        loop.connection_created(conn)
+        loop._shutdown = False
+        loop._started = True  # simulate a running reactor thread
+
+        def fake_start():
+            # The connection is closed by another thread while the libev
+            # loop returns, because it has no more active watchers.
+            loop.connection_destroyed(conn)
+
+        loop._loop = Mock()
+        loop._loop.start = fake_start
+
+        reactor_thread = threading.Thread(target=loop._run_loop, name="test_reactor", daemon=True)
+        reactor_thread.start()
+        reactor_thread.join(timeout=5)
+
+        self.assertFalse(reactor_thread.is_alive())
+        self.assertFalse(loop._started)
+        conn._socket.close.assert_called_once_with()
+        self.assertEqual(loop._closed_conns, set())
+
+    def test_connection_destroyed_after_exit_is_closed(self):
+        """
+        A connection may be closed after the reactor thread has already
+        exited. No reactor thread is going to start for an already-closed
+        connection, so connection_destroyed() must close its socket
+        itself, or nobody ever will.
+
+        @jira_ticket GH-1131
+        """
+        loop = LibevLoop()
+
+        conn = Mock()
+        loop.connection_created(conn)
+        loop._shutdown = False
+        loop._started = False  # the reactor thread has exited
+
+        with patch('cassandra.io.libevreactor.Thread') as mock_thread_cls:
+            loop.connection_destroyed(conn)
+        mock_thread_cls.assert_not_called()
+
+        conn._socket.close.assert_called_once_with()
+        self.assertEqual(loop._closed_conns, set())
+        self.assertEqual(loop._live_conns, set())
+        self.assertEqual(loop._new_conns, set())
+
 
 class LibevTimerPatcher(unittest.TestCase):
 
