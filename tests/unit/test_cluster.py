@@ -514,8 +514,7 @@ class ClusterTest(unittest.TestCase):
         cluster.sessions = (session,)
 
         with self.assertLogs('cassandra.cluster', level='ERROR'):
-            with self.assertRaisesRegex(RuntimeError, 'pool scheduling failed'):
-                cluster.on_up(host)
+            cluster.on_up(host)
 
         assert host.is_up is False
         assert not host._currently_handling_node_up
@@ -523,7 +522,7 @@ class ClusterTest(unittest.TestCase):
         cluster.control_connection.on_down.assert_not_called()
         cluster._start_reconnector.assert_not_called()
 
-    def test_remove_waits_for_inflight_up_completion(self):
+    def test_remove_orders_notifications_after_inflight_up_completion(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)
         cluster.profile_manager = Mock()
@@ -541,7 +540,6 @@ class ClusterTest(unittest.TestCase):
         cluster.sessions = (session,)
         callback_started = Event()
         release_callback = Event()
-        removal_attempted = Event()
         removal_finished = Event()
         callback_order = []
 
@@ -556,21 +554,6 @@ class ClusterTest(unittest.TestCase):
         cluster.register_listener(listener)
         cluster.on_up(host)
 
-        callback_lock = host._down_callbacks_lock
-        remove_thread = None
-
-        class AttemptTrackingLock(object):
-
-            def __enter__(self):
-                if threading.current_thread() is remove_thread:
-                    removal_attempted.set()
-                callback_lock.acquire()
-                return self
-
-            def __exit__(self, exc_type, exc_value, traceback):
-                callback_lock.release()
-
-        host._down_callbacks_lock = AttemptTrackingLock()
         completion_thread = Thread(target=lambda: future.set_result(True))
 
         def remove_host():
@@ -584,8 +567,9 @@ class ClusterTest(unittest.TestCase):
         try:
             assert callback_started.wait(5)
             remove_thread.start()
-            assert removal_attempted.wait(5)
-            assert not removal_finished.is_set()
+            assert removal_finished.wait(5)
+            assert host._is_removed
+            assert callback_order == []
         finally:
             release_callback.set()
             completion_thread.join(5)
@@ -595,10 +579,10 @@ class ClusterTest(unittest.TestCase):
         assert not completion_thread.is_alive()
         assert not remove_thread.is_alive()
         assert callback_order.index('up') < callback_order.index('remove')
-        session.update_created_pools.assert_called_once_with()
+        session.update_created_pools.assert_not_called()
         assert host._is_removed
 
-    def test_remove_releases_callback_lock_before_notifications(self):
+    def test_remove_releases_coordination_lock_before_notifications(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)
         cluster.control_connection.on_remove = Mock()
@@ -606,20 +590,22 @@ class ClusterTest(unittest.TestCase):
                     host_id=uuid.uuid4())
         cluster.metadata.add_or_return_host(host)
         lock_acquired = Event()
+        observations = []
 
         def on_listener_remove(_host):
-            assert cluster.metadata.get_host_by_host_id(host.host_id) is None
-            assert host._is_removed
+            observations.extend((
+                cluster.metadata.get_host_by_host_id(host.host_id) is None,
+                host._is_removed))
 
             def acquire_callback_lock():
-                with host._down_callbacks_lock:
+                with cluster._lifecycle.transaction():
                     lock_acquired.set()
 
             lock_thread = Thread(target=acquire_callback_lock)
             lock_thread.start()
-            assert lock_acquired.wait(2)
+            observations.append(lock_acquired.wait(2))
             lock_thread.join(2)
-            assert not lock_thread.is_alive()
+            observations.append(not lock_thread.is_alive())
 
         listener = Mock()
         listener.on_remove.side_effect = on_listener_remove
@@ -627,11 +613,12 @@ class ClusterTest(unittest.TestCase):
 
         cluster.remove_host(host)
 
+        assert observations == [True, True, True, True]
         listener.on_remove.assert_called_once_with(host)
         cluster.control_connection.on_remove.assert_called_once_with(
             host, trigger_reconciliation=True)
 
-    def test_replacement_waits_for_inflight_up_completion(self):
+    def test_replacement_orders_notifications_after_inflight_up_completion(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)
         cluster.profile_manager = Mock()
@@ -650,7 +637,6 @@ class ClusterTest(unittest.TestCase):
         cluster.sessions = (session,)
         callback_started = Event()
         release_callback = Event()
-        replacement_attempted = Event()
         replacement_finished = Event()
         callback_order = []
 
@@ -665,21 +651,6 @@ class ClusterTest(unittest.TestCase):
         cluster.register_listener(listener)
         cluster.on_up(host)
 
-        callback_lock = host._down_callbacks_lock
-        replacement_thread = None
-
-        class AttemptTrackingLock(object):
-
-            def __enter__(self):
-                if threading.current_thread() is replacement_thread:
-                    replacement_attempted.set()
-                callback_lock.acquire()
-                return self
-
-            def __exit__(self, exc_type, exc_value, traceback):
-                callback_lock.release()
-
-        host._down_callbacks_lock = AttemptTrackingLock()
         completion_thread = Thread(target=lambda: future.set_result(True))
 
         def replace_host():
@@ -693,9 +664,9 @@ class ClusterTest(unittest.TestCase):
         try:
             assert callback_started.wait(5)
             replacement_thread.start()
-            assert replacement_attempted.wait(5)
-            assert cluster.metadata.get_host_by_host_id(host.host_id) is host
-            assert not replacement_finished.is_set()
+            assert replacement_finished.wait(5)
+            assert host._is_removed
+            assert callback_order == []
         finally:
             release_callback.set()
             completion_thread.join(5)
@@ -709,7 +680,7 @@ class ClusterTest(unittest.TestCase):
         assert cluster.metadata.get_host_by_host_id(host.host_id) is None
         assert cluster.metadata.get_host(host.endpoint).host_id != host.host_id
 
-    def test_endpoint_move_waits_for_inflight_up_completion(self):
+    def test_endpoint_move_orders_notifications_after_inflight_up_completion(self):
         cluster = Cluster()
         self.addCleanup(cluster.shutdown)
         cluster.profile_manager = Mock()
@@ -728,7 +699,7 @@ class ClusterTest(unittest.TestCase):
         cluster.sessions = (session,)
         callback_started = Event()
         release_callback = Event()
-        move_attempted = Event()
+        move_finished = Event()
         callback_order = []
 
         def on_listener_up(_host):
@@ -742,21 +713,6 @@ class ClusterTest(unittest.TestCase):
         cluster.register_listener(listener)
         cluster.on_up(host)
 
-        callback_lock = host._down_callbacks_lock
-        move_thread = None
-
-        class AttemptTrackingLock(object):
-
-            def __enter__(self):
-                if threading.current_thread() is move_thread:
-                    move_attempted.set()
-                callback_lock.acquire()
-                return self
-
-            def __exit__(self, exc_type, exc_value, traceback):
-                callback_lock.release()
-
-        host._down_callbacks_lock = AttemptTrackingLock()
         completion_thread = Thread(target=lambda: future.set_result(True))
         move_errors = []
 
@@ -766,14 +722,17 @@ class ClusterTest(unittest.TestCase):
                     host, DefaultEndPoint('127.0.0.2'))
             except Exception as exc:
                 move_errors.append(exc)
+            finally:
+                move_finished.set()
 
         move_thread = Thread(target=move_host)
         completion_thread.start()
         try:
             assert callback_started.wait(5)
             move_thread.start()
-            assert move_attempted.wait(5)
-            assert cluster.metadata.get_host_by_host_id(host.host_id) is host
+            assert move_finished.wait(5)
+            assert host._is_removed
+            assert callback_order == []
         finally:
             release_callback.set()
             completion_thread.join(5)
@@ -1961,7 +1920,9 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         cluster.control_connection.on_down.assert_called_once_with(self.host)
         session.on_down.assert_called_once_with(self.host)
         listener.on_down.assert_called_once_with(self.host)
-        cluster._start_reconnector.assert_called_once_with(self.host, False)
+        cluster._start_reconnector.assert_called_once_with(
+            self.host, False, on_add_reconnection=None,
+            down_event_generation=self.host._down_event_generation)
         assert not self.host._currently_handling_node_down
 
     def test_queued_reconnector_restart_skips_pending_up(self):
@@ -1987,11 +1948,10 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         cluster.executor.submit.return_value = Future()
         self.host.set_down()
 
-        cluster.on_up(self.host)
-        assert self.host._currently_handling_node_up
-
         cluster.on_down(self.host, is_host_addition=False)
         restart_task, *args = cluster.executor.submit.call_args.args
+        cluster.on_up(self.host)
+        assert self.host._currently_handling_node_up
         restart_task(*args)
 
         assert not self.host.is_currently_reconnecting()
@@ -2034,9 +1994,9 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         cluster.executor.submit.return_value = Future()
         self.host.set_down()
 
-        cluster.on_up(self.host)
         cluster.on_down(self.host, is_host_addition=False)
         restart_task, *args = cluster.executor.submit.call_args.args
+        cluster.on_up(self.host)
 
         pool_future.set_result(False)
         failed_up_handler = self.host._reconnection_handler
@@ -2134,7 +2094,7 @@ class HostReconnectionHandlerTest(unittest.TestCase):
 
         listener.on_add.side_effect = on_add
 
-        with pytest.raises(RuntimeError, match='listener failed'):
+        with self.assertLogs('cassandra.cluster', level='ERROR'):
             cluster.on_add(self.host)
 
         assert not self.host._pending_host_addition
@@ -2165,7 +2125,9 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         down_task, *args = cluster.executor.submit.call_args.args
         down_task(*args)
 
-        cluster._start_reconnector.assert_called_once_with(self.host, False)
+        cluster._start_reconnector.assert_called_once_with(
+            self.host, False, on_add_reconnection=None,
+            down_event_generation=self.host._down_event_generation)
         assert not self.host._currently_handling_node_down
 
     def test_failed_down_submission_releases_pending_state(self):
@@ -5269,7 +5231,8 @@ class ClusterDownHandlingTest(unittest.TestCase):
 
         self.cluster.profile_manager.on_down.assert_called_once_with(self.host)
         self.cluster._start_reconnector.assert_called_once_with(
-            self.host, False)
+            self.host, False, on_add_reconnection=None,
+            down_event_generation=self.host._down_event_generation)
 
     def test_down_handling_continues_when_a_session_raises(self):
         del self.cluster.on_down_potentially_blocking  # use the real method
@@ -5286,7 +5249,8 @@ class ClusterDownHandlingTest(unittest.TestCase):
 
         following_session.on_down.assert_called_once_with(self.host)
         self.cluster._start_reconnector.assert_called_once_with(
-            self.host, False)
+            self.host, False, on_add_reconnection=None,
+            down_event_generation=self.host._down_event_generation)
 
     def test_down_handling_continues_when_a_listener_raises(self):
         del self.cluster.on_down_potentially_blocking  # use the real method
@@ -5303,7 +5267,8 @@ class ClusterDownHandlingTest(unittest.TestCase):
 
         following_listener.on_down.assert_called_once_with(self.host)
         self.cluster._start_reconnector.assert_called_once_with(
-            self.host, False)
+            self.host, False, on_add_reconnection=None,
+            down_event_generation=self.host._down_event_generation)
 
     def test_reentrant_removal_stops_remaining_down_callbacks(self):
         del self.cluster.on_down_potentially_blocking  # use the real method
@@ -5351,14 +5316,13 @@ class ClusterDownHandlingTest(unittest.TestCase):
         self.cluster.control_connection.on_down.assert_not_called()
         self.cluster._start_reconnector.assert_not_called()
 
-    def test_remove_waits_for_inflight_down_callback(self):
+    def test_remove_orders_notifications_after_inflight_down_callback(self):
         del self.cluster.on_down_potentially_blocking  # use the real method
         self.cluster.metadata.add_or_return_host(self.host)
         self.cluster.profile_manager.on_down = Mock()
         self.cluster._start_reconnector = Mock()
         callback_started = Event()
         release_callback = Event()
-        removal_attempted = Event()
         removal_finished = Event()
         callback_order = []
 
@@ -5376,21 +5340,6 @@ class ClusterDownHandlingTest(unittest.TestCase):
         self.host.set_down()
         self.host._currently_handling_node_down = True
 
-        callback_lock = self.host._down_callbacks_lock
-        remove_thread = None
-
-        class AttemptTrackingLock(object):
-
-            def __enter__(self):
-                if threading.current_thread() is remove_thread:
-                    removal_attempted.set()
-                callback_lock.acquire()
-                return self
-
-            def __exit__(self, exc_type, exc_value, traceback):
-                callback_lock.release()
-
-        self.host._down_callbacks_lock = AttemptTrackingLock()
         body = Cluster.on_down_potentially_blocking.__wrapped__
         down_thread = Thread(
             target=body,
@@ -5407,13 +5356,13 @@ class ClusterDownHandlingTest(unittest.TestCase):
         down_thread.start()
         assert callback_started.wait(5)
         remove_thread.start()
-        assert removal_attempted.wait(5)
-        removal_was_blocked = not removal_finished.is_set()
+        assert removal_finished.wait(5)
+        assert self.host._is_removed
+        assert callback_order == []
         release_callback.set()
         down_thread.join(5)
         remove_thread.join(5)
 
-        assert removal_was_blocked
         assert not down_thread.is_alive()
         assert not remove_thread.is_alive()
         assert callback_order.index('down') < callback_order.index('remove')
@@ -6336,3 +6285,469 @@ class ClusterSSLSessionCacheTest(unittest.TestCase):
                                                  {'ssl_session_cache': cache})
 
         assert kwargs['ssl_session_cache'] is cache
+
+
+@pytest.mark.parametrize("operation", ["up", "add", "retry"])
+@pytest.mark.parametrize("supersede", [None, "down", "remove", "shutdown"])
+def test_preparation_does_not_block_lifecycle_delivery(operation, supersede):
+    cluster = Cluster(executor_threads=4)
+    entered, release, completed = Event(), Event(), Event()
+    try:
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster.control_connection.on_remove = Mock()
+        cluster.scheduler.schedule = Mock()
+        cluster._send_chunks = Mock()
+        cluster._prepared_statements = {b"query": Mock(keyspace=None)}
+        connection = Mock()
+
+        def connect(endpoint):
+            entered.set()
+            assert release.wait(5)
+            return connection
+
+        cluster.connection_factory = Mock(side_effect=connect)
+        cluster._make_connection_factory = Mock(return_value=Mock())
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        other = Host("127.0.0.2", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        cluster.metadata.add_or_return_host(other)
+        host.set_down()
+        other.set_up()
+        pool_future = Future()
+        session = Mock()
+        session.get_pool_state.return_value = {}
+        session.add_or_renew_pool.return_value = pool_future
+        cluster.sessions = (session,)
+        listener = Mock()
+        down_delivered = Event()
+        listener.on_down.side_effect = lambda h: down_delivered.set()
+        cluster.register_listener(listener)
+        preparation_futures = []
+        recovery_futures = []
+        submit = cluster.executor.submit
+
+        def record_submit(fn, *args, **kwargs):
+            future = submit(fn, *args, **kwargs)
+            if fn == cluster._prepare_all_queries:
+                preparation_futures.append(future)
+            elif getattr(fn, "__name__", None) == "_restart_reconnector":
+                recovery_futures.append(future)
+            return future
+
+        cluster.executor.submit = record_submit
+
+        def start():
+            if operation == "up":
+                cluster.on_up(host)
+            elif operation == "add":
+                cluster.on_add(host, refresh_nodes=False)
+            else:
+                host._endpoint_add_retry_pending = True
+                cluster.retry_failed_endpoint_add(host)
+
+        start()
+        assert entered.wait(5)
+        start()
+        # Both forms of duplicate admission must leave the first owner intact.
+        cluster.on_up(host)
+        cluster.on_add(host, refresh_nodes=False)
+        assert len(preparation_futures) == 1
+        preparation_futures[0].add_done_callback(lambda f: completed.set())
+        session.add_or_renew_pool.assert_not_called()
+        assert host.is_up is False
+
+        cluster.on_down(other, False)
+        assert down_delivered.wait(5)
+        cluster._lifecycle.update_location(other, "new-dc", "new-rack")
+        delivered = Event()
+        cluster._lifecycle.submit(delivered.set)
+        assert delivered.wait(5)
+        assert other.datacenter == "new-dc"
+        cluster.remove_host(other)
+        delivered.clear()
+        cluster._lifecycle.submit(delivered.set)
+        assert delivered.wait(5)
+        listener.on_remove.assert_called_once_with(other)
+        assert not release.is_set()
+
+        if supersede == "down":
+            cluster.on_down(host, operation != "up")
+            assert host._currently_handling_node_up is False
+            assert len(recovery_futures) == 1
+            recovery_futures[0].result(timeout=5)
+            assert host._reconnection_handler is not None
+            assert host._reconnection_handler.is_host_addition == (operation != "up")
+        elif supersede == "remove":
+            cluster.remove_host(host)
+            replacement = Host("127.0.0.1", SimpleConvictionPolicy,
+                               host_id=host.host_id)
+            cluster.metadata.add_or_return_host(replacement)
+        elif supersede == "shutdown":
+            cluster._lifecycle.close()
+
+        release.set()
+        assert completed.wait(5)
+        if supersede != "shutdown":
+            delivered.clear()
+            cluster._lifecycle.submit(delivered.set)
+            assert delivered.wait(5)
+        if supersede is not None:
+            session.add_or_renew_pool.assert_not_called()
+            assert host.is_up is False
+            assert not host._currently_handling_node_up
+            assert not host._lifecycle_pending
+        else:
+            session.add_or_renew_pool.assert_called_once()
+            assert host.is_up is False
+            pool_future.set_result(True)
+            assert host.is_up is True
+            notification = (listener.on_up if operation == "up"
+                            else listener.on_add)
+            notification.assert_called_once_with(host)
+    finally:
+        release.set()
+        cluster.shutdown()
+
+
+@pytest.mark.parametrize("operation", ["up", "add", "retry"])
+@pytest.mark.parametrize("failure", ["submit", "prepare", "cancel"])
+def test_preparation_failure_releases_ownership_and_keeps_recovery(operation, failure):
+    cluster = Cluster()
+    try:
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._prepared_statements = {b"query": Mock()}
+        cluster._make_connection_factory = Mock(return_value=Mock())
+        cluster.scheduler.schedule = Mock()
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        host.set_down()
+        future = Future()
+        with patch.object(cluster.executor, "submit") as submit:
+            if failure == "submit":
+                submit.side_effect = RuntimeError("executor rejected preparation")
+            else:
+                submit.return_value = future
+            if operation == "up":
+                cluster.on_up(host)
+            elif operation == "add":
+                cluster.on_add(host, refresh_nodes=False)
+            else:
+                host._endpoint_add_retry_pending = True
+                cluster.retry_failed_endpoint_add(host)
+            if failure == "prepare":
+                future.set_exception(RuntimeError("preparation failed"))
+            elif failure == "cancel":
+                future.cancel()
+        assert getattr(host, "_lifecycle_preparation", None) is None
+        assert not host._currently_handling_node_up
+        assert host._lifecycle_pending == (operation != "up")
+        assert host.is_up is False
+        if operation == "up":
+            assert host._reconnection_handler is not None
+        else:
+            assert host._endpoint_add_retry_pending
+            cluster.scheduler.schedule.assert_called_once_with(
+                1, cluster.retry_failed_endpoint_add, host)
+    finally:
+        cluster.shutdown()
+
+
+@pytest.mark.parametrize("operation", ["up", "add"])
+def test_superseded_preparation_cannot_release_newer_owner(operation):
+    cluster = Cluster()
+    try:
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster.control_connection.on_up = Mock()
+        cluster._prepared_statements = {b"query": Mock()}
+        cluster._restart_reconnector = Mock()
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        host.set_down()
+        old, new = Future(), Future()
+        with patch.object(cluster.executor, "submit", side_effect=[old, new]):
+            start = cluster.on_up if operation == "up" else cluster.on_add
+            start(host)
+            cluster.on_down(host, operation == "add")
+            cluster._restart_reconnector.assert_called_once()
+            start(host)
+            token = host._lifecycle_preparation
+            old.set_result(None)
+            assert host._lifecycle_preparation is token
+            assert host.is_up is False
+            new.set_result(None)
+            assert host._lifecycle_preparation is None
+            assert host.is_up is True
+    finally:
+        cluster.shutdown()
+
+
+@pytest.mark.parametrize("pool_result", [None, True])
+def test_queued_up_is_superseded_by_newer_down(pool_result):
+    cluster = Cluster()
+    try:
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._start_reconnector = Mock()
+        cluster._discount_down_events = False
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        host.set_up()
+        listener = Mock()
+        cluster.register_listener(listener)
+        if pool_result is not None:
+            future = Future()
+            future.set_result(pool_result)
+            session = Mock()
+            session.add_or_renew_pool.return_value = future
+            cluster.sessions = (session,)
+        delivered = Event()
+        with cluster._lifecycle.transaction():
+            cluster.on_up(host)
+            cluster.on_down(host, False)
+            cluster._lifecycle.submit(delivered.set)
+        assert delivered.wait(5)
+        assert host.is_up is False
+        cluster.profile_manager.on_up.assert_not_called()
+        listener.on_up.assert_not_called()
+        assert not host._currently_handling_node_up
+        # A later recovery must still be admitted. A second queue hop also
+        # waits for pool completion queued by the UP notification itself.
+        delivered.clear()
+        cluster.on_up(host)
+        cluster._lifecycle.submit(
+            lambda: cluster._lifecycle.submit(delivered.set))
+        assert delivered.wait(5)
+        assert host.is_up is True
+    finally:
+        cluster.shutdown()
+
+
+def test_completed_up_pool_cannot_publish_readiness_after_newer_down():
+    cluster = Cluster()
+    try:
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_up = Mock()
+        cluster._restart_reconnector = Mock()
+        cluster._discount_down_events = False
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        host.set_down()
+        future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = future
+        cluster.sessions = (session,)
+        listener = Mock()
+        cluster.register_listener(listener)
+        cluster.on_up(host)
+        delivered = Event()
+        with cluster._lifecycle.transaction():
+            future.set_result(True)
+            cluster.on_down(host, False)
+            cluster._lifecycle.submit(delivered.set)
+        assert delivered.wait(5)
+        assert host.is_up is False
+        listener.on_up.assert_not_called()
+        assert not host._currently_handling_node_up
+    finally:
+        cluster.shutdown()
+
+
+@pytest.mark.parametrize("already_complete", [False, True])
+def test_add_readiness_cannot_overwrite_newer_down(already_complete):
+    cluster = Cluster()
+    try:
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._start_reconnector = Mock()
+        cluster._discount_down_events = False
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        future = Future()
+        session = Mock()
+        session.add_or_renew_pool.return_value = future
+        cluster.sessions = (session,)
+        listener = Mock()
+        cluster.register_listener(listener)
+        if already_complete:
+            future.set_result(True)
+
+            def add_pool(*args, **kwargs):
+                cluster.on_down(host, True, expect_host_to_be_down=True)
+                return future
+
+            session.add_or_renew_pool.side_effect = add_pool
+            cluster.on_add(host, refresh_nodes=False)
+        else:
+            cluster.on_add(host, refresh_nodes=False)
+            with cluster._lifecycle.transaction():
+                future.set_result(True)
+                cluster.on_down(host, True, expect_host_to_be_down=True)
+        delivered = Event()
+        # ADD pool completion may enqueue finalization behind this sentinel.
+        cluster._lifecycle.submit(
+            lambda: cluster._lifecycle.submit(delivered.set))
+        assert delivered.wait(5)
+        assert host.is_up is False
+        listener.on_add.assert_not_called()
+        listener.on_down.assert_called_once_with(host)
+    finally:
+        cluster.shutdown()
+
+
+@pytest.mark.parametrize("operation", ["add", "retry"])
+@pytest.mark.parametrize("with_pool", [False, True])
+def test_queued_add_is_superseded_by_down_but_later_recovery_succeeds(operation, with_pool):
+    cluster = Cluster()
+    try:
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._start_reconnector = Mock()
+        cluster._discount_down_events = False
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        listener = Mock()
+        cluster.register_listener(listener)
+        if with_pool:
+            future = Future()
+            future.set_result(True)
+            session = Mock()
+            session.add_or_renew_pool.return_value = future
+            cluster.sessions = (session,)
+        if operation == "retry":
+            host._endpoint_add_retry_pending = True
+            start = cluster.retry_failed_endpoint_add
+        else:
+            start = lambda h: cluster.on_add(h, refresh_nodes=False)
+        delivered = Event()
+        with cluster._lifecycle.transaction():
+            start(host)
+            cluster.on_down(host, True, expect_host_to_be_down=True)
+            cluster._lifecycle.submit(delivered.set)
+        assert delivered.wait(5)
+        assert host.is_up is False
+        listener.on_add.assert_not_called()
+        cluster.profile_manager.on_add.assert_not_called()
+        if with_pool:
+            session.add_or_renew_pool.assert_not_called()
+        # A retry admitted after DOWN represents fresh recovery.
+        delivered.clear()
+        start(host)
+        cluster._lifecycle.submit(delivered.set)
+        assert delivered.wait(5)
+        assert host.is_up is True
+        listener.on_add.assert_called_once_with(host)
+        assert not host._lifecycle_pending
+        if operation == "retry":
+            assert not host._endpoint_add_retry_pending
+    finally:
+        cluster.shutdown()
+
+
+def test_superseded_initial_add_preserves_reconnection_intent():
+    cluster = Cluster()
+    try:
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock())
+        cluster.scheduler.schedule = Mock()
+        cluster._discount_down_events = False
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        listener = Mock()
+        cluster.register_listener(listener)
+        delivered = Event()
+        with cluster._lifecycle.transaction():
+            cluster.on_add(host, refresh_nodes=False,
+                           reconcile_pools_on_failure=True)
+            # Status DOWN carries no knowledge that discovery is still queued.
+            cluster.on_down(host, False, expect_host_to_be_down=True)
+            cluster._lifecycle.submit(delivered.set)
+        assert delivered.wait(5)
+        assert host.is_up is False
+        listener.on_add.assert_not_called()
+        handler = host._reconnection_handler
+        assert handler is not None
+        assert handler.is_host_addition
+        assert handler.on_add is host._pending_host_addition_callback
+        assert handler.on_add.keywords == {
+            "refresh_nodes": True, "reconcile_pools_on_failure": True,
+            "set_up_if_ignored": True}
+        # A successful probe can complete the original ADD, including when
+        # current policy no longer assigns the replacement a connection pool.
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        handler.on_add(host)
+        assert host.is_up is True
+        listener.on_add.assert_called_once_with(host)
+        assert not host._pending_host_addition
+        assert host._pending_host_addition_callback is None
+        assert not host._lifecycle_pending
+    finally:
+        cluster.shutdown()
+
+
+@pytest.mark.parametrize("up_already_complete", [False, True])
+@pytest.mark.parametrize("replacement", [False, True])
+def test_superseded_add_failure_cannot_remove_new_up_pool(up_already_complete, replacement):
+    cluster = Cluster()
+    try:
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster.control_connection.on_up = Mock()
+        cluster._start_reconnector = Mock()
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        old_future, new_future = Future(), Future()
+        if up_already_complete:
+            new_future.set_result(True)
+        session = new_session_with_pool_state()
+        session.shutdown = Mock()
+        session.update_created_pools = Mock()
+        session.submit = lambda fn: fn()
+        old_intent = Mock(host=host)
+        old_intent.complete_result = old_future.set_result
+        new_pool = Mock(host=host)
+
+        def add_pool(host, is_host_addition, **kwargs):
+            if is_host_addition:
+                session._pool_intents[host] = old_intent
+                return old_future
+            session._pools[host] = new_pool
+            return new_future
+
+        session.add_or_renew_pool = add_pool
+        cluster.sessions = (session,)
+        cluster.on_add(host, refresh_nodes=False,
+                       reconcile_pools_on_failure=replacement)
+        cluster.on_up(host)
+        assert old_future.result() is False
+        new_pool.shutdown.assert_not_called()
+        assert session._pools[host] is new_pool
+        cluster.profile_manager.on_down.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
+        if not up_already_complete:
+            assert host._currently_handling_node_up
+            assert host._lifecycle_pending
+            new_future.set_result(True)
+        assert host.is_up is True
+        assert not host._currently_handling_node_up
+    finally:
+        cluster.shutdown()

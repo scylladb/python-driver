@@ -81,6 +81,19 @@ class HostDistance(object):
 
 
 class HostStateListener(object):
+    """Receive ordered host lifecycle notifications.
+
+    Notifications run without topology or host callback locks. Metadata may
+    already reflect a newer topology while a callback is running. An active
+    callback can finish after its Host is retired; stale queued UP, DOWN and
+    ADD work is discarded, and removal is delivered before replacement ADD.
+
+    A listener may call :meth:`~cassandra.cluster.Cluster.refresh_nodes` to
+    publish metadata synchronously. Notifications caused by that refresh are
+    queued until the current notification finishes, rather than delivered
+    recursively. Return promptly: waiting for another notification from the
+    same cluster prevents its FIFO dispatcher from making progress.
+    """
 
     def on_up(self, host):
         """ Called when a node is marked up. """
@@ -90,9 +103,9 @@ class HostStateListener(object):
         """
         Called when a node is marked down.
 
-        Return promptly. Host removal waits for an in-progress DOWN callback,
-        so do not wait synchronously for work submitted to the cluster executor.
-        This applies to registered listeners and custom load-balancing policies.
+        Return promptly; later lifecycle notifications wait for this callback.
+        Metadata removal itself does not wait. This also applies to custom
+        load-balancing policies.
         """
         raise NotImplementedError()
 

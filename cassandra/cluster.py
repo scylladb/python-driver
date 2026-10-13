@@ -54,6 +54,7 @@ from weakref import WeakValueDictionary
 from cassandra import (ConsistencyLevel, AuthenticationFailed, OperationTimedOut, UnsupportedOperation,
                        SchemaTargetType, DriverException, ProtocolVersion,
                        UnresolvableContactPoints, DependencyException, InvalidRequest)
+from cassandra import _lifecycle
 from cassandra.auth import _proxy_execute_key, PlainTextAuthProvider
 from cassandra.client_routes import ClientRoutesChangeType, ClientRoutesConfig, _ClientRoutesHandler
 from cassandra.connection import (ClientRoutesEndPointFactory, ConnectionException, ConnectionShutdown,
@@ -156,10 +157,6 @@ log = logging.getLogger(__name__)
 _GRAPH_PAGING_MIN_DSE_VERSION = Version('6.8.0')
 
 _NOT_SET = object()
-
-
-class _EndpointMoveRejected(ValueError):
-    """A batch could not publish because its metadata snapshot went stale."""
 
 
 def _cancel_and_notify(future):
@@ -386,7 +383,14 @@ def run_in_executor(f):
         if self.is_shutdown:
             return
         try:
-            future = self.executor.submit(f, self, *args, **kwargs)
+            lifecycle_method = getattr(f, '_lifecycle_method', None)
+            if lifecycle_method is not None:
+                future = self._lifecycle.submit_async(
+                    self.executor, lifecycle_method, self, *args, **kwargs)
+                if future is None:
+                    return None
+            else:
+                future = self.executor.submit(f, self, *args, **kwargs)
             future.add_done_callback(_future_completed)
             return future
         except Exception:
@@ -1789,6 +1793,7 @@ class Cluster(object):
                 and not client_routes_config.advanced_shard_awareness):
             self.shard_aware_options.disable_shardaware_port = True
 
+        self._lifecycle = _lifecycle.LifecycleCoordinator(self)
         self._listeners = set()
         self._listener_lock = Lock()
 
@@ -2281,6 +2286,10 @@ class Cluster(object):
     def _shutdown(self, wait_for_executor):
         """Finish cleanup after shutdown has been claimed under ``self._lock``."""
 
+        self._lifecycle.close()
+        if self._lifecycle.delivering:
+            wait_for_executor = False
+
         if self._idle_heartbeat:
             self._idle_heartbeat.stop()
 
@@ -2336,10 +2345,11 @@ class Cluster(object):
             self._start_reconnector(host, is_host_addition=False)
 
     def _is_current_host(self, host):
-        return (not host._is_removed and
-                self.metadata.get_host_by_host_id(host.host_id) is host)
+        return self._lifecycle.is_current(host)
 
-    def _on_up_future_completed(self, host, futures, results, lock, finished_future):
+    @_lifecycle.event
+    def _on_up_future_completed(self, host, futures, results, lock, finished_future,
+                                generation=None):
         with lock:
             futures.discard(finished_future)
 
@@ -2351,96 +2361,110 @@ class Cluster(object):
             if futures:
                 return
 
-        # Removal and replacement hold this lock while unpublishing the host,
-        # so an UP completion cannot outlive its metadata identity.
-        with host._down_callbacks_lock:
-            try:
-                if not self._is_current_host(host):
+        # Retirement can publish while a callback runs. Fence every remaining
+        # effect; the FIFO delivers removal after the current notification.
+        try:
+            if not self._lifecycle.readiness_is_current(host, generation):
+                return
+
+            # all futures have completed at this point
+            for exc in [f for f in results if isinstance(f, Exception)]:
+                log.error("Unexpected failure while marking node %s up:", host, exc_info=exc)
+                self._cleanup_failed_on_up_handling(host)
+                return
+
+            if not all(results):
+                log.debug("Connection pool could not be created, not marking node %s up", host)
+                self._cleanup_failed_on_up_handling(host)
+                return
+
+            log.info("Connection pools established for node %s", host)
+            if not self._lifecycle.mark_ready(host, readiness_generation=generation):
+                return
+            for listener in self.listeners:
+                if not self._lifecycle.dispatch_current(
+                        host, listener.on_up, readiness_generation=generation):
                     return
 
-                # all futures have completed at this point
-                for exc in [f for f in results if isinstance(f, Exception)]:
-                    log.error("Unexpected failure while marking node %s up:", host, exc_info=exc)
-                    self._cleanup_failed_on_up_handling(host)
+            # see if there are any pools to add or remove now that the host is marked up
+            for session in tuple(self.sessions):
+                if not self._lifecycle.readiness_is_current(host, generation):
                     return
-
-                if not all(results):
-                    log.debug("Connection pool could not be created, not marking node %s up", host)
-                    self._cleanup_failed_on_up_handling(host)
-                    return
-
-                log.info("Connection pools established for node %s", host)
-                # mark the host as up and notify all listeners
-                with host.lock:
-                    host.set_up()
-                    host._pending_host_addition = False
-                    host._pending_host_addition_callback = None
-                for listener in self.listeners:
-                    if not self._is_current_host(host):
-                        return
-                    listener.on_up(host)
-
-                # see if there are any pools to add or remove now that the host is marked up
-                for session in tuple(self.sessions):
-                    if not self._is_current_host(host):
-                        return
-                    session.update_created_pools()
-            finally:
-                with host.lock:
-                    host._currently_handling_node_up = False
+                session.update_created_pools()
+        finally:
+            self._lifecycle.finish_up(host, generation)
 
     def on_up(self, host):
         """
         Intended for internal use only.
         """
+        self._lifecycle.submit_readiness(host, self._on_up)
+
+    def _on_up(self, host, generation):
         if self.is_shutdown or self.allow_control_connection_query_fallback == ControlConnectionQueryFallback.SkipPoolCreation:
             return
 
-        log.debug("Waiting to acquire lock for handling up status of node %s", host)
-        with host.lock:
-            if not self._is_current_host(host):
-                log.debug("Ignoring up status for removed host %s", host)
-                return
-
-            if host._currently_handling_node_up:
-                log.debug("Another thread is already handling up status of node %s", host)
-                return
-
-            if host.is_up:
-                log.debug("Host %s was already marked up", host)
-                return
-
-            host._currently_handling_node_up = True
+        if not self._lifecycle.begin_up(host, generation):
+            return
         log.debug("Starting to handle up status of node %s", host)
 
+        try:
+            reconnector = host.get_and_set_reconnection_handler(None)
+            if reconnector:
+                reconnector.cancel()
+            if not self._lifecycle.readiness_is_current(host, generation):
+                return
+            distance = self.profile_manager.distance(host)
+            if not self._lifecycle.readiness_is_current(host, generation):
+                return
+            if distance != HostDistance.IGNORED:
+                self._prepare_host(
+                    host, partial(self._on_up_prepared, host, generation),
+                    partial(self._on_up_preparation_failed, host, generation))
+            else:
+                self._on_up_prepared(host, generation)
+        except Exception:
+            self._on_up_preparation_failed(host, generation)
+            raise
+
+    def _on_up_preparation_failed(self, host, generation):
+        if not self._lifecycle.readiness_is_current(host, generation):
+            return
+        try:
+            self._cleanup_failed_on_up_handling(host)
+        finally:
+            self._lifecycle.finish_up(host, generation)
+
+    def _on_up_prepared(self, host, generation):
+        if not self._lifecycle.readiness_is_current(host, generation):
+            return
         have_future = False
         futures = set()
         try:
-            log.info("Host %s may be up; will prepare queries and open connection pool", host)
-
-            reconnector = host.get_and_set_reconnection_handler(None)
-            if reconnector:
-                log.debug("Now that host %s is up, cancelling the reconnection handler", host)
-                reconnector.cancel()
-
-            if self.profile_manager.distance(host) != HostDistance.IGNORED:
-                self._prepare_all_queries(host)
-                log.debug("Done preparing all queries for host %s, ", host)
-
             for session in tuple(self.sessions):
-                session.remove_pool(host)
+                if not self._lifecycle.dispatch_current(
+                        host, session.remove_pool, readiness_generation=generation):
+                    return
 
             log.debug("Signalling to load balancing policies that host %s is up", host)
-            self.profile_manager.on_up(host)
+            if not self._lifecycle.dispatch_current(
+                        host, self.profile_manager.on_up, readiness_generation=generation):
+                return
 
             log.debug("Signalling to control connection that host %s is up", host)
-            self.control_connection.on_up(host)
+            if not self._lifecycle.dispatch_current(
+                        host, self.control_connection.on_up, readiness_generation=generation):
+                return
 
             log.debug("Attempting to open new connection pools for host %s", host)
             futures_lock = Lock()
             futures_results = []
-            callback = partial(self._on_up_future_completed, host, futures, futures_results, futures_lock)
+            callback = partial(
+                self._on_up_future_completed, host, futures, futures_results,
+                futures_lock, generation=generation)
             for session in tuple(self.sessions):
+                if not self._lifecycle.readiness_is_current(host, generation):
+                    return
                 future = session.add_or_renew_pool(host, is_host_addition=False)
                 if future is not None:
                     have_future = True
@@ -2457,30 +2481,23 @@ class Cluster(object):
             for future in futures:
                 future.cancel()
 
-            with host._down_callbacks_lock:
-                try:
-                    self._cleanup_failed_on_up_handling(host)
-                finally:
-                    with host.lock:
-                        host._currently_handling_node_up = False
             raise
         else:
             if not have_future:
-                with host._down_callbacks_lock:
-                    with host.lock:
-                        if self._is_current_host(host):
-                            host.set_up()
-                            host._pending_host_addition = False
-                            host._pending_host_addition_callback = None
-                        host._currently_handling_node_up = False
-
-        # for testing purposes
-        return futures
+                try:
+                    self._lifecycle.mark_ready(host, readiness_generation=generation)
+                finally:
+                    self._lifecycle.finish_up(host, generation)
 
     def _start_reconnector(self, host, is_host_addition,
-                           on_add_reconnection=None, start=True):
+                           on_add_reconnection=None, start=True,
+                           down_event_generation=None, restart=False):
         with host.lock:
-            if host._is_removed:
+            if not self._lifecycle.down_is_current(host, down_event_generation):
+                return None
+            if restart and (host.is_up is not False or
+                            host._currently_handling_node_up or
+                            host.is_currently_reconnecting()):
                 return None
             if (host._pending_host_addition and
                     on_add_reconnection is None):
@@ -2504,13 +2521,15 @@ class Cluster(object):
         # on_remove() will clear and cancel this handler; if removal wins, do
         # not leave retry work attached to a terminal Host object.
         with host.lock:
-            if host._is_removed:
+            if not self._lifecycle.down_is_current(host, down_event_generation):
                 return None
-            if is_host_addition:
-                host._pending_host_addition = True
+            if restart and (host.is_up is not False or
+                            host._currently_handling_node_up or
+                            host.is_currently_reconnecting()):
+                return None
+            if is_host_addition or host._pending_host_addition:
+                self._lifecycle.remember_addition(host, on_add_reconnection)
             is_host_addition = host._pending_host_addition
-            if is_host_addition and on_add_reconnection is not None:
-                host._pending_host_addition_callback = on_add_reconnection
             reconnector = _HostReconnectionHandler(
                 host, conn_factory, is_host_addition, on_add, self.on_up,
                 self.scheduler, schedule,
@@ -2527,6 +2546,7 @@ class Cluster(object):
         return reconnector
 
     @run_in_executor
+    @_lifecycle.event
     def on_down_potentially_blocking(self, host, is_host_addition,
                                      down_event_generation,
                                      on_add_reconnection=None):
@@ -2539,94 +2559,67 @@ class Cluster(object):
             # on_down() reports successful dispatch to callers that rely on a
             # reconnection being started.
             try:
-                if not self._dispatch_down_callback(
-                        host, down_event_generation,
-                        self.profile_manager.on_down):
+                if not self._lifecycle.dispatch_current(
+                        host, self.profile_manager.on_down,
+                        generation=down_event_generation):
                     return
             except Exception:
                 log.exception("Error in load balancing policy down handler for host %s", host)
             try:
-                if not self._dispatch_down_callback(
-                        host, down_event_generation,
-                        self.control_connection.on_down):
+                if not self._lifecycle.dispatch_current(
+                        host, self.control_connection.on_down,
+                        generation=down_event_generation):
                     return
             except Exception:
                 log.exception("Error in control connection down handler for host %s", host)
             for session in tuple(self.sessions):
                 try:
-                    if not self._dispatch_down_callback(
-                            host, down_event_generation, session.on_down):
+                    if not self._lifecycle.dispatch_current(
+                            host, session.on_down, generation=down_event_generation):
                         return
                 except Exception:
                     log.exception("Error marking host %s down in session", host)
 
             for listener in self.listeners:
                 try:
-                    if not self._dispatch_down_callback(
-                            host, down_event_generation, listener.on_down):
+                    if not self._lifecycle.dispatch_current(
+                            host, listener.on_down, generation=down_event_generation):
                         return
                 except Exception:
                     log.exception("Error in host state listener down handler for host %s", host)
 
-            # Pool cleanup and listener callbacks above may race a newer DOWN
-            # generation or host removal. Pair the final check with handler
-            # installation so stale work cannot publish a reconnector.
             with host.lock:
-                if down_event_generation != host._down_event_generation:
+                if not self._lifecycle.down_is_current(host, down_event_generation):
                     return
-                if on_add_reconnection is None:
-                    self._start_reconnector(host, is_host_addition)
-                else:
-                    self._start_reconnector(
-                        host, is_host_addition,
-                        on_add_reconnection=on_add_reconnection)
+            # Policy callbacks and schedule construction run unlocked. The
+            # final installation rechecks this generation under host.lock.
+            self._start_reconnector(
+                host, is_host_addition,
+                on_add_reconnection=on_add_reconnection,
+                down_event_generation=down_event_generation)
         finally:
-            with host.lock:
-                if down_event_generation == host._down_event_generation:
-                    host._currently_handling_node_down = False
-
-    @staticmethod
-    def _dispatch_down_callback(host, down_event_generation, callback):
-        """Invoke a current DOWN callback before removal can overtake it."""
-        # Removal waits for this callback before notifying on_remove. User
-        # callbacks must not wait on cluster executor work; #382 tracks moving
-        # lifecycle ordering to queued work instead of blocking a worker.
-        with host._down_callbacks_lock:
-            with host.lock:
-                if (host._is_removed or
-                        down_event_generation != host._down_event_generation):
-                    return False
-            callback(host)
-            return True
+            self._lifecycle.finish_down(host, down_event_generation)
 
     @run_in_executor
     def _restart_reconnector(self, host, is_host_addition,
                              down_event_generation,
                              on_add_reconnection=None):
         try:
-            # Match the old synchronous path's ordering with on_up(): if the
-            # host recovered or is still being brought up while this task was
-            # queued, there is nothing to restart. A failed UP transition
-            # starts its own reconnector before releasing the UP guard, which
-            # must not be replaced by this stale task.
             with host.lock:
-                if (down_event_generation == host._down_event_generation and
-                        host.is_up is False and
-                        not host._currently_handling_node_up and
-                        not host.is_currently_reconnecting()):
-                    if on_add_reconnection is None:
-                        self._start_reconnector(host, is_host_addition)
-                    else:
-                        self._start_reconnector(
-                            host, is_host_addition,
-                            on_add_reconnection=on_add_reconnection)
+                if (not self._lifecycle.down_is_current(host, down_event_generation) or
+                        host.is_up is not False or
+                        host._currently_handling_node_up or
+                        host.is_currently_reconnecting()):
+                    return
+            self._start_reconnector(
+                host, is_host_addition,
+                on_add_reconnection=on_add_reconnection,
+                down_event_generation=down_event_generation, restart=True)
         finally:
-            with host.lock:
-                if down_event_generation == host._down_event_generation:
-                    host._currently_handling_node_down = False
+            self._lifecycle.finish_down(host, down_event_generation)
 
     def on_down(self, host, is_host_addition, expect_host_to_be_down=False,
-                on_add_reconnection=None):
+                on_add_reconnection=None, _pool_failure=None):
         """
         Intended for internal use only.
 
@@ -2635,80 +2628,53 @@ class Cluster(object):
         if self.is_shutdown or self.allow_control_connection_query_fallback == ControlConnectionQueryFallback.SkipPoolCreation:
             return False
 
-        restart_reconnector = False
-        with host.lock:
-            if host._is_removed:
-                return False
+        # Custom distance policies may refresh topology. Do not invoke them
+        # under the Host state lock needed by terminal publication.
+        connected = False
+        if (self._discount_down_events and
+                self.profile_manager.distance(host) != HostDistance.IGNORED):
+            for session in tuple(self.sessions):
+                pool_state = session.get_pool_state().get(host)
+                if pool_state:
+                    connected |= pool_state['open_count'] > 0
 
-            was_up = host.is_up
-
-            # ignore down signals if we have open pools to the host
-            # this is to avoid closing pools when a control connection host became isolated
-            if self._discount_down_events and self.profile_manager.distance(host) != HostDistance.IGNORED:
-                connected = False
-                for session in tuple(self.sessions):
-                    pool_states = session.get_pool_state()
-                    pool_state = pool_states.get(host)
-                    if pool_state:
-                        connected |= pool_state['open_count'] > 0
-                if connected:
-                    return False
-
-            host.set_down()
-            if (not was_up and
-                    (host.is_currently_reconnecting() or
-                     host._currently_handling_node_down)):
-                return False
-
-            if not was_up and not expect_host_to_be_down:
-                # A terminal failure may have released this down host's old
-                # handler. Start a new retry cycle without repeating the DOWN
-                # notifications that were sent on the original transition.
-                restart_reconnector = True
-
-            host._currently_handling_node_down = True
-            host._down_event_generation += 1
-            down_event_generation = host._down_event_generation
-
-        if restart_reconnector:
-            if on_add_reconnection is None:
-                future = self._restart_reconnector(
-                    host, is_host_addition, down_event_generation)
-            else:
-                future = self._restart_reconnector(
-                    host, is_host_addition, down_event_generation,
-                    on_add_reconnection=on_add_reconnection)
-            if future is None:
-                with host.lock:
-                    if down_event_generation == host._down_event_generation:
-                        host._currently_handling_node_down = False
-            # Restarting the host reconnector does not dispatch the DOWN
-            # callbacks that reconnect the control connection.
-            return False
-
-        log.warning("Host %s has been marked down", host)
-
-        if on_add_reconnection is None:
-            future = self.on_down_potentially_blocking(
-                host, is_host_addition, down_event_generation)
-        else:
-            future = self.on_down_potentially_blocking(
-                host, is_host_addition, down_event_generation,
-                on_add_reconnection=on_add_reconnection)
-        if future is None:
-            with host.lock:
-                if down_event_generation == host._down_event_generation:
-                    host._currently_handling_node_down = False
-        return future is not None
+        return self._lifecycle.dispatch_down(
+            host, is_host_addition, connected, expect_host_to_be_down,
+            on_add_reconnection, _pool_failure)
 
     def on_add(self, host, refresh_nodes=True,
                reconcile_pools_on_failure=False,
                set_up_if_ignored=False):
+        on_add_reconnection = None
+        if reconcile_pools_on_failure:
+            on_add_reconnection = partial(
+                self.on_add, refresh_nodes=True,
+                reconcile_pools_on_failure=True, set_up_if_ignored=True)
+
+        def deliver(host, generation):
+            try:
+                self._on_add(host, generation, refresh_nodes,
+                             reconcile_pools_on_failure, set_up_if_ignored,
+                             on_add_reconnection)
+            except Exception:
+                self._on_add_preparation_failed(host)
+                raise
+        with self._lifecycle.transaction():
+            # Preserve discovery intent even if DOWN supersedes this queued
+            # readiness attempt. Its recovery must still complete an ADD.
+            if not self._lifecycle.begin_addition(host, on_add_reconnection):
+                return
+            self._lifecycle.submit_readiness(host, deliver)
+
+    def _on_add(self, host, generation, refresh_nodes=True,
+                reconcile_pools_on_failure=False,
+                set_up_if_ignored=False, on_add_reconnection=None):
         if self.is_shutdown:
             return
 
-        on_add_reconnection = None
-        if reconcile_pools_on_failure:
+        if not self._lifecycle.readiness_is_current(host, generation):
+            return
+        if reconcile_pools_on_failure and on_add_reconnection is None:
             # The initial replacement add runs inside a topology refresh, but
             # delayed retries do not. A successful probe also establishes
             # liveness when the policy no longer assigns the host a pool.
@@ -2718,26 +2684,53 @@ class Cluster(object):
                 set_up_if_ignored=True)
 
         with host.lock:
-            if host._is_removed:
+            if (not self._lifecycle.readiness_is_current(host, generation) or
+                    not self._lifecycle.begin_addition(host, on_add_reconnection)):
                 return
-            host._pending_host_addition = True
-            if on_add_reconnection is not None:
-                host._pending_host_addition_callback = on_add_reconnection
+            addition_token = self._lifecycle.claim_addition(host)
 
         log.debug("Handling new host %r and notifying listeners", host)
 
         self.profile_manager.on_add(host)
+        if not self._lifecycle.readiness_is_current(host, generation):
+            return
         self.control_connection.on_add(host, refresh_nodes)
+        if not self._lifecycle.readiness_is_current(host, generation):
+            return
 
         distance = self.profile_manager.distance(host)
+        if not self._lifecycle.readiness_is_current(host, generation):
+            return
         if distance != HostDistance.IGNORED:
-            self._prepare_all_queries(host)
-            log.debug("Done preparing queries for new host %r", host)
+            self._prepare_host(
+                host, partial(self._on_add_prepared, host, distance,
+                              reconcile_pools_on_failure, set_up_if_ignored,
+                              on_add_reconnection, generation, addition_token),
+                partial(self._on_add_preparation_failed, host))
+            return
+        self._on_add_prepared(host, distance, reconcile_pools_on_failure,
+                              set_up_if_ignored, on_add_reconnection, generation,
+                              addition_token)
 
+    def _on_add_preparation_failed(self, host):
+        # Keep the ADD readiness reservation until the retry owns pool setup.
+        if self._is_current_host(host):
+            with host.lock:
+                host._endpoint_add_retry_pending = True
+            self._schedule_failed_endpoint_add_retry(host)
+
+    def _on_add_prepared(self, host, distance, reconcile_pools_on_failure,
+                         set_up_if_ignored, on_add_reconnection, generation,
+                         addition_token):
+        if (not self._lifecycle.readiness_is_current(host, generation) or
+                not self._lifecycle.addition_is_current(host, addition_token)):
+            return
         if distance == HostDistance.IGNORED:
             log.debug("Not adding connection pool for new host %r because the "
                       "load balancing policy has marked it as IGNORED", host)
-            self._finalize_add(host, set_up=set_up_if_ignored)
+            self._finalize_add(
+                host, set_up=set_up_if_ignored, generation=generation,
+                addition_token=addition_token)
             return
 
         futures_lock = Lock()
@@ -2756,6 +2749,8 @@ class Cluster(object):
                 if futures:
                     return
 
+            if not self._lifecycle.addition_is_current(host, addition_token):
+                return
             log.debug('All futures have completed for added host %s', host)
 
             failures = [f for f in futures_results if isinstance(f, Exception)]
@@ -2765,7 +2760,15 @@ class Cluster(object):
             elif not all(futures_results):
                 log.warning("Connection pool could not be created, not marking node %s up", host)
             else:
-                self._finalize_add(host)
+                self._finalize_add(host, generation=generation,
+                               addition_token=addition_token)
+                return
+
+            if not reconcile_pools_on_failure:
+                # A healthy sibling pool can discount DOWN. Once aggregate
+                # ADD has failed it no longer owns ordinary pool creation;
+                # let that session reconcile without tearing down live pools.
+                self._lifecycle.release_addition(host, addition_token)
                 return
 
             # A same-endpoint replacement removes its predecessor without
@@ -2796,11 +2799,8 @@ class Cluster(object):
                     # as terminal. Supersede that task as well as any handler
                     # it managed to install, and allow a later DOWN event to
                     # start fresh handling.
-                    with host.lock:
-                        host._down_event_generation += 1
-                        host._currently_handling_node_down = False
-                        old_reconnector = \
-                            host.get_and_set_reconnection_handler(None)
+                    old_reconnector = self._lifecycle.supersede_down(host)
+                    self._lifecycle.release_addition(host, addition_token)
                     if old_reconnector:
                         old_reconnector.cancel()
                 else:
@@ -2855,7 +2855,8 @@ class Cluster(object):
                 futures.add(future)
 
         if not futures:
-            self._finalize_add(host)
+            self._finalize_add(host, generation=generation,
+                               addition_token=addition_token)
             return
 
         # Register callbacks only after every session has had its pool
@@ -2863,42 +2864,54 @@ class Cluster(object):
         # when the future is already complete, so registering inside the loop
         # can finalize the host while later sessions are still unscheduled.
         for future in tuple(futures):
-            future.add_done_callback(future_completed)
+            future.add_done_callback(
+                lambda future: self._lifecycle.submit(future_completed, future))
 
-    def _finalize_add(self, host, set_up=True):
-        with host.lock:
-            if host._is_removed:
-                return
-            if set_up:
-                host.set_up()
-            host._pending_host_addition = False
-            host._pending_host_addition_callback = None
+    @_lifecycle.event
+    def _finalize_add(self, host, set_up=True, generation=None,
+                      addition_token=None):
+        if not self._lifecycle.mark_ready(
+                host, set_up, readiness_generation=generation,
+                addition_token=addition_token):
+            return
 
         for listener in self.listeners:
-            listener.on_add(host)
+            try:
+                if not self._lifecycle.dispatch_current(
+                        host, listener.on_add, readiness_generation=generation):
+                    return
+            except Exception:
+                log.exception("Error in host addition listener for %s", host)
 
         # see if there are any pools to add or remove now that the host is marked up
         for session in tuple(self.sessions):
+            if not self._lifecycle.readiness_is_current(host, generation):
+                return
             session.update_created_pools()
 
     def on_remove(self, host, trigger_reconciliation=True,
-                  suppress_callback_errors=False):
-        """Retire a host, optionally isolating replacement callback failures."""
-        if self.is_shutdown:
-            return
+                  suppress_callback_errors=False, refresh_nodes=True):
+        """Retire a host and queue its ordered removal notifications.
 
-        self._retire_host(host)
-        self._notify_host_removed(host, trigger_reconciliation,
-                                  suppress_callback_errors)
+        ``suppress_callback_errors`` is accepted for compatibility and has no
+        effect. Removal callback exceptions are always logged, and remaining
+        cleanup continues. Queued notifications cannot propagate exceptions
+        to the caller.
+        """
+        self._lifecycle.retire(
+            host, trigger_reconciliation=trigger_reconciliation,
+            refresh_nodes=refresh_nodes)
 
     def _notify_host_removed(self, host, trigger_reconciliation,
-                             suppress_callback_errors):
+                             suppress_callback_errors, refresh_nodes=True):
         if self.is_shutdown:
             return
 
         log.debug("[cluster] Removing host %s", host)
 
         def notify(callback, *args, **kwargs):
+            if self.is_shutdown:
+                return False
             if not suppress_callback_errors:
                 callback(*args, **kwargs)
                 return True
@@ -2916,40 +2929,37 @@ class Cluster(object):
                 notify(session.remove_pool, host)
         for listener in self.listeners:
             notify(listener.on_remove, host)
-        notify(self.control_connection.on_remove, host,
-               trigger_reconciliation=trigger_reconciliation)
+        options = dict(trigger_reconciliation=trigger_reconciliation)
+        if not refresh_nodes:
+            options["refresh_nodes"] = False
+        notify(self.control_connection.on_remove, host, **options)
 
         reconnection_handler = host.get_and_set_reconnection_handler(None)
         if reconnection_handler:
-            notify(reconnection_handler.cancel)
-
-    @staticmethod
-    def _retire_host(host):
-        # A Host object is never re-added after lifecycle removal; a later
-        # discovery creates a new object, even when it carries the same ID.
-        # Serialize this transition with DOWN callbacks before pool removal.
-        with host._down_callbacks_lock:
-            with host.lock:
-                host._is_removed = True
-                host.set_down()
-                host._pending_host_addition = False
-                host._pending_host_addition_callback = None
+            try:
+                reconnection_handler.cancel()
+            except Exception:
+                log.exception("Error cancelling removed host reconnector")
 
     def signal_connection_failure(self, host, connection_exc,
                                   is_host_addition,
                                   expect_host_to_be_down=False,
-                                  on_add_reconnection=None):
+                                  on_add_reconnection=None, _pool_failure=None):
         """Return whether the failure caused DOWN handling to be dispatched."""
+        if _pool_failure is not None and not _pool_failure.is_current():
+            return False
         is_down = host.signal_connection_failure(connection_exc)
         if not is_down:
             return False
+        options = {} if _pool_failure is None else {'_pool_failure': _pool_failure}
         if on_add_reconnection is None:
             return self.on_down(
-                host, is_host_addition, expect_host_to_be_down)
+                host, is_host_addition, expect_host_to_be_down, **options)
         return self.on_down(
             host, is_host_addition, expect_host_to_be_down,
-            on_add_reconnection=on_add_reconnection)
+            on_add_reconnection=on_add_reconnection, **options)
 
+    @_lifecycle.transaction
     def add_host(self, endpoint, datacenter=None, rack=None, signal=True,
                  refresh_nodes=True, host_id=None,
                  reconcile_pools_on_failure=False,
@@ -2975,34 +2985,9 @@ class Cluster(object):
 
         candidate = Host(endpoint, self.conviction_policy_factory, datacenter,
                          rack, host_id=host_id)
-        host, new, replaced_host = self.metadata._add_or_replace_host(
-            candidate, allow_replace=signal)
-        if not new and host.endpoint != candidate.endpoint:
-            if not signal:
-                raise ValueError("Endpoint replacement requires host addition signaling")
-            if not replace_existing_id:
-                raise ValueError("Endpoint replacement is disabled for this host addition")
-            return self.replace_host_endpoint(
-                host, candidate.endpoint, datacenter, rack), False
-
-        if replaced_host is not None:
-            log.info("Cassandra host %s removed", replaced_host)
-            # The replacement is already visible. Its addition owns pool
-            # reconciliation, so removal must not start a nested refresh.
-            try:
-                self.on_remove(replaced_host, trigger_reconciliation=False,
-                               suppress_callback_errors=True)
-            except Exception:
-                log.exception("Error notifying removal of replaced host %s",
-                              replaced_host)
-            reconcile_pools_on_failure = True
-        if new and signal:
-            log.info("New Cassandra host %r discovered", host)
-            self.on_add(
-                host, refresh_nodes,
-                reconcile_pools_on_failure=reconcile_pools_on_failure)
-
-        return host, new
+        return self._lifecycle.publish_host(
+            candidate, signal, refresh_nodes, reconcile_pools_on_failure,
+            replace_existing_id)
 
     def replace_host_endpoint(self, host, endpoint, datacenter=None, rack=None):
         """Move a host ID to a new endpoint with a fresh Host lifecycle.
@@ -3014,6 +2999,7 @@ class Cluster(object):
         return self.replace_hosts_endpoints(
             [(host, endpoint, datacenter, rack)])[0]
 
+    @_lifecycle.transaction
     def replace_hosts_endpoints(self, moves):
         """Publish all moving Hosts before retiring and adding their routes."""
         replacements = []
@@ -3045,35 +3031,14 @@ class Cluster(object):
                     connection._control_connection_host = host
                     bound_host = host
                     break
-        try:
-            self.metadata.replace_host_endpoints(replacements)
-        except ValueError as exc:
-            raise _EndpointMoveRejected(str(exc)) from exc
         reconnect_control = connection is not None and any(
             bound_host is host or
             (bound_host is None and
              control_connection._connection_matches_host(connection, host))
             for host, _ in replacements)
 
-        for host, replacement in replacements:
-            log.info("Cassandra host %s moved from %s to %s", host.host_id,
-                     host.endpoint, replacement.endpoint)
-            self.on_remove(host, trigger_reconciliation=False,
-                           suppress_callback_errors=True)
-        try:
-            for _, replacement in replacements:
-                try:
-                    self.on_add(replacement, refresh_nodes=False,
-                                reconcile_pools_on_failure=True)
-                except Exception:
-                    log.exception("Error notifying addition of moved host %s",
-                                  replacement)
-                    with replacement.lock:
-                        replacement._endpoint_add_retry_pending = True
-                    self._schedule_failed_endpoint_add_retry(replacement)
-        finally:
-            if reconnect_control:
-                control_connection.reconnect()
+        self._lifecycle.publish_replacements(
+            replacements, control_connection.reconnect if reconnect_control else None)
         return [replacement for _, replacement in replacements]
 
     def _schedule_failed_endpoint_add_retry(self, host):
@@ -3094,51 +3059,39 @@ class Cluster(object):
 
     def retry_failed_endpoint_add(self, host):
         """Retry a published endpoint replacement whose synchronous add failed."""
-        # Removal uses this same lock to make the old lifecycle terminal.
-        # Keep policy/pool setup ordered before that removal or skip it.
-        with host._down_callbacks_lock:
-            if self.metadata.get_host_by_host_id(host.host_id) is not host:
+        self._lifecycle.submit_readiness(host, self._retry_failed_endpoint_add)
+
+    def _retry_failed_endpoint_add(self, host, generation):
+        # A superseded retry leaves its intent for fresh recovery after DOWN.
+        with host.lock:
+            if (not self._lifecycle.readiness_is_current(host, generation) or
+                    not getattr(host, '_endpoint_add_retry_pending', False)):
                 return
+            # Claim this retry so overlapping topology refreshes do not
+            # run policy and pool setup for the same Host at once.
+            host._endpoint_add_retry_pending = False
+        try:
+            self._on_add(host, generation, refresh_nodes=False,
+                         reconcile_pools_on_failure=True)
+        except Exception:
+            log.exception("Error retrying addition of moved host %s", host)
             with host.lock:
-                if (host._is_removed or
-                        not getattr(host, '_endpoint_add_retry_pending', False)):
-                    return
-                # Claim this retry so overlapping topology refreshes do not
-                # run policy and pool setup for the same Host at once.
-                host._endpoint_add_retry_pending = False
-            try:
-                self.on_add(host, refresh_nodes=False,
-                            reconcile_pools_on_failure=True)
-            except Exception:
-                log.exception("Error retrying addition of moved host %s", host)
-                with host.lock:
-                    if not host._is_removed:
-                        host._endpoint_add_retry_pending = True
-                self._schedule_failed_endpoint_add_retry(host)
+                if not host._is_removed:
+                    host._endpoint_add_retry_pending = True
+            self._schedule_failed_endpoint_add_retry(host)
 
     def remove_host(self, host, trigger_reconciliation=True,
-                    suppress_callback_errors=False):
-        """
-        Called when the control connection observes that a node has left the
-        ring.  Intended for internal use only.
+                    suppress_callback_errors=False, refresh_nodes=True):
+        """Unpublish a current host and queue its lifecycle cleanup.
 
-        ``trigger_reconciliation`` may be disabled when an immediately
-        following host addition owns pool and control-connection follow-up.
-        ``suppress_callback_errors`` keeps replacement cleanup moving if a
-        removal listener raises.
+        ``suppress_callback_errors`` is accepted for compatibility and has no
+        effect. Removal callback exceptions are always logged, and remaining
+        cleanup continues. Queued notifications cannot propagate exceptions
+        to the caller.
         """
-        if host:
-            # Unpublish and retire the host under the callback lock so UP and
-            # DOWN completion see a terminal state. Run callbacks after release.
-            with host._down_callbacks_lock:
-                if (self._is_current_host(host) and
-                        self.metadata.remove_host(host)):
-                    self._retire_host(host)
-                    log.info("Cassandra host %s removed", host)
-                else:
-                    return
-            self._notify_host_removed(
-                host, trigger_reconciliation, suppress_callback_errors)
+        self._lifecycle.remove(
+            host, trigger_reconciliation=trigger_reconciliation,
+            refresh_nodes=refresh_nodes)
 
     def register_listener(self, listener):
         """
@@ -3281,7 +3234,13 @@ class Cluster(object):
 
     def refresh_nodes(self, force_token_rebuild=False):
         """
-        Synchronously refresh the node list and token metadata
+        Synchronously publish refreshed node-list and token metadata.
+
+        DC/rack location transitions and lifecycle notifications are delivered
+        in order outside metadata locks.
+        If another notification is running (including this call from a
+        listener), this method can return before the queued notifications run.
+        A newer accepted refresh supersedes an older in-flight snapshot.
 
         `force_token_rebuild` can be used to rebuild the token map metadata, even if no new nodes are discovered.
 
@@ -3319,6 +3278,34 @@ class Cluster(object):
                 if not success:
                     log.debug("Got unexpected response when preparing "
                               "statement on host %s: %r", host, response)
+
+    def _prepare_host(self, host, continuation, failed):
+        # Empty preparation keeps the common notification path synchronous.
+        if not self.reprepare_on_up or not self._prepared_statements:
+            continuation()
+            return
+        token = self._lifecycle.begin_preparation(host)
+        if token is None:
+            return
+
+        def completed(future):
+            def deliver():
+                if not self._lifecycle.finish_preparation(host, token):
+                    return
+                try:
+                    future.result()
+                    continuation()
+                except Exception:
+                    log.exception("Error preparing host %s for readiness", host)
+                    failed()
+            self._lifecycle.submit(deliver)
+
+        try:
+            future = self.executor.submit(self._prepare_all_queries, host)
+        except Exception:
+            self._lifecycle.finish_preparation(host, token)
+            raise
+        future.add_done_callback(completed)
 
     def _prepare_all_queries(self, host):
         if not self._prepared_statements or not self.reprepare_on_up:
@@ -4560,8 +4547,14 @@ class Session(object):
                             host, generation, expected_pool, endpoint)):
                     return self._stale_pool_creation_result_locked(
                         host, expected_pool, intent, distance)
-                self._pool_generations[host] = object()
-                dispatch_failure()
+                failure_generation = object()
+                self._pool_generations[host] = failure_generation
+                reservation = _lifecycle.PoolFailureReservation(
+                    self, host, failure_generation, expected_pool, intent, endpoint)
+        # Conviction/distance callbacks can refresh topology. Retain ownership
+        # in a token and recheck it atomically with DOWN admission instead of
+        # holding session/host locks through arbitrary policy code.
+        dispatch_failure(reservation)
         return owning_result
 
     def add_or_renew_pool(self, host, is_host_addition,
@@ -4731,7 +4724,7 @@ class Session(object):
 
             connection_errors = []
 
-            def dispatch_connection_failure():
+            def dispatch_connection_failure(reservation):
                 connection_exc = connection_errors[0]
                 log.warning(
                     "Failed to create connection pool for new host %s:",
@@ -4741,12 +4734,13 @@ class Session(object):
                 if on_add_reconnection is None:
                     self.cluster.signal_connection_failure(
                         host, connection_exc, is_host_addition,
-                        expect_host_to_be_down=True)
+                        expect_host_to_be_down=True, _pool_failure=reservation)
                 else:
                     self.cluster.signal_connection_failure(
                         host, connection_exc, is_host_addition,
                         expect_host_to_be_down=True,
-                        on_add_reconnection=on_add_reconnection)
+                        on_add_reconnection=on_add_reconnection,
+                        _pool_failure=reservation)
 
             try:
                 new_pool = HostConnection(host, distance, self)
@@ -4754,14 +4748,16 @@ class Session(object):
                 authentication_exc = ConnectionException(
                     str(auth_exc), endpoint=host)
 
-                def dispatch_authentication_failure():
+                def dispatch_authentication_failure(reservation):
                     if on_add_reconnection is None:
                         self.cluster.signal_connection_failure(
-                            host, authentication_exc, is_host_addition)
+                            host, authentication_exc, is_host_addition,
+                            _pool_failure=reservation)
                     else:
                         self.cluster.signal_connection_failure(
                             host, authentication_exc, is_host_addition,
-                            on_add_reconnection=on_add_reconnection)
+                            on_add_reconnection=on_add_reconnection,
+                            _pool_failure=reservation)
 
                 # Replacement aggregation uses None to distinguish a
                 # non-retryable authentication failure from other falsey
@@ -4827,18 +4823,20 @@ class Session(object):
                 new_pool._set_keyspace_for_all_conns(keyspace, callback)
                 set_keyspace_event.wait(self.cluster.connect_timeout)
                 if not set_keyspace_event.is_set() or errors_returned:
-                    def dispatch_keyspace_failure():
+                    def dispatch_keyspace_failure(reservation):
                         log.warning(
                             "Failed setting keyspace for pool after "
                             "keyspace changed during connect: %s",
                             errors_returned)
                         if on_add_reconnection is None:
-                            self.cluster.on_down(host, is_host_addition)
+                            self.cluster.on_down(
+                                host, is_host_addition, _pool_failure=reservation)
                         else:
                             self.cluster.on_down(
                                 host, is_host_addition,
                                 expect_host_to_be_down=True,
-                                on_add_reconnection=on_add_reconnection)
+                                on_add_reconnection=on_add_reconnection,
+                                _pool_failure=reservation)
 
                     try:
                         return self._handle_pool_creation_failure(
@@ -4950,7 +4948,7 @@ class Session(object):
                 if self.is_shutdown:
                     break
                 with host.lock:
-                    if host._is_removed:
+                    if host._is_removed or host._lifecycle_pending:
                         continue
                     # In-flight on_add/on_up owns pool creation for a down host;
                     # superseding it would settle its result False with no retry.
@@ -5573,6 +5571,7 @@ class ControlConnection(object):
         self._token_meta_enabled = token_meta_enabled
         self._schema_meta_page_size = schema_meta_page_size
 
+        self._lifecycle = self._cluster._lifecycle
         self._lock = RLock()
         self._schema_agreement_lock = Lock()
 
@@ -5946,6 +5945,7 @@ class ControlConnection(object):
                     connection,
                     self._timeout)
 
+            revision = self._lifecycle.reserve_refresh()
             sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
             sel_local = self._SELECT_LOCAL if self._token_meta_enabled else self._SELECT_LOCAL_NO_TOKENS
             peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
@@ -5968,7 +5968,8 @@ class ControlConnection(object):
                     peers_query, timeout=self._timeout)
 
             shared_results = (peers_result, local_result)
-            self._refresh_node_list_and_token_map(connection, preloaded_results=shared_results)
+            self._refresh_node_list_and_token_map(
+                connection, preloaded_results=shared_results, revision=revision)
             self._refresh_schema(connection, preloaded_results=shared_results, schema_agreement_wait=-1)
         except Exception:
             connection.close()
@@ -6227,7 +6228,9 @@ class ControlConnection(object):
         return False
 
     def _refresh_node_list_and_token_map(self, connection, preloaded_results=None,
-                                         force_token_rebuild=False):
+                                         force_token_rebuild=False, revision=None):
+        if revision is None:
+            revision = self._lifecycle.reserve_refresh(force_token_rebuild)
         if preloaded_results:
             log.debug("[control connection] Refreshing node list and token map using preloaded results")
             peers_result = preloaded_results[0]
@@ -6248,36 +6251,60 @@ class ControlConnection(object):
             peers_result, local_result = connection.wait_for_responses(
                 peers_query, local_query, timeout=self._timeout)
 
-        peers_result = dict_factory(peers_result.column_names, peers_result.parsed_rows)
-
-        partitioner = None
-        token_map = {}
-
-        found_host_ids = set()
-        found_endpoints = set()
-
+        rows = dict_factory(peers_result.column_names, peers_result.parsed_rows)
         local_row = None
         if local_result.parsed_rows:
-            local_rows = dict_factory(local_result.column_names, local_result.parsed_rows)
-            local_row = local_rows[0]
-            cluster_name = local_row["cluster_name"]
-            self._cluster.metadata.cluster_name = cluster_name
+            local_row = dict_factory(local_result.column_names,
+                                     local_result.parsed_rows)[0]
+            rows.insert(0, local_row)
+        prepared = [(row, self._cluster.endpoint_factory.create(row))
+                    for row in rows if self._is_valid_peer(row)]
+        with self._lifecycle.transaction():
+            if not self._lifecycle.accept_refresh(revision):
+                if not self._lifecycle.closed:
+                    self._bind_stale_candidate(connection, prepared, local_row)
+                return
+            force_token_rebuild |= self._lifecycle.force_rebuild_required(revision)
+            self._apply_node_list_and_token_map(
+                connection, prepared, local_row, force_token_rebuild)
+            if force_token_rebuild:
+                self._lifecycle.complete_token_rebuild(revision)
 
-            partitioner = local_row.get("partitioner")
-            tokens = local_row.get("tokens", None)
+    def _bind_stale_candidate(self, connection, prepared, local_row):
+        """Bind socket-local identity without publishing an older topology."""
+        if vars(connection).get('_control_connection_host') is not None:
+            return
+        for row, endpoint in prepared:
+            if row is not local_row:
+                continue
+            host_id = row.get('host_id')
+            host = self._cluster.metadata.get_host_by_host_id(host_id)
+            original = getattr(connection, 'original_endpoint', connection.endpoint)
+            if (host is not None and not host._is_removed and
+                    host.endpoint in (endpoint, original)):
+                connection._control_connection_host_id = host_id
+                connection._control_connection_host = host
+                return
+        # A candidate socket whose observed identity/route was superseded
+        # must be retried, not installed against the new endpoint owner.
+        raise ConnectionException("Control connection topology snapshot is stale",
+                                  connection.endpoint)
 
-            peers_result.insert(0, local_row)
+    def _apply_node_list_and_token_map(
+            self, connection, prepared, local_row, force_token_rebuild):
+        partitioner = local_row.get('partitioner') if local_row else None
+        token_map = {}
+        found_host_ids = set()
+        found_endpoints = set()
+        if local_row:
+            self._cluster.metadata.cluster_name = local_row['cluster_name']
 
         # Check metadata.partitioner to see if we haven't built anything yet. If
         # every node in the cluster was in the contact points, we won't discover
         # any new nodes, so we need this additional check.  (See PYTHON-90)
         should_rebuild_token_map = force_token_rebuild or self._cluster.metadata.partitioner is None
         accepted_rows = []
-        for row in peers_result:
-            if not self._is_valid_peer(row):
-                continue
-
-            factory_endpoint = self._cluster.endpoint_factory.create(row)
+        for row, factory_endpoint in prepared:
             host_id = row.get("host_id")
 
             # Use the factory endpoint for duplicate detection even when a Unix
@@ -6296,6 +6323,18 @@ class ControlConnection(object):
                 connection._control_connection_host_id = host_id
             existing_host = self._cluster.metadata.get_host_by_host_id(host_id)
             accepted_rows.append((row, factory_endpoint, host_id, existing_host))
+
+        # Retire absent routes before queuing any ADD notifications. SNI and
+        # client-routes endpoints include identity, so a UUID replacement need
+        # not collide with its predecessor's endpoint. Policies must release
+        # that predecessor's remote-host slot before classifying new hosts.
+        # Same-endpoint displacement retains its atomic replacement path.
+        for old_host_id, old_host in self._cluster.metadata.all_hosts_items():
+            if (old_host_id not in found_host_ids and
+                    old_host.endpoint not in found_endpoints):
+                should_rebuild_token_map = True
+                self._cluster.remove_host(
+                    old_host, refresh_nodes=False, suppress_callback_errors=True)
 
         # Determine all moves from the same topology snapshot, then publish
         # them together. An endpoint may be released by a later row (including
@@ -6345,7 +6384,7 @@ class ControlConnection(object):
         if moves:
             try:
                 replacements = self._cluster.replace_hosts_endpoints(moves)
-            except _EndpointMoveRejected:
+            except _lifecycle.EndpointMoveRejected:
                 log.warning(
                     "[control connection] Endpoint moves changed during refresh; skipping stale batch",
                     exc_info=True)
@@ -6497,18 +6536,17 @@ class ControlConnection(object):
                     getattr(host, '_endpoint_add_retry_pending', False)):
                 # Query preparation in on_add can block on a slow node.
                 # Keep the topology refresh moving while the scheduler runs
-                # the retry under the host's callback lock.
+                # the retry through the lifecycle notification queue.
                 self._cluster.scheduler.schedule_unique(
                     0, self._cluster.retry_failed_endpoint_add, host)
 
         for old_host_id, old_host in self._cluster.metadata.all_hosts_items():
-            if old_host_id not in found_host_ids:
+            if (old_host_id not in found_host_ids and
+                    old_host.endpoint in found_endpoints):
                 should_rebuild_token_map = True
                 log.debug("[control connection] Removing host not found in peers metadata: %r", old_host)
-                # This metadata-only removal must not overtake UP completion.
-                with old_host._down_callbacks_lock:
-                    if self._cluster.metadata.get_host_by_host_id(old_host_id) is old_host:
-                        self._cluster.metadata.remove_host_by_host_id(old_host_id, old_host.endpoint)
+                self._cluster.remove_host(
+                    old_host, refresh_nodes=False, suppress_callback_errors=True)
 
         log.debug("[control connection] Finished fetching ring info")
         if partitioner and should_rebuild_token_map:
@@ -6559,16 +6597,7 @@ class ControlConnection(object):
         return True
 
     def _update_location_info(self, host, datacenter, rack):
-        if host.datacenter == datacenter and host.rack == rack:
-            return False
-
-        # If the dc/rack information changes, we need to update the load balancing policy.
-        # For that, we remove and re-add the node against the policy. Not the most elegant, and assumes
-        # that the policy will update correctly, but in practice this should work.
-        self._cluster.profile_manager.on_down(host)
-        host.set_location_info(datacenter, rack)
-        self._cluster.profile_manager.on_up(host)
-        return True
+        return self._lifecycle.update_location(host, datacenter, rack)
 
     def _delay_for_event_type(self, event_type, delay_window):
         # this serves to order processing correlated events (received within the window)
@@ -6905,7 +6934,7 @@ class ControlConnection(object):
         if refresh_nodes:
             self.refresh_node_list_and_token_map(force_token_rebuild=True)
 
-    def on_remove(self, host, trigger_reconciliation=True):
+    def on_remove(self, host, trigger_reconciliation=True, refresh_nodes=True):
         if not trigger_reconciliation:
             # Same-endpoint replacement reconciliation is already running on
             # either the current connection or a candidate that its caller
@@ -6918,7 +6947,7 @@ class ControlConnection(object):
             log.debug("[control connection] Control connection host (%s) is being removed. Reconnecting", host)
             # refresh will be done on reconnect
             self.reconnect()
-        else:
+        elif refresh_nodes:
             self.refresh_node_list_and_token_map(force_token_rebuild=True)
 
     def get_connections(self):
