@@ -435,6 +435,7 @@ class TestClientRoutesSSLValidation(unittest.TestCase):
                 client_routes_config=config,
             )
         self.assertIn("check_hostname", str(cm.exception))
+        self.assertIn("connectivity/client-routes.html#tls", str(cm.exception))
 
     def test_check_hostname_with_ssl_options_raises(self):
         """Cluster should reject check_hostname=True in ssl_options with client_routes_config."""
@@ -448,6 +449,7 @@ class TestClientRoutesSSLValidation(unittest.TestCase):
                 client_routes_config=config,
             )
         self.assertIn("check_hostname", str(cm.exception))
+        self.assertIn("connectivity/client-routes.html#tls", str(cm.exception))
 
     def test_disabled_check_hostname_with_client_routes_ok(self):
         """Cluster should allow check_hostname=False with client_routes_config."""
