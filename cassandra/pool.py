@@ -160,9 +160,10 @@ class Host(object):
     _currently_handling_node_up = False
     _currently_handling_node_down = False
     _down_event_generation = 0
+    _lifecycle_pending = False
     _pending_host_addition = False
+    _pending_host_addition_notification = False
     _pending_host_addition_callback = None
-    _down_callbacks_lock = None
 
     sharding_info = None
 
@@ -183,10 +184,6 @@ class Host(object):
         self.conviction_policy = conviction_policy_factory(self)
         self.set_location_info(datacenter, rack)
         self.lock = RLock()
-        # DOWN callbacks call into policies and sessions. Keep them ordered
-        # with terminal removal without holding the Host state lock across
-        # those external callbacks.
-        self._down_callbacks_lock = RLock()
 
     @property
     def address(self):
