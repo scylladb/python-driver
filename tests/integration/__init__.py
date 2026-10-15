@@ -1028,5 +1028,6 @@ class Cassandra41CCMCluster(CCMCluster):
         return v
 
     def set_configuration_options(self, values=None, *args, **kwargs):
-        new_values = {self._get_config_key(k, str(v)):self._get_config_val(k, str(v)) for (k,v) in values.items()}
+        # keep v's type: str(True) is written as the YAML string 'True', which Cassandra refuses to start with
+        new_values = {self._get_config_key(k, v): self._get_config_val(k, v) for (k, v) in values.items()}
         super(Cassandra41CCMCluster, self).set_configuration_options(values=new_values, *args, **kwargs)
