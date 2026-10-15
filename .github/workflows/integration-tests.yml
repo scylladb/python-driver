@@ -1,5 +1,8 @@
 name: Integration tests
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:
@@ -94,3 +97,54 @@ jobs:
           export PYTHON_GIL=0
         fi
         uv run pytest -v tests/integration/standard/ tests/integration/cqlengine/
+
+  tests-cassandra:
+    name: test cassandra ${{ matrix.event_loop_manager }} (${{ matrix.python-version }})
+    if: "!contains(github.event.pull_request.labels.*.name, 'disable-integration-tests')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11"]
+        event_loop_manager: ["libev", "asyncio"]
+
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+    # Cassandra 5.0 needs JDK 11+
+    - name: Set up JDK 11
+      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      with:
+        java-version: 11
+        distribution: temurin
+
+    - name: Install libev
+      run: sudo apt-get install libev4 libev-dev
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      with:
+        python-version: ${{ matrix.python-version }}
+        enable-cache: true
+
+    - name: Build driver
+      run: uv sync
+
+    - name: Get latest Cassandra version
+      run: |
+        version=$(git ls-remote --tags --refs https://github.com/apache/cassandra 'cassandra-*' \
+          | sed 's|.*refs/tags/cassandra-||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+        echo "CASSANDRA_VERSION=$version" >> "$GITHUB_ENV"
+
+    - name: Cache Cassandra download
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.ccm/repository
+        key: cassandra-${{ env.CASSANDRA_VERSION }}-${{ runner.os }}
+
+    - name: Test with pytest
+      env:
+        EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
+        PROTOCOL_VERSION: 4
+      run: uv run pytest -v tests/integration/standard/
