@@ -998,8 +998,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
 
         assert Ext0.name in _RegisteredExtensionType._extension_registry
         assert Ext1.name in _RegisteredExtensionType._extension_registry
-        # There will bee the RLAC extension here.
-        assert len(_RegisteredExtensionType._extension_registry) == 3
+        assert len(_RegisteredExtensionType._extension_registry) == 2
 
         self.cluster.refresh_table_metadata(ks, t)
         table_meta = ks_meta.tables[t]
