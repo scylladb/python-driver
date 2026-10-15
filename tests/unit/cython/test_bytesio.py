@@ -26,6 +26,7 @@ class BytesIOTest(unittest.TestCase):
         bytesio_testhelper.test_read1()
         bytesio_testhelper.test_read2()
         bytesio_testhelper.test_read3()
+        bytesio_testhelper.test_read_offset()
 
     @cythontest
     def test_reading_error(self):
