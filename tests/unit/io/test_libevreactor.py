@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import sys
 import threading
 import unittest
 
@@ -99,14 +100,14 @@ class LibevConnectionTest(ReactorTestMixin, unittest.TestCase):
 
 class _InstrumentedLock(object):
     """
-    Wraps a real threading.Lock and calls a hook the first time it is
+    Wraps a real threading.RLock (like LibevLoop._lock) and calls a hook the first time it is
     acquired. Used to pause a thread *while it holds the lock* so a second
     thread's attempt to acquire the same lock can be observed as blocking
     (or not).
     """
 
     def __init__(self, on_first_acquire):
-        self._real_lock = threading.Lock()
+        self._real_lock = threading.RLock()
         self._on_first_acquire = on_first_acquire
         self._acquire_count = 0
         self._count_lock = threading.Lock()
@@ -123,6 +124,9 @@ class _InstrumentedLock(object):
 
     def release(self):
         self._real_lock.release()
+
+    def _is_owned(self):
+        return self._real_lock._is_owned()
 
     def __enter__(self):
         self.acquire()
@@ -326,6 +330,127 @@ class LibevLoopRaceTest(unittest.TestCase):
         self.assertEqual(loop._closed_conns, set())
         self.assertEqual(loop._live_conns, set())
         self.assertEqual(loop._new_conns, set())
+
+
+    def test_connection_destroyed_reentered_under_lock(self):
+        """
+        A GC finalizer (Session.__del__ -> shutdown() -> conn.close()) can
+        fire inside any block holding _lock and call connection_destroyed()
+        on the same thread. That must not deadlock, and the connection must
+        still be closed by the next loop pass.
+
+        @jira_ticket GH-1133
+        """
+        loop = LibevLoop()
+
+        conn = Mock()
+        loop.connection_created(conn)
+        loop._started = True  # simulate a running reactor thread
+
+        def finalizer_under_lock():
+            with loop._lock:
+                loop.connection_destroyed(conn)
+
+        t = threading.Thread(target=finalizer_under_lock, daemon=True)
+        t.start()
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "connection_destroyed() deadlocked")
+        self.assertIn(conn, loop._live_conns)
+
+        loop._loop_will_run(None)
+
+        conn._socket.close.assert_called_once_with()
+        self.assertEqual(loop._live_conns, set())
+        self.assertEqual(loop._new_conns, set())
+        self.assertEqual(loop._closed_conns, set())
+        self.assertEqual(loop._deferred_destroyed, [])
+
+
+    def _reenter_on_close(self, loop, victim):
+        # Simulate a GC finalizer closing `victim` while _close_conns() runs
+        # under _lock, which is where the reactor exit paths close sockets.
+        real_close_conns = loop._close_conns
+
+        def close_conns(conns):
+            loop._close_conns = real_close_conns  # close() runs only once
+            loop.connection_destroyed(victim)
+            real_close_conns(conns)
+        loop._close_conns = close_conns
+
+    def test_connection_destroyed_reentered_during_reactor_exit(self):
+        """
+        No loop pass follows the reactor's exit block, so a close deferred
+        there must be finished before the thread ends.
+
+        @jira_ticket GH-1133
+        """
+        loop = LibevLoop()
+        loop._started = True
+        loop._loop = Mock()  # start() returns at once with no live conns
+        victim = Mock()
+        self._reenter_on_close(loop, victim)
+
+        t = threading.Thread(target=loop._run_loop, daemon=True)
+        t.start()
+        t.join(timeout=5)
+
+        self.assertFalse(t.is_alive())
+        victim._socket.close.assert_called_once_with()
+        self.assertEqual(loop._deferred_destroyed, [])
+
+    def test_connection_destroyed_reentered_with_reactor_stopped(self):
+        """
+        With no reactor running, connection_destroyed() closes the socket
+        itself under _lock; a close deferred there must still be finished.
+
+        @jira_ticket GH-1133
+        """
+        loop = LibevLoop()
+        conn, victim = Mock(), Mock()
+        loop.connection_created(conn)
+        loop.connection_created(victim)
+        loop._started = False
+        self._reenter_on_close(loop, victim)
+
+        t = threading.Thread(target=loop.connection_destroyed, args=(conn,), daemon=True)
+        t.start()
+        t.join(timeout=5)
+
+        self.assertFalse(t.is_alive(), "connection_destroyed() deadlocked")
+        conn._socket.close.assert_called_once_with()
+        victim._socket.close.assert_called_once_with()
+        self.assertEqual(loop._live_conns, set())
+        self.assertEqual(loop._deferred_destroyed, [])
+
+
+    def test_close_drains_many_deferred_closes(self):
+        """
+        One GC pass can defer closing every shard connection at once. The
+        close() that drains them must not recurse per connection, or it
+        dies with RecursionError before failing its own pending requests.
+
+        @jira_ticket GH-1133
+        """
+        loop = LibevLoop()
+        loop._started = True
+        deferred = [Mock() for _ in range(sys.getrecursionlimit() + 100)]
+        for c in deferred:
+            loop.connection_created(c)
+        loop._deferred_destroyed.extend(deferred)
+
+        conn = Mock(lock=threading.Lock(), is_closed=False, is_defunct=False, last_error=None)
+        loop.connection_created(conn)
+        with patch('cassandra.io.libevreactor._global_loop', loop):
+            LibevConnection.close(conn)
+
+        conn.error_all_requests.assert_called_once()
+        conn.connected_event.set.assert_called_once_with()
+        self.assertEqual(loop._deferred_destroyed, [])
+        self.assertEqual(loop._live_conns, set())
+
+        loop._loop_will_run(None)
+        for c in deferred + [conn]:
+            c._socket.close.assert_called_once_with()
 
 
 class LibevTimerPatcher(unittest.TestCase):
