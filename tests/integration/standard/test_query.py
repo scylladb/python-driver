@@ -1012,7 +1012,7 @@ class LightweightTransactionTests(unittest.TestCase):
                 if exception_type == "NoHostAvailable":
                     pytest.fail("PYTHON-91: Disconnected from Cassandra: %s" % result)
                 if exception_type in ["WriteTimeout", "WriteFailure", "ReadTimeout", "ReadFailure",
-                                       "ErrorMessageSub", "OperationTimedOut"]:
+                                       "ErrorMessageSub", "ErrorMessage", "OperationTimedOut"]:
                     if exception_type in ["WriteTimeout", "WriteFailure"]:
                         received_timeout = True
                     elif exception_type == "OperationTimedOut":
@@ -1681,6 +1681,8 @@ class PreparedWithKeyspaceTests(BaseKeyspaceTests, unittest.TestCase):
             wait_until(
                 lambda: mock_handler.get_message_count('debug', 'Preparing all known prepared statements') >= 1,
                 delay=0.5, max_attempts=20)
+            # statements are prepared while the pool opens, before the host is marked up
+            wait_until(lambda: self.cluster.metadata.get_host('127.0.0.1').is_up, delay=0.5, max_attempts=20)
 
             results = self.session.execute(prepared_statement, (1,), execution_profile="only_first")
             assert results.one() == (1, )
