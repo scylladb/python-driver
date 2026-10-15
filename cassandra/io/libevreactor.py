@@ -17,7 +17,7 @@ import logging
 import os
 import socket
 import ssl
-from threading import Lock, Thread
+from threading import Lock, RLock, Thread
 import time
 
 from cassandra import DependencyException
@@ -66,7 +66,10 @@ class LibevLoop(object):
         # connection forever (see issue #980). Two separate locks can't give
         # that atomicity no matter which one each side takes, so there is
         # only one lock here, not a hold-both-locks protocol.
-        self._lock = Lock()
+        # It is an RLock only so connection_destroyed() can detect being
+        # re-entered by a thread that already holds it, via _is_owned():
+        # private, but threading.Condition relies on it too.
+        self._lock = RLock()
         self._lock_thread = Lock()
 
         self._thread = None
@@ -78,6 +81,8 @@ class LibevLoop(object):
         self._new_conns = set()
         # recently closed connections that need their write/read watcher stopped
         self._closed_conns = set()
+        # connections closed while their thread held _lock; drained by the loop
+        self._deferred_destroyed = []
 
         self._preparer = libev.Prepare(self._loop, self._loop_will_run)
         # prevent _preparer from keeping the loop from returning
@@ -138,6 +143,7 @@ class LibevLoop(object):
                         self._closed_conns = set()
                         self._close_conns(to_stop)
                     break
+        self._drain_deferred()
 
     def _cleanup(self):
         # TODO: unguarded write; self._notify() below wakes _run_loop to re-check.
@@ -201,6 +207,21 @@ class LibevLoop(object):
             self._new_conns = new_new_conns
 
     def connection_destroyed(self, conn):
+        self._connection_destroyed(conn)
+        self._drain_deferred()
+
+    def _connection_destroyed(self, conn):
+        if self._lock._is_owned():
+            # Re-entered on a thread that already holds _lock: any allocation
+            # inside a locked block can run a GC finalizer (Session.__del__ ->
+            # shutdown() -> conn.close()). Updating the sets here would be
+            # overwritten by the enclosing copy-on-write update, and with a
+            # plain Lock it deadlocked (GH-1133). Finish it once the lock
+            # is released, see _drain_deferred().
+            self._deferred_destroyed.append(conn)
+            self._notifier.send()
+            return
+
         with self._lock:
             new_conns = self._new_conns.copy()
             new_conns.discard(conn)
@@ -217,13 +238,28 @@ class LibevLoop(object):
                 # the lock ensures no reactor thread starts meanwhile.
                 # On shutdown, _cleanup() closes all connections itself.
                 self._close_conns((conn,))
-                return
-
-            new_closed_conns = self._closed_conns.copy()
-            new_closed_conns.add(conn)
-            self._closed_conns = new_closed_conns
+            else:
+                new_closed_conns = self._closed_conns.copy()
+                new_closed_conns.add(conn)
+                self._closed_conns = new_closed_conns
 
         self._notifier.send()
+
+    def _drain_deferred(self):
+        # Called after every release of _lock that may have deferred a
+        # connection_destroyed(): end of connection_destroyed(), each loop
+        # pass, and reactor exit, which nothing else would run after.
+        # Can run on several threads at once, so pop() can lose the race.
+        # Calls the non-draining variant: closes deferred meanwhile are
+        # picked up by this loop, so the stack doesn't grow per connection.
+        if self._lock._is_owned():
+            return  # still inside the locked block that deferred them
+        while True:
+            try:
+                conn = self._deferred_destroyed.pop()
+            except IndexError:
+                return
+            self._connection_destroyed(conn)
 
     @staticmethod
     def _close_conns(conns):
@@ -241,6 +277,8 @@ class LibevLoop(object):
 
     def _loop_will_run(self, prepare):
         changed = False
+        self._drain_deferred()
+
         # TODO: unguarded read; copy-on-write set, self-heals next tick.
         for conn in self._live_conns:
             if not conn.deque and conn._write_watcher_is_active:
