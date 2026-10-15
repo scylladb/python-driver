@@ -25,7 +25,7 @@ from cassandra.cluster import Cluster
 from cassandra.policies import TokenAwarePolicy, RoundRobinPolicy, ConstantReconnectionPolicy
 from cassandra import OperationTimedOut
 
-from tests.integration import use_cluster, get_node, PROTOCOL_VERSION
+from tests.integration import use_cluster, get_node, PROTOCOL_VERSION, scylla_only
 from tests.util import wait_until_not_raised
 
 LOGGER = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ def teardown_module():
         os.environ['SCYLLA_EXT_OPTS'] = _saved_scylla_ext_opts
 
 
+@scylla_only
 class TestShardAwareIntegration(unittest.TestCase):
     @classmethod
     def setup_class(cls):

@@ -14,12 +14,17 @@
 
 import unittest
 
+import pytest
+
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
 from packaging.version import Version
 from tests.integration import use_singledc, remove_cluster, greaterthanorequalcass40, \
     CASSANDRA_VERSION, TestCluster, DEFAULT_SINGLE_INTERFACE_PORT
+
+# use_singledc() never passes use_single_interface to scylla-ccm, which doesn't support it
+pytestmark = pytest.mark.skip(reason='scylla-ccm cannot create single-interface clusters')
 
 
 def setup_module():

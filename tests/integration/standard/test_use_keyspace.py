@@ -12,7 +12,7 @@ from cassandra.cluster import Cluster
 from cassandra.pool import HostConnection
 from cassandra.policies import TokenAwarePolicy, RoundRobinPolicy, ConstantReconnectionPolicy
 
-from tests.integration import use_cluster, PROTOCOL_VERSION, local
+from tests.integration import use_cluster, PROTOCOL_VERSION, local, scylla_only
 
 LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +75,7 @@ class TestUseKeyspace(unittest.TestCase):
             for i in range(200):
                 session2.execute(f"SELECT * FROM set_keyspace_slow_connection WHERE pk = 1")
 
+    @scylla_only
     def test_use_during_background_shard_connection_open(self):
         self.session.execute("CREATE KEYSPACE IF NOT EXISTS use_race_old WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
         self.session.execute("CREATE KEYSPACE IF NOT EXISTS use_race_new WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
