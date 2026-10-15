@@ -146,6 +146,17 @@ except Exception:
 CASSANDRA_VERSION = Version(mcv_string) if mcv_string else cassandra_version
 CCM_VERSION = mcv_string if mcv_string else cv_string
 
+if not SCYLLA_VERSION and CASSANDRA_VERSION >= Version('5.0'):
+    # scylla-ccm runs every Cassandra node with Java 8 (Node.get_env), but Cassandra 5.0 needs Java 11+.
+    # Use JAVA_HOME from the environment instead. Drop this once ccm picks the JDK by Cassandra version.
+    from ccmlib.node import Node as CCMNode
+
+    def _get_env_with_java_home(self):
+        update_conf = not self._Node__conf_updated
+        self._Node__conf_updated = True
+        return common.make_cassandra_env(self.get_install_dir(), self.get_path(), update_conf)
+    CCMNode.get_env = _get_env_with_java_home
+
 CASSANDRA_IP = os.getenv('CLUSTER_IP', '127.0.0.1')
 CASSANDRA_DIR = os.getenv('CASSANDRA_DIR', None)
 
@@ -1028,5 +1039,6 @@ class Cassandra41CCMCluster(CCMCluster):
         return v
 
     def set_configuration_options(self, values=None, *args, **kwargs):
-        new_values = {self._get_config_key(k, str(v)):self._get_config_val(k, str(v)) for (k,v) in values.items()}
+        # keep v's type: str(True) is written as the YAML string 'True', which Cassandra refuses to start with
+        new_values = {self._get_config_key(k, v): self._get_config_val(k, v) for (k, v) in values.items()}
         super(Cassandra41CCMCluster, self).set_configuration_options(values=new_values, *args, **kwargs)
