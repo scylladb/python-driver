@@ -24,7 +24,7 @@ import requests
 
 from cassandra.protocol import ConfigurationException
 from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster, greaterthanorequalcass40, \
-    xfail_scylla_version_lt
+    xfail_scylla_version_lt, scylla_only, xfail_cassandra_local_ports
 from tests.integration.datatype_utils import update_datatypes
 
 
@@ -109,6 +109,7 @@ class ControlConnectionTests(unittest.TestCase):
         assert new_host1 != new_host2
 
     @greaterthanorequalcass40
+    @xfail_cassandra_local_ports
     def test_control_connection_port_discovery(self):
         """
         Test to validate that the correct port is discovered when peersV2 is used (C* 4.0+).
@@ -134,6 +135,7 @@ class ControlConnectionTests(unittest.TestCase):
             assert 9042 == host.broadcast_rpc_port
             assert 7000 == host.broadcast_port
 
+    @scylla_only
     @xfail_scylla_version_lt(reason='scylladb/scylladb#26992 - system.client_routes is not yet supported',
                              scylla_version="2026.1.0")
     def test_client_routes_change_event(self):
