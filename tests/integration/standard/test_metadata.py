@@ -37,7 +37,8 @@ from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, exec
                                get_supported_protocol_versions, greaterthancass20,
                                greaterthancass21, lessthancass40,
                                TestCluster, requires_java_udf, requires_composite_type,
-                               requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, requirescompactstorage, get_tablets_disabled_ddl_suffix, execute_with_long_wait_retry)
+                               requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, requirescompactstorage, get_tablets_disabled_ddl_suffix, execute_with_long_wait_retry,
+                               scylla_only, xfail_cassandra_local_ports)
 
 from tests.util import wait_until, assertRegex, assertDictEqual, assertListEqual, assert_startswith_diff
 
@@ -50,6 +51,7 @@ def setup_module():
 
 class HostMetaDataTests(BasicExistingKeyspaceUnitTestCase):
     @local
+    @xfail_cassandra_local_ports
     def test_host_addresses(self):
         """
         Check to ensure that the broadcast_address, broadcast_rpc_address,
@@ -1267,7 +1269,6 @@ CREATE TABLE export_udts.users (
         cluster.shutdown()
 
     @local
-    @pytest.mark.xfail(reason='AssertionError: \'RAC1\' != \'r1\' - probably a bug in driver or in Scylla')
     def test_replicas(self):
         """
         Ensure cluster.metadata.get_replicas return correctly when not attached to keyspace
@@ -1283,7 +1284,7 @@ CREATE TABLE export_udts.users (
         assert list(cluster.metadata.get_replicas('test3rf', b'key')) != []
         host = list(cluster.metadata.get_replicas('test3rf', b'key'))[0]
         assert host.datacenter == 'dc1'
-        assert host.rack == 'r1'
+        assert host.rack == ('RAC1' if SCYLLA_VERSION else 'r1')
         cluster.shutdown()
 
     def test_token_map(self):
@@ -1323,6 +1324,8 @@ class TokenMetadataTest(unittest.TestCase):
         cluster.shutdown()
 
 
+# metadata timeout (USING TIMEOUT) is Scylla only
+@scylla_only
 class TestMetadataTimeout:
     """
     Test of TokenMap creation and other behavior.

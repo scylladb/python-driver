@@ -17,7 +17,10 @@ import subprocess
 import sys
 
 from tests.integration import use_cluster, get_cluster, get_node, start_cluster_wait_for_up, \
-    libevtest, PROTOCOL_VERSION, CASSANDRA_IP
+    libevtest, PROTOCOL_VERSION, CASSANDRA_IP, scylla_only
+
+# the many-shard node comes from ScyllaNode.set_smp(); ccm's Cassandra nodes have no shards
+pytestmark = scylla_only
 
 # GH-1133: `cqlsh -e` drops its Session without shutdown(). When a GC pass
 # collects it, Session.__del__ closes all its connections on whatever thread

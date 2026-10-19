@@ -320,6 +320,10 @@ requires_vector_type = unittest.skipUnless(
     _has_vector_type(),
     'Cassandra >= 5.0 or Scylla >= 2025.4 required')
 xfail_scylla = lambda reason, *args, **kwargs: pytest.mark.xfail(SCYLLA_VERSION is not None, reason=reason, *args, **kwargs)
+scylla_only = pytest.mark.skipif(SCYLLA_VERSION is None, reason='Scylla only test')
+# system.local is read with a fixed column list since #528, without broadcast_port / rpc_port
+xfail_cassandra_local_ports = pytest.mark.xfail(SCYLLA_VERSION is None and CASSANDRA_VERSION >= Version('4-a'), strict=True,
+                                                reason='broadcast_port / broadcast_rpc_port of the local host are not read')
 incorrect_test = lambda reason='This test seems to be incorrect and should be fixed', *args, **kwargs: pytest.mark.xfail(reason=reason, *args, **kwargs)
 
 pypy = unittest.skipUnless(platform.python_implementation() == "PyPy", "Test is skipped unless it's on PyPy")
