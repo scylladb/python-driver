@@ -4,7 +4,7 @@ from cassandra import OperationType, RateLimitReached
 from cassandra.cluster import Cluster
 from cassandra.policies import ConstantReconnectionPolicy, RoundRobinPolicy, TokenAwarePolicy
 
-from tests.integration import PROTOCOL_VERSION, use_singledc
+from tests.integration import PROTOCOL_VERSION, use_singledc, scylla_only
 import pytest
 
 LOGGER = logging.getLogger(__name__)
@@ -12,6 +12,7 @@ LOGGER = logging.getLogger(__name__)
 def setup_module():
     use_singledc()
 
+@scylla_only
 class TestRateLimitExceededException(unittest.TestCase):
     @classmethod
     def setup_class(cls):

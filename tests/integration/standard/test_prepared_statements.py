@@ -24,7 +24,7 @@ from cassandra import InvalidRequest, DriverException
 from cassandra import ConsistencyLevel, ProtocolVersion
 from cassandra.query import PreparedStatement, UNSET_VALUE
 from tests.integration import (get_server_versions, greaterthanorequalcass40,
-    BasicSharedKeyspaceUnitTestCase)
+    BasicSharedKeyspaceUnitTestCase, scylla_only)
 
 import logging
 import pytest
@@ -406,6 +406,7 @@ class PreparedStatementTests(unittest.TestCase):
         with pytest.raises(InvalidRequest):
             self.session.execute(prepared, [0])
 
+    @scylla_only  # LWT flag in PREPARED metadata is a Scylla protocol extension
     def test_recognize_lwt_query(self):
         self.session.execute("CREATE TABLE IF NOT EXISTS preparedtests.bound_statement_test (a int PRIMARY KEY, b int)")
         # Prepare a non-LWT statement

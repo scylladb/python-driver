@@ -1020,6 +1020,9 @@ class LightweightTransactionTests(unittest.TestCase):
                         # actually returned a WriteTimeout/WriteFailure.
                         received_client_timeout = True
                     continue
+                if exception_type == "ErrorMessage" and result.code == 0x1700:
+                    # Cassandra 4.0+ CAS_WRITE_UNKNOWN: "CAS operation result is unknown"
+                    continue
 
                 pytest.fail("Unexpected exception %s: %s" % (exception_type, result))
 
