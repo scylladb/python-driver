@@ -21,6 +21,7 @@ import pytest
 from cassandra.cluster import Cluster, ControlConnection
 from cassandra._lifecycle import LifecycleCoordinator
 from cassandra.connection import DefaultEndPoint
+from cassandra.policies import HostDistance
 from tests.unit.test_control_connection import (
     HOST_ID_1, HOST_ID_2, HOST_ID_3, MockConnection, _node_meta_results)
 
@@ -722,6 +723,65 @@ def test_duplicate_up_does_not_schedule_another_pool_creation(topology):
     pool_ready.set_result(True)
     assert host.is_up
     assert not host._currently_handling_node_up
+
+
+class _ExpectedDownAdmissionFailure(Exception):
+    pass
+
+
+@pytest.mark.parametrize('inspection', ['distance', 'pool_state'])
+@pytest.mark.parametrize('postcondition', ['host_up', 'not_dispatched', 'no_down_handler'])
+@pytest.mark.xfail(
+    strict=True, raises=_ExpectedDownAdmissionFailure,
+    reason='#925: DOWN admission does not fence health inspection against recovery')
+def test_down_health_inspection_cannot_undo_completed_recovery(
+        topology, inspection, postcondition):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    host.set_down()
+    cluster.control_connection.on_up = Mock()
+    cluster.on_down_potentially_blocking = Mock(return_value=Future())
+    session = Mock()
+    ready = Future()
+    session.add_or_renew_pool.return_value = ready
+    session.get_pool_state.return_value = {host: {'open_count': 0}}
+    cluster.sessions.add(session)
+    cluster.on_up(host)
+    assert not host.is_up
+    recovered = []
+
+    def finish_recovery():
+        ready.set_result(True)
+        recovered.append(host.is_up)
+
+    if inspection == 'distance':
+        def distance(_host):
+            finish_recovery()
+            # No pool-state inspection follows an IGNORED decision, so this
+            # also exercises admission without a pool-failure reservation.
+            return HostDistance.IGNORED
+        cluster.profile_manager.distance.side_effect = distance
+    else:
+        def pool_state():
+            # Finish recovery after capturing an empty pool observation but
+            # before the older DOWN operation admits its destructive work.
+            observed = {host: {'open_count': 0}}
+            finish_recovery()
+            return observed
+        session.get_pool_state.side_effect = pool_state
+
+    dispatched = cluster.on_down(host, is_host_addition=False)
+
+    assert recovered == [True]
+    try:
+        if postcondition == 'host_up':
+            assert host.is_up, 'an obsolete DOWN observation undid successful recovery'
+        elif postcondition == 'not_dispatched':
+            assert not dispatched
+        elif postcondition == 'no_down_handler':
+            cluster.on_down_potentially_blocking.assert_not_called()
+    except AssertionError as error:
+        raise _ExpectedDownAdmissionFailure from error
 
 
 def test_refresh_publishes_nodes_and_tokens_before_queued_listener(topology):
