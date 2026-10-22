@@ -501,11 +501,8 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
 
         # This will enable the Mirroring query handler which will echo our custom payload k,v pairs back
 
-        if 'graph' in workloads:
-            jvm_args += ['-Xms1500M', '-Xmx1500M']
-        else:
-            if PROTOCOL_VERSION >= 4 and not SCYLLA_VERSION:
-                jvm_args = [" -Dcassandra.custom_query_handler_class=org.apache.cassandra.cql3.CustomPayloadMirroringQueryHandler"]
+        if PROTOCOL_VERSION >= 4 and not SCYLLA_VERSION:
+            jvm_args = [" -Dcassandra.custom_query_handler_class=org.apache.cassandra.cql3.CustomPayloadMirroringQueryHandler"]
         if len(workloads) > 0:
             for node in CCM_CLUSTER.nodes.values():
                 node.set_workloads(workloads)

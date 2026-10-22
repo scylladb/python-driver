@@ -171,9 +171,6 @@ exclude_also = [
     "^    def (_handle_continuous_paging_first_response|cancel_continuous_paging|new_continuous_paging_session|remove_continuous_paging_session|error_all_cp_sessions|_write_paging_options)\\(",
     # cluster.py: Astra `cloud=` secure-connect-bundle setup
     "^ +if cloud is not None:",
-    # metadata.py: DSE schema parsers, DSE Graph vertex/edge metadata, DSE RLAC
-    "^class (SchemaParserDSE60|SchemaParserDSE67|SchemaParserDSE68|TableMetadataDSE68|VertexMetadata|EdgeMetadata|RLACTableExtension)\\b",
-    "^ +if dse_version:",
 ]
 
 [tool.coverage.html]
