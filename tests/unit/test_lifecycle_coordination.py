@@ -724,6 +724,78 @@ def test_duplicate_up_does_not_schedule_another_pool_creation(topology):
     assert not host._currently_handling_node_up
 
 
+def test_refresh_publishes_nodes_and_tokens_before_queued_listener(topology):
+    cluster, connection = topology
+    cluster.refresh_nodes()
+    old = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    old_tokens = cluster.metadata.token_map
+    assert old in old_tokens.token_to_host_owner.values()
+    entered = Event()
+    release = Event()
+    listener = Mock()
+    cluster.register_listener(listener)
+
+    def slow_callback():
+        entered.set()
+        assert release.wait(5)
+
+    worker = Thread(target=cluster._lifecycle.submit, args=(slow_callback,))
+    worker.start()
+    try:
+        assert entered.wait(5)
+        del connection.peer_results[1][1]
+        cluster.refresh_nodes()
+
+        assert cluster.metadata.get_host_by_host_id(HOST_ID_3) is None
+        assert cluster.metadata.get_host(old.endpoint) is None
+        assert old._is_removed
+        assert old not in cluster.metadata.token_map.token_to_host_owner.values()
+        assert old in old_tokens.token_to_host_owner.values()
+        listener.on_remove.assert_not_called()
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    listener.on_remove.assert_called_once_with(old)
+
+
+def test_up_listener_sees_all_sessions_ready_and_can_refresh(topology):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    host.set_down()
+    cluster.control_connection.on_up = Mock()
+    sessions = [Mock(), Mock()]
+    ready = [Future(), Future()]
+    for session, result in zip(sessions, ready):
+        session.add_or_renew_pool.return_value = result
+        cluster.sessions.add(session)
+    listener = Mock()
+    observed = []
+
+    def on_up(current):
+        assert current is host
+        assert current.is_up
+        assert all(result.result(timeout=0) is True for result in ready)
+        cluster.refresh_nodes()
+        assert cluster.metadata.get_host_by_host_id(host.host_id) is host
+        observed.append(current)
+
+    listener.on_up.side_effect = on_up
+    cluster.register_listener(listener)
+    cluster.on_up(host)
+    ready[0].set_result(True)
+    assert not host.is_up
+    listener.on_up.assert_not_called()
+    ready[1].set_result(True)
+
+    assert host.is_up
+    assert observed == [host]
+    listener.on_up.assert_called_once_with(host)
+    for session in sessions:
+        session.add_or_renew_pool.assert_called_once_with(
+            host, is_host_addition=False)
+
+
 def test_superseded_down_does_not_reach_later_callbacks(topology):
     cluster, _ = topology
     host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
