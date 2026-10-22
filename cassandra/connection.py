@@ -608,6 +608,12 @@ class ConnectionShutdown(ConnectionException):
     pass
 
 
+class ConnectionSendError(ConnectionException):
+    """A push failed after request bytes might have been queued."""
+
+    pass
+
+
 class ProtocolVersionUnsupported(ConnectionException):
     """
     Server rejected startup message due to unsupported protocol version
@@ -1522,6 +1528,9 @@ class Connection(object):
             if self.is_defunct or self.is_closed:
                 return
             self.is_defunct = True
+            self.last_error = exc
+            if isinstance(exc, ConnectionSendError):
+                self.signaled_error = True
 
         exc_info = sys.exc_info()
         # if we are not handling an exception, just use the passed exception, and don't try to format exc_info with the message
@@ -1541,7 +1550,6 @@ class Connection(object):
             # counts, for the same reason it does there.
             self._discard_tls_session()
 
-        self.last_error = exc
         self.close()
         self.error_all_cp_sessions(exc)
         self.error_all_requests(exc)
@@ -1641,7 +1649,11 @@ class Connection(object):
                 self._segment_codec.encode(buffer, msg)
                 msg = buffer.getvalue()
 
-            self.push(msg)
+            try:
+                self.push(msg)
+            except Exception as exc:
+                raise ConnectionSendError("Failed to push request on %s" % self.endpoint,
+                                          self.endpoint) from exc
         except Exception:
             self._requests.pop(request_id, None)
             raise
@@ -1683,8 +1695,12 @@ class Connection(object):
                     self.send_msg(msgs[messages_sent + i],
                                   request_id,
                                   partial(waiter.got_response, index=messages_sent + i))
-                except Exception:
+                except Exception as exc:
                     unsent_request_ids = request_ids[i:]
+                    if isinstance(exc, ConnectionSendError):
+                        # push may have written the request before failing.  Retire
+                        # the connection before its stream ID becomes available again.
+                        self.defunct(exc)
                     with self.lock:
                         self.in_flight -= len(unsent_request_ids)
                         self.request_ids.extend(unsent_request_ids)
@@ -2211,9 +2227,20 @@ class Connection(object):
 
         # We've incremented self.in_flight above, so we "have permission" to
         # acquire a new request id
-        request_id = self.get_request_id()
-
-        self.send_msg(query, request_id, process_result)
+        request_id = None
+        try:
+            with self.lock:
+                request_id = self.get_request_id()
+            self.send_msg(query, request_id, process_result)
+        except Exception as exc:
+            with self.lock:
+                self.in_flight -= 1
+                if request_id is not None:
+                    self.request_ids.append(request_id)
+            if not isinstance(exc, ConnectionBusy):
+                self.defunct(ConnectionException(
+                    "Failed sending keyspace change: %r" % (exc,), self.endpoint))
+            raise
 
     @property
     def is_idle(self):
@@ -2403,7 +2430,10 @@ class ConnectionHeartbeat(Thread):
                         # Only HostConnection supports shutdown_on_error
                         owner.shutdown_on_error = True
                     connection.defunct(exc)
-                    owner.return_connection(connection)
+                    if connection.is_control_connection:
+                        owner.return_connection(connection)
+                    else:
+                        owner.return_connection(connection, heartbeat_failed=True)
             except self.ShutdownException:
                 pass
             except Exception:

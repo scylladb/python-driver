@@ -30,7 +30,7 @@ except ImportError:
     from cassandra.util import WeakSet  # NOQA
 
 from cassandra import AuthenticationFailed
-from cassandra.connection import (ConnectionException, EndPoint,
+from cassandra.connection import (ConnectionException, ConnectionSendError, EndPoint,
                                   DefaultEndPoint, UnixSocketEndPoint)
 from cassandra.policies import HostDistance
 
@@ -160,9 +160,10 @@ class Host(object):
     _currently_handling_node_up = False
     _currently_handling_node_down = False
     _down_event_generation = 0
+    _lifecycle_pending = False
     _pending_host_addition = False
+    _pending_host_addition_notification = False
     _pending_host_addition_callback = None
-    _down_callbacks_lock = None
 
     sharding_info = None
 
@@ -183,10 +184,6 @@ class Host(object):
         self.conviction_policy = conviction_policy_factory(self)
         self.set_location_info(datacenter, rack)
         self.lock = RLock()
-        # DOWN callbacks call into policies and sessions. Keep them ordered
-        # with terminal removal without holding the Host state lock across
-        # those external callbacks.
-        self._down_callbacks_lock = RLock()
 
     @property
     def address(self):
@@ -507,6 +504,7 @@ class HostConnection(object):
 
         if self._keyspace:
             first_connection.set_keyspace_blocking(self._keyspace)
+            first_connection.keyspace = self._keyspace
         if first_connection.features.sharding_info and not self._session.cluster.shard_aware_options.disable:
             self.host.sharding_info = first_connection.features.sharding_info
             self._open_connections_for_all_shards(first_connection.features.shard_id)
@@ -592,7 +590,8 @@ class HostConnection(object):
             return random.choice(active_connections)
         return random.choice(list(self._connections.values()))
 
-    def borrow_connection(self, timeout, routing_key=None, keyspace=None, table=None, routing_token=None):
+    def borrow_connection(self, timeout, routing_key=None, keyspace=None, table=None,
+                          routing_token=None, allow_keyspace_mismatch=False):
         conn = self._get_connection_for_routing_key(routing_key, keyspace, table, routing_token)
         start = time.time()
         remaining = timeout
@@ -602,11 +601,25 @@ class HostConnection(object):
                 # The connection might have been closed in the meantime - if so, try again
                 conn = self._get_connection_for_routing_key(routing_key, keyspace, table, routing_token)
             with conn.lock:
-                if (not conn.is_closed or last_retry) and conn.in_flight < conn.max_request_id:
+                if (allow_keyspace_mismatch or conn.keyspace == self._keyspace) and \
+                        (not conn.is_closed or last_retry) and \
+                        conn.in_flight < conn.max_request_id:
                     # On last retry we ignore connection status, since it is better to return closed connection than
                     #  raise Exception
                     conn.in_flight += 1
                     return conn, conn.get_request_id()
+            if not allow_keyspace_mismatch and conn.keyspace != self._keyspace:
+                alternate = next((candidate for candidate in tuple(self._connections.values())
+                                  if candidate is not conn and not candidate.is_closed and
+                                  candidate.keyspace == self._keyspace), None)
+                if alternate is not None:
+                    conn = alternate
+                    continue
+                # Waiting here could block the reactor thread that must
+                # deliver the pending USE response. Let the request try another
+                # host or fail while this pool finishes synchronizing.
+                raise NoConnectionsAvailable(
+                    "No connection has the current session keyspace")
             if timeout is not None:
                 remaining = timeout - time.time() + start
                 if remaining < 0:
@@ -620,10 +633,16 @@ class HostConnection(object):
                     conn = self._get_connection()
                 else:
                     self._stream_available_condition.wait(remaining)
+            conn = self._get_connection_for_routing_key(
+                routing_key, keyspace, table, routing_token)
 
+        if not allow_keyspace_mismatch and conn.keyspace != self._keyspace:
+            raise NoConnectionsAvailable(
+                "No connection has the current session keyspace")
         raise NoConnectionsAvailable("All request IDs are currently in use")
 
-    def return_connection(self, connection, stream_was_orphaned=False):
+    def return_connection(self, connection, stream_was_orphaned=False,
+                          replace_only=False, heartbeat_failed=False):
         if not stream_was_orphaned:
             with connection.lock:
                 connection.in_flight -= 1
@@ -631,17 +650,25 @@ class HostConnection(object):
                 self._stream_available_condition.notify()
 
         if connection.is_defunct or connection.is_closed:
-            if connection.signaled_error and not self.shutdown_on_error:
+            if connection.signaled_error and not replace_only and \
+                    (not self.shutdown_on_error or
+                     (isinstance(connection.last_error, ConnectionSendError) and
+                      not heartbeat_failed)):
                 return
 
             is_down = False
-            if not connection.signaled_error:
+            if replace_only:
+                # A local send-queue failure says nothing about host health.
+                # Mark the connection handled so later callbacks do not report
+                # this failure to the host conviction policy.
+                connection.signaled_error = True
+            elif not connection.signaled_error:
                 log.debug("Defunct or closed connection (%s) returned to pool, potentially "
                           "marking host %s as down", id(connection), self.host)
                 is_down = self.host.signal_connection_failure(connection.last_error)
                 connection.signaled_error = True
 
-            if self.shutdown_on_error and not is_down:
+            if self.shutdown_on_error and not is_down and not replace_only:
                 is_down = True
 
             if is_down:
@@ -679,6 +706,7 @@ class HostConnection(object):
             self._stream_available_condition.notify()
 
     def _replace(self, connection):
+        failed_connection = None
         with self._lock:
             if self.is_shutdown:
                 return
@@ -696,6 +724,13 @@ class HostConnection(object):
                     if self._keyspace:
                         connection.set_keyspace_blocking(self._keyspace)
                     self._connections[connection.features.shard_id] = connection
+                    try:
+                        self._sync_keyspace(connection)
+                    except Exception:
+                        if self._connections.get(connection.features.shard_id) is connection:
+                            del self._connections[connection.features.shard_id]
+                        failed_connection = connection
+                        raise
             except Exception:
                 log.warning("Failed reconnecting %s. Retrying." % (self.endpoint,))
                 self._session.submit(self._replace, connection)
@@ -703,6 +738,8 @@ class HostConnection(object):
                 self._is_replacing = False
                 with self._stream_available_condition:
                     self._stream_available_condition.notify()
+        if failed_connection is not None:
+            failed_connection.close()
 
     def shutdown(self):
         log.debug("Shutting down connections to %s", self.host)
@@ -856,6 +893,7 @@ class HostConnection(object):
                 self.host
             )
             old_conn = None
+            sync_error = None
             with self._lock:
                 is_shutdown = self.is_shutdown
                 if not is_shutdown:
@@ -872,6 +910,20 @@ class HostConnection(object):
                     if self._keyspace:
                         conn.set_keyspace_blocking(self._keyspace)
                     self._connections[conn.features.shard_id] = conn
+                    try:
+                        self._sync_keyspace(conn)
+                    except Exception as exc:
+                        if self._connections.get(conn.features.shard_id) is conn:
+                            if old_conn is None:
+                                del self._connections[conn.features.shard_id]
+                            else:
+                                self._connections[conn.features.shard_id] = old_conn
+                        self._connecting.discard(shard_id)
+                        sync_error = exc
+
+            if sync_error is not None:
+                conn.close()
+                raise sync_error
 
             if is_shutdown:
                 conn.close()
@@ -976,12 +1028,26 @@ class HostConnection(object):
             for conn in self._trash:
                 conn.close()
 
+    def _sync_keyspace(self, conn):
+        """Bring a newly published connection up to the pool's current keyspace."""
+        while self._keyspace and conn.keyspace != self._keyspace:
+            target = self._keyspace
+            conn.set_keyspace_blocking(target)
+            if self._keyspace == target:
+                break
+        with self._stream_available_condition:
+            self._stream_available_condition.notify_all()
+
     def _set_keyspace_for_all_conns(self, keyspace, callback):
         """
         Asynchronously sets the keyspace for all connections.  When all
         connections have been set, `callback` will be called with two
         arguments: this pool, and a list of any errors that occurred.
         """
+        # A connection published after this snapshot rechecks the new value in
+        # _sync_keyspace. Do not take self._lock here: the publishing thread may
+        # hold it while waiting for a keyspace reply on this event-loop thread.
+        self._keyspace = keyspace
         remaining_callbacks = set(self._connections.values())
         remaining_callbacks_lock = Lock()
         errors = []
@@ -990,19 +1056,46 @@ class HostConnection(object):
             callback(self, errors)
             return
 
-        def connection_finished_setting_keyspace(conn, error):
-            self.return_connection(conn)
+        def connection_finished_setting_keyspace(conn, error,
+                                                 release_connection=True):
+            # set_keyspace_async reserves one stream for every call. Retire
+            # this reply before a corrective USE reserves the next stream.
+            if release_connection:
+                self.return_connection(conn)
+            else:
+                # A synchronous send error already returned the stream, but
+                # a defunct connection still needs normal pool replacement.
+                self.return_connection(conn, stream_was_orphaned=True)
+            if error is None and self._keyspace and conn.keyspace != self._keyspace:
+                # An older USE may finish after a newer one on this shared
+                # connection. Converge on the current pool target before the
+                # callback publishes this connection as synchronized.
+                try:
+                    conn.set_keyspace_async(
+                        self._keyspace, connection_finished_setting_keyspace)
+                except Exception as exc:
+                    error = exc
+                else:
+                    return
             with remaining_callbacks_lock:
                 remaining_callbacks.remove(conn)
-            if error:
-                errors.append(error)
+                if error:
+                    errors.append(error)
+                all_finished = not remaining_callbacks
+            with self._stream_available_condition:
+                self._stream_available_condition.notify_all()
 
-            if not remaining_callbacks:
+            if all_finished:
                 callback(self, errors)
 
-        self._keyspace = keyspace
-        for conn in list(self._connections.values()):
-            conn.set_keyspace_async(keyspace, connection_finished_setting_keyspace)
+        for conn in list(remaining_callbacks):
+            try:
+                conn.set_keyspace_async(keyspace, connection_finished_setting_keyspace)
+            except Exception as exc:
+                # A synchronous send failure has already returned its stream
+                # in Connection.set_keyspace_async; no reply callback follows.
+                connection_finished_setting_keyspace(
+                    conn, exc, release_connection=False)
 
     def get_connections(self):
         connections = self._connections

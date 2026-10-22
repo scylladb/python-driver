@@ -1174,6 +1174,96 @@ class AggregateToCQLTests(unittest.TestCase):
 
 
 class HostsTests(unittest.TestCase):
+    def test_replace_host_endpoints_publishes_chain_and_swap(self):
+        for destinations in ((1, 2, 3), (1, 0)):
+            metadata = Metadata()
+            endpoints = [DefaultEndPoint('127.0.0.%s' % i)
+                         for i in range(1, 5)]
+            old = [Host(endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+                   for endpoint in endpoints[:3]]
+            for host in old:
+                metadata.add_or_return_host(host)
+            moves = [(host, Host(endpoints[index], SimpleConvictionPolicy,
+                                 host_id=host.host_id))
+                     for host, index in zip(old[:len(destinations)],
+                                            destinations)]
+
+            metadata.replace_host_endpoints(moves)
+
+            for host, replacement in moves:
+                assert metadata.get_host_by_host_id(host.host_id) is replacement
+                assert metadata.get_host(replacement.endpoint) is replacement
+                assert not metadata.remove_host(host)
+
+    def test_replace_host_endpoints_rejects_invalid_batch_atomically(self):
+        metadata = Metadata()
+        endpoints = [DefaultEndPoint('127.0.0.%s' % i)
+                     for i in range(1, 4)]
+        old = [Host(endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+               for endpoint in endpoints]
+        for host in old:
+            metadata.add_or_return_host(host)
+
+        valid = (old[0], Host(endpoints[1], SimpleConvictionPolicy,
+                              host_id=old[0].host_id))
+        invalid = (old[1], Host(endpoints[2], SimpleConvictionPolicy,
+                                host_id=old[1].host_id))
+        with self.assertRaisesRegex(ValueError, "belongs to another host"):
+            metadata.replace_host_endpoints([valid, invalid])
+        for host in old:
+            assert metadata.get_host_by_host_id(host.host_id) is host
+            assert metadata.get_host(host.endpoint) is host
+
+        stale = Host(old[1].endpoint, SimpleConvictionPolicy,
+                     host_id=old[1].host_id)
+        with self.assertRaisesRegex(ValueError, "no longer current"):
+            metadata.replace_host_endpoints([valid, (stale, invalid[1])])
+        wrong_id = Host(endpoints[2], SimpleConvictionPolicy,
+                        host_id=uuid.uuid4())
+        with self.assertRaisesRegex(ValueError, "preserve host_id"):
+            metadata.replace_host_endpoints([valid, (old[1], wrong_id)])
+        duplicate_endpoint = Host(endpoints[1], SimpleConvictionPolicy,
+                                  host_id=old[2].host_id)
+        with self.assertRaisesRegex(ValueError, "more than once"):
+            metadata.replace_host_endpoints(
+                [valid, (old[2], duplicate_endpoint)])
+        for host in old:
+            assert metadata.get_host_by_host_id(host.host_id) is host
+            assert metadata.get_host(host.endpoint) is host
+
+    def test_replace_host_endpoint_preserves_id_and_reindexes(self):
+        metadata = Metadata()
+        old_endpoint = DefaultEndPoint('127.0.0.1')
+        new_endpoint = DefaultEndPoint('127.0.0.2')
+        old = Host(old_endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        replacement = Host(new_endpoint, SimpleConvictionPolicy,
+                           host_id=old.host_id)
+        metadata.add_or_return_host(old)
+
+        metadata.replace_host_endpoint(old, replacement)
+
+        assert metadata.get_host_by_host_id(old.host_id) is replacement
+        assert metadata.get_host(old_endpoint) is None
+        assert metadata.get_host(new_endpoint) is replacement
+        assert not metadata.remove_host(old)
+        assert not metadata.remove_host_by_host_id(old.host_id, old_endpoint)
+        assert metadata.get_host_by_host_id(old.host_id) is replacement
+
+    def test_replace_host_endpoint_rejects_conflicting_owner(self):
+        metadata = Metadata()
+        old = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        owner = Host('127.0.0.2', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        replacement = Host(owner.endpoint, SimpleConvictionPolicy,
+                           host_id=old.host_id)
+        metadata.add_or_return_host(old)
+        metadata.add_or_return_host(owner)
+
+        with self.assertRaisesRegex(ValueError, "belongs to another host"):
+            metadata.replace_host_endpoint(old, replacement)
+
+        assert metadata.get_host(old.endpoint) is old
+        assert metadata.get_host(owner.endpoint) is owner
+
     def test_replace_host_publishes_new_endpoint_owner(self):
         metadata = Metadata()
         endpoint = DefaultEndPoint('127.0.0.1')

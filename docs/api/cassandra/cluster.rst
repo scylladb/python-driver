@@ -213,3 +213,58 @@ Clusters and Sessions
    :members:
 
 .. autoexception:: UserTypeDoesNotExist ()
+
+Topology publication and lifecycle notifications
+------------------------------------------------
+
+:meth:`Cluster.refresh_nodes` synchronously publishes node-list and token
+metadata. DC/rack attribute changes are delivered with their policy transition
+(remove from the old location, update the Host, add at the new location), and
+can lag node-list publication while a notification is running. The method does
+not wait for an already-running lifecycle notification.
+Policies, session pool management and registered host listeners receive queued
+notifications in order, with no topology or host callback lock held while they
+run. A replacement's removal notifications precede its addition notifications.
+
+A listener can call ``refresh_nodes()`` synchronously, including while another
+thread removes its host. The nested refresh publishes metadata and appends its
+notifications; it does not recursively invoke a replacement's addition inside
+an unfinished removal callback. Consequently metadata can be newer than the
+notifications currently being delivered, and pool availability can lag metadata
+publication. A newly published host remains reserved while its addition
+operation owns recovery. If UP supersedes an unfinished or failed ADD, a
+successful UP delivers the pending listener ``on_add`` once before ``on_up``.
+It does not repeat the policy or control-connection ADD callbacks.
+
+For ordinary ADD, policy and control-connection callback failures are logged
+without automatic callback retries. They release the recovery reservation;
+the pending listener discovery notification is retained for a later successful
+ADD or UP. Partially applied callback effects are not rolled back. Transport
+and preparation retries continue, and replacement ADD retains its existing
+callback retry behavior.
+
+Retirement is terminal for a Host object. An already-running callback may
+finish after retirement, but queued stale UP, DOWN and ADD work is discarded.
+A callback must return before later notifications can run; do not wait for
+another lifecycle notification from the same cluster. Callback exceptions are
+logged and do not strand the notification queue.
+
+Removal callback exceptions are logged and cleanup continues for the remaining
+policies, pools and listeners. The ``suppress_callback_errors`` argument to
+``Cluster.on_remove()`` and ``Cluster.remove_host()`` is accepted for
+compatibility but has no effect, even when ``False``. Queued removal
+notifications cannot propagate exceptions to the initiating caller.
+
+Topology queries can overlap. A snapshot older than a newer accepted refresh
+is discarded instead of overwriting the newer topology. This orders client
+refresh requests; it does not establish a server-side topology version.
+
+Shutdown first closes lifecycle admission and discards queued notifications.
+This coordinator step does not wait for an active listener. An external
+``shutdown()`` call still waits for executor workers during executor teardown;
+a listener calling it from an executor worker skips that wait to avoid joining
+itself. Already-admitted user
+callbacks may finish, but later notifications, refresh publication and late
+pool-completion callbacks cannot restart the closed lifecycle. Pending addition
+and location reservations are cleared, and current or retired host reconnectors
+are cancelled.

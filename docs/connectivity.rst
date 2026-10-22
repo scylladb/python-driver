@@ -30,6 +30,39 @@ Choose the connection model that matches the network:
        addresses are not directly reachable.
      - :class:`~cassandra.client_routes.ClientRoutesConfig`.
 
+Control-connection fallback
+---------------------------
+
+:class:`~cassandra.cluster.ControlConnectionQueryFallback` offers ``Fallback``,
+which uses the shared control connection when no node pool is usable, and
+``SkipPoolCreation``, which always uses it for application queries. Both modes
+bind fallback queries to one keyspace at a time.
+
+An explicit ``USE`` statement or :meth:`~cassandra.cluster.Session.set_keyspace`
+can change that binding only when its Session is the sole fallback user. Another
+Session using the control connection causes the change to fail. Queries already
+in flight from the same Session may execute under either keyspace; wait for
+those queries to finish before sending ``USE`` when their keyspace matters.
+Another ``USE`` fails while an explicit keyspace change is pending. If the
+driver is still selecting the Session's initial keyspace, an explicit ``USE``
+waits for that setup to finish.
+An uncertain ``USE`` result, such as a client timeout, closes the shared
+control connection so a later query cannot inherit an unknown keyspace state.
+
+Pooled keyspace changes
+-----------------------
+
+With node pools, the driver applies a successful ``USE`` to the Session's
+other connections. If any connection rejects that change, the calling ``USE``
+fails. The driver does not automatically retry the rejected change or replace
+that connection.
+
+The failure does not roll back changes that already succeeded:
+``Session.keyspace`` and some connections may already use the new keyspace.
+Connections still using the old keyspace are not used for ordinary queries.
+After correcting the cause of the rejection, issue ``USE`` again or create a
+new Session before sending unqualified queries.
+
 Contents
 --------
 
