@@ -34,6 +34,100 @@ from tests.unit.util import HashableMock
 LOGGER = logging.getLogger(__name__)
 
 
+class _ExpectedStaleSocketFailure(Exception):
+    pass
+
+
+@pytest.mark.parametrize('ownership, convicted, postcondition', [
+    pytest.param('current', False, None),
+    pytest.param('current', True, None),
+] + [
+    pytest.param(
+        ownership, convicted, postcondition,
+        marks=pytest.mark.xfail(
+            strict=True, raises=_ExpectedStaleSocketFailure,
+            reason='#858: stale socket failures still affect current ownership'
+        ) if postcondition in expected_failures else ())
+    for ownership, convicted, expected_failures in [
+        ('draining', False, ('conviction', 'replacement_scheduled',
+                             'shard_connection')),
+        ('draining', True, ('conviction', 'down', 'pool_open',
+                            'shard_connection', 'replacement_open')),
+        ('retired_pool', False, ('conviction',)),
+        ('retired_pool', True, ('conviction', 'down')),
+    ]
+    for postcondition in [
+        'conviction', 'down', 'replacement_scheduled', 'pool_open',
+        'shard_connection', 'replacement_open',
+    ]
+])
+def test_connection_failure_respects_socket_ownership(
+        ownership, convicted, postcondition):
+    host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+    host.signal_connection_failure = Mock(return_value=convicted)
+    session = NonCallableMagicMock(spec=Session, keyspace=None)
+    session.cluster.shard_aware_options.disable = True
+
+    def connection():
+        return HashableMock(
+            spec=Connection, lock=Lock(), in_flight=0, max_request_id=100,
+            is_closed=False, is_defunct=False, signaled_error=False,
+            orphaned_threshold_reached=False, orphaned_request_ids=set(),
+            keyspace=None, features=ProtocolFeatures(shard_id=0))
+
+    original = connection()
+    replacement = connection()
+    session.cluster.connection_factory.side_effect = [original, replacement]
+    pool = HostConnection(host, HostDistance.LOCAL, session)
+    session._pools = {host: pool}
+    borrowed, _ = pool.borrow_connection(timeout=0)
+    assert borrowed is original
+    assert original.in_flight == 1
+
+    if ownership == 'draining':
+        # An overloaded socket keeps its outstanding requests after its shard
+        # slot has been given to a healthy replacement.
+        pool._connections[0] = replacement
+        pool._trash.add(original)
+    elif ownership == 'retired_pool':
+        winner = HostConnection(host, HostDistance.LOCAL, session)
+        session._pools = {host: winner}
+        pool.shutdown()
+
+    original.is_defunct = True
+    original.last_error = ConnectionException('old socket failed', host.endpoint)
+    pool.return_connection(original)
+
+    # Even stale completions still release their own connection's accounting.
+    assert original.in_flight == 0
+    assert replacement.in_flight == 0
+    if ownership == 'current':
+        host.signal_connection_failure.assert_called_once_with(original.last_error)
+        assert pool.is_shutdown is convicted
+        if convicted:
+            session.cluster.on_down.assert_called_once_with(
+                host, is_host_addition=False)
+        else:
+            session.submit.assert_called_once_with(pool._replace, original)
+    else:
+        current = session._pools[host]
+        try:
+            if postcondition == 'conviction':
+                host.signal_connection_failure.assert_not_called()
+            elif postcondition == 'down':
+                session.cluster.on_down.assert_not_called()
+            elif postcondition == 'replacement_scheduled':
+                session.submit.assert_not_called()
+            elif postcondition == 'pool_open':
+                assert not current.is_shutdown
+            elif postcondition == 'shard_connection':
+                assert current._connections.get(0) is replacement
+            elif postcondition == 'replacement_open':
+                replacement.close.assert_not_called()
+        except AssertionError as error:
+            raise _ExpectedStaleSocketFailure from error
+
+
 class _PoolTests(unittest.TestCase):
     __test__ = False
     PoolImpl = None
