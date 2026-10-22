@@ -77,6 +77,9 @@ Behavior Changes
   ``request_timeout`` otherwise (10 seconds by default), instead of never
   timing out on the client. With ``raise_on_first_error=True``, both result
   modes now stop scheduling new statements after the first failure.
+* ``PyYAML`` is no longer a dependency. It has been unused since the removal
+  of the Scylla Cloud bundle support; applications that import ``yaml`` must
+  depend on it directly.
 
 3.29.12
 ========
