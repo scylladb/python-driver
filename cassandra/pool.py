@@ -29,7 +29,7 @@ try:
 except ImportError:
     from cassandra.util import WeakSet  # NOQA
 
-from cassandra import AuthenticationFailed
+from cassandra import AuthenticationFailed, _lifecycle
 from cassandra.connection import (ConnectionException, ConnectionSendError, EndPoint,
                                   DefaultEndPoint, UnixSocketEndPoint)
 from cassandra.policies import HostDistance
@@ -467,10 +467,11 @@ class HostConnection(object):
         self.endpoint = host.endpoint
         self.host_distance = host_distance
         self._session = weakref.proxy(session)
+        self._session_ref = weakref.ref(session)
         self._lock = Lock()
         # this is used in conjunction with the connection streams. Not using the connection lock because the connection can be replaced in the lifetime of the pool.
         self._stream_available_condition = Condition(Lock())
-        self._is_replacing = False
+        self._replacement_connections = {}
         self._connecting = set()
         self._connections = {}
         self._pending_connections = []
@@ -651,39 +652,60 @@ class HostConnection(object):
                 self._stream_available_condition.notify()
 
         if connection.is_defunct or connection.is_closed:
-            if connection.signaled_error and not replace_only and \
-                    (not self.shutdown_on_error or
-                     (isinstance(connection.last_error, ConnectionSendError) and
-                      not heartbeat_failed)):
+            reservation = _lifecycle.ConnectionFailureReservation(self, connection)
+            with reservation.locked():
+                current = reservation.owns_locked()
+                if current:
+                    if connection.signaled_error and not replace_only and \
+                            (not self.shutdown_on_error or
+                             (isinstance(connection.last_error, ConnectionSendError) and
+                              not heartbeat_failed)):
+                        return
+                    report_failure = not replace_only and not connection.signaled_error
+                    connection.signaled_error = True
+                else:
+                    self._trash.discard(connection)
+            if not current:
+                # A stale completion still releases its stream above, but its
+                # failed transport cannot affect the current pool or shard.
+                connection.close()
                 return
 
             is_down = False
-            if replace_only:
-                # A local send-queue failure says nothing about host health.
-                # Mark the connection handled so later callbacks do not report
-                # this failure to the host conviction policy.
-                connection.signaled_error = True
-            elif not connection.signaled_error:
+            if report_failure:
                 log.debug("Defunct or closed connection (%s) returned to pool, potentially "
                           "marking host %s as down", id(connection), self.host)
                 is_down = self.host.signal_connection_failure(connection.last_error)
-                connection.signaled_error = True
 
             if self.shutdown_on_error and not is_down and not replace_only:
                 is_down = True
 
             if is_down:
-                self.shutdown()
-                self._session.cluster.on_down(self.host, is_host_addition=False)
+                # Policy and health inspection can replace the pool or socket.
+                # Carry ownership through DOWN admission and pool shutdown.
+                if reservation.is_current():
+                    try:
+                        self._session.cluster.on_down(
+                            self.host, is_host_addition=False,
+                            _pool_failure=reservation)
+                    finally:
+                        self.shutdown(_failure=reservation)
+                else:
+                    with self._lock:
+                        self._trash.discard(connection)
+                    connection.close()
             else:
+                schedule_replacement = False
+                with reservation.locked():
+                    if reservation.owns_locked():
+                        self._connections.pop(connection.features.shard_id)
+                        self._replacement_connections[
+                            connection.features.shard_id] = connection
+                        schedule_replacement = True
+                    else:
+                        self._trash.discard(connection)
                 connection.close()
-                with self._lock:
-                    if self.is_shutdown:
-                        return
-                    self._connections.pop(connection.features.shard_id, None)
-                    if self._is_replacing:
-                        return
-                    self._is_replacing = True
+                if schedule_replacement:
                     self._session.submit(self._replace, connection)
         elif connection in self._trash:
             with connection.lock:
@@ -707,11 +729,25 @@ class HostConnection(object):
             self._stream_available_condition.notify()
 
     def _replace(self, connection):
+        reservation = _lifecycle.ConnectionFailureReservation(
+            self, connection, replacing=True)
+        if not reservation.is_current():
+            with self._lock:
+                shard_id = connection.features.shard_id
+                if self._replacement_connections.get(shard_id) is connection:
+                    self._replacement_connections.pop(shard_id)
+            return
         failed_connection = None
         with self._lock:
-            if self.is_shutdown:
+            shard_id = connection.features.shard_id
+            current = self._connections.get(shard_id)
+            if (self.is_shutdown or
+                    (current is not None and current is not connection) or
+                    (current is None and
+                     self._replacement_connections.get(shard_id) is not connection)):
                 return
 
+            self._replacement_connections[shard_id] = connection
             log.debug("Replacing connection (%s) to %s", id(connection), self.host)
             try:
                 if connection.features.shard_id in self._connections:
@@ -734,31 +770,36 @@ class HostConnection(object):
                         raise
             except Exception:
                 log.warning("Failed reconnecting %s. Retrying." % (self.endpoint,))
+                self._replacement_connections[shard_id] = connection
                 self._session.submit(self._replace, connection)
             else:
-                self._is_replacing = False
+                self._replacement_connections.pop(shard_id, None)
                 with self._stream_available_condition:
                     self._stream_available_condition.notify()
         if failed_connection is not None:
             failed_connection.close()
 
-    def shutdown(self):
+    def shutdown(self, _failure=None):
         log.debug("Shutting down connections to %s", self.host)
-        with self._lock:
-            if self.is_shutdown:
+        shutdown_lock = _failure.locked() if _failure is not None else self._lock
+        with shutdown_lock:
+            if (self.is_shutdown or
+                    (_failure is not None and not _failure.owns_locked())):
                 return
             else:
                 self.is_shutdown = True
             with self._stream_available_condition:
                 self._stream_available_condition.notify_all()
 
-            for future in self._shard_connections_futures:
-                future.cancel()
-
+            futures_to_cancel = tuple(self._shard_connections_futures)
+            self._replacement_connections.clear()
             connections_to_close = self._connections.copy()
             pending_connections_to_close = self._pending_connections.copy()
             self._connections.clear()
             self._pending_connections.clear()
+
+        for future in futures_to_cancel:
+            future.cancel()
 
         # connection.close can call pool.return_connection, which will
         #  obtain self._lock via self._stream_available_condition.
