@@ -1122,6 +1122,75 @@ def test_publication_contention_keeps_session_available(topology):
         pool.shutdown()
 
 
+def test_unpublished_failure_keeps_session_available_for_publication(topology):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._profile_manager = cluster.profile_manager
+    session.keyspace = None
+    session.is_shutdown = False
+    session.shutdown = Mock()
+    connection = _PublicationConnection(host.endpoint, compression=False)
+    cluster.connection_factory = Mock(return_value=connection)
+    pool = HostConnection(host, HostDistance.LOCAL, session)
+    connection.is_defunct = True
+    host.signal_connection_failure = Mock()
+    work_lock = pool._lock
+    attempting = Event()
+    published = Event()
+    errors = []
+
+    class ObservedLock:
+        def __enter__(self):
+            attempting.set()
+            work_lock.acquire()
+
+        def __exit__(self, *args):
+            work_lock.release()
+
+    pool._lock = ObservedLock()
+
+    def fail():
+        try:
+            pool.return_connection(connection, stream_was_orphaned=True)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def publish():
+        try:
+            with patch('cassandra.cluster.HostConnection', return_value=pool):
+                assert session.add_or_renew_pool(host, False).result(timeout=5)
+            published.set()
+        except BaseException as exc:
+            errors.append(exc)
+
+    failure = Thread(target=fail)
+    publication = Thread(target=publish)
+    try:
+        # A background shard may own the work lock while publication takes
+        # membership then Session. A stale failure must release Session before
+        # waiting for work-lock cleanup, or all three operations can deadlock.
+        work_lock.acquire()
+        try:
+            failure.start()
+            assert attempting.wait(5)
+            publication.start()
+            assert published.wait(2)
+        finally:
+            work_lock.release()
+    finally:
+        for worker in (failure, publication):
+            if worker.ident is not None:
+                worker.join(5)
+        pool.shutdown()
+    assert not failure.is_alive()
+    assert not publication.is_alive()
+    assert not errors
+    assert session._pools[host] is pool
+    host.signal_connection_failure.assert_not_called()
+
+
 @pytest.mark.parametrize('healthy', [False, True])
 def test_publication_progress_with_unsynchronized_background_shard(
         topology, healthy):
