@@ -14,6 +14,7 @@
 import unittest
 
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import nullcontext
 import gc
 import logging
 import multiprocessing
@@ -1024,7 +1025,8 @@ class ClusterTest(unittest.TestCase):
 
             pool = Mock(
                 host=pool_host, host_distance=distance,
-                is_shutdown=False, _keyspace=None)
+                is_shutdown=False, _keyspace=None, _membership_lock=RLock())
+            pool._lock_usable_connection.return_value = nullcontext(True)
             pool.get_state.return_value = {"open_count": 1}
             created_pools.append(pool)
             return pool
@@ -1255,7 +1257,9 @@ class ClusterTest(unittest.TestCase):
 
         new_pool = Mock(
             host=host, host_distance=HostDistance.LOCAL,
-            is_shutdown=False, _keyspace="old_keyspace")
+            is_shutdown=False, _keyspace="old_keyspace",
+            _membership_lock=RLock())
+        new_pool._lock_usable_connection.return_value = nullcontext(True)
         keyspace_error = ConnectionException("keyspace update failed")
 
         def fail_keyspace_update(_keyspace, callback):
@@ -1363,7 +1367,8 @@ class ClusterTest(unittest.TestCase):
 
         new_pool = Mock(
             host=host, host_distance=HostDistance.LOCAL,
-            is_shutdown=False, _keyspace=None)
+            is_shutdown=False, _keyspace=None, _membership_lock=RLock())
+        new_pool._lock_usable_connection.return_value = nullcontext(True)
 
         def create_pool(*args, **kwargs):
             cluster.remove_host(host, trigger_reconciliation=False)
@@ -2874,7 +2879,8 @@ class SessionPoolRaceTest(unittest.TestCase):
     def _pool(self, host, keyspace=None, distance=HostDistance.LOCAL):
         pool = Mock(
             host=host, host_distance=distance, is_shutdown=False,
-            _keyspace=keyspace)
+            _keyspace=keyspace, _membership_lock=RLock())
+        pool._lock_usable_connection.return_value = nullcontext(True)
         pool.shutdown.side_effect = lambda: setattr(
             pool, 'is_shutdown', True)
         return pool
@@ -5216,7 +5222,9 @@ class SessionTest(unittest.TestCase):
             "127.0.0.2", SimpleConvictionPolicy, host_id=host_id)
         old_pool = Mock(host=original_host)
         pool_state = {"open_count": 1}
-        new_pool = Mock(host=current_host, _keyspace=None)
+        new_pool = Mock(
+            host=current_host, _keyspace=None, _membership_lock=RLock())
+        new_pool._lock_usable_connection.return_value = nullcontext(True)
         new_pool.get_state.return_value = pool_state
         session = new_session_with_pool_state({original_host: old_pool})
         session.keyspace = None

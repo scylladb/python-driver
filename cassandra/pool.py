@@ -16,6 +16,7 @@
 Connection pooling and host management.
 """
 from concurrent.futures import Future
+from contextlib import contextmanager
 from functools import total_ordering
 import logging
 import time
@@ -160,6 +161,7 @@ class Host(object):
     _currently_handling_node_up = False
     _currently_handling_node_down = False
     _down_event_generation = 0
+    _health_generation = 0
     _lifecycle_pending = False
     _pending_host_addition = False
     _pending_host_addition_notification = False
@@ -467,6 +469,7 @@ class HostConnection(object):
         self.host_distance = host_distance
         self._session = weakref.proxy(session)
         self._lock = Lock()
+        self._membership_lock = Lock()
         # this is used in conjunction with the connection streams. Not using the connection lock because the connection can be replaced in the lifetime of the pool.
         self._stream_available_condition = Condition(Lock())
         self._is_replacing = False
@@ -499,7 +502,8 @@ class HostConnection(object):
         log.debug("Initializing connection for host %s", self.host)
         first_connection = session.cluster.connection_factory(self.endpoint, on_orphaned_stream_released=self.on_orphaned_stream_released)
         log.debug("First connection created to %s for shard_id=%s", self.host, first_connection.features.shard_id)
-        self._connections[first_connection.features.shard_id] = first_connection
+        with self._membership_lock:
+            self._connections[first_connection.features.shard_id] = first_connection
         self._keyspace = session.keyspace
 
         if self._keyspace:
@@ -679,7 +683,9 @@ class HostConnection(object):
                 with self._lock:
                     if self.is_shutdown:
                         return
-                    self._connections.pop(connection.features.shard_id, None)
+                    with self._membership_lock:
+                        self._connections.pop(
+                            connection.features.shard_id, None)
                     if self._is_replacing:
                         return
                     self._is_replacing = True
@@ -713,22 +719,17 @@ class HostConnection(object):
 
             log.debug("Replacing connection (%s) to %s", id(connection), self.host)
             try:
-                if connection.features.shard_id in self._connections:
-                    del self._connections[connection.features.shard_id]
+                with self._membership_lock:
+                    self._connections.pop(connection.features.shard_id, None)
                 if self.host.sharding_info and not self._session.cluster.shard_aware_options.disable:
                     self._connecting.add(connection.features.shard_id)
                     self._session.submit(self._open_connection_to_missing_shard, connection.features.shard_id)
                 else:
                     connection = self._session.cluster.connection_factory(self.endpoint,
                                                                           on_orphaned_stream_released=self.on_orphaned_stream_released)
-                    if self._keyspace:
-                        connection.set_keyspace_blocking(self._keyspace)
-                    self._connections[connection.features.shard_id] = connection
                     try:
-                        self._sync_keyspace(connection)
+                        self._sync_keyspace(connection, publish=True)
                     except Exception:
-                        if self._connections.get(connection.features.shard_id) is connection:
-                            del self._connections[connection.features.shard_id]
                         failed_connection = connection
                         raise
             except Exception:
@@ -744,19 +745,19 @@ class HostConnection(object):
     def shutdown(self):
         log.debug("Shutting down connections to %s", self.host)
         with self._lock:
-            if self.is_shutdown:
-                return
-            else:
+            with self._membership_lock:
+                if self.is_shutdown:
+                    return
                 self.is_shutdown = True
+                connections_to_close = self._connections.copy()
+                self._connections.clear()
             with self._stream_available_condition:
                 self._stream_available_condition.notify_all()
 
             for future in self._shard_connections_futures:
                 future.cancel()
 
-            connections_to_close = self._connections.copy()
             pending_connections_to_close = self._pending_connections.copy()
-            self._connections.clear()
             self._pending_connections.clear()
 
         # connection.close can call pool.return_connection, which will
@@ -907,17 +908,9 @@ class HostConnection(object):
                             conn.features.shard_id,
                             self.host
                         )
-                    if self._keyspace:
-                        conn.set_keyspace_blocking(self._keyspace)
-                    self._connections[conn.features.shard_id] = conn
                     try:
-                        self._sync_keyspace(conn)
+                        self._sync_keyspace(conn, publish=True)
                     except Exception as exc:
-                        if self._connections.get(conn.features.shard_id) is conn:
-                            if old_conn is None:
-                                del self._connections[conn.features.shard_id]
-                            else:
-                                self._connections[conn.features.shard_id] = old_conn
                         self._connecting.discard(shard_id)
                         sync_error = exc
 
@@ -1028,12 +1021,21 @@ class HostConnection(object):
             for conn in self._trash:
                 conn.close()
 
-    def _sync_keyspace(self, conn):
-        """Bring a newly published connection up to the pool's current keyspace."""
-        while self._keyspace and conn.keyspace != self._keyspace:
-            target = self._keyspace
-            conn.set_keyspace_blocking(target)
-            if self._keyspace == target:
+    def _sync_keyspace(self, conn, publish=False):
+        """
+        Synchronize before publishing membership, without a network-wait
+        guard.
+        """
+        while True:
+            with self._membership_lock:
+                target = self._keyspace
+            if target and conn.keyspace != target:
+                conn.set_keyspace_blocking(target)
+            with self._membership_lock:
+                if self._keyspace != target:
+                    continue
+                if publish:
+                    self._connections[conn.features.shard_id] = conn
                 break
         with self._stream_available_condition:
             self._stream_available_condition.notify_all()
@@ -1044,11 +1046,12 @@ class HostConnection(object):
         connections have been set, `callback` will be called with two
         arguments: this pool, and a list of any errors that occurred.
         """
-        # A connection published after this snapshot rechecks the new value in
-        # _sync_keyspace. Do not take self._lock here: the publishing thread may
-        # hold it while waiting for a keyspace reply on this event-loop thread.
-        self._keyspace = keyspace
-        remaining_callbacks = set(self._connections.values())
+        # Pair the target and member snapshot with final synchronized
+        # insertion. Never take the broad work lock here: it can await
+        # this reply thread.
+        with self._membership_lock:
+            self._keyspace = keyspace
+            remaining_callbacks = set(self._connections.values())
         remaining_callbacks_lock = Lock()
         errors = []
 
@@ -1100,6 +1103,19 @@ class HostConnection(object):
     def get_connections(self):
         connections = self._connections
         return list(connections.values()) if connections else []
+
+    @contextmanager
+    def _lock_usable_connection(self):
+        # Publication owns _membership_lock, then Session and Host locks.
+        # Host must precede Connection, matching ResponseFuture's send path.
+        if not self.is_shutdown:
+            for connection in self._connections.values():
+                with connection.lock:
+                    if not (connection.is_closed or connection.is_defunct):
+                        # Keep this member usable through health publication.
+                        yield True
+                        return
+        yield False
 
     def get_state(self):
         in_flights = [c.in_flight for c in list(self._connections.values())]
