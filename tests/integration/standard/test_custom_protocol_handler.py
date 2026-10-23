@@ -134,7 +134,6 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         self._protocol_divergence_fail_by_flag_uses_int(ProtocolVersion.V4, uses_int_query_flag=False,
                                                         int_flag=True)
 
-    @unittest.expectedFailure
     @greaterthanorequalcass40
     def test_protocol_v5_uses_flag_int(self):
         """
@@ -148,7 +147,6 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         self._protocol_divergence_fail_by_flag_uses_int(ProtocolVersion.V5, uses_int_query_flag=True, beta=True,
                                                         int_flag=True)
 
-    @unittest.expectedFailure
     @greaterthanorequalcass40
     def test_protocol_divergence_v5_fail_by_flag_uses_int(self):
         """

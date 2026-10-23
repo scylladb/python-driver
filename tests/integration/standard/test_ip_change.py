@@ -5,7 +5,7 @@ import unittest
 from cassandra.cluster import ExecutionProfile
 from cassandra.policies import WhiteListRoundRobinPolicy
 
-from tests.integration import use_cluster, get_node, get_cluster, local, TestCluster
+from tests.integration import use_cluster, get_node, get_cluster, local, TestCluster, SCYLLA_VERSION
 from tests.util import wait_until_not_raised
 
 LOGGER = logging.getLogger(__name__)
@@ -46,7 +46,10 @@ class TestIpAddressChange(unittest.TestCase):
         LOGGER.debug("Change IP address for node3")
         ip_prefix = get_cluster().get_ipprefix()
         new_ip = f'{ip_prefix}33'
-        node3.set_configuration_options(values={'listen_address': new_ip, 'rpc_address': new_ip, 'api_address': new_ip})
+        new_addresses = {'listen_address': new_ip, 'rpc_address': new_ip}
+        if SCYLLA_VERSION:
+            new_addresses['api_address'] = new_ip
+        node3.set_configuration_options(values=new_addresses)
         node3.network_interfaces = {k: (new_ip, v[1]) for k, v in node3.network_interfaces.items()}
         LOGGER.debug(f"Start node3 again with ip address {new_ip}")
         node3.start(wait_for_binary_proto=True)
