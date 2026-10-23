@@ -160,6 +160,7 @@ class Host(object):
     _currently_handling_node_up = False
     _currently_handling_node_down = False
     _down_event_generation = 0
+    _health_generation = 0
     _lifecycle_pending = False
     _pending_host_addition = False
     _pending_host_addition_notification = False

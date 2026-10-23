@@ -14,16 +14,17 @@
 
 from concurrent.futures import Future
 from threading import Event, Lock, Thread
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
 from cassandra.cluster import Cluster, ControlConnection
-from cassandra._lifecycle import LifecycleCoordinator
+from cassandra._lifecycle import LifecycleCoordinator, PoolFailureReservation
 from cassandra.connection import DefaultEndPoint
 from cassandra.policies import HostDistance
 from tests.unit.test_control_connection import (
     HOST_ID_1, HOST_ID_2, HOST_ID_3, MockConnection, _node_meta_results)
+from tests.unit.utils import new_session_with_pool_state
 
 
 @pytest.fixture
@@ -725,17 +726,9 @@ def test_duplicate_up_does_not_schedule_another_pool_creation(topology):
     assert not host._currently_handling_node_up
 
 
-class _ExpectedDownAdmissionFailure(Exception):
-    pass
-
-
 @pytest.mark.parametrize('inspection', ['distance', 'pool_state'])
-@pytest.mark.parametrize('postcondition', ['host_up', 'not_dispatched', 'no_down_handler'])
-@pytest.mark.xfail(
-    strict=True, raises=_ExpectedDownAdmissionFailure,
-    reason='#925: DOWN admission does not fence health inspection against recovery')
 def test_down_health_inspection_cannot_undo_completed_recovery(
-        topology, inspection, postcondition):
+        topology, inspection):
     cluster, _ = topology
     host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
     host.set_down()
@@ -773,15 +766,76 @@ def test_down_health_inspection_cannot_undo_completed_recovery(
     dispatched = cluster.on_down(host, is_host_addition=False)
 
     assert recovered == [True]
-    try:
-        if postcondition == 'host_up':
-            assert host.is_up, 'an obsolete DOWN observation undid successful recovery'
-        elif postcondition == 'not_dispatched':
-            assert not dispatched
-        elif postcondition == 'no_down_handler':
-            cluster.on_down_potentially_blocking.assert_not_called()
-    except AssertionError as error:
-        raise _ExpectedDownAdmissionFailure from error
+    assert host.is_up, 'an obsolete DOWN observation undid successful recovery'
+    assert not dispatched
+    cluster.on_down_potentially_blocking.assert_not_called()
+
+
+@pytest.mark.parametrize('inspection', ['distance', 'pool_state'])
+@pytest.mark.parametrize('pool_failure', [False, True])
+def test_down_health_inspection_cannot_undo_pool_publication(
+        topology, inspection, pool_failure):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    cluster.on_down_potentially_blocking = Mock(return_value=Future())
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._profile_manager = cluster.profile_manager
+    session.keyspace = None
+    session.is_shutdown = False
+    session.shutdown = Mock()
+    cluster.sessions = (session,)
+    candidate = Mock(host=host, is_shutdown=False, _keyspace=None)
+    candidate.get_state.return_value = {'open_count': 1}
+
+    def publish_pool():
+        with patch('cassandra.cluster.HostConnection', return_value=candidate):
+            assert session.add_or_renew_pool(
+                host, is_host_addition=False).result(timeout=5) is True
+
+    if inspection == 'distance':
+        def distance(_host):
+            cluster.profile_manager.distance.side_effect = None
+            publish_pool()
+            return HostDistance.IGNORED
+        cluster.profile_manager.distance.side_effect = distance
+    else:
+        def pool_state():
+            publish_pool()
+            return {host: {'open_count': 0}}
+        session.get_pool_state = Mock(side_effect=pool_state)
+
+    # Keep a failing session's reservation current while another session
+    # publishes a pool. The host observation must fence both admission paths.
+    reservation = None
+    if pool_failure:
+        failed = new_session_with_pool_state()
+        failed.is_shutdown = False
+        intent = object()
+        generation = object()
+        failed._pool_intents[host] = intent
+        failed._pool_generations[host] = generation
+        reservation = PoolFailureReservation(
+            failed, host, generation, None, intent, host.endpoint)
+
+    assert not cluster.on_down(
+        host, is_host_addition=False, _pool_failure=reservation)
+
+    assert host.is_up
+    assert session._pools[host] is candidate
+    candidate.shutdown.assert_not_called()
+    cluster.on_down_potentially_blocking.assert_not_called()
+    if reservation is not None:
+        assert reservation.is_current()
+
+    # A later genuine failure must still be admitted with a fresh observation.
+    cluster.profile_manager.distance.side_effect = None
+    cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+    session.get_pool_state = Mock(return_value={host: {'open_count': 0}})
+    assert cluster.on_down(
+        host, is_host_addition=False, _pool_failure=reservation)
+    assert host.is_up is False
+    cluster.on_down_potentially_blocking.assert_called_once()
 
 
 def test_refresh_publishes_nodes_and_tokens_before_queued_listener(topology):

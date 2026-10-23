@@ -186,15 +186,25 @@ class LifecycleCoordinator:
                     getattr(host, '_readiness_generation', 0)):
                 host._currently_handling_node_up = False
 
-    def begin_down(self, host, connected=False, expect_down=False, pool_failure=None):
+    def observe_health(self, host):
+        """Capture ownership before inspecting policies or session pools."""
+        with host.lock:
+            if self.closed or host._is_removed:
+                return None
+            return host._health_generation
+
+    def begin_down(self, host, health_generation, connected=False,
+                   expect_down=False, pool_failure=None):
         """Return (generation, retry_only), or None if DOWN is discounted."""
         failure_lock = (pool_failure.session._lock
                         if pool_failure is not None else nullcontext())
         with failure_lock:
             with host.lock:
                 if (self.closed or host._is_removed or connected or
+                        health_generation != host._health_generation or
                         (pool_failure is not None and not pool_failure.owns_locked())):
                     return None
+                host._health_generation += 1
                 self.cancel_preparation(host)
                 host._readiness_generation = (
                     getattr(host, '_readiness_generation', 0) + 1)
@@ -208,13 +218,14 @@ class LifecycleCoordinator:
                 host._down_event_generation += 1
                 return host._down_event_generation, not was_up and not expect_down
 
-    def dispatch_down(self, host, is_host_addition, connected, expect_host_to_be_down,
-                      on_add_reconnection, pool_failure=None):
+    def dispatch_down(self, host, health_generation, is_host_addition, connected,
+                      expect_host_to_be_down, on_add_reconnection, pool_failure=None):
         # Publish DOWN state and FIFO admission together. Do not drain on
         # this caller; the executor (or another drainer) owns delivery.
         with self.transaction(drain=False):
             admission = self.begin_down(
-                host, connected=connected, expect_down=expect_host_to_be_down,
+                host, health_generation, connected=connected,
+                expect_down=expect_host_to_be_down,
                 pool_failure=pool_failure)
             if admission is None:
                 return False
@@ -448,6 +459,7 @@ class LifecycleCoordinator:
                 return False
             if set_up:
                 host.is_up = True
+            host._health_generation += 1
             host._addition_token = None
             host._endpoint_add_retry_pending = False
             host._lifecycle_pending = False

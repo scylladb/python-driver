@@ -2642,8 +2642,13 @@ class Cluster(object):
         if self.is_shutdown or self.allow_control_connection_query_fallback == ControlConnectionQueryFallback.SkipPoolCreation:
             return False
 
+        health_generation = self._lifecycle.observe_health(host)
+        if health_generation is None:
+            return False
+
         # Custom distance policies may refresh topology. Do not invoke them
-        # under the Host state lock needed by terminal publication.
+        # under the Host state lock needed by terminal publication. Recovery
+        # or pool publication during inspection invalidates this observation.
         connected = False
         if (self._discount_down_events and
                 self.profile_manager.distance(host) != HostDistance.IGNORED):
@@ -2653,7 +2658,7 @@ class Cluster(object):
                     connected |= pool_state['open_count'] > 0
 
         return self._lifecycle.dispatch_down(
-            host, is_host_addition, connected, expect_host_to_be_down,
+            host, health_generation, is_host_addition, connected, expect_host_to_be_down,
             on_add_reconnection, _pool_failure)
 
     def on_add(self, host, refresh_nodes=True,
@@ -4845,6 +4850,7 @@ class Session(object):
                                         expected_pool.host_distance
                                 self._pools[host] = new_pool
                                 self._pool_generations[host] = object()
+                                host._health_generation += 1
                                 publish_pool = True
 
                 if stale_candidate:
