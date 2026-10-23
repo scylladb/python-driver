@@ -20,7 +20,7 @@ explicitly for internal use; no names are exported by wildcard imports.
 
 from collections import deque
 from concurrent.futures import Future
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from functools import partial, wraps
 import logging
 from threading import local, RLock
@@ -56,9 +56,60 @@ class PoolFailureReservation:
                     self.host, self.generation, self.expected_pool, self.endpoint))
 
     def is_current(self):
+        with self.locked():
+            return self.owns_locked()
+
+    @contextmanager
+    def locked(self):
         with self.session._lock:
             with self.host.lock:
-                return self.owns_locked()
+                yield
+
+
+class ConnectionFailureReservation:
+    """Retain the pool and shard slot that own a connection failure."""
+
+    def __init__(self, pool, connection, replacing=False):
+        self.pool = pool
+        self.connection = connection
+        self.session = pool._session_ref()
+        self.host = pool.host
+        self.replacing = replacing
+
+    @contextmanager
+    def locked(self):
+        if self.session is None:
+            yield
+            return
+        with self.session._lock:
+            with self.host.lock:
+                # Unpublished candidates can hold their work lock while
+                # publication waits for Session under the membership lock.
+                # Only a current pool needs its shard ownership inspected.
+                if self.session._pools.get(self.host) is not self.pool:
+                    yield
+                    return
+                with self.pool._lock:
+                    yield
+
+    def owns_locked(self):
+        if (self.session is None or
+                self.session._pools.get(self.host) is not self.pool):
+            return False
+        current = self.pool._connections.get(self.connection.features.shard_id)
+        owns_slot = (current is self.connection or
+                     (self.replacing and current is None and
+                      self.pool._replacement_connections.get(
+                          self.connection.features.shard_id) is self.connection))
+        return (not self.session.is_shutdown and
+                not self.session.cluster.is_shutdown and
+                not self.host._is_removed and
+                self.host.endpoint == self.pool.endpoint and
+                not self.pool.is_shutdown and owns_slot)
+
+    def is_current(self):
+        with self.locked():
+            return self.owns_locked()
 
 
 class LifecycleCoordinator:
@@ -196,27 +247,26 @@ class LifecycleCoordinator:
     def begin_down(self, host, health_generation, connected=False,
                    expect_down=False, pool_failure=None):
         """Return (generation, retry_only), or None if DOWN is discounted."""
-        failure_lock = (pool_failure.session._lock
-                        if pool_failure is not None else nullcontext())
+        failure_lock = (pool_failure.locked()
+                        if pool_failure is not None else host.lock)
         with failure_lock:
-            with host.lock:
-                if (self.closed or host._is_removed or connected or
-                        health_generation != host._health_generation or
-                        (pool_failure is not None and not pool_failure.owns_locked())):
-                    return None
-                host._health_generation += 1
-                self.cancel_preparation(host)
-                host._readiness_generation = (
-                    getattr(host, '_readiness_generation', 0) + 1)
-                host._currently_handling_node_up = False
-                was_up = host.is_up
-                host.set_down()
-                if (not was_up and (host.is_currently_reconnecting() or
-                                    host._currently_handling_node_down)):
-                    return None
-                host._currently_handling_node_down = True
-                host._down_event_generation += 1
-                return host._down_event_generation, not was_up and not expect_down
+            if (self.closed or host._is_removed or connected or
+                    health_generation != host._health_generation or
+                    (pool_failure is not None and not pool_failure.owns_locked())):
+                return None
+            host._health_generation += 1
+            self.cancel_preparation(host)
+            host._readiness_generation = (
+                getattr(host, '_readiness_generation', 0) + 1)
+            host._currently_handling_node_up = False
+            was_up = host.is_up
+            host.set_down()
+            if (not was_up and (host.is_currently_reconnecting() or
+                                host._currently_handling_node_down)):
+                return None
+            host._currently_handling_node_down = True
+            host._down_event_generation += 1
+            return host._down_event_generation, not was_up and not expect_down
 
     def dispatch_down(self, host, health_generation, is_host_addition,
                       connected, expect_host_to_be_down, on_add_reconnection,
