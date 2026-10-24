@@ -2384,7 +2384,9 @@ class Cluster(object):
                 return
 
             log.info("Connection pools established for node %s", host)
-            if not self._lifecycle.mark_ready(host, readiness_generation=generation):
+            if not self._lifecycle.mark_ready(
+                    host, readiness_generation=generation,
+                    advance_health=False):
                 return
             self._notify_pending_add(host, generation)
             for listener in self.listeners:
@@ -2642,8 +2644,13 @@ class Cluster(object):
         if self.is_shutdown or self.allow_control_connection_query_fallback == ControlConnectionQueryFallback.SkipPoolCreation:
             return False
 
+        health_generation = self._lifecycle.observe_health(host)
+        if health_generation is None:
+            return False
+
         # Custom distance policies may refresh topology. Do not invoke them
-        # under the Host state lock needed by terminal publication.
+        # under the Host state lock needed by terminal publication. Recovery
+        # or pool publication during inspection invalidates this observation.
         connected = False
         if (self._discount_down_events and
                 self.profile_manager.distance(host) != HostDistance.IGNORED):
@@ -2653,7 +2660,8 @@ class Cluster(object):
                     connected |= pool_state['open_count'] > 0
 
         return self._lifecycle.dispatch_down(
-            host, is_host_addition, connected, expect_host_to_be_down,
+            host, health_generation, is_host_addition, connected,
+            expect_host_to_be_down,
             on_add_reconnection, _pool_failure)
 
     def on_add(self, host, refresh_nodes=True,
@@ -2801,7 +2809,8 @@ class Cluster(object):
                 log.warning("Connection pool could not be created, not marking node %s up", host)
             else:
                 self._finalize_add(host, generation=generation,
-                               addition_token=addition_token)
+                                   addition_token=addition_token,
+                                   advance_health=False)
                 return
 
             if not reconcile_pools_on_failure:
@@ -2909,10 +2918,10 @@ class Cluster(object):
 
     @_lifecycle.event
     def _finalize_add(self, host, set_up=True, generation=None,
-                      addition_token=None):
+                      addition_token=None, advance_health=True):
         if not self._lifecycle.mark_ready(
                 host, set_up, readiness_generation=generation,
-                addition_token=addition_token):
+                addition_token=addition_token, advance_health=advance_health):
             return
 
         self._notify_pending_add(host, generation)
@@ -4824,28 +4833,37 @@ class Session(object):
                 publish_pool = False
                 stale_candidate = False
                 stale_result = False
-                with self._lock:
-                    with host.lock:
-                        if not self._owns_pool_generation_locked(
-                                host, generation, expected_pool, endpoint):
-                            stale_candidate = True
-                            stale_result = \
-                                self._stale_pool_creation_result_locked(
-                                    host, expected_pool, intent, distance,
-                                    ignored_intent_is_success=True)
-                        else:
-                            keyspace = self.keyspace
-                            if new_pool._keyspace == keyspace:
-                                current_intent = \
-                                    self._pool_intents_locked().get(host)
-                                if (current_intent is not intent and
-                                        expected_pool is not None and
-                                        not expected_pool.is_shutdown):
-                                    new_pool.host_distance = \
-                                        expected_pool.host_distance
-                                self._pools[host] = new_pool
-                                self._pool_generations[host] = object()
-                                publish_pool = True
+                # This short guard excludes membership changes, not
+                # background connection creation or keyspace waits under
+                # the pool work lock.
+                with new_pool._membership_lock:
+                    with self._lock:
+                        with host.lock:
+                            if not self._owns_pool_generation_locked(
+                                    host, generation, expected_pool, endpoint):
+                                stale_candidate = True
+                                stale_result = \
+                                    self._stale_pool_creation_result_locked(
+                                        host, expected_pool, intent, distance,
+                                        ignored_intent_is_success=True)
+                            else:
+                                keyspace = self.keyspace
+                                if new_pool._keyspace == keyspace:
+                                    current_intent = \
+                                        self._pool_intents_locked().get(host)
+                                    if (current_intent is not intent and
+                                            expected_pool is not None and
+                                            not expected_pool.is_shutdown):
+                                        new_pool.host_distance = \
+                                            expected_pool.host_distance
+                                    with (
+                                        new_pool._lock_usable_connection()
+                                    ) as connected:
+                                        self._pools[host] = new_pool
+                                        self._pool_generations[host] = object()
+                                        if connected:
+                                            host._health_generation += 1
+                                        publish_pool = True
 
                 if stale_candidate:
                     log.debug(

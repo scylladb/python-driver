@@ -14,16 +14,20 @@
 
 from concurrent.futures import Future
 from threading import Event, Lock, Thread
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
 from cassandra.cluster import Cluster, ControlConnection
-from cassandra._lifecycle import LifecycleCoordinator
-from cassandra.connection import DefaultEndPoint
+from cassandra._lifecycle import LifecycleCoordinator, PoolFailureReservation
+from cassandra.connection import (
+    Connection, ConnectionException, DefaultEndPoint)
 from cassandra.policies import HostDistance
+from cassandra.pool import HostConnection
+from cassandra.protocol_features import ProtocolFeatures
 from tests.unit.test_control_connection import (
     HOST_ID_1, HOST_ID_2, HOST_ID_3, MockConnection, _node_meta_results)
+from tests.unit.utils import new_session_with_pool_state
 
 
 @pytest.fixture
@@ -725,63 +729,497 @@ def test_duplicate_up_does_not_schedule_another_pool_creation(topology):
     assert not host._currently_handling_node_up
 
 
-class _ExpectedDownAdmissionFailure(Exception):
-    pass
+@pytest.mark.parametrize('initial_state', [None, False, True])
+def test_ignored_add_during_down_inspection_does_not_establish_health(
+        topology, initial_state):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    host.is_up = initial_state
+    cluster.control_connection.on_add = Mock()
+    cluster.on_down_potentially_blocking = Mock(return_value=Future())
+    cluster._restart_reconnector = Mock(return_value=Future())
+    listener = Mock()
+    cluster.register_listener(listener)
+
+    def distance(current):
+        assert current is host
+        cluster.profile_manager.distance.side_effect = None
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+        cluster.on_add(host, refresh_nodes=False)
+        listener.on_add.assert_called_once_with(host)
+        assert host.is_up is initial_state
+        return HostDistance.IGNORED
+
+    cluster.profile_manager.distance.side_effect = distance
+
+    dispatched = cluster.on_down(host, is_host_addition=False)
+
+    cluster.profile_manager.distance.assert_called()
+    listener.on_add.assert_called_once_with(host)
+    assert host.is_up is False
+    assert dispatched is (initial_state is True)
+    if initial_state:
+        cluster.on_down_potentially_blocking.assert_called_once()
+        cluster._restart_reconnector.assert_not_called()
+    else:
+        cluster.on_down_potentially_blocking.assert_not_called()
+        cluster._restart_reconnector.assert_called_once()
 
 
 @pytest.mark.parametrize('inspection', ['distance', 'pool_state'])
-@pytest.mark.parametrize('postcondition', ['host_up', 'not_dispatched', 'no_down_handler'])
-@pytest.mark.xfail(
-    strict=True, raises=_ExpectedDownAdmissionFailure,
-    reason='#925: DOWN admission does not fence health inspection against recovery')
-def test_down_health_inspection_cannot_undo_completed_recovery(
-        topology, inspection, postcondition):
+@pytest.mark.parametrize('event', ['up', 'add'])
+@pytest.mark.parametrize('healthy', [False, True])
+def test_down_health_inspection_respects_aggregate_pool_health(
+        topology, inspection, event, healthy):
     cluster, _ = topology
     host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
     host.set_down()
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._profile_manager = cluster.profile_manager
+    session.keyspace = None
+    session.is_shutdown = False
+    session.shutdown = Mock()
+    session.update_created_pools = Mock()
+    cluster.sessions = (session,)
     cluster.control_connection.on_up = Mock()
+    cluster.control_connection.on_add = Mock()
+    cluster._prepare_host = lambda host, success, failure: success()
     cluster.on_down_potentially_blocking = Mock(return_value=Future())
-    session = Mock()
-    ready = Future()
-    session.add_or_renew_pool.return_value = ready
-    session.get_pool_state.return_value = {host: {'open_count': 0}}
-    cluster.sessions.add(session)
-    cluster.on_up(host)
-    assert not host.is_up
-    recovered = []
+    connection = _PublicationConnection(host.endpoint, compression=False)
+    constructing = Event()
+    release = Event()
+    completed = Event()
+    listener = Mock()
+    getattr(listener, 'on_' + event).side_effect = lambda _: completed.set()
+    cluster.register_listener(listener)
 
-    def finish_recovery():
-        ready.set_result(True)
-        recovered.append(host.is_up)
+    def construct(*args, **kwargs):
+        constructing.set()
+        assert release.wait(5)
+        return connection
+
+    cluster.connection_factory = Mock(side_effect=construct)
+    owns = session._owns_pool_generation_locked
+
+    def check_ownership(*args):
+        if cluster.connection_factory.called and not healthy:
+            connection.defunct(ConnectionException('candidate failed'))
+        return owns(*args)
+
+    session._owns_pool_generation_locked = check_ownership
+    if event == 'up':
+        cluster.on_up(host)
+    else:
+        cluster.on_add(host, refresh_nodes=False)
+    assert constructing.wait(5)
+
+    def finish():
+        release.set()
+        assert completed.wait(5)
+        assert host.is_up
 
     if inspection == 'distance':
         def distance(_host):
-            finish_recovery()
-            # No pool-state inspection follows an IGNORED decision, so this
-            # also exercises admission without a pool-failure reservation.
+            finish()
             return HostDistance.IGNORED
         cluster.profile_manager.distance.side_effect = distance
     else:
         def pool_state():
-            # Finish recovery after capturing an empty pool observation but
-            # before the older DOWN operation admits its destructive work.
             observed = {host: {'open_count': 0}}
-            finish_recovery()
+            finish()
             return observed
-        session.get_pool_state.side_effect = pool_state
+        session.get_pool_state = Mock(side_effect=pool_state)
 
-    dispatched = cluster.on_down(host, is_host_addition=False)
-
-    assert recovered == [True]
     try:
-        if postcondition == 'host_up':
-            assert host.is_up, 'an obsolete DOWN observation undid successful recovery'
-        elif postcondition == 'not_dispatched':
-            assert not dispatched
-        elif postcondition == 'no_down_handler':
-            cluster.on_down_potentially_blocking.assert_not_called()
-    except AssertionError as error:
-        raise _ExpectedDownAdmissionFailure from error
+        assert cluster.on_down(host, False) is (not healthy)
+        assert host.is_up is healthy
+    finally:
+        release.set()
+    if healthy:
+        cluster.on_down_potentially_blocking.assert_not_called()
+        cluster.profile_manager.distance.side_effect = None
+        session.get_pool_state = Mock(return_value={host: {'open_count': 0}})
+        assert cluster.on_down(host, False)
+    cluster.on_down_potentially_blocking.assert_called_once()
+
+
+@pytest.mark.parametrize('event', ['up', 'add'])
+@pytest.mark.parametrize('ignored', [False, True])
+def test_readiness_without_pool_work_retains_health_authority(
+        topology, event, ignored):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    host.set_down()
+    cluster.sessions = ()
+    if ignored:
+        cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+    cluster._prepare_host = lambda host, success, failure: success()
+    cluster.control_connection.on_up = Mock()
+    cluster.control_connection.on_add = Mock()
+    before = host._health_generation
+    if event == 'up':
+        cluster.on_up(host)
+    else:
+        cluster.on_add(host, refresh_nodes=False, set_up_if_ignored=True)
+    assert host.is_up
+    assert host._health_generation > before
+
+
+@pytest.mark.parametrize('inspection', ['distance', 'pool_state'])
+@pytest.mark.parametrize('pool_failure', [False, True])
+@pytest.mark.parametrize('pool_distance, connect_remote, connection_healthy', [
+    pytest.param(HostDistance.REMOTE, False, True, id='disabled_remote'),
+    pytest.param(HostDistance.REMOTE, True, True, id='healthy_remote'),
+    pytest.param(HostDistance.LOCAL, False, True, id='healthy_local'),
+    pytest.param(HostDistance.REMOTE, True, False, id='closed_remote'),
+    pytest.param(HostDistance.LOCAL, False, False, id='closed_local'),
+])
+def test_down_health_inspection_cannot_undo_pool_publication(
+        topology, inspection, pool_failure, pool_distance, connect_remote,
+        connection_healthy):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    cluster.on_down_potentially_blocking = Mock(return_value=Future())
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._profile_manager = cluster.profile_manager
+    session.keyspace = None
+    session.is_shutdown = False
+    session.shutdown = Mock()
+    cluster.sessions = (session,)
+    cluster.connect_to_remote_hosts = connect_remote
+    cluster.profile_manager.distance.return_value = pool_distance
+    connection = Mock(
+        features=ProtocolFeatures(shard_id=0),
+        is_closed=not connection_healthy,
+        is_defunct=False, lock=Lock())
+    cluster.connection_factory = Mock(return_value=connection)
+    has_connections = pool_distance != HostDistance.REMOTE or connect_remote
+    establishes_health = has_connections and connection_healthy
+
+    def publish_pool():
+        assert session.add_or_renew_pool(
+            host, is_host_addition=False).result(timeout=5) is True
+
+    if inspection == 'distance':
+        def distance(_host):
+            cluster.profile_manager.distance.side_effect = None
+            publish_pool()
+            return HostDistance.IGNORED
+        cluster.profile_manager.distance.side_effect = distance
+    else:
+        def pool_state():
+            publish_pool()
+            return {host: {'open_count': 0}}
+        session.get_pool_state = Mock(side_effect=pool_state)
+
+    # Keep a failing session's reservation current while another session
+    # publishes a pool. The host observation must fence both admission paths.
+    reservation = None
+    if pool_failure:
+        failed = new_session_with_pool_state()
+        failed.is_shutdown = False
+        intent = object()
+        generation = object()
+        failed._pool_intents[host] = intent
+        failed._pool_generations[host] = generation
+        reservation = PoolFailureReservation(
+            failed, host, generation, None, intent, host.endpoint)
+
+    dispatched = cluster.on_down(
+        host, is_host_addition=False, _pool_failure=reservation)
+
+    candidate = session._pools[host]
+    assert candidate.open_count == int(establishes_health)
+    assert cluster.connection_factory.call_count == int(has_connections)
+    assert not candidate.is_shutdown
+    assert host.is_up is establishes_health
+    assert dispatched is (not establishes_health)
+    if establishes_health:
+        cluster.on_down_potentially_blocking.assert_not_called()
+    else:
+        cluster.on_down_potentially_blocking.assert_called_once()
+    if reservation is not None:
+        assert reservation.is_current()
+
+    if not establishes_health:
+        return
+
+    # A later genuine failure must still be admitted with a fresh observation.
+    cluster.profile_manager.distance.side_effect = None
+    cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+    session.get_pool_state = Mock(return_value={host: {'open_count': 0}})
+    assert cluster.on_down(
+        host, is_host_addition=False, _pool_failure=reservation)
+    assert host.is_up is False
+    cluster.on_down_potentially_blocking.assert_called_once()
+
+
+class _PublicationConnection(Connection):
+    """Real connection state transitions without a network transport."""
+
+    def close(self):
+        with self.lock:
+            self.is_closed = True
+
+
+@pytest.mark.parametrize('failure', ['close', 'defunct'])
+def test_failed_candidate_cannot_fence_down_before_publication(
+        topology, failure):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._profile_manager = cluster.profile_manager
+    session.keyspace = None
+    session.is_shutdown = False
+    session.shutdown = Mock()
+    cluster.sessions = (session,)
+    cluster.on_down_potentially_blocking = Mock(return_value=Future())
+    connection = _PublicationConnection(host.endpoint, compression=False)
+    cluster.connection_factory = Mock(return_value=connection)
+    publishing = Event()
+    failed = Event()
+    errors = []
+    owns = session._owns_pool_generation_locked
+
+    def fail():
+        try:
+            assert publishing.wait(5)
+            if failure == 'close':
+                connection.close()
+            else:
+                connection.defunct(ConnectionException('candidate failed'))
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            failed.set()
+
+    def check_ownership(*args):
+        if cluster.connection_factory.called and not publishing.is_set():
+            # The candidate exists, and publication owns Session/Host state.
+            # A positive observation made before these locks is now obsolete.
+            publishing.set()
+            assert failed.wait(5)
+        return owns(*args)
+
+    session._owns_pool_generation_locked = check_ownership
+
+    def inspect():
+        observed = {host: {'open_count': 0}}
+        assert session.add_or_renew_pool(host, False).result(timeout=5) is True
+        return observed
+
+    session.get_pool_state = Mock(side_effect=inspect)
+    worker = Thread(target=fail)
+    worker.start()
+    try:
+        assert cluster.on_down(host, False)
+        assert host.is_up is False
+        assert session._pools[host].open_count == 0
+        cluster.on_down_potentially_blocking.assert_called_once()
+    finally:
+        publishing.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert not errors
+
+
+def test_publication_guard_releases_connection_and_membership(topology):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session.keyspace = None
+    connection = _PublicationConnection(host.endpoint, compression=False)
+    cluster.connection_factory = Mock(return_value=connection)
+    pool = HostConnection(host, HostDistance.LOCAL, session)
+    attempting = Event()
+    failed = Event()
+
+    def fail():
+        attempting.set()
+        connection.defunct(ConnectionException('failure after publication'))
+        pool.shutdown()
+        failed.set()
+
+    worker = Thread(target=fail)
+    try:
+        with pool._membership_lock:
+            with session._lock:
+                with host.lock:
+                    with pool._lock_usable_connection() as connected:
+                        assert connected
+                        worker.start()
+                        assert attempting.wait(5)
+                        assert not failed.wait(0.05)
+                        assert not connection.is_defunct
+                        assert pool._connections.get(
+                            connection.features.shard_id) is connection
+        assert failed.wait(5)
+    finally:
+        if worker.ident is not None:
+            worker.join(5)
+        pool.shutdown()
+    assert not worker.is_alive()
+    assert connection.is_defunct
+    assert pool.is_shutdown
+
+
+def test_publication_contention_keeps_session_available(topology):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._profile_manager = cluster.profile_manager
+    session.keyspace = None
+    session.is_shutdown = False
+    session.shutdown = Mock()
+    connection = _PublicationConnection(host.endpoint, compression=False)
+    cluster.connection_factory = Mock(return_value=connection)
+    pool = HostConnection(host, HostDistance.LOCAL, session)
+    membership = pool._membership_lock
+    attempting = Event()
+    replied = Event()
+
+    class ObservedLock:
+        def __enter__(self):
+            attempting.set()
+            membership.acquire()
+
+        def __exit__(self, *args):
+            membership.release()
+
+    pool._membership_lock = ObservedLock()
+    reply_thread = None
+    errors = []
+
+    def reply():
+        try:
+            session._set_keyspace_for_all_pools(
+                None, lambda errors: replied.set())
+        except BaseException as exc:
+            errors.append(exc)
+
+    try:
+        membership.acquire()
+        try:
+            with patch('cassandra.cluster.HostConnection', return_value=pool):
+                publication = session.add_or_renew_pool(host, False)
+                assert attempting.wait(5)
+                reply_thread = Thread(target=reply)
+                reply_thread.start()
+                assert replied.wait(2)
+        finally:
+            membership.release()
+            if reply_thread is not None:
+                reply_thread.join(5)
+                assert not reply_thread.is_alive()
+        assert not errors
+        assert publication.result(timeout=5) is True
+    finally:
+        pool.shutdown()
+
+
+@pytest.mark.parametrize('healthy', [False, True])
+def test_publication_progress_with_unsynchronized_background_shard(
+        topology, healthy):
+    from cassandra.protocol import ResultMessage, RESULT_KIND_SET_KEYSPACE
+    from cassandra.shard_info import _ShardingInfo
+
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._profile_manager = cluster.profile_manager
+    session.keyspace = 'ks'
+    session.is_shutdown = False
+    session.shutdown = Mock()
+    sharding = _ShardingInfo(0, 2, '', '', 0, None, None)
+    first = _PublicationConnection(host.endpoint, compression=False)
+    first.features = ProtocolFeatures(shard_id=0, sharding_info=sharding)
+    second = _PublicationConnection(host.endpoint, compression=False)
+    second.features = ProtocolFeatures(shard_id=1, sharding_info=sharding)
+    requests = []
+    pending = []
+    response_lock = Lock()
+    cleanup_mode = Event()
+    initial_use = Event()
+    current_use = Event()
+    work = []
+    submit = session.submit
+
+    def schedule(fn, *args, **kwargs):
+        future = submit(fn, *args, **kwargs)
+        if getattr(fn, '__name__', '') == '_open_connection_to_missing_shard':
+            work.append(future)
+        return future
+
+    session.submit = schedule
+
+    def respond(message, request_id, cb, **kwargs):
+        cb(ResultMessage(RESULT_KIND_SET_KEYSPACE))
+        return 0
+
+    def unanswered(message, request_id, cb, **kwargs):
+        with response_lock:
+            requests.append(cb)
+            immediate = cleanup_mode.is_set()
+            if not immediate:
+                pending.append(cb)
+            (initial_use if len(requests) == 1 else current_use).set()
+        if immediate:
+            cb(ResultMessage(RESULT_KIND_SET_KEYSPACE))
+        return 0
+
+    def respond_one():
+        with response_lock:
+            callback = pending.pop(0) if pending else None
+            assert callback is not None or cleanup_mode.is_set()
+        if callback is not None:
+            callback(ResultMessage(RESULT_KIND_SET_KEYSPACE))
+
+    first.send_msg = respond
+    second.send_msg = unanswered
+    cluster.connection_factory = Mock(side_effect=[first, second])
+    cluster.shard_aware_options.disable_shardaware_port = True
+    candidates = []
+
+    def construct(*args, **kwargs):
+        pool = HostConnection(*args, **kwargs)
+        candidates.append(pool)
+        assert initial_use.wait(5)
+        # Force the background socket to await a corrective USE after its
+        # original target succeeds. It must not qualify as usable membership.
+        session.keyspace = 'newks'
+        pool._set_keyspace_for_all_conns('newks', lambda pool, errors: None)
+        respond_one()
+        assert current_use.wait(5)
+        if not healthy:
+            first.close()
+        return pool
+
+    before = host._health_generation
+    try:
+        with patch('cassandra.cluster.HostConnection', side_effect=construct):
+            publication = session.add_or_renew_pool(host, False)
+            assert current_use.wait(5)
+            assert publication.result(timeout=2) is True
+        assert host._health_generation == before + int(healthy)
+    finally:
+        with response_lock:
+            cleanup_mode.set()
+            callbacks = list(pending)
+            pending.clear()
+        for callback in callbacks:
+            callback(ResultMessage(RESULT_KIND_SET_KEYSPACE))
+        for future in work:
+            future.result(timeout=5)
+        for pool in candidates:
+            pool.shutdown()
+    assert second.keyspace == 'newks'
+    assert host._health_generation == before + int(healthy)
 
 
 def test_refresh_publishes_nodes_and_tokens_before_queued_listener(topology):
