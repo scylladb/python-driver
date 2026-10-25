@@ -1,0 +1,51 @@
+name: Create GitHub release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Successfully published Scylla driver tag
+        type: string
+        required: true
+
+      source_sha:
+        description: Exact commit used for the published artifacts
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Mint repository-scoped release App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Require release App identity
+        env:
+          RELEASE_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: test "$RELEASE_APP_SLUG" = scylladb-releaser
+      - name: Verify tag and create release with filtered notes
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python3 .github/scripts/release_notes.py release "$RELEASE_TAG" "$SOURCE_SHA"

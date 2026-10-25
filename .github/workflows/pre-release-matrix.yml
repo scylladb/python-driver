@@ -1,0 +1,100 @@
+name: Pre-release Python driver matrix
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact release candidate commit to test
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    name: Driver matrix (${{ matrix.scylla }}, protocols 3 and 4)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scylla: LATEST
+            filters: '^[0-9]{4}$.^[0-9]+$.^[0-9]+$ and LAST.LAST.LAST'
+          - scylla: PRIOR
+            filters: '^[0-9]{4}$.^[0-9]+$.^[0-9]+$ and LAST-1'
+          - scylla: LTS-LATEST
+            filters: '^[0-9]{4}$.^[0-9]+$.^[0-9]+$ and LAST.1.LAST'
+          - scylla: LTS-PRIOR
+            filters: '^[0-9]{4}$.^[0-9]+$.^[0-9]+$ and LAST-1.1.LAST'
+    env:
+      WORKSPACE: ${{ github.workspace }}
+      PYTHON_MATRIX_DIR: ${{ github.workspace }}/matrix
+      PYTHON_DRIVER_DIR: ${{ github.workspace }}/driver
+      CCM_DIR: ${{ github.workspace }}/scylla-ccm
+    steps:
+      # Explicit repository is required: checkout in a reusable workflow defaults
+      # to its caller, not the repository that owns the matrix harness.
+      - name: Checkout matrix harness
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: scylladb/python-driver-matrix
+          ref: dcb16da4c0c7f87e64fcc7751e3214343f6fc3b2
+          path: matrix
+          persist-credentials: false
+      - name: Checkout exact driver candidate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: driver
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout CCM
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: scylladb/scylla-ccm
+          ref: 88f8dbd774d0207b43b1df97e4b85479cd6f945c
+          path: scylla-ccm
+          persist-credentials: false
+      - name: Resolve Scylla version
+        id: scylla
+        uses: scylladb-actions/get-version@a1dc4fedfb5684242148020b24e4150b1fe7ad08 # v0.4.5
+        with:
+          source: dockerhub-imagetag
+          repo: scylladb/scylla
+          filters: ${{ matrix.filters }}
+          github-token: ${{ github.token }}
+      - name: Resolve older LTS from enterprise repository if needed
+        id: fallback
+        if: matrix.scylla == 'LTS-PRIOR' && (steps.scylla.outputs.versions == '' || steps.scylla.outputs.versions == '[]')
+        uses: scylladb-actions/get-version@a1dc4fedfb5684242148020b24e4150b1fe7ad08 # v0.4.5
+        with:
+          source: dockerhub-imagetag
+          repo: scylladb/scylla-enterprise
+          filters: ${{ matrix.filters }}
+          github-token: ${{ github.token }}
+      - name: Run matrix harness against candidate SHA
+        working-directory: matrix
+        env:
+          DRIVER_SHA: ${{ inputs.source_sha }}
+          SCYLLA_VERSIONS: ${{ steps.fallback.outputs.versions || steps.scylla.outputs.versions }}
+        run: |
+          set -euo pipefail
+          SCYLLA_VERSION=$(python3 - <<'PY'
+          import json, os, re
+          versions = json.loads(os.environ['SCYLLA_VERSIONS'])
+          version = versions[0] if isinstance(versions, list) and versions else versions
+          if not isinstance(version, str) or not re.fullmatch(r'[0-9]{4}\.[0-9]+\.[0-9]+', version):
+              raise SystemExit('Scylla version resolution did not return a release')
+          print('release:' + version)
+          PY
+          )
+          export SCYLLA_VERSION
+          # Match the matrix repository's declared compatibility exclusions.
+          if [[ "$SCYLLA_VERSION" == release:2025.1.* ]]; then
+            export PYTEST_ADDOPTS='--ignore=tests/integration/standard/test_tablets_routing_v2.py --deselect=tests/integration/standard/test_application_info.py::ApplicationInfoTest::test_create_session_and_check_system_views_clients --deselect=tests/integration/standard/test_tls_resumption.py::TLSSessionResumptionTests::test_every_connection_resumes_from_a_warmed_cache --deselect=tests/integration/standard/test_tls_resumption.py::TLSSessionResumptionTests::test_resumption_is_on_by_default_with_an_ssl_context'
+          fi
+          ./scripts/run_test.sh python3 ./main.py "$PYTHON_DRIVER_DIR" \
+            --driver-type scylla --versions "$DRIVER_SHA" --protocols 3,4 \
+            --scylla-version "$SCYLLA_VERSION"
