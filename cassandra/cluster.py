@@ -2655,6 +2655,12 @@ class Cluster(object):
         if (self._discount_down_events and
                 self.profile_manager.distance(host) != HostDistance.IGNORED):
             for session in tuple(self.sessions):
+                # This failure will shut down its pool, including any healthy
+                # sibling shards. Only independent pools can discount DOWN.
+                if (isinstance(_pool_failure,
+                               _lifecycle.ConnectionFailureReservation) and
+                        session is _pool_failure.session):
+                    continue
                 pool_state = session.get_pool_state().get(host)
                 if pool_state:
                     connected |= pool_state['open_count'] > 0
