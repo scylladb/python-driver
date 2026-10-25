@@ -655,22 +655,19 @@ class HostConnection(object):
                 self._stream_available_condition.notify()
 
         if connection.is_defunct or connection.is_closed:
-            if connection.signaled_error and not replace_only and \
-                    (not self.shutdown_on_error or
-                     (isinstance(connection.last_error, ConnectionSendError) and
-                      not heartbeat_failed)):
-                return
+            # Claim the transport before pool work: a redundant reactor
+            # callback must return while that work waits for its response.
+            with connection.lock:
+                if connection.signaled_error and not replace_only and \
+                        (not self.shutdown_on_error or
+                         (isinstance(connection.last_error, ConnectionSendError) and
+                          not heartbeat_failed)):
+                    return
+                report_failure = not replace_only and not connection.signaled_error
+                connection.signaled_error = True
             reservation = _lifecycle.ConnectionFailureReservation(self, connection)
             with reservation.locked():
                 current = reservation.owns_locked()
-                if current:
-                    if connection.signaled_error and not replace_only and \
-                            (not self.shutdown_on_error or
-                             (isinstance(connection.last_error, ConnectionSendError) and
-                              not heartbeat_failed)):
-                        return
-                    report_failure = not replace_only and not connection.signaled_error
-                    connection.signaled_error = True
             if not current:
                 with self._lock:
                     self._trash.discard(connection)

@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
 import logging
 import uuid
 from cassandra.protocol_features import ProtocolFeatures
@@ -20,7 +19,7 @@ from cassandra.protocol_features import ProtocolFeatures
 from cassandra.shard_info import _ShardingInfo
 
 import unittest
-from threading import Barrier, Thread, Event, Lock, RLock, get_ident
+from threading import Barrier, Thread, Event, Lock, RLock
 from unittest.mock import Mock, NonCallableMagicMock, MagicMock, patch
 
 from cassandra.cluster import Cluster, Session, ShardAwareOptions
@@ -140,7 +139,7 @@ def test_failure_policy_cannot_affect_replacement(socket_pool, convicted, change
         try:
             winner = (HostConnection(host, HostDistance.LOCAL, session)
                       if change == 'pool' else None)
-            with session._lock, host.lock, pool._lock:
+            with original.lock, session._lock, host.lock, pool._lock:
                 if change == 'socket':
                     pool._connections[0] = replacement
                     pool._trash.add(original)
@@ -292,58 +291,42 @@ def test_racing_first_callbacks_preserve_convicting_owner(socket_pool):
     host, session, pool, original, _ = socket_pool
     original.in_flight = 2
     original.is_defunct = True
-    initial_callbacks = Barrier(2)
-    policy_entered, release_policy, second_done = Event(), Event(), Event()
+    start_callbacks = Barrier(3)
+    policy_entered, release_policy, duplicate_done = Event(), Event(), Event()
     errors = []
-    locked = ConnectionFailureReservation.locked
-
-    @contextmanager
-    def enter(reservation, *args, **kwargs):
-        if not getattr(reservation, '_test_entered', False):
-            reservation._test_entered = True
-            # Both callbacks have passed the unsignaled fast check before
-            # the first callback publishes its conviction-in-progress.
-            initial_callbacks.wait(timeout=5)
-            if get_ident() == second.ident:
-                assert policy_entered.wait(5)
-        with locked(reservation, *args, **kwargs):
-            yield
 
     def convict(error):
         policy_entered.set()
         assert release_policy.wait(5)
         return True
 
-    def fail(done=None):
+    def fail():
         try:
+            start_callbacks.wait(timeout=5)
             pool.return_connection(original)
         except BaseException as exc:
             errors.append(exc)
         finally:
-            if done is not None:
-                done.set()
+            duplicate_done.set()
 
     host.signal_connection_failure.side_effect = convict
-    first = Thread(target=fail)
-    second = Thread(target=fail, args=(second_done,))
+    workers = (Thread(target=fail), Thread(target=fail))
     try:
-        with patch.object(ConnectionFailureReservation, 'locked', enter):
-            first.start()
-            second.start()
-            assert second_done.wait(2)
-            assert pool._connections[0] is original
-            release_policy.set()
-            for worker in (first, second):
-                worker.join(5)
+        for worker in workers:
+            worker.start()
+        start_callbacks.wait(timeout=5)
+        assert policy_entered.wait(5)
+        assert duplicate_done.wait(2), 'duplicate callback waited for conviction'
+        assert pool._connections[0] is original
     finally:
         release_policy.set()
-        initial_callbacks.abort()
-        for worker in (first, second):
+        start_callbacks.abort()
+        for worker in workers:
             if worker.ident is not None:
                 worker.join(5)
         pool.shutdown()
     assert not errors
-    assert all(not worker.is_alive() for worker in (first, second))
+    assert all(not worker.is_alive() for worker in workers)
     assert original.in_flight == 0
     host.signal_connection_failure.assert_called_once()
     session.cluster.on_down.assert_called_once()

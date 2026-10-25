@@ -965,7 +965,10 @@ class _PublicationConnection(Connection):
             self.is_closed = True
 
 
-def test_duplicate_failed_callback_allows_same_pool_use_response(topology):
+@pytest.mark.parametrize('first_failure_waiting', [False, True],
+                         ids=['already_claimed', 'first_waiting'])
+def test_duplicate_failed_callback_allows_same_pool_use_response(
+        topology, first_failure_waiting):
     from cassandra.protocol import ResultMessage, RESULT_KIND_SET_KEYSPACE
     from cassandra.shard_info import _ShardingInfo
 
@@ -977,7 +980,7 @@ def test_duplicate_failed_callback_allows_same_pool_use_response(topology):
     session.is_shutdown = False
     session.submit = Mock()
     original = _PublicationConnection(host.endpoint, compression=False)
-    original.features = ProtocolFeatures(shard_id=0)
+    original.features = ProtocolFeatures(shard_id=1 if first_failure_waiting else 0)
     candidate = _PublicationConnection(host.endpoint, compression=False)
     candidate.features = ProtocolFeatures(shard_id=0)
     cluster.connection_factory = Mock(side_effect=[original, candidate])
@@ -988,22 +991,48 @@ def test_duplicate_failed_callback_allows_same_pool_use_response(topology):
     host.sharding_info = _ShardingInfo(0, 2, '', '', 0, None, None)
     host.signal_connection_failure = Mock(return_value=False)
     original.in_flight = 2
-    original.is_defunct = True
-    original.last_error = ConnectionException('socket failed', host.endpoint)
-    pool.return_connection(original)
-    assert original.in_flight == 1
-    session.submit.assert_called_once_with(pool._replace, original)
-    pool._replace(original)
-    assert session.submit.call_count == 2
-    session.submit.assert_called_with(pool._open_connection_to_missing_shard, 0)
+    original.last_error = ConnectionResetError('socket reset')
+    if not first_failure_waiting:
+        original.is_defunct = True
+        pool.return_connection(original)
+        assert original.in_flight == 1
+        session.submit.assert_called_once_with(pool._replace, original)
+        pool._replace(original)
+        assert session.submit.call_count == 2
+        session.submit.assert_called_with(pool._open_connection_to_missing_shard, 0)
 
     io_waiting = Event()
+    first_blocking = Event()
     reactor_done = Event()
     response_lock = Lock()
     responses = []
     errors = []
 
+    if first_failure_waiting:
+        work_lock = pool._lock
+
+        class WorkLock:
+            def acquire(self, blocking=True):
+                # A nonblocking ownership probe is not the common checkpoint:
+                # the first callback must actually wait behind pending USE.
+                if blocking and get_ident() == first.ident:
+                    first_blocking.set()
+                return work_lock.acquire(blocking)
+
+            def release(self):
+                work_lock.release()
+
+            def __enter__(self):
+                self.acquire()
+                return self
+
+            def __exit__(self, *args):
+                self.release()
+
+        pool._lock = WorkLock()
+
     def send(message, request_id, cb, **kwargs):
+        assert message.query.startswith('USE ')
         with response_lock:
             responses.append(cb)
         io_waiting.set()
@@ -1031,24 +1060,43 @@ def test_duplicate_failed_callback_allows_same_pool_use_response(topology):
 
     candidate.send_msg = send
     worker = Thread(target=run, args=(lambda: pool._open_connection_to_missing_shard(0),))
+    first = Thread(target=run, args=(lambda: pool.return_connection(original),))
     reactor = Thread(target=run, args=(process_responses,))
+    threads = (worker, first, reactor) if first_failure_waiting else (worker, reactor)
     try:
-        worker.start()
-        assert io_waiting.wait(5)
-        reactor.start()
-        assert reactor_done.wait(2), 'duplicate failure blocked same-pool USE response'
+        try:
+            worker.start()
+            assert io_waiting.wait(5)
+            if first_failure_waiting:
+                original.is_defunct = True
+                first.start()
+                assert first_blocking.wait(5), 'first failure did not wait for USE'
+            reactor.start()
+            progressed = reactor_done.wait(2)
+        finally:
+            respond()
+            for thread in threads:
+                if thread.ident is not None:
+                    thread.join(5)
+        assert all(not thread.is_alive() for thread in threads)
+        assert not errors
+        assert original.in_flight == candidate.in_flight == 0
+        assert candidate.keyspace == 'ks'
+        host.signal_connection_failure.assert_called_once_with(original.last_error)
+        assert host.is_up
+        assert not pool.is_shutdown
+        if first_failure_waiting:
+            session.submit.assert_called_once_with(pool._replace, original)
+            assert session._pools[host] is pool
+            borrowed, _ = pool.borrow_connection(timeout=0)
+            assert borrowed is candidate
+            pool.return_connection(borrowed)
+            assert candidate.in_flight == 0
+        else:
+            assert session.submit.call_count == 2
+        assert progressed, 'duplicate failure blocked same-pool USE response'
     finally:
-        respond()
-        for thread in (worker, reactor):
-            if thread.ident is not None:
-                thread.join(5)
         pool.shutdown()
-    assert all(not thread.is_alive() for thread in (worker, reactor))
-    assert not errors
-    assert original.in_flight == candidate.in_flight == 0
-    assert candidate.keyspace == 'ks'
-    host.signal_connection_failure.assert_called_once_with(original.last_error)
-    assert session.submit.call_count == 2
 
 
 @pytest.mark.parametrize('independent_healthy_pool', [False, True])
