@@ -655,6 +655,11 @@ class HostConnection(object):
                 self._stream_available_condition.notify()
 
         if connection.is_defunct or connection.is_closed:
+            if connection.signaled_error and not replace_only and \
+                    (not self.shutdown_on_error or
+                     (isinstance(connection.last_error, ConnectionSendError) and
+                      not heartbeat_failed)):
+                return
             reservation = _lifecycle.ConnectionFailureReservation(self, connection)
             with reservation.locked():
                 current = reservation.owns_locked()
@@ -684,16 +689,14 @@ class HostConnection(object):
                 is_down = True
 
             if is_down:
-                # Policy and health inspection can replace the pool or socket.
-                # Carry ownership through DOWN admission and pool shutdown.
+                # Retire before inspecting other sessions: concurrent failures
+                # must not discount each other's doomed sibling connections.
+                self.shutdown(_failure=reservation)
                 if reservation.is_current():
-                    try:
-                        self._session.cluster.on_down(
-                            self.host, is_host_addition=False,
-                            _pool_failure=reservation)
-                    finally:
-                        self.shutdown(_failure=reservation)
-                else:
+                    self._session.cluster.on_down(
+                        self.host, is_host_addition=False,
+                        _pool_failure=reservation)
+                elif not reservation.retired:
                     with self._lock:
                         self._trash.discard(connection)
                     connection.close()
@@ -789,6 +792,10 @@ class HostConnection(object):
             with self._membership_lock:
                 if self.is_shutdown:
                     return
+                if _failure is not None:
+                    # Only this reservation may retain failure authority after
+                    # its own guarded retirement clears the shard slots.
+                    _failure.retired = True
                 self.is_shutdown = True
                 connections_to_close = self._connections.copy()
                 self._connections.clear()

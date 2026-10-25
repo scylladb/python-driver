@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 import logging
 import uuid
 from cassandra.protocol_features import ProtocolFeatures
@@ -19,10 +20,11 @@ from cassandra.protocol_features import ProtocolFeatures
 from cassandra.shard_info import _ShardingInfo
 
 import unittest
-from threading import Thread, Event, Lock, RLock
+from threading import Barrier, Thread, Event, Lock, RLock, get_ident
 from unittest.mock import Mock, NonCallableMagicMock, MagicMock, patch
 
 from cassandra.cluster import Cluster, Session, ShardAwareOptions
+from cassandra._lifecycle import ConnectionFailureReservation
 from cassandra.connection import Connection, ConnectionBusy, ConnectionException, ConnectionSendError, DefaultEndPoint
 from cassandra.pool import HostConnection
 from cassandra.pool import Host, NoConnectionsAvailable
@@ -176,7 +178,7 @@ def test_failure_policy_cannot_affect_replacement(socket_pool, convicted, change
         replacement.close.assert_not_called()
 
 
-@pytest.mark.parametrize('change', ['socket', 'pool'])
+@pytest.mark.parametrize('change', ['pool', 'endpoint', 'health'])
 def test_down_admission_rechecks_failed_socket(socket_pool, change):
     host, session, pool, original, replacement = socket_pool
     cluster = Cluster(contact_points=[])
@@ -192,23 +194,160 @@ def test_down_admission_rechecks_failed_socket(socket_pool, change):
 
     def distance(current):
         with session._lock, host.lock, pool._lock:
-            if change == 'socket':
-                pool._connections[0] = replacement
-            else:
+            if change == 'pool':
                 session._pools[host] = Mock(
                     host=host, endpoint=host.endpoint, is_shutdown=False)
+            elif change == 'endpoint':
+                host.endpoint = DefaultEndPoint('127.0.0.2')
+            else:
+                host._health_generation += 1
         return HostDistance.IGNORED
 
     cluster.profile_manager.distance.side_effect = distance
     try:
         pool.return_connection(original)
         assert host.is_up
-        assert not session._pools[host].is_shutdown
+        assert pool.is_shutdown
+        if change == 'pool':
+            assert not session._pools[host].is_shutdown
         replacement.close.assert_not_called()
         cluster.on_down_potentially_blocking.assert_not_called()
     finally:
         pool.shutdown()
         cluster.shutdown()
+
+
+@pytest.mark.parametrize('change', ['pool', 'endpoint', 'host', 'session', 'cluster'])
+def test_retirement_cleanup_cannot_down_superseding_owner(socket_pool, change):
+    host, session, pool, original, replacement = socket_pool
+    host.signal_connection_failure.return_value = True
+    pool.borrow_connection(timeout=0)
+    original.is_defunct = True
+    successor = Mock(is_shutdown=False)
+
+    def supersede():
+        # Socket cleanup is outside ownership guards, so it can synchronously
+        # change topology or publish a successor before DOWN inspection starts.
+        with session._lock, host.lock:
+            assert pool._lock.acquire(False), 'cleanup retained the pool work lock'
+            try:
+                if change == 'pool':
+                    session._pools[host] = successor
+                elif change == 'endpoint':
+                    host.endpoint = DefaultEndPoint('127.0.0.2')
+                elif change == 'host':
+                    host._is_removed = True
+                elif change == 'session':
+                    session.is_shutdown = True
+                else:
+                    session.cluster.is_shutdown = True
+            finally:
+                pool._lock.release()
+
+    original.close.side_effect = supersede
+    pool.return_connection(original)
+    assert pool.is_shutdown
+    assert original.in_flight == 0
+    original.close.assert_called_once()
+    session.cluster.on_down.assert_not_called()
+    replacement.close.assert_not_called()
+    successor.shutdown.assert_not_called()
+
+
+@pytest.mark.parametrize('retirement', ['owned', 'generic', 'already_shutdown', 'stale', 'other_failure'])
+def test_only_own_guarded_retirement_can_admit_down(socket_pool, retirement):
+    host, session, pool, original, replacement = socket_pool
+    cluster = Cluster(contact_points=[])
+    session.cluster = cluster
+    cluster.sessions = (session,)
+    cluster.profile_manager.distance = Mock(return_value=HostDistance.IGNORED)
+    cluster.on_down_potentially_blocking = Mock(return_value=Future())
+    host.set_up()
+    failure = ConnectionFailureReservation(pool, original)
+    try:
+        if retirement == 'generic':
+            pool.shutdown()
+        elif retirement == 'already_shutdown':
+            pool.shutdown()
+            pool.shutdown(_failure=failure)
+        elif retirement == 'stale':
+            pool._connections[0] = replacement
+            pool.shutdown(_failure=failure)
+        elif retirement == 'other_failure':
+            pool.shutdown(_failure=ConnectionFailureReservation(pool, original))
+            pool.shutdown(_failure=failure)
+        else:
+            pool.shutdown(_failure=failure)
+
+        admitted = cluster.on_down(host, False, _pool_failure=failure)
+        assert admitted is (retirement == 'owned')
+        assert host.is_up is (retirement != 'owned')
+        assert cluster.on_down_potentially_blocking.call_count == int(retirement == 'owned')
+    finally:
+        pool.shutdown()
+        cluster.shutdown()
+
+
+def test_racing_first_callbacks_preserve_convicting_owner(socket_pool):
+    host, session, pool, original, _ = socket_pool
+    original.in_flight = 2
+    original.is_defunct = True
+    initial_callbacks = Barrier(2)
+    policy_entered, release_policy, second_done = Event(), Event(), Event()
+    errors = []
+    locked = ConnectionFailureReservation.locked
+
+    @contextmanager
+    def enter(reservation, *args, **kwargs):
+        if not getattr(reservation, '_test_entered', False):
+            reservation._test_entered = True
+            # Both callbacks have passed the unsignaled fast check before
+            # the first callback publishes its conviction-in-progress.
+            initial_callbacks.wait(timeout=5)
+            if get_ident() == second.ident:
+                assert policy_entered.wait(5)
+        with locked(reservation, *args, **kwargs):
+            yield
+
+    def convict(error):
+        policy_entered.set()
+        assert release_policy.wait(5)
+        return True
+
+    def fail(done=None):
+        try:
+            pool.return_connection(original)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            if done is not None:
+                done.set()
+
+    host.signal_connection_failure.side_effect = convict
+    first = Thread(target=fail)
+    second = Thread(target=fail, args=(second_done,))
+    try:
+        with patch.object(ConnectionFailureReservation, 'locked', enter):
+            first.start()
+            second.start()
+            assert second_done.wait(2)
+            assert pool._connections[0] is original
+            release_policy.set()
+            for worker in (first, second):
+                worker.join(5)
+    finally:
+        release_policy.set()
+        initial_callbacks.abort()
+        for worker in (first, second):
+            if worker.ident is not None:
+                worker.join(5)
+        pool.shutdown()
+    assert not errors
+    assert all(not worker.is_alive() for worker in (first, second))
+    assert original.in_flight == 0
+    host.signal_connection_failure.assert_called_once()
+    session.cluster.on_down.assert_called_once()
+    session.submit.assert_not_called()
 
 
 @pytest.mark.parametrize('independent_pool', [False, True])

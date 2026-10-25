@@ -13,13 +13,14 @@
 # limitations under the License.
 
 from concurrent.futures import Future
-from threading import Event, Lock, Thread, get_ident
+from threading import Barrier, Event, Lock, Thread, get_ident
 from unittest.mock import Mock, patch
 
 import pytest
 
 from cassandra.cluster import Cluster, ControlConnection
-from cassandra._lifecycle import LifecycleCoordinator, PoolFailureReservation
+from cassandra._lifecycle import (
+    ConnectionFailureReservation, LifecycleCoordinator, PoolFailureReservation)
 from cassandra.connection import (
     Connection, ConnectionException, DefaultEndPoint)
 from cassandra.policies import HostDistance
@@ -964,6 +965,261 @@ class _PublicationConnection(Connection):
             self.is_closed = True
 
 
+def test_duplicate_failed_callback_allows_same_pool_use_response(topology):
+    from cassandra.protocol import ResultMessage, RESULT_KIND_SET_KEYSPACE
+    from cassandra.shard_info import _ShardingInfo
+
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session.keyspace = None
+    session.is_shutdown = False
+    session.submit = Mock()
+    original = _PublicationConnection(host.endpoint, compression=False)
+    original.features = ProtocolFeatures(shard_id=0)
+    candidate = _PublicationConnection(host.endpoint, compression=False)
+    candidate.features = ProtocolFeatures(shard_id=0)
+    cluster.connection_factory = Mock(side_effect=[original, candidate])
+    cluster.shard_aware_options.disable_shardaware_port = True
+    pool = HostConnection(host, HostDistance.LOCAL, session)
+    session._pools[host] = pool
+    session.keyspace = pool._keyspace = original.keyspace = 'ks'
+    host.sharding_info = _ShardingInfo(0, 2, '', '', 0, None, None)
+    host.signal_connection_failure = Mock(return_value=False)
+    original.in_flight = 2
+    original.is_defunct = True
+    original.last_error = ConnectionException('socket failed', host.endpoint)
+    pool.return_connection(original)
+    assert original.in_flight == 1
+    session.submit.assert_called_once_with(pool._replace, original)
+    pool._replace(original)
+    assert session.submit.call_count == 2
+    session.submit.assert_called_with(pool._open_connection_to_missing_shard, 0)
+
+    io_waiting = Event()
+    reactor_done = Event()
+    response_lock = Lock()
+    responses = []
+    errors = []
+
+    def send(message, request_id, cb, **kwargs):
+        with response_lock:
+            responses.append(cb)
+        io_waiting.set()
+        return 0
+
+    def respond():
+        with response_lock:
+            callbacks = list(responses)
+            responses.clear()
+        for callback in callbacks:
+            callback(ResultMessage(RESULT_KIND_SET_KEYSPACE))
+
+    def run(fn):
+        try:
+            fn()
+        except BaseException as exc:
+            errors.append(exc)
+
+    def process_responses():
+        # The same reactor must finish this redundant failure callback before
+        # delivering the USE response that releases the replacement work lock.
+        pool.return_connection(original)
+        respond()
+        reactor_done.set()
+
+    candidate.send_msg = send
+    worker = Thread(target=run, args=(lambda: pool._open_connection_to_missing_shard(0),))
+    reactor = Thread(target=run, args=(process_responses,))
+    try:
+        worker.start()
+        assert io_waiting.wait(5)
+        reactor.start()
+        assert reactor_done.wait(2), 'duplicate failure blocked same-pool USE response'
+    finally:
+        respond()
+        for thread in (worker, reactor):
+            if thread.ident is not None:
+                thread.join(5)
+        pool.shutdown()
+    assert all(not thread.is_alive() for thread in (worker, reactor))
+    assert not errors
+    assert original.in_flight == candidate.in_flight == 0
+    assert candidate.keyspace == 'ks'
+    host.signal_connection_failure.assert_called_once_with(original.last_error)
+    assert session.submit.call_count == 2
+
+
+@pytest.mark.parametrize('independent_healthy_pool', [False, True])
+def test_concurrent_session_failures_retire_before_health_inspection(
+        topology, independent_healthy_pool):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    sessions, pools, failed, siblings = [], [], [], []
+    for index in range(2 + int(independent_healthy_pool)):
+        session = new_session_with_pool_state()
+        session.cluster = cluster
+        session.keyspace = None
+        session.is_shutdown = False
+        session.shutdown = Mock()
+        session.on_down = Mock()
+        connection = _PublicationConnection(host.endpoint, compression=False)
+        connection.features = ProtocolFeatures(shard_id=0)
+        cluster.connection_factory = Mock(return_value=connection)
+        pool = HostConnection(host, HostDistance.LOCAL, session)
+        session._pools[host] = pool
+        sessions.append(session)
+        pools.append(pool)
+        if index < 2:
+            sibling = _PublicationConnection(host.endpoint, compression=False)
+            sibling.features = ProtocolFeatures(shard_id=1)
+            pool._connections[1] = sibling
+            siblings.append(sibling)
+            connection.is_defunct = True
+            connection.in_flight = 1
+            connection.last_error = ConnectionException('shard failed', host.endpoint)
+            failed.append(connection)
+    cluster.sessions = tuple(sessions)
+    host.signal_connection_failure = Mock(return_value=True)
+    cluster.control_connection.on_down = Mock()
+    snapshots = Barrier(2)
+    for session in sessions[:2]:
+        get_state = session.get_pool_state
+
+        def inspect(get_state=get_state):
+            state = get_state()
+            # Both failures capture the other session's real pool health
+            # before either can finish DOWN admission or its old cleanup.
+            snapshots.wait(timeout=5)
+            return state
+
+        session.get_pool_state = inspect
+
+    errors, scheduled, order = [], [], []
+    cluster.profile_manager.on_down.side_effect = lambda _: order.append('down')
+    cluster._start_reconnector.side_effect = lambda *a, **kw: order.append('recovery')
+
+    def delayed_submit(fn, *args, **kwargs):
+        scheduled.append((fn, args, kwargs))
+        return Future()
+
+    def fail(index):
+        try:
+            pools[index].return_connection(failed[index])
+        except BaseException as exc:
+            errors.append(exc)
+
+    workers = [Thread(target=fail, args=(index,)) for index in range(2)]
+    try:
+        with patch.object(cluster.executor, 'submit', side_effect=delayed_submit):
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(7)
+            assert all(not worker.is_alive() for worker in workers)
+            assert not errors
+            assert all(pool.is_shutdown for pool in pools[:2])
+            assert all(connection.is_closed for connection in failed + siblings)
+            assert all(connection.in_flight == 0 for connection in failed)
+            assert host.is_up is independent_healthy_pool
+            assert len(scheduled) == int(not independent_healthy_pool)
+            # Check actual FIFO delivery and recovery, including a later
+            # notification. A stale second failure must not duplicate DOWN.
+            with cluster._lifecycle.transaction(drain=False):
+                cluster._lifecycle.submit(order.append, 'later')
+            cluster._lifecycle.drain()
+            for fn, args, kwargs in scheduled:
+                fn(*args, **kwargs)
+            assert order == (['later'] if independent_healthy_pool else
+                             ['down', 'recovery', 'later'])
+            assert cluster._start_reconnector.call_count == int(not independent_healthy_pool)
+            if independent_healthy_pool:
+                healthy, _ = pools[2].borrow_connection(timeout=0)
+                assert not healthy.is_closed
+                pools[2].return_connection(healthy)
+                assert not pools[2].is_shutdown
+    finally:
+        snapshots.abort()
+        for worker in workers:
+            if worker.ident is not None:
+                worker.join(5)
+        for pool in pools:
+            pool.shutdown()
+
+
+@pytest.mark.parametrize('supersede', [
+    None, 'pool', 'endpoint', 'host', 'session', 'cluster', 'health',
+])
+def test_retired_failure_admission_does_not_wait_for_pool_work(
+        topology, supersede):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session.keyspace = None
+    session.is_shutdown = False
+    session.shutdown = Mock()
+    connection = _PublicationConnection(host.endpoint, compression=False)
+    connection.features = ProtocolFeatures(shard_id=0)
+    cluster.connection_factory = Mock(return_value=connection)
+    pool = HostConnection(host, HostDistance.LOCAL, session)
+    session._pools[host] = pool
+    cluster.sessions = (session,)
+    successor = HostConnection(host, HostDistance.IGNORED, session)
+    reservation = ConnectionFailureReservation(pool, connection)
+    pool.shutdown(_failure=reservation)
+    cluster.on_down_potentially_blocking = Mock(return_value=Future())
+
+    def distance(_host):
+        with session._lock, host.lock:
+            if supersede == 'pool':
+                session._pools[host] = successor
+            elif supersede == 'endpoint':
+                host.endpoint = DefaultEndPoint('127.0.0.2')
+            elif supersede == 'host':
+                host._is_removed = True
+            elif supersede == 'session':
+                session.is_shutdown = True
+            elif supersede == 'cluster':
+                cluster.is_shutdown = True
+            elif supersede == 'health':
+                assert cluster._lifecycle.mark_ready(host)
+        return HostDistance.LOCAL
+
+    cluster.profile_manager.distance.side_effect = distance
+    done = Event()
+    admitted, errors = [], []
+
+    def admit():
+        try:
+            admitted.append(cluster.on_down(host, False, _pool_failure=reservation))
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    worker = Thread(target=admit)
+    try:
+        # After retirement the shard map has no authority left to inspect.
+        # Its work lock must not delay admission or hide superseding topology.
+        with pool._lock:
+            worker.start()
+            assert done.wait(2), 'retired failure waited for pool work'
+        worker.join(5)
+        assert not worker.is_alive()
+        assert not errors
+        assert admitted == [supersede is None]
+        assert host.is_up is (supersede is not None)
+        assert cluster.on_down_potentially_blocking.call_count == int(supersede is None)
+        assert not successor.is_shutdown
+    finally:
+        worker.join(5)
+        cluster.is_shutdown = False
+        pool.shutdown()
+        successor.shutdown()
+
+
 @pytest.mark.parametrize('failure', ['close', 'defunct'])
 def test_failed_candidate_cannot_fence_down_before_publication(
         topology, failure):
@@ -1191,12 +1447,9 @@ def test_unpublished_failure_keeps_session_available_for_publication(topology):
     host.signal_connection_failure.assert_not_called()
 
 
-@pytest.mark.parametrize('phase, supersede', [
-    ('return', None), ('down', None), ('return', 'pool'),
-    ('down', 'pool'), ('down', 'health'),
-])
+@pytest.mark.parametrize('supersede', [None, 'pool'])
 def test_current_failure_contention_allows_other_host_response(
-        topology, phase, supersede):
+        topology, supersede):
     from cassandra.protocol import ResultMessage, RESULT_KIND_SET_KEYSPACE
     from cassandra.shard_info import _ShardingInfo
 
@@ -1229,7 +1482,6 @@ def test_current_failure_contention_allows_other_host_response(
         host.signal_connection_failure = Mock(return_value=True)
 
     io_waiting = Event()
-    at_down = Event()
     contended = Event()
     reactor_done = Event()
     response_lock = Lock()
@@ -1260,15 +1512,6 @@ def test_current_failure_contention_allows_other_host_response(
         return future
 
     cluster.on_down_potentially_blocking = Mock(side_effect=admit)
-    begin_down = cluster._lifecycle.begin_down
-
-    def begin(host, *args, **kwargs):
-        if phase == 'down' and host is hosts[0]:
-            at_down.set()
-            assert io_waiting.wait(5)
-        return begin_down(host, *args, **kwargs)
-
-    cluster._lifecycle.begin_down = begin
     work_lock = pools[0]._lock
 
     class ObservedLock:
@@ -1294,33 +1537,24 @@ def test_current_failure_contention_allows_other_host_response(
         except BaseException as exc:
             errors.append(exc)
 
-    def open_shard():
-        if phase == 'down':
-            assert at_down.wait(5)
-        pools[0]._open_connection_to_missing_shard(1)
-
     def process_responses():
         # One reactor must finish the other host's failure callback before
         # it can deliver the USE response that releases the pool work lock.
         if supersede == 'pool':
             with session._lock, hosts[0].lock:
                 session._pools[hosts[0]] = successor
-        elif supersede == 'health':
-            assert cluster._lifecycle.mark_ready(hosts[0])
         pools[1].return_connection(connections[1])
         respond()
         reactor_done.set()
 
     failure = Thread(target=run, args=(lambda: pools[0].return_connection(
         connections[0]),))
-    worker = Thread(target=run, args=(open_shard,))
+    worker = Thread(target=run, args=(lambda: pools[0]._open_connection_to_missing_shard(1),))
     reactor = Thread(target=run, args=(process_responses,))
     try:
         worker.start()
-        if phase == 'return':
-            assert io_waiting.wait(5)
-        failure.start()
         assert io_waiting.wait(5)
+        failure.start()
         assert contended.wait(5)
         reactor.start()
         assert reactor_done.wait(2), 'cross-host failure blocked reactor progress'
@@ -1342,8 +1576,7 @@ def test_current_failure_contention_allows_other_host_response(
     assert hosts[0].is_up is bool(supersede)
     assert not hosts[1].is_up
     hosts[1].signal_connection_failure.assert_called_once()
-    assert hosts[0].signal_connection_failure.call_count == int(
-        phase == 'down' or supersede != 'pool')
+    assert hosts[0].signal_connection_failure.call_count == int(supersede != 'pool')
     if successor is not None:
         assert session._pools[hosts[0]] is successor
         assert not successor.is_shutdown
