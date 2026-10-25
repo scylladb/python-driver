@@ -39,10 +39,6 @@ class EndpointMoveRejected(ValueError):
     """A batch could not publish because its metadata snapshot went stale."""
 
 
-class ConnectionFailureLockContended(Exception):
-    """Retry admission after releasing the enclosing lifecycle transaction."""
-
-
 class PoolFailureReservation:
     """Fence an admitted pool failure without locking across policy callbacks."""
 
@@ -64,7 +60,7 @@ class PoolFailureReservation:
             return self.owns_locked()
 
     @contextmanager
-    def locked(self, wait=True):
+    def locked(self):
         with self.session._lock:
             with self.host.lock:
                 yield
@@ -79,9 +75,10 @@ class ConnectionFailureReservation:
         self.session = pool._session_ref()
         self.host = pool.host
         self.replacing = replacing
+        self.retired = False
 
     @contextmanager
-    def locked(self, wait=True):
+    def locked(self):
         if self.session is None:
             yield
             return
@@ -90,8 +87,10 @@ class ConnectionFailureReservation:
                 with self.host.lock:
                     # Unpublished candidates can hold their work lock while
                     # publication waits for Session under the membership lock.
-                    # Only a current pool needs its shard ownership inspected.
-                    if self.session._pools.get(self.host) is not self.pool:
+                    # A completed retirement no longer needs shard ownership
+                    # inspected; its receipt retains only Session/Host guards.
+                    if (self.retired or
+                            self.session._pools.get(self.host) is not self.pool):
                         yield
                         return
                     if self.pool._lock.acquire(False):
@@ -100,30 +99,26 @@ class ConnectionFailureReservation:
                         finally:
                             self.pool._lock.release()
                         return
-            if not wait:
-                raise ConnectionFailureLockContended()
-            self.wait()
-
-    def wait(self):
-        # Never retain work while reacquiring Session/Host. DOWN callers also
-        # leave their lifecycle transaction before waiting and retry admission.
-        with self.pool._lock:
-            pass
+            # Never retain work while reacquiring Session/Host. Active socket
+            # failures may await I/O under work before they can retire a pool.
+            with self.pool._lock:
+                pass
 
     def owns_locked(self):
         if (self.session is None or
                 self.session._pools.get(self.host) is not self.pool):
             return False
-        current = self.pool._connections.get(self.connection.features.shard_id)
-        owns_slot = (current is self.connection or
-                     (self.replacing and current is None and
-                      self.pool._replacement_connections.get(
-                          self.connection.features.shard_id) is self.connection))
+        owns_slot = self.retired
+        if not self.retired and not self.pool.is_shutdown:
+            current = self.pool._connections.get(self.connection.features.shard_id)
+            owns_slot = (current is self.connection or
+                         (self.replacing and current is None and
+                          self.pool._replacement_connections.get(
+                              self.connection.features.shard_id) is self.connection))
         return (not self.session.is_shutdown and
                 not self.session.cluster.is_shutdown and
                 not self.host._is_removed and
-                self.host.endpoint == self.pool.endpoint and
-                not self.pool.is_shutdown and owns_slot)
+                self.host.endpoint == self.pool.endpoint and owns_slot)
 
     def is_current(self):
         with self.locked():
@@ -265,7 +260,7 @@ class LifecycleCoordinator:
     def begin_down(self, host, health_generation, connected=False,
                    expect_down=False, pool_failure=None):
         """Return (generation, retry_only), or None if DOWN is discounted."""
-        failure_lock = (pool_failure.locked(wait=False)
+        failure_lock = (pool_failure.locked()
                         if pool_failure is not None else host.lock)
         with failure_lock:
             if (self.closed or host._is_removed or connected or
@@ -291,45 +286,41 @@ class LifecycleCoordinator:
                       pool_failure=None):
         # Publish DOWN state and FIFO admission together. Do not drain on
         # this caller; the executor (or another drainer) owns delivery.
-        while True:
-            try:
-                with self.transaction(drain=False):
-                    admission = self.begin_down(
-                        host, health_generation, connected=connected,
-                        expect_down=expect_host_to_be_down,
-                        pool_failure=pool_failure)
-                    if admission is None:
-                        return False
-                    down_event_generation, restart_reconnector = admission
+        with self.transaction(drain=False):
+            admission = self.begin_down(
+                host, health_generation, connected=connected,
+                expect_down=expect_host_to_be_down,
+                pool_failure=pool_failure)
+            if admission is None:
+                return False
+            down_event_generation, restart_reconnector = admission
 
-                    if restart_reconnector:
-                        if on_add_reconnection is None:
-                            future = self._cluster._restart_reconnector(
-                                host, is_host_addition, down_event_generation)
-                        else:
-                            future = self._cluster._restart_reconnector(
-                                host, is_host_addition, down_event_generation,
-                                on_add_reconnection=on_add_reconnection)
-                        if future is None:
-                            self.finish_down(host, down_event_generation)
-                        # Restarting the host reconnector does not dispatch
-                        # DOWN callbacks that reconnect the control connection.
-                        return False
+            if restart_reconnector:
+                if on_add_reconnection is None:
+                    future = self._cluster._restart_reconnector(
+                        host, is_host_addition, down_event_generation)
+                else:
+                    future = self._cluster._restart_reconnector(
+                        host, is_host_addition, down_event_generation,
+                        on_add_reconnection=on_add_reconnection)
+                if future is None:
+                    self.finish_down(host, down_event_generation)
+                # Restarting the host reconnector does not dispatch
+                # DOWN callbacks that reconnect the control connection.
+                return False
 
-                    log.warning("Host %s has been marked down", host)
+            log.warning("Host %s has been marked down", host)
 
-                    if on_add_reconnection is None:
-                        future = self._cluster.on_down_potentially_blocking(
-                            host, is_host_addition, down_event_generation)
-                    else:
-                        future = self._cluster.on_down_potentially_blocking(
-                            host, is_host_addition, down_event_generation,
-                            on_add_reconnection=on_add_reconnection)
-                    if future is None:
-                        self.finish_down(host, down_event_generation)
-                    return future is not None
-            except ConnectionFailureLockContended:
-                pool_failure.wait()
+            if on_add_reconnection is None:
+                future = self._cluster.on_down_potentially_blocking(
+                    host, is_host_addition, down_event_generation)
+            else:
+                future = self._cluster.on_down_potentially_blocking(
+                    host, is_host_addition, down_event_generation,
+                    on_add_reconnection=on_add_reconnection)
+            if future is None:
+                self.finish_down(host, down_event_generation)
+            return future is not None
 
     @staticmethod
     def finish_down(host, generation):
