@@ -728,7 +728,7 @@ class HostConnection(object):
                     connection = self._session.cluster.connection_factory(self.endpoint,
                                                                           on_orphaned_stream_released=self.on_orphaned_stream_released)
                     try:
-                        self._sync_keyspace(connection, publish=True)
+                        self._sync_keyspace(connection)
                     except Exception:
                         failed_connection = connection
                         raise
@@ -909,7 +909,7 @@ class HostConnection(object):
                             self.host
                         )
                     try:
-                        self._sync_keyspace(conn, publish=True)
+                        self._sync_keyspace(conn)
                     except Exception as exc:
                         self._connecting.discard(shard_id)
                         sync_error = exc
@@ -1021,7 +1021,7 @@ class HostConnection(object):
             for conn in self._trash:
                 conn.close()
 
-    def _sync_keyspace(self, conn, publish=False):
+    def _sync_keyspace(self, conn):
         """
         Synchronize before publishing membership, without a network-wait
         guard.
@@ -1034,8 +1034,7 @@ class HostConnection(object):
             with self._membership_lock:
                 if self._keyspace != target:
                     continue
-                if publish:
-                    self._connections[conn.features.shard_id] = conn
+                self._connections[conn.features.shard_id] = conn
                 break
         with self._stream_available_condition:
             self._stream_available_condition.notify_all()
