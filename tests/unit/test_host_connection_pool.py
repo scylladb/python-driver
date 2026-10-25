@@ -830,18 +830,17 @@ class HostConnectionTests(_PoolTests):
         assert conn.keyspace == pool._keyspace
 
     def test_failed_replacement_keyspace_sync_removes_connection(self):
-        host = Mock(spec=Host, address='ip1', sharding_info=None)
-        session = self.make_session()
-        session.cluster.shard_aware_options.disable = True
-        old_conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
-                                is_closed=False, max_request_id=100, lock=Lock())
-        old_conn.features.shard_id = 0
-        old_conn.features.sharding_info = None
-        new_conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
-                                is_closed=False, max_request_id=100, lock=Lock())
-        new_conn.features.shard_id = 0
-        session.cluster.connection_factory.side_effect = [old_conn, new_conn]
-        pool = self.make_pool(host, session)
+        host, session, pool, old_conn, new_conn = _make_socket_pool()
+        pool._keyspace = 'foobarkeyspace'
+        # Regular-port replacements can land on a different shard.
+        new_conn.features = ProtocolFeatures(shard_id=1)
+        healthy = HashableMock(
+            spec=Connection, in_flight=0, is_defunct=False, is_closed=False,
+            max_request_id=100, lock=Lock(), keyspace=None,
+            features=ProtocolFeatures(shard_id=0))
+        healthy.set_keyspace_blocking.side_effect = \
+            lambda keyspace: setattr(healthy, 'keyspace', keyspace)
+        session.cluster.connection_factory.side_effect = [new_conn, healthy]
 
         def set_keyspace(keyspace):
             if keyspace == 'foobarkeyspace':
@@ -851,11 +850,26 @@ class HostConnectionTests(_PoolTests):
                 raise ConnectionException('sync failed', host.endpoint)
 
         new_conn.set_keyspace_blocking.side_effect = set_keyspace
-        pool._replace(old_conn)
+        old_conn.is_defunct = True
+        old_conn.in_flight = 1
+        try:
+            pool.return_connection(old_conn)
+            replace, retired = session.submit.call_args.args
+            replace(retired)
 
-        assert 0 not in pool._connections
-        new_conn.close.assert_called_once()
-        session.submit.assert_called_once_with(pool._replace, new_conn)
+            assert not pool._connections
+            new_conn.close.assert_called_once()
+            replace, retired = session.submit.call_args.args
+            replace(retired)
+
+            borrowed, _ = pool.borrow_connection(timeout=0)
+            assert borrowed is healthy
+            assert healthy.keyspace == pool._keyspace == 'newks'
+            assert not pool._replacement_connections
+            healthy.close.assert_not_called()
+            pool.return_connection(borrowed)
+        finally:
+            pool.shutdown()
 
     def test_failed_shard_keyspace_sync_allows_retry(self):
         host = Mock(spec=Host, address='ip1', sharding_info=None)
