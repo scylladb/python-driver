@@ -30,15 +30,17 @@ from cassandra.policies import HostDistance, SimpleConvictionPolicy
 import pytest
 
 from tests.unit.util import HashableMock
+from tests.unit.utils import new_session_with_pool_state
 
 LOGGER = logging.getLogger(__name__)
 
 
-def _make_socket_pool():
+def _make_socket_pool(session=None):
     host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
     host.signal_connection_failure = Mock(return_value=False)
-    session = NonCallableMagicMock(
-        spec=Session, keyspace=None, _lock=RLock(), is_shutdown=False)
+    if session is None:
+        session = NonCallableMagicMock(
+            spec=Session, keyspace=None, _lock=RLock(), is_shutdown=False)
     session.cluster.is_shutdown = False
     session.cluster.shard_aware_options.disable = True
 
@@ -206,6 +208,55 @@ def test_down_admission_rechecks_failed_socket(socket_pool, change):
         cluster.on_down_potentially_blocking.assert_not_called()
     finally:
         pool.shutdown()
+        cluster.shutdown()
+
+
+@pytest.mark.parametrize('independent_pool', [False, True])
+def test_failed_pool_cannot_discount_its_own_down(independent_pool):
+    session = new_session_with_pool_state()
+    session.cluster = Mock()
+    session.keyspace = None
+    session.is_shutdown = False
+    host, session, pool, original, sibling = _make_socket_pool(session)
+    sibling.features = ProtocolFeatures(shard_id=1)
+    pool._connections[1] = sibling
+
+    other_session = new_session_with_pool_state()
+    other_session.cluster = session.cluster
+    other_session.keyspace = None
+    other_session.is_shutdown = False
+    healthy = HashableMock(
+        spec=Connection, in_flight=0, is_closed=False, is_defunct=False,
+        orphaned_request_ids=set(), features=ProtocolFeatures(shard_id=0))
+    session.cluster.connection_factory.side_effect = [healthy]
+    other_pool = HostConnection(host, HostDistance.LOCAL, other_session)
+    other_session._pools[host] = other_pool
+
+    cluster = Cluster(contact_points=[])
+    session.cluster = other_session.cluster = cluster
+    cluster.sessions = ((session, other_session) if independent_pool
+                        else (session,))
+    cluster.profile_manager.distance = Mock(return_value=HostDistance.LOCAL)
+    cluster.on_down_potentially_blocking = Mock(return_value=Future())
+    host.set_up()
+    host.signal_connection_failure.return_value = True
+    original.in_flight = 1
+    original.is_defunct = True
+    original.last_error = ConnectionException('one shard failed', host.endpoint)
+    try:
+        assert cluster._discount_down_events
+        assert session.get_pool_state()[host]['open_count'] == 1
+        pool.return_connection(original)
+        assert original.in_flight == 0
+        assert pool.is_shutdown
+        assert host.is_up is independent_pool
+        assert (cluster.on_down_potentially_blocking.call_count ==
+                (0 if independent_pool else 1))
+        assert not other_pool.is_shutdown
+        healthy.close.assert_not_called()
+    finally:
+        pool.shutdown()
+        other_pool.shutdown()
         cluster.shutdown()
 
 
