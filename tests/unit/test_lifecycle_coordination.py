@@ -1006,6 +1006,7 @@ def test_duplicate_failed_callback_allows_same_pool_use_response(
     reactor_done = Event()
     response_lock = Lock()
     responses = []
+    cleanup_started = False
     errors = []
 
     if first_failure_waiting:
@@ -1034,12 +1035,18 @@ def test_duplicate_failed_callback_allows_same_pool_use_response(
     def send(message, request_id, cb, **kwargs):
         assert message.query.startswith('USE ')
         with response_lock:
-            responses.append(cb)
+            respond_now = cleanup_started
+            if not respond_now:
+                responses.append(cb)
+        if respond_now:
+            cb(ResultMessage(RESULT_KIND_SET_KEYSPACE))
         io_waiting.set()
         return 0
 
-    def respond():
+    def respond(cleanup=False):
+        nonlocal cleanup_started
         with response_lock:
+            cleanup_started |= cleanup
             callbacks = list(responses)
             responses.clear()
         for callback in callbacks:
@@ -1074,7 +1081,7 @@ def test_duplicate_failed_callback_allows_same_pool_use_response(
             reactor.start()
             progressed = reactor_done.wait(2)
         finally:
-            respond()
+            respond(cleanup=True)
             for thread in threads:
                 if thread.ident is not None:
                     thread.join(5)
@@ -1534,20 +1541,27 @@ def test_current_failure_contention_allows_other_host_response(
     reactor_done = Event()
     response_lock = Lock()
     responses = []
+    cleanup_started = False
     delivered = []
     delivery_futures = []
     errors = []
 
     def send(message, request_id, cb, **kwargs):
         with response_lock:
-            responses.append(cb)
+            respond_now = cleanup_started
+            if not respond_now:
+                responses.append(cb)
+        if respond_now:
+            cb(ResultMessage(RESULT_KIND_SET_KEYSPACE))
         io_waiting.set()
         return 0
 
     candidate.send_msg = send
 
-    def respond():
+    def respond(cleanup=False):
+        nonlocal cleanup_started
         with response_lock:
+            cleanup_started |= cleanup
             callbacks = list(responses)
             responses.clear()
         for callback in callbacks:
@@ -1609,7 +1623,7 @@ def test_current_failure_contention_allows_other_host_response(
     finally:
         # Release controlled I/O even for the unfixed production negative
         # control, so assertion failures cannot leave blocked driver threads.
-        respond()
+        respond(cleanup=True)
         for thread in (worker, failure, reactor):
             if thread.ident is not None:
                 thread.join(5)
