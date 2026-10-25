@@ -761,12 +761,13 @@ class HostConnection(object):
                     self._connecting.add(connection.features.shard_id)
                     self._session.submit(self._open_connection_to_missing_shard, connection.features.shard_id)
                 else:
-                    connection = self._session.cluster.connection_factory(self.endpoint,
-                                                                          on_orphaned_stream_released=self.on_orphaned_stream_released)
+                    new_connection = self._session.cluster.connection_factory(
+                        self.endpoint,
+                        on_orphaned_stream_released=self.on_orphaned_stream_released)
                     try:
-                        self._sync_keyspace(connection)
+                        self._sync_keyspace(new_connection)
                     except Exception:
-                        failed_connection = connection
+                        failed_connection = new_connection
                         raise
             except Exception:
                 log.warning("Failed reconnecting %s. Retrying." % (self.endpoint,))
