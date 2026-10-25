@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from concurrent.futures import Future
-from threading import Event, Lock, Thread
+from threading import Event, Lock, Thread, get_ident
 from unittest.mock import Mock, patch
 
 import pytest
@@ -1189,6 +1189,166 @@ def test_unpublished_failure_keeps_session_available_for_publication(topology):
     assert not errors
     assert session._pools[host] is pool
     host.signal_connection_failure.assert_not_called()
+
+
+@pytest.mark.parametrize('phase, supersede', [
+    ('return', None), ('down', None), ('return', 'pool'),
+    ('down', 'pool'), ('down', 'health'),
+])
+def test_current_failure_contention_allows_other_host_response(
+        topology, phase, supersede):
+    from cassandra.protocol import ResultMessage, RESULT_KIND_SET_KEYSPACE
+    from cassandra.shard_info import _ShardingInfo
+
+    cluster, _ = topology
+    hosts = [cluster.metadata.get_host_by_host_id(host_id)
+             for host_id in (HOST_ID_1, HOST_ID_2)]
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._profile_manager = cluster.profile_manager
+    session.keyspace = 'ks'
+    session.is_shutdown = False
+    session.shutdown = Mock()
+    cluster.shard_aware_options.disable_shardaware_port = True
+    connections = [_PublicationConnection(host.endpoint, compression=False)
+                   for host in hosts]
+    for connection in connections:
+        connection.features = ProtocolFeatures(shard_id=0)
+        connection.keyspace = 'ks'
+        connection.is_defunct = True
+        connection.in_flight = 1
+    candidate = _PublicationConnection(hosts[0].endpoint, compression=False)
+    candidate.features = ProtocolFeatures(shard_id=1)
+    cluster.connection_factory = Mock(side_effect=connections + [candidate])
+    pools = [HostConnection(host, HostDistance.LOCAL, session) for host in hosts]
+    session._pools.update(zip(hosts, pools))
+    hosts[0].sharding_info = _ShardingInfo(0, 2, '', '', 0, None, None)
+    successor = (HostConnection(hosts[0], HostDistance.IGNORED, session)
+                 if supersede == 'pool' else None)
+    for host in hosts:
+        host.signal_connection_failure = Mock(return_value=True)
+
+    io_waiting = Event()
+    at_down = Event()
+    contended = Event()
+    reactor_done = Event()
+    response_lock = Lock()
+    responses = []
+    delivered = []
+    delivery_futures = []
+    errors = []
+
+    def send(message, request_id, cb, **kwargs):
+        with response_lock:
+            responses.append(cb)
+        io_waiting.set()
+        return 0
+
+    candidate.send_msg = send
+
+    def respond():
+        with response_lock:
+            callbacks = list(responses)
+            responses.clear()
+        for callback in callbacks:
+            callback(ResultMessage(RESULT_KIND_SET_KEYSPACE))
+
+    def admit(host, is_addition, generation):
+        future = cluster._lifecycle.submit_async(
+            cluster.executor, delivered.append, host)
+        delivery_futures.append(future)
+        return future
+
+    cluster.on_down_potentially_blocking = Mock(side_effect=admit)
+    begin_down = cluster._lifecycle.begin_down
+
+    def begin(host, *args, **kwargs):
+        if phase == 'down' and host is hosts[0]:
+            at_down.set()
+            assert io_waiting.wait(5)
+        return begin_down(host, *args, **kwargs)
+
+    cluster._lifecycle.begin_down = begin
+    work_lock = pools[0]._lock
+
+    class ObservedLock:
+        def acquire(self, blocking=True):
+            if failure.ident == get_ident() and io_waiting.is_set():
+                contended.set()
+            return work_lock.acquire(blocking)
+
+        def release(self):
+            work_lock.release()
+
+        def __enter__(self):
+            self.acquire()
+
+        def __exit__(self, *args):
+            self.release()
+
+    pools[0]._lock = ObservedLock()
+
+    def run(fn):
+        try:
+            fn()
+        except BaseException as exc:
+            errors.append(exc)
+
+    def open_shard():
+        if phase == 'down':
+            assert at_down.wait(5)
+        pools[0]._open_connection_to_missing_shard(1)
+
+    def process_responses():
+        # One reactor must finish the other host's failure callback before
+        # it can deliver the USE response that releases the pool work lock.
+        if supersede == 'pool':
+            with session._lock, hosts[0].lock:
+                session._pools[hosts[0]] = successor
+        elif supersede == 'health':
+            assert cluster._lifecycle.mark_ready(hosts[0])
+        pools[1].return_connection(connections[1])
+        respond()
+        reactor_done.set()
+
+    failure = Thread(target=run, args=(lambda: pools[0].return_connection(
+        connections[0]),))
+    worker = Thread(target=run, args=(open_shard,))
+    reactor = Thread(target=run, args=(process_responses,))
+    try:
+        worker.start()
+        if phase == 'return':
+            assert io_waiting.wait(5)
+        failure.start()
+        assert io_waiting.wait(5)
+        assert contended.wait(5)
+        reactor.start()
+        assert reactor_done.wait(2), 'cross-host failure blocked reactor progress'
+    finally:
+        # Release controlled I/O even for the unfixed production negative
+        # control, so assertion failures cannot leave blocked driver threads.
+        respond()
+        for thread in (worker, failure, reactor):
+            if thread.ident is not None:
+                thread.join(5)
+        for pool in pools:
+            pool.shutdown()
+    assert all(not thread.is_alive() for thread in (worker, failure, reactor))
+    assert not errors
+    assert all(connection.in_flight == 0 for connection in connections)
+    for future in delivery_futures:
+        future.result(timeout=5)
+    assert delivered == ([hosts[1]] if supersede else [hosts[1], hosts[0]])
+    assert hosts[0].is_up is bool(supersede)
+    assert not hosts[1].is_up
+    hosts[1].signal_connection_failure.assert_called_once()
+    assert hosts[0].signal_connection_failure.call_count == int(
+        phase == 'down' or supersede != 'pool')
+    if successor is not None:
+        assert session._pools[hosts[0]] is successor
+        assert not successor.is_shutdown
+        successor.shutdown()
+    assert candidate.keyspace == 'ks'
 
 
 @pytest.mark.parametrize('healthy', [False, True])
