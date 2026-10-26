@@ -7409,8 +7409,14 @@ class ResponseFuture(object):
             # We should still raise OperationTimedOut to reject the future so that the main event thread will not
             # wait for it endlessly
             except KeyError:
-                key = "Connection defunct by heartbeat"
-                errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
+                if not self.is_schema_agreed:
+                    # The request was also removed when its response arrived:
+                    # a schema change result, which now waits for schema
+                    # agreement. Report that instead of a defunct connection.
+                    errors = self._schema_agreement_timeout_errors()
+                else:
+                    key = "Connection defunct by heartbeat"
+                    errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
                 self._set_final_exception(OperationTimedOut(errors, self._current_host,
                                                             timeout=self.timeout,
                                                             in_flight=connection.in_flight))
@@ -7442,13 +7448,16 @@ class ResponseFuture(object):
                     key = str(self._current_host.endpoint)
                 errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
             else:
-                connection = self.session.cluster.control_connection._connection
-                host = str(connection.endpoint) if connection else 'unknown'
-                errors = {host: "Request timed out while waiting for schema agreement. See Session.execute[_async](timeout) and Cluster.max_schema_agreement_wait."}
+                errors = self._schema_agreement_timeout_errors()
 
         self._set_final_exception(OperationTimedOut(errors, self._current_host,
                                                     timeout=self.timeout,
                                                     in_flight=conn_in_flight))
+
+    def _schema_agreement_timeout_errors(self):
+        connection = self.session.cluster.control_connection._connection
+        host = str(connection.endpoint) if connection else 'unknown'
+        return {host: "Request timed out while waiting for schema agreement. See Session.execute[_async](timeout) and Cluster.max_schema_agreement_wait."}
 
     def _on_speculative_execute(self):
         self._timer = None

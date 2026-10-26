@@ -749,6 +749,55 @@ class ResponseFutureTests(unittest.TestCase):
         assert exc_info.value.timeout == 1
         assert exc_info.value.in_flight == 5
 
+    def test_timeout_while_waiting_for_schema_agreement(self):
+        """
+        A schema change result removes the request from the connection's request
+        queue, like a defunct connection does, and then waits for schema agreement.
+        A timeout during that wait must be reported as a timeout while waiting for
+        schema agreement - the server did apply the schema change - not as a
+        connection defunct by heartbeat.
+        """
+
+        connection = MagicMock(spec=Connection)
+        connection._requests = {}
+        connection.in_flight = 5
+        connection.orphaned_request_ids = set()
+        connection.features.tablets_routing_v2 = False
+        connection.features.tablets_routing_v1 = False
+
+        pool = Mock()
+        pool.is_shutdown = False
+        pool.borrow_connection.return_value = [connection, 1]
+
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [Mock(), Mock()]
+        session._pools.get.return_value = pool
+
+        query = SimpleStatement("DROP KEYSPACE ks")
+        message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
+
+        rf = ResponseFuture(session, message, query, 1)
+        rf.send_request()
+
+        # Simulate the arrival of the schema change result: the connection has
+        # removed the request from its queue, and the result waits for schema
+        # agreement in session.submit(), which this mock session never runs.
+        connection._requests = {}
+        result = Mock(spec=ResultMessage,
+                      kind=RESULT_KIND_SCHEMA_CHANGE,
+                      schema_change_event={'target_type': SchemaTargetType.KEYSPACE,
+                                           'change_type': SchemaChangeType.DROPPED,
+                                           'keyspace': "ks"})
+        rf._set_result(None, connection, pool, result)
+        session.submit.assert_called_once()
+
+        # Simulate ResponseFuture timing out
+        rf._on_timeout()
+        with pytest.raises(OperationTimedOut, match="waiting for schema agreement") as exc_info:
+            rf.result()
+        assert "Connection defunct by heartbeat" not in str(exc_info.value)
+        assert exc_info.value.timeout == 1
+
     def test_read_timeout_error_message(self):
         session = self.make_session()
         query = SimpleStatement("SELECT * FROM foo")
