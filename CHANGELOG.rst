@@ -72,6 +72,10 @@ Bug Fixes
   could leave millions of objects behind, and the full collection that freed
   them could pause the whole process for many seconds and make requests in
   flight fail with ``OperationTimedOut`` (#1296).
+* ``BatchStatement`` now takes ``table`` from the statement it is routed by, as
+  it already did for ``keyspace`` and ``routing_key``. A batch on a tablet table
+  can now be sent to the replicas and the shard of its tablet, when the driver
+  knows them, instead of being routed by the token ring.
 
 3.29.13
 ========
