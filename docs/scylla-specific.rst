@@ -252,9 +252,11 @@ consistency is experimental.
 .. note::
 
    ``TABLETS_ROUTING_V2`` is still experimental: a Scylla node advertises it
-   (on the wire as ``TABLETS_ROUTING_V2_EXPERIMENTAL``) only when started with
-   the ``strongly-consistent-tables`` experimental feature enabled. A node
-   without it offers only ``TABLETS_ROUTING_V1``.
+   (on the wire as ``TABLETS_ROUTING_V2_EXPERIMENTAL_V2``) only when started
+   with the ``strongly-consistent-tables`` experimental feature enabled. A node
+   without it offers only ``TABLETS_ROUTING_V1``. Nodes advertising the earlier
+   revision of the extension, ``TABLETS_ROUTING_V2_EXPERIMENTAL``, are treated
+   as offering only ``TABLETS_ROUTING_V1``.
 
 
 Prepared Statement Metadata Caching (``SCYLLA_USE_METADATA_ID``)
