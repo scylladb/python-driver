@@ -18,6 +18,14 @@ Bug Fixes
   is now sent to the replicas and the shard of its tablet instead of being routed
   by the token ring.
 
+Behavior Changes
+----------------
+* ``TABLETS_ROUTING_V2`` is now negotiated under the wire name
+  ``TABLETS_ROUTING_V2_EXPERIMENTAL_V2``, matching the revision of the
+  experimental extension in ScyllaDB that adds a routing hint to ``BATCH``
+  requests. Nodes that only advertise the original
+  ``TABLETS_ROUTING_V2_EXPERIMENTAL`` fall back to ``TABLETS_ROUTING_V1``.
+
 3.29.13
 ========
 Nov 2, 2026
