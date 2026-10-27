@@ -952,19 +952,28 @@ class PrepareMessage(_MessageType):
                 write_string(f, self.keyspace)
 
 
+# The routing statement index of a BATCH routed by none of its statements
+# (TABLETS_ROUTING_V2). The number of statements is a [short], so this index
+# never names a statement.
+NO_ROUTING_STATEMENT = 0xFFFF
+
+
 class BatchMessage(_MessageType):
     opcode = 0x0D
     name = 'BATCH'
 
     def __init__(self, batch_type, queries, consistency_level,
                  serial_consistency_level=None, timestamp=None,
-                 keyspace=None):
+                 keyspace=None, routing_statement_index=NO_ROUTING_STATEMENT,
+                 tablet_version_block=None):
         self.batch_type = batch_type
         self.queries = queries
         self.consistency_level = consistency_level
         self.serial_consistency_level = serial_consistency_level
         self.timestamp = timestamp
         self.keyspace = keyspace
+        self.routing_statement_index = routing_statement_index
+        self.tablet_version_block = tablet_version_block
 
     def send_body(self, f, protocol_version, protocol_features=None):
         write_byte(f, self.batch_type.value)
@@ -1007,6 +1016,14 @@ class BatchMessage(_MessageType):
         if ProtocolVersion.uses_keyspace_flag(protocol_version):
             if self.keyspace is not None:
                 write_string(f, self.keyspace)
+
+        if protocol_features is not None and protocol_features.tablets_routing_v2:
+            # A V2 connection makes the server read a routing hint at the end of
+            # every BATCH, so always write one: the index of the statement the
+            # batch is routed by, then the tablet_version_block for its tablet.
+            # The server ignores the block when there is no routing statement.
+            write_short(f, self.routing_statement_index)
+            write_byte(f, self.tablet_version_block if self.tablet_version_block is not None else 0)
 
 
 known_event_types = frozenset((
