@@ -36,7 +36,9 @@ from cassandra.policies import (RackAwareRoundRobinPolicy, RoundRobinPolicy, Whi
                                 IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy, ExponentialBackoffRetryPolicy)
 from cassandra.connection import DefaultEndPoint, UnixSocketEndPoint
 from cassandra.pool import Host
-from cassandra.query import Statement
+from cassandra.cqltypes import Int32Type
+from cassandra.protocol import ColumnMetadata
+from cassandra.query import BatchStatement, PreparedStatement, Statement
 from cassandra.tablets import Tablets, Tablet
 
 
@@ -1012,6 +1014,41 @@ class TokenAwarePolicyTest(unittest.TestCase):
         for query in (lwt, serial):
             for _ in range(len(hosts)):
                 assert list(policy.make_query_plan(None, query))[:3] == order
+
+    def test_batch_is_routed_by_the_tablet_of_its_routing_statement(self):
+        """
+        A batch looks up the tablet under the table of the statement its routing
+        key comes from. Without a table, the lookup would miss and the batch would
+        be routed by the token ring instead.
+        """
+        hosts = [Host(DefaultEndPoint(str(i)), SimpleConvictionPolicy, host_id=uuid.uuid4()) for i in range(4)]
+        for host in hosts:
+            host.set_up()
+        tablet_replicas = hosts[:2]
+        tablet = Tablet(replicas=[(h.host_id, 0) for h in tablet_replicas])
+
+        cluster = Mock(spec=Cluster)
+        cluster.metadata = Mock(spec=Metadata)
+        cluster.metadata._tablets = Mock(spec=Tablets)
+        cluster.metadata._tablets.get_tablet_for_key.side_effect = \
+            lambda keyspace, table, token: tablet if (keyspace, table) == ('ks', 'tbl') else None
+        cluster.metadata.get_replicas.return_value = hosts[2:]
+        cluster.metadata.keyspaces = {}
+
+        child_policy = Mock()
+        child_policy.make_query_plan.return_value = hosts
+        child_policy.distance.return_value = HostDistance.LOCAL
+        policy = TokenAwarePolicy(child_policy, shuffle_replicas=False)
+        policy.populate(cluster, hosts)
+
+        prepared = PreparedStatement(
+            column_metadata=[ColumnMetadata('ks', 'tbl', 'pk', Int32Type)], query_id=b'id',
+            routing_key_indexes=[0], query="INSERT INTO ks.tbl (pk) VALUES (?)", keyspace='ks',
+            protocol_version=4, result_metadata=[], result_metadata_id=None)
+        batch = BatchStatement()
+        batch.add(prepared, (1,))
+
+        assert list(policy.make_query_plan(None, batch))[:2] == tablet_replicas
 
     def test_leader_aware_routing_with_tablet_version(self):
         """

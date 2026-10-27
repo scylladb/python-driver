@@ -6,6 +6,10 @@ Bug Fixes
 * Tablet updates no longer mutate a table's tablet list in place, so a
   concurrent lookup cannot fail with ``IndexError``, miss its tablet, or route
   to the wrong one (#1086).
+* ``BatchStatement`` now takes ``table`` from the statement it is routed by, as
+  it already did for ``keyspace`` and ``routing_key``. A batch on a tablet table
+  is now sent to the replicas and the shard of its tablet instead of being routed
+  by the token ring.
 
 3.29.13
 ========
