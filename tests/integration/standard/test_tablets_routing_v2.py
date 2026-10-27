@@ -14,6 +14,7 @@ server that does not advertise it (e.g. a released Scylla), every test is skippe
 """
 
 from contextlib import contextmanager
+import uuid
 
 import pytest
 
@@ -26,6 +27,7 @@ from cassandra.protocol import ExecuteMessage
 from cassandra.protocol_features import (
     ProtocolFeatures, TABLETS_ROUTING_V1, TABLETS_ROUTING_V2,
 )
+from cassandra.query import BatchStatement, BoundStatement, SimpleStatement, Statement
 
 from tests.integration import PROTOCOL_VERSION, use_cluster
 
@@ -548,3 +550,437 @@ class TestTabletsRoutingV2Integration:
                 "request coordinated by {} but the Raft leader is replicas[0]={}; "
                 "leader-aware routing did not target the leader".format(
                     getattr(coordinator, 'host_id', None), leader_host_id))
+
+    # -- batches ------------------------------------------------------------------
+
+    @contextmanager
+    def _new_table(self, keyspace, columns="pk int, ck int, v int, PRIMARY KEY (pk, ck)"):
+        """
+        Yield the name of a new table in `keyspace`, with `columns`. No request
+        has accessed it yet, so the driver has no cached tablet of it.
+        """
+        table = "batch_" + uuid.uuid4().hex[:8]
+        # The tablets of an empty table could be merged while the test runs.
+        self.session.execute(
+            f"CREATE TABLE {keyspace}.{table} ({columns}) "
+            "WITH tablets = {'min_tablet_count': '8'}")
+        try:
+            yield table
+        finally:
+            self.session.execute(f"DROP TABLE IF EXISTS {keyspace}.{table}")
+
+    @staticmethod
+    def _routing_payload(result):
+        return (result.response_future.custom_payload or {}).get('tablets-routing-v2')
+
+    def _execute_until_routing_information(self, statement, attempts=30):
+        """
+        Execute `statement` until its response carries routing information, and
+        return the decoded payload. Without a cached tablet the driver sends a
+        random tablet_version_block, which matches ~1/16 of the time.
+        """
+        for _ in range(attempts):
+            result = self.session.execute(statement)
+            if self._routing_payload(result) is not None:
+                return result, self._decode_v2_payload(result.response_future.custom_payload)
+        raise AssertionError("the server never returned a 'tablets-routing-v2' payload")
+
+    def _assert_block_matches(self, statement, bound, attempts=10):
+        """
+        Assert that `statement` is sent with a block matching the cached tablet
+        of `bound`, so the server returns no routing information for it.
+
+        The tablet may change meanwhile, e.g. if the load balancer migrates it,
+        and then the server rightly returns routing information for its new
+        version. It's only wrong if it returns it for the version the block was
+        chosen for.
+        """
+        for _ in range(attempts):
+            tablet, _ = self._cached_tablet(bound)
+            assert tablet is not None, "the tablet of the statement isn't cached"
+            result = self.session.execute(statement)
+            if self._routing_payload(result) is None:
+                return
+            info = self._decode_v2_payload(result.response_future.custom_payload)
+            assert info['tablet_version'] != tablet.tablet_version, (
+                "the server returned routing information despite a cached, up-to-date "
+                "tablet_version")
+        raise AssertionError(f"the tablet changed during each of {attempts} requests")
+
+    @pytest.mark.parametrize("keyspace", ["test_v2", "test_v2_sc"])
+    def test_batch_routing_information_is_cached_under_routing_statement_table(self, keyspace):
+        """
+        A BATCH names the statement it is routed by, and the routing information
+        returned for its tablet is cached under that statement's table. Once it
+        is, the block matches and no more routing information is returned.
+        """
+        with self._new_table(keyspace) as table:
+            insert = self.session.prepare(f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES (?, ?, ?)")
+            # Strongly-consistent tables only accept QUORUM/LOCAL_QUORUM writes.
+            batch = BatchStatement(consistency_level=ConsistencyLevel.LOCAL_QUORUM)
+            batch.add(insert, (1, 1, 1))
+            batch.add(insert, (1, 2, 2))
+            bound = insert.bind((1, 1, 1))
+            assert self._cached_tablet(bound)[0] is None
+
+            result, info = self._execute_until_routing_information(batch)
+            assert result.response_future.message.routing_statement_index == 0
+
+            tablet, token = self._cached_tablet(bound)
+            assert tablet is not None, "the routing information wasn't cached under the table"
+            assert tablet.tablet_version == info['tablet_version']
+            assert tablet.first_token < token.value <= tablet.last_token
+
+            self._assert_block_matches(batch, bound)
+
+    def test_batch_routed_by_statement_after_query_text(self):
+        """
+        The routing statement doesn't have to come first: statements sent as
+        query text can't be routed by, but they can precede it.
+        """
+        with self._new_table("test_v2") as table:
+            insert = self.session.prepare(f"INSERT INTO test_v2.{table} (pk, ck, v) VALUES (?, ?, ?)")
+            batch = BatchStatement()
+            batch.add(f"INSERT INTO test_v2.{table} (pk, ck, v) VALUES (1, 0, 0)")
+            batch.add(SimpleStatement(f"INSERT INTO test_v2.{table} (pk, ck, v) VALUES (1, 1, 1)"))
+            batch.add(insert, (1, 2, 2))
+
+            result, info = self._execute_until_routing_information(batch)
+
+            assert result.response_future.message.routing_statement_index == 2
+            _, token = self._cached_tablet(insert.bind((1, 2, 2)))
+            assert info['first_token'] < token.value <= info['last_token']
+
+    def test_batch_without_routing_statement(self):
+        """
+        A batch the server can't compute the token of names no routing
+        statement: the server accepts it, and never returns routing information
+        for it. That's a batch of statements sent as query text, even if one
+        has a routing key, and an empty batch.
+        """
+        def assert_no_routing_statement(batch):
+            for _ in range(3):
+                result = self.session.execute(batch)
+                assert result.response_future.message.routing_statement_index == 0xFFFF  # no routing statement
+                assert self._routing_payload(result) is None
+
+        with self._new_table("test_v2") as table:
+            query = f"INSERT INTO test_v2.{table} (pk, ck, v) VALUES (1, 1, 1)"
+
+            batch = BatchStatement()
+            batch.add(query)
+            assert_no_routing_statement(batch)
+
+            batch = BatchStatement()
+            batch.add(SimpleStatement(query, keyspace='test_v2',
+                                      routing_key=types.Int32Type.serialize(1, PROTOCOL_VERSION)))
+            assert batch.routing_key is not None
+            assert_no_routing_statement(batch)
+
+            assert_no_routing_statement(BatchStatement())
+
+    def test_batch_not_routed_by_statement_without_partition_key_bind_indices(self):
+        """
+        The marker is named pk but sets v, so the partition key is a literal and
+        the server sends no partition key bind indices. The driver guesses a
+        routing key from the marker's name, but the batch names no routing
+        statement: the server would ignore a hint naming it and send no
+        routing information.
+        """
+        with self._new_table("test_v2") as table:
+            update = self.session.prepare(f"UPDATE test_v2.{table} SET v = :pk WHERE pk = 1 AND ck = 1")
+            batch = BatchStatement()
+            batch.add(update, (5,))
+            assert batch.routing_key is not None
+
+            for _ in range(3):
+                result = self.session.execute(batch)
+                assert result.response_future.message.routing_statement_index == 0xFFFF  # no routing statement
+                assert self._routing_payload(result) is None
+
+    def test_batch_with_overridden_routing_key_gets_routing_information_of_routing_statement(self):
+        """
+        A batch the user routes by another routing key still names its routing
+        statement, and gets routing information for the tablet of the partition
+        the statement writes. Once it's cached, the block matches.
+        """
+        with self._new_table("test_v2") as table:
+            insert = self.session.prepare(f"INSERT INTO test_v2.{table} (pk, ck, v) VALUES (?, ?, ?)")
+            batch = BatchStatement()
+            batch.add(insert, (1, 1, 1))
+            batch.routing_key = insert.bind((2, 1, 1)).routing_key
+
+            result, info = self._execute_until_routing_information(batch)
+
+            assert result.response_future.message.routing_statement_index == 0
+            tablet, token = self._cached_tablet(insert.bind((1, 1, 1)))
+            assert info['first_token'] < token.value <= info['last_token']
+            assert tablet is not None and tablet.tablet_version == info['tablet_version']
+
+            self._assert_block_matches(batch, insert.bind((1, 1, 1)))
+
+    def test_batch_with_changed_keyspace_or_table_names_no_routing_statement(self):
+        """
+        Once the user changes the keyspace or the table of a batch, it names no
+        routing statement: the server accepts it, and returns no routing
+        information, which the driver would cache under the wrong table.
+        """
+        with self._new_table("test_v2") as table, self._new_table("test_v2") as other:
+            insert = self.session.prepare(f"INSERT INTO test_v2.{table} (pk, ck, v) VALUES (?, ?, ?)")
+            metadata = self.session.cluster.metadata
+            token = metadata.token_map.token_class.from_key(insert.bind((1, 1, 1)).routing_key)
+
+            for keyspace, changed_table in (("test_v2_sc", table), ("test_v2", other)):
+                batch = BatchStatement()
+                batch.add(insert, (1, 1, 1))
+                assert batch._get_routing_statement() is not None
+                batch.keyspace = keyspace
+                batch.table = changed_table
+
+                for _ in range(3):
+                    result = self.session.execute(batch)
+                    assert result.response_future.message.routing_statement_index == 0xFFFF  # no routing statement
+                    assert self._routing_payload(result) is None
+                assert metadata._tablets.get_tablet_for_key(keyspace, changed_table, token) is None
+
+            assert metadata._tablets.get_tablet_for_key("test_v2", table, token) is None
+
+    def test_multi_partition_batch_gets_routing_information_of_routing_statement(self):
+        """
+        An eventually consistent batch may write partitions of several tablets.
+        It only gets routing information for the tablet of the routing
+        statement.
+        """
+        with self._new_table("test_v2") as table:
+            insert = self.session.prepare(f"INSERT INTO test_v2.{table} (pk, ck, v) VALUES (?, ?, ?)")
+            routing_pk = 0
+            routing_tablet = self._ensure_cached(insert.bind((routing_pk, 0, 0)))
+
+            def in_routing_tablet(pk):
+                _, token = self._cached_tablet(insert.bind((pk, 0, 0)))
+                return routing_tablet.first_token < token.value <= routing_tablet.last_token
+
+            other_pk = next((pk for pk in range(1, 1000) if not in_routing_tablet(pk)), None)
+            assert other_pk is not None, "no partition outside the tablet of the routing statement"
+            # Forget the tablet, so that the batch is sent with a random block.
+            self.session.cluster.metadata._tablets.drop_tablets("test_v2", table)
+
+            batch = BatchStatement()
+            batch.add(f"INSERT INTO test_v2.{table} (pk, ck, v) VALUES ({other_pk}, 1, 1)")
+            batch.add(insert, (routing_pk, 1, 1))
+            batch.add(insert, (other_pk, 2, 2))
+
+            _, info = self._execute_until_routing_information(batch)
+
+            assert (info['first_token'], info['last_token']) == \
+                (routing_tablet.first_token, routing_tablet.last_token)
+
+    @staticmethod
+    def _prepared_batch_query(keyspace, table):
+        # Partition key bind indices: [3], the last marker targeting pk.
+        return (f"BEGIN BATCH "
+                f"INSERT INTO {keyspace}.{table} (pk, ck, v) VALUES (?, 1, ?); "
+                f"UPDATE {keyspace}.{table} SET v = ? WHERE pk = ? AND ck = 2; "
+                f"APPLY BATCH")
+
+    def test_prepared_strongly_consistent_batch_gets_routing_information(self):
+        """
+        A prepared BEGIN BATCH ... APPLY BATCH is sent as an EXECUTE, and a
+        strongly-consistent one is version-checked like any other prepared
+        statement.
+        """
+        with self._new_table("test_v2_sc") as table:
+            prepared = self.session.prepare(self._prepared_batch_query("test_v2_sc", table))
+            assert prepared.routing_key_indexes == [3]
+            bound = prepared.bind((1, 1, 2, 1))
+            bound.consistency_level = ConsistencyLevel.LOCAL_QUORUM
+
+            tablet = self._ensure_cached(bound)
+            _, token = self._cached_tablet(bound)
+            assert tablet.first_token < token.value <= tablet.last_token
+
+            self._assert_block_matches(bound, bound)
+
+    def test_prepared_eventually_consistent_batch_gets_no_routing_information(self):
+        """
+        The server ignores the tablet_version_block of an eventually consistent
+        prepared batch. Nothing is cached, so every request carries another
+        random block.
+        """
+        with self._new_table("test_v2") as table:
+            prepared = self.session.prepare(self._prepared_batch_query("test_v2", table))
+            bound = prepared.bind((1, 1, 2, 1))
+
+            for _ in range(16):
+                result = self.session.execute(bound)
+                assert self._routing_payload(result) is None
+            assert self._cached_tablet(bound)[0] is None
+
+    def test_prepared_batch_with_literal_partition_key_gets_no_routing_information(self):
+        """
+        The partition key of a strongly-consistent prepared batch is a literal,
+        so the server sends no partition key bind indices for it, and the driver
+        guesses no routing key. The driver can't compute the token, so it sends
+        a zero block, and the server never version-checks the batch.
+        """
+        with self._new_table("test_v2_sc") as table:
+            prepared = self.session.prepare(
+                f"BEGIN BATCH "
+                f"INSERT INTO test_v2_sc.{table} (pk, ck, v) VALUES (1, 1, ?); "
+                f"UPDATE test_v2_sc.{table} SET v = ? WHERE pk = 1 AND ck = 2; "
+                f"APPLY BATCH")
+            assert prepared._pk_indexes is None
+            assert prepared.routing_key_indexes is None
+            bound = prepared.bind((1, 2))
+            bound.consistency_level = ConsistencyLevel.LOCAL_QUORUM
+            assert bound.routing_key is None
+
+            for _ in range(3):
+                result = self.session.execute(bound)
+                assert result.response_future.message.tablet_version_block == 0
+                assert self._routing_payload(result) is None
+
+    def test_batch_routed_by_statement_of_table_with_composite_partition_key(self):
+        """
+        The routing key of a composite partition key is packed from the values
+        of its columns in the order of the partition key, not of the markers.
+        The token computed from it is the one the server computes, so the batch
+        gets routing information for the right tablet, and once it's cached,
+        the block matches.
+        """
+        with self._new_table("test_v2", "pk1 int, pk2 int, v int, PRIMARY KEY ((pk1, pk2))") as table:
+            insert = self.session.prepare(f"INSERT INTO test_v2.{table} (v, pk2, pk1) VALUES (?, ?, ?)")
+            assert insert._pk_indexes == [2, 1]
+            bound = insert.bind((0, 2, 1))
+            batch = BatchStatement()
+            batch.add(bound)
+
+            result, info = self._execute_until_routing_information(batch)
+
+            assert result.response_future.message.routing_statement_index == 0
+            tablet, token = self._cached_tablet(bound)
+            # The batch was written at LOCAL_ONE: read at LOCAL_QUORUM, so
+            # the replica that acknowledged it is read too.
+            token_query = SimpleStatement(
+                f"SELECT token(pk1, pk2) FROM test_v2.{table} WHERE pk1 = 1 AND pk2 = 2",
+                consistency_level=ConsistencyLevel.LOCAL_QUORUM)
+            server_token = self.session.execute(token_query).one()[0]
+            assert token.value == server_token
+            assert info['first_token'] < token.value <= info['last_token']
+            assert tablet is not None and tablet.tablet_version == info['tablet_version']
+
+            self._assert_block_matches(batch, bound)
+
+    def _assert_batch_gets_routing_information_of_composite_partition(self, table, batch, prepared, values):
+        """
+        Assert that `batch`, routed by another routing key than the one of the
+        partition its routing statement writes, gets routing information for
+        that partition, and once it's cached, the block matches. `values` bind
+        `prepared` as INSERT INTO <table> (pk1, pk2, v), so pk1 and pk2 are
+        values[0] and values[1].
+        """
+        # The routing key of the partition, packed independently of the code
+        # under test.
+        server_routing_key = b"".join(Statement()._key_parts_packed(
+            [types.Int32Type.serialize(v, PROTOCOL_VERSION) for v in values[:2]]))
+        token_class = self.session.cluster.metadata.token_map.token_class
+        # The batch is routed elsewhere.
+        assert token_class.from_key(batch.routing_key) != token_class.from_key(server_routing_key)
+
+        result, info = self._execute_until_routing_information(batch)
+
+        assert result.response_future.message.routing_statement_index == 0
+        # The batch wrote the row, so the server can compute its token. It was
+        # written at LOCAL_ONE: read at LOCAL_QUORUM, so the replica that
+        # acknowledged it is read too.
+        token_query = SimpleStatement(
+            f"SELECT token(pk1, pk2) FROM test_v2.{table} WHERE pk1 = %s AND pk2 = %s",
+            consistency_level=ConsistencyLevel.LOCAL_QUORUM)
+        server_token = self.session.execute(token_query, values[:2]).one()[0]
+        assert token_class.from_key(server_routing_key).value == server_token
+        partition = BoundStatement(prepared, routing_key=server_routing_key).bind(values)
+        tablet, token = self._cached_tablet(partition)
+        assert info['first_token'] < token.value <= info['last_token']
+        assert tablet is not None and tablet.tablet_version == info['tablet_version']
+
+        self._assert_block_matches(batch, partition)
+
+    def test_batch_routed_by_reordered_routing_key_indexes_of_composite_partition_key(self):
+        """
+        The user routes by the partition key columns in another order, so the
+        batch is routed by another token than the server computes from pk1 and
+        pk2. The batch still gets routing information for the tablet of their
+        partition, and once it's cached, the block matches.
+        """
+        with self._new_table("test_v2", "pk1 int, pk2 int, v int, PRIMARY KEY ((pk1, pk2))") as table:
+            insert = self.session.prepare(f"INSERT INTO test_v2.{table} (pk1, pk2, v) VALUES (?, ?, ?)")
+            assert insert._pk_indexes == [0, 1]
+            insert.routing_key_indexes = [1, 0]
+            batch = BatchStatement()
+            batch.add(insert, (1, 2, 0))
+
+            self._assert_batch_gets_routing_information_of_composite_partition(table, batch, insert, (1, 2, 0))
+
+    def test_batch_routed_by_explicit_routing_key_of_bound_statement_of_composite_partition_key(self):
+        """
+        The user gives the bound statement a routing key of another partition,
+        so the batch is routed by it. The batch still gets routing information
+        for the tablet of the partition the statement writes, and once it's
+        cached, the block matches.
+        """
+        with self._new_table("test_v2", "pk1 int, pk2 int, v int, PRIMARY KEY ((pk1, pk2))") as table:
+            insert = self.session.prepare(f"INSERT INTO test_v2.{table} (pk1, pk2, v) VALUES (?, ?, ?)")
+            other_routing_key = b"".join(Statement()._key_parts_packed(
+                [types.Int32Type.serialize(v, PROTOCOL_VERSION) for v in (3, 4)]))
+            batch = BatchStatement()
+            batch.add(BoundStatement(insert, routing_key=other_routing_key).bind((1, 2, 0)))
+            assert batch.routing_key is other_routing_key
+
+            self._assert_batch_gets_routing_information_of_composite_partition(table, batch, insert, (1, 2, 0))
+
+    def test_batch_not_routed_by_statement_with_partly_bound_partition_key(self):
+        """
+        Only one column of the composite partition key is bound by a marker, the
+        other one is a literal. The server sends no partition key bind indices
+        for the statement, and the driver guesses no routing key for it either,
+        so the batch is routed by the next statement that has one, and names it.
+        """
+        with self._new_table("test_v2", "pk1 int, pk2 int, v int, PRIMARY KEY ((pk1, pk2))") as table:
+            partial = self.session.prepare(f"INSERT INTO test_v2.{table} (pk1, pk2, v) VALUES (?, 2, ?)")
+            assert partial._pk_indexes is None
+            assert partial.routing_key_indexes is None
+            insert = self.session.prepare(f"INSERT INTO test_v2.{table} (pk1, pk2, v) VALUES (?, ?, ?)")
+            bound = insert.bind((3, 4, 0))
+            batch = BatchStatement()
+            batch.add(partial, (1, 0))
+            batch.add(bound)
+
+            result, info = self._execute_until_routing_information(batch)
+
+            assert result.response_future.message.routing_statement_index == 1
+            tablet, token = self._cached_tablet(bound)
+            assert info['first_token'] < token.value <= info['last_token']
+            assert tablet is not None and tablet.tablet_version == info['tablet_version']
+
+            self._assert_block_matches(batch, bound)
+
+    def test_batch_routed_by_user_routing_key_of_partly_bound_partition_key(self):
+        """
+        The user may make the driver route by the bound column of a partition
+        key whose other column is a literal. The server sent no partition key
+        bind indices for the statement, so the batch names no routing
+        statement: the server would ignore a hint naming it and send no
+        routing information.
+        """
+        with self._new_table("test_v2", "pk1 int, pk2 int, v int, PRIMARY KEY ((pk1, pk2))") as table:
+            partial = self.session.prepare(f"INSERT INTO test_v2.{table} (pk1, pk2, v) VALUES (?, 2, ?)")
+            assert partial._pk_indexes is None
+            partial.routing_key_indexes = [0]
+            batch = BatchStatement()
+            batch.add(partial, (1, 0))
+            assert batch.routing_key is not None
+
+            for _ in range(3):
+                result = self.session.execute(batch)
+                assert result.response_future.message.routing_statement_index == 0xFFFF  # no routing statement
+                assert self._routing_payload(result) is None
