@@ -171,6 +171,40 @@ class BatchStatementTest(unittest.TestCase):
 
         batch.add('something')
 
+    @staticmethod
+    def _make_keyed_prepared_statement(table):
+        return PreparedStatement(
+            column_metadata=[ColumnMetadata('ks', table, 'pk', Int32Type)],
+            query_id=b"query-id-" + table.encode(),
+            routing_key_indexes=[0],
+            query="INSERT INTO ks.%s (pk) VALUES (?)" % table,
+            keyspace='ks',
+            protocol_version=4,
+            result_metadata=[],
+            result_metadata_id=None,
+        )
+
+    def test_routing_attributes_come_from_the_first_keyed_statement(self):
+        """
+        The batch takes its keyspace, table and routing key from the first
+        statement that has a routing key, so that tablet lookups use the table
+        the batch is routed by.
+        """
+        batch = BatchStatement()
+        batch.add("INSERT INTO ks.other (pk) VALUES (0)")
+        batch.add(SimpleStatement("INSERT INTO ks.other (pk) VALUES (0)", keyspace='ks'))
+        batch.add(self._make_keyed_prepared_statement('tbl'), (1,))
+        batch.add(self._make_keyed_prepared_statement('other'), (2,))
+
+        assert batch.keyspace == 'ks'
+        assert batch.table == 'tbl'
+        assert batch.routing_key == Int32Type.serialize(1, 4)
+
+        batch.clear()
+        assert batch.keyspace is None
+        assert batch.table is None
+        assert batch.routing_key is None
+
     def test_add_all(self):
         batch = BatchStatement()
         statements = ['%s'] * 10

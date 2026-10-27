@@ -900,6 +900,7 @@ class BatchStatement(Statement):
         """
         del self._statements_and_parameters[:]
         self.keyspace = None
+        self.table = None
         self.routing_key = None
         if self.custom_payload:
             self.custom_payload.clear()
@@ -964,6 +965,7 @@ class BatchStatement(Statement):
             if statement.keyspace and statement.routing_key:
                 self.routing_key = statement.routing_key
                 self.keyspace = statement.keyspace
+                self.table = statement.table
 
     def _update_custom_payload(self, statement):
         if statement.custom_payload:
