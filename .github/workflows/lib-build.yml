@@ -13,7 +13,7 @@ on:
         description: "Target os to build for: linux,macos,windows"
         type: string
         required: false
-        default: "linux,macos-x86,macos-arm,windows,linux-aarch64"
+        default: "linux,macos-arm,windows,linux-aarch64"
 
       target_tag:
         description: "Publish particular tag"
@@ -59,10 +59,6 @@ jobs:
            elif [[ "${target}" == "windows" ]]; then
              [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
              echo -n  '{"os":"windows-2022", "target": "windows"}' >> /tmp/matrix.json
-             was_added=1
-           elif [[ "${target}" == "macos-x86" ]]; then
-             [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
-             echo -n  '{"os":"macos-15-intel", "target": "macos-x86"}' >> /tmp/matrix.json
              was_added=1
            elif [[ "${target}" == "macos-arm" ]]; then
              [ -n "$was_added" ] && echo -n ","  >> /tmp/matrix.json
