@@ -3,7 +3,8 @@ from io import BytesIO
 from uuid import uuid4
 
 from cassandra import ConsistencyLevel, ProtocolVersion
-from cassandra.protocol import ExecuteMessage
+from cassandra.protocol import BatchMessage, ExecuteMessage, _NO_ROUTING_STATEMENT
+from cassandra.query import BatchType
 from cassandra.protocol_features import ProtocolFeatures
 from cassandra.tablets import Tablets, Tablet, choose_tablet_version_block, random_tablet_version_block
 
@@ -348,3 +349,59 @@ class ExecuteMessageSerializationTest(unittest.TestCase):
         first_again = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=True))
         self.assertEqual(first, first_again)
         self.assertEqual(first, second_plain + bytes([0x3C]))
+
+
+class BatchMessageSerializationTest(unittest.TestCase):
+    """BatchMessage.send_body decides whether to emit the routing hint from the
+    serving connection's negotiated protocol features (TABLETS_ROUTING_V2)."""
+
+    PROTOCOL_VERSION = ProtocolVersion.V4
+
+    def _make_message(self, **hint):
+        queries = [
+            (True, b"\x01\x02\x03\x04", [b"\x00\x00\x00\x01"]),
+            (False, "INSERT INTO ks.tbl (pk) VALUES (2)", ()),
+        ]
+        return BatchMessage(BatchType.LOGGED, queries, ConsistencyLevel.ONE, timestamp=42, **hint)
+
+    def _encode_body(self, message, protocol_features):
+        f = BytesIO()
+        message.send_body(f, self.PROTOCOL_VERSION, protocol_features)
+        return f.getvalue()
+
+    def test_hint_appended_on_v2_connection(self):
+        """A V2 connection appends the routing statement index as a [short],
+        followed by the tablet_version_block byte."""
+        message = self._make_message(routing_statement_index=0x0102, tablet_version_block=0xAB)
+        v2 = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=True))
+        plain = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=False))
+        self.assertEqual(v2, plain + bytes([0x01, 0x02, 0xAB]))
+
+    def test_hint_absent_without_v2(self):
+        """No hint when the connection did not negotiate V2, and passing no
+        features at all is equivalent to V2 being off."""
+        message = self._make_message(routing_statement_index=0, tablet_version_block=0xAB)
+        no_features = self._encode_body(message, None)
+        v2_off = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=False))
+        self.assertEqual(no_features, v2_off)
+        self.assertEqual(no_features, self._encode_body(self._make_message(), None))
+
+    def test_no_routing_statement_by_default(self):
+        """On a V2 connection the server requires a hint on every BATCH, so a
+        message built without one names no routing statement, with a zero block."""
+        message = self._make_message()
+        v2 = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=True))
+        plain = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=False))
+        self.assertEqual(_NO_ROUTING_STATEMENT, 0xFFFF)
+        self.assertEqual(v2, plain + bytes([0xFF, 0xFF, 0x00]))
+
+    def test_same_message_encodes_consistently_across_connections(self):
+        """The same shared message instance yields the V2 or non-V2 framing purely
+        from the features argument, so it is safe to encode on connections with
+        different capabilities without copying it."""
+        message = self._make_message(routing_statement_index=1, tablet_version_block=0x3C)
+        first = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=True))
+        second_plain = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=False))
+        first_again = self._encode_body(message, ProtocolFeatures(tablets_routing_v2=True))
+        self.assertEqual(first, first_again)
+        self.assertEqual(first, second_plain + bytes([0x00, 0x01, 0x3C]))
