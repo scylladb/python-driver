@@ -14,8 +14,12 @@ USE_METADATA_ID = "SCYLLA_USE_METADATA_ID"
 # The server advertises and expects this exact extension name in SUPPORTED/STARTUP
 # (see scylladb transport/cql_protocol_extension.cc). While the feature is gated
 # behind the server's `strongly-consistent-tables` experimental flag, the wire
-# name carries the `_EXPERIMENTAL` suffix.
-TABLETS_ROUTING_V2 = "TABLETS_ROUTING_V2_EXPERIMENTAL"
+# name carries the `_EXPERIMENTAL` suffix. The trailing `_V2` comes from the
+# server renaming the extension when BATCH requests started to carry a routing
+# hint, so that the server and the driver never disagree about their layout.
+# Servers that only know the original `TABLETS_ROUTING_V2_EXPERIMENTAL` aren't
+# negotiated with.
+TABLETS_ROUTING_V2 = "TABLETS_ROUTING_V2_EXPERIMENTAL_V2"
 
 class ProtocolFeatures(object):
     rate_limit_error = None

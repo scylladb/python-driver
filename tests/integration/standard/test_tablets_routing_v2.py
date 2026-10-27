@@ -9,7 +9,7 @@ matches the server's encoding.
 
 The whole module is opt-in: the server only advertises the extension when started
 with the `strongly-consistent-tables` experimental feature, and it is exchanged on
-the wire under the name `TABLETS_ROUTING_V2_EXPERIMENTAL`. When run against a
+the wire under the name `TABLETS_ROUTING_V2_EXPERIMENTAL_V2`. When run against a
 server that does not advertise it (e.g. a released Scylla), every test is skipped.
 """
 
@@ -36,7 +36,7 @@ def setup_module(module):
         use_cluster('tablets_routing_v2', {"dc1": [1, 1, 1]}, start=True, set_keyspace=False,
                     configuration_options={
                         # `strongly-consistent-tables` is what gates the server's
-                        # advertisement of TABLETS_ROUTING_V2_EXPERIMENTAL.
+                        # advertisement of TABLETS_ROUTING_V2_EXPERIMENTAL_V2.
                         'experimental_features': ['udf', 'strongly-consistent-tables'],
                     })
     except Exception as exc:
@@ -99,7 +99,7 @@ class TestTabletsRoutingV2Integration:
             raise
         if not v2_negotiated:
             cls.cluster.shutdown()
-            pytest.skip("Server does not support TABLETS_ROUTING_V2_EXPERIMENTAL. "
+            pytest.skip("Server does not support TABLETS_ROUTING_V2_EXPERIMENTAL_V2. "
                         "It must be started with the 'strongly-consistent-tables' feature "
                         "and offer support for the protocol extension.")
 
