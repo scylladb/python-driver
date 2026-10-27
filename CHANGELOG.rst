@@ -40,6 +40,10 @@ Bug Fixes
   is still delayed does not stop the send, and a callback that runs after
   admission but before the bytes are written times the request out while the
   request may still be sent (#603).
+* ``BatchStatement`` now takes ``table`` from the statement it is routed by, as
+  it already did for ``keyspace`` and ``routing_key``. A batch on a tablet table
+  can now be sent to the replicas and the shard of its tablet, when the driver
+  knows them, instead of being routed by the token ring.
 
 3.29.13
 ========
