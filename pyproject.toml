@@ -239,11 +239,11 @@ test-command = [
 [tool.cibuildwheel.windows]
 build-frontend = "build"
 # On Windows the C extensions are optional (CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST
-# is overridden to "no" below), so extension-dependent tests (e.g. libev) are
+# is overridden to "no" below), so extension-dependent tests may be
 # legitimately skipped here. CASS_DRIVER_NO_SKIP is therefore NOT enabled on
 # Windows; we only add -v so skips are visible in the log.
 test-command = [
-    "pytest --import-mode=append {project}/tests/unit -v -k \"not (test_deserialize_date_range_year or test_datetype or test_libevreactor)\"",
+    "pytest --import-mode=append {project}/tests/unit -v -k \"not (test_deserialize_date_range_year or test_datetype)\"",
 ]
 
 # TODO: set CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST to yes when https://github.com/scylladb/python-driver/issues/429 is fixed
