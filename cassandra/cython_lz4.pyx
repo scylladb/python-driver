@@ -72,6 +72,12 @@ cdef enum:
 cdef enum:
     STACK_ALLOC_THRESHOLD = 16384  # 16 KiB
 
+# Release the GIL only at/above this size: for typical small CQL frames the
+# GIL handoff to other driver threads costs more than the (de)compression.
+cdef enum:
+    NOGIL_THRESHOLD = 2048  # 2 KiB
+
+_NOGIL_THRESHOLD = NOGIL_THRESHOLD
 
 cdef extern from "lz4.h":
     int LZ4_compress_default(const char *src, char *dst,
@@ -140,7 +146,10 @@ def lz4_compress(bytes data not None):
     cdef bytes result
     cdef char *out_ptr
     try:
-        with nogil:
+        if src_size >= NOGIL_THRESHOLD:
+            with nogil:
+                compressed_size = LZ4_compress_default(src, tmp, src_size, bound)
+        else:
             compressed_size = LZ4_compress_default(src, tmp, src_size, bound)
         if compressed_size <= 0:
             raise RuntimeError(
@@ -196,9 +205,12 @@ def lz4_decompress(bytes data not None):
     cdef char *out_ptr = PyBytes_AS_STRING(out)
 
     cdef int result
-    with nogil:
-        result = LZ4_decompress_safe(src + 4, out_ptr,
-                                     compressed_size,
+    if uncompressed_size >= NOGIL_THRESHOLD:
+        with nogil:
+            result = LZ4_decompress_safe(src + 4, out_ptr, compressed_size,
+                                         <int>uncompressed_size)
+    else:
+        result = LZ4_decompress_safe(src + 4, out_ptr, compressed_size,
                                      <int>uncompressed_size)
     if result < 0:
         raise RuntimeError(
