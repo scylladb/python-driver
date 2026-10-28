@@ -21,14 +21,14 @@ dependencies = [
 
 [dependency-groups]
 # Add any dev-only tools here; example shown
-dev = ["hatchling==1.32.4"]
+dev = ["hatchling==1.33.0"]
 
 [tool.uv.sources]
 # Keep the driver editable from the parent directory
 scylla-driver = { path = "../", editable = true }
 
 [build-system]
-requires = ["hatchling==1.32.4"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
