@@ -74,6 +74,20 @@ test('every build and test uses one prepared candidate and final tag checks the 
   assert.equal(integration.on.workflow_call.inputs.source_sha.required, true);
   const checkout = integration.jobs.tests.steps.find(step => step.uses?.startsWith('actions/checkout@'));
   assert.equal(checkout.with.ref, '${{ inputs.source_sha || github.sha }}');
+  const build = load('lib-build.yml');
+  const resolve = build.jobs['resolve-source'];
+  const source = resolve.steps.find(step => step.uses?.startsWith('actions/checkout@'));
+  assert.equal(source.with.ref, '${{ inputs.target_tag || github.sha }}');
+  assert.equal(resolve.outputs.sha, '${{ steps.source.outputs.sha }}');
+  assert.ok(resolve.steps.some(step => step.id === 'source'));
+  assert.equal(build.on.workflow_call.outputs.source_sha.value, '${{ jobs.resolve-source.outputs.sha }}');
+  for (const name of ['build-wheels', 'build-sdist']) {
+    const job = build.jobs[name];
+    assert.ok(needs(job).includes('resolve-source'));
+    const checkouts = job.steps.filter(step => step.uses?.startsWith('actions/checkout@'));
+    assert.ok(checkouts.length > 0, `${name} must check out the build source`);
+    for (const step of checkouts) assert.equal(step.with.ref, '${{ needs.resolve-source.outputs.sha }}');
+  }
 });
 
 test('downloaded distributions are checked before PyPI upload using trusted helper code', () => {
@@ -136,15 +150,16 @@ def inventory(request, timeout):
 urllib.request.urlopen = inventory
 `);
   try {
-    for (const [status, inventory, allowed] of [
+    for (const [status, inventory, allowed, error] of [
       [404, '', true],
       [200, JSON.stringify({urls: [{filename: 'decoy.whl'}]}), true],
-      [200, JSON.stringify({urls: [{filename: wheel}]}), false],
-      [200, JSON.stringify({urls: [{filename: sdist}]}), false],
-      [503, '', false],
-      [200, '{invalid', false]
+      [200, JSON.stringify({urls: [{filename: wheel}]}), false, /ValueError: Release files already exist on PyPI;/],
+      [200, JSON.stringify({urls: [{filename: sdist}]}), false, /ValueError: Release files already exist on PyPI;/],
+      [503, '', false, /HTTPError: HTTP Error 503:/],
+      [200, '{invalid', false, /JSONDecodeError:/]
     ]) {
       rmSync(uploaded, {force: true});
+      rmSync(trace, {force: true});
       const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', `${guard.run}\nprintf uploaded > "$UPLOADED"`], {
         cwd: directory, encoding: 'utf8', timeout: 5000,
         env: {...process.env, PYTHONPATH: directory, RELEASE_VERSION: '3.29.13',
@@ -153,7 +168,10 @@ urllib.request.urlopen = inventory
       assert.equal(result.status === 0, allowed, result.stderr);
       assert.equal(readFileSync(trace, 'utf8'), 'https://pypi.org/pypi/scylla-driver/3.29.13/json');
       if (allowed) assert.equal(readFileSync(uploaded, 'utf8'), 'uploaded');
-      else assert.throws(() => readFileSync(uploaded), {code: 'ENOENT'});
+      else {
+        assert.match(result.stderr, error);
+        assert.throws(() => readFileSync(uploaded), {code: 'ENOENT'});
+      }
     }
   } finally { rmSync(directory, {recursive: true, force: true}); }
 });

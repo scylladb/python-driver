@@ -35,7 +35,7 @@ on:
 
     outputs:
       source_sha:
-        description: Exact commit used for all published artifacts
+        description: Exact commit used for every wheel and sdist built by this workflow
         value: ${{ jobs.resolve-source.outputs.sha }}
 
 permissions:
