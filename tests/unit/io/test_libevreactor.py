@@ -13,6 +13,7 @@
 # limitations under the License.
 import sys
 import threading
+import time
 import unittest
 
 from unittest.mock import patch, Mock
@@ -451,6 +452,58 @@ class LibevLoopRaceTest(unittest.TestCase):
         loop._loop_will_run(None)
         for c in deferred + [conn]:
             c._socket.close.assert_called_once_with()
+
+
+class LibevLoopCleanupTest(unittest.TestCase):
+
+    def setUp(self):
+        if LibevLoop is None:
+            raise unittest.SkipTest('libev does not appear to be installed correctly')
+
+    def test_cleanup_right_after_connections_are_closed(self):
+        """
+        Cluster.shutdown() closes the connections, and the atexit _cleanup()
+        runs right after, while the loop thread is still in ev_run. _cleanup()
+        must end that thread, instead of waiting out the join timeout, which
+        made every process using the driver exit 5s late.
+        """
+        from cassandra.io import libevwrapper as libev
+
+        class FakeConnection(object):
+            deque = ()
+            _write_watcher_is_active = False
+            _read_watcher = None
+            _write_watcher = None
+            endpoint = 'fake'
+
+            def __init__(self, sock):
+                self._socket = sock
+                self._read_watcher = libev.IO(sock.fileno(), libev.EV_READ, loop._loop, Mock())
+                self._write_watcher = libev.IO(sock.fileno(), libev.EV_WRITE, loop._loop, Mock())
+
+            def close(self):
+                pass
+
+        loop = LibevLoop()
+        conns = []
+        for _ in range(4):
+            sock, peer = socket.socketpair()
+            self.addCleanup(peer.close)
+            conn = FakeConnection(sock)
+            loop.connection_created(conn)
+            loop.maybe_start()
+            conns.append(conn)
+        # let the loop start the read watchers and wait in ev_run
+        time.sleep(0.05)
+
+        for conn in conns:
+            loop.connection_destroyed(conn)
+        thread = loop._thread
+        start = time.time()
+        loop._cleanup()
+
+        self.assertFalse(thread.is_alive())
+        self.assertLess(time.time() - start, 2)
 
 
 class LibevTimerPatcher(unittest.TestCase):

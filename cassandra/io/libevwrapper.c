@@ -53,9 +53,16 @@ Loop_unref(libevwrapper_Loop *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *
+Loop_ref(libevwrapper_Loop *self, PyObject *args) {
+    ev_ref(self->loop);
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef Loop_methods[] = {
     {"start", (PyCFunction)Loop_start, METH_NOARGS, "Start the event loop"},
     {"unref", (PyCFunction)Loop_unref, METH_NOARGS, "Unrefrence the event loop"},
+    {"ref", (PyCFunction)Loop_ref, METH_NOARGS, "Reference the event loop"},
     {NULL} /* Sentinel */
 };
 
