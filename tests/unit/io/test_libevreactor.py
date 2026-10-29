@@ -13,6 +13,7 @@
 # limitations under the License.
 import sys
 import threading
+import time
 import unittest
 
 from unittest.mock import patch, Mock
@@ -96,6 +97,9 @@ class LibevConnectionTest(ReactorTestMixin, unittest.TestCase):
                 # singleton loop is left in a working state for subsequent tests
                 # (otherwise timers would never be scheduled and tests would hang).
                 _global_loop._preparer.start()
+                # _cleanup took the preparer's loop reference back; drop it
+                # again as in LibevLoop.__init__, or the loop never returns
+                _global_loop._loop.unref()
 
 
 class _InstrumentedLock(object):
@@ -451,6 +455,122 @@ class LibevLoopRaceTest(unittest.TestCase):
         loop._loop_will_run(None)
         for c in deferred + [conn]:
             c._socket.close.assert_called_once_with()
+
+
+class LibevLoopCleanupTest(unittest.TestCase):
+
+    def setUp(self):
+        if LibevLoop is None:
+            raise unittest.SkipTest('libev does not appear to be installed correctly')
+
+    def _start_loop(self):
+        """A started LibevLoop with 4 open connections, waiting in ev_run"""
+        from cassandra.io import libevwrapper as libev
+
+        class FakeConnection(object):
+            deque = ()
+            _write_watcher_is_active = False
+            _read_watcher = None
+            _write_watcher = None
+            endpoint = 'fake'
+
+            def __init__(self, sock):
+                self._socket = sock
+                self._read_watcher = libev.IO(sock.fileno(), libev.EV_READ, loop._loop, Mock())
+                self._write_watcher = libev.IO(sock.fileno(), libev.EV_WRITE, loop._loop, Mock())
+
+            def close(self):
+                pass
+
+        loop = LibevLoop()
+        socks = []
+
+        def teardown():
+            # also when an assertion failed: end the loop thread and release
+            # the sockets, as nothing else owns this local loop
+            loop._cleanup()
+            for sock in socks:
+                sock.close()
+        self.addCleanup(teardown)
+
+        conns = []
+        for _ in range(4):
+            sock, peer = socket.socketpair()
+            socks += [sock, peer]
+            conn = FakeConnection(sock)
+            loop.connection_created(conn)
+            loop.maybe_start()
+            conns.append(conn)
+
+        # with open connections and their read watchers active, the loop
+        # thread can't leave ev_run until _cleanup() stops the watchers
+        deadline = time.time() + 2
+        while not all(c._read_watcher.is_active() for c in conns):
+            self.assertLess(time.time(), deadline, "read watchers never started")
+            time.sleep(0.001)
+        self.assertTrue(loop._thread.is_alive())
+        return loop, conns
+
+    def test_cleanup_ends_the_loop_thread(self):
+        """
+        At exit the atexit _cleanup() runs while the loop thread is in ev_run:
+        after Cluster.shutdown() it's closing the sockets of the closed
+        connections, without it the connections are still open. _cleanup()
+        must end that thread, instead of waiting out the join timeout, which
+        made every process using the driver exit 5s late.
+        """
+        loop, conns = self._start_loop()
+
+        thread = loop._thread
+        start = time.time()
+        loop._cleanup()
+
+        self.assertFalse(thread.is_alive())
+        self.assertLess(time.time() - start, 2)
+
+    def test_cleanup_while_loop_thread_arms_the_timer(self):
+        """
+        _update_timer() checks _shutdown, then runs the timer callbacks and
+        arms the loop timer. If _cleanup() stops the timer in between, the
+        timer armed after it keeps ev_run going until it fires, so the join
+        in _cleanup() waits out its timeout.
+        """
+        loop, conns = self._start_loop()
+
+        class TimerSpy(object):
+            def __init__(self, timer):
+                self.timer = timer
+                self.stopped = threading.Event()
+
+            def start(self, timeout):
+                self.timer.start(timeout)
+
+            def stop(self):
+                self.timer.stop()
+                self.stopped.set()
+
+        timer = loop._loop_timer = TimerSpy(loop._loop_timer)
+        cleanup = threading.Thread(target=loop._cleanup)
+        cleanup_started = threading.Event()
+
+        def service_timeouts():
+            # runs on the loop thread, after _update_timer() checked _shutdown
+            if not cleanup.is_alive() and not loop._shutdown:
+                cleanup.start()
+                cleanup_started.set()
+                # let _cleanup() stop the timer before it's armed below
+                timer.stopped.wait(2)
+            return time.time() + 100
+
+        thread = loop._thread
+        start = time.time()
+        with patch.object(loop._timers, 'service_timeouts', service_timeouts):
+            loop.notify()  # wake the loop thread to run _update_timer()
+            self.assertTrue(cleanup_started.wait(2))
+            cleanup.join(10)
+
+        self.assertFalse(thread.is_alive())
+        self.assertLess(time.time() - start, 2)
 
 
 class LibevTimerPatcher(unittest.TestCase):
