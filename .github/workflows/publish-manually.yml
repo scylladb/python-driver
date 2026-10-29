@@ -5,7 +5,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: New release version, for example 3.29.13 (without -scylla)
+        description: >-
+          Next patch, minor or major version in X.Y.Z form (without -scylla).
+          Increment patch by one, or minor by one with patch reset to zero,
+          or major by one with minor and patch reset to zero. No skipped versions.
         type: string
         required: true
 

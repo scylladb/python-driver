@@ -3,6 +3,8 @@ name: Test release automation
 on:
   pull_request:
     paths:
+      - 'cassandra/__init__.py'
+      - 'docs/conf.py'
       - '.github/scripts/**'
       - '.github/tests/**'
       - '.github/package.json'
@@ -18,6 +20,8 @@ on:
   push:
     branches: [master]
     paths:
+      - 'cassandra/__init__.py'
+      - 'docs/conf.py'
       - '.github/scripts/**'
       - '.github/tests/**'
       - '.github/package.json'

@@ -88,9 +88,11 @@ test('canonical policy matches mixed support files and keeps runtime or unknown 
     'Makefile', 'LICENSE', 'examples/basic.py', 'scripts/release.py', 'unknown.txt',
     '.github/unknown.yml', '.github/workflows/lib-build.yml',
     '.github/workflows/build-push.yml', '.github/workflows/publish-manually.yml',
-    '.github/workflows/github-release.yml']) {
-    const current = await guard.snapshot(fixture({files: [...files, file(name)]}).github, repo, 20);
-    assert.equal(current.omit, false, name);
+    '.github/workflows/github-release.yml', '.github/workflows/integration-tests.yml']) {
+    for (const changed of [[file(name)], [...files, file(name)]]) {
+      const current = await guard.snapshot(fixture({files: changed}).github, repo, 20);
+      assert.equal(current.omit, false, name);
+    }
   }
 });
 

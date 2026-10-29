@@ -62,6 +62,11 @@ def release_files(base, version):
             or requested <= current):
         raise ValueError(
             'Release version must be newer than the current driver version')
+    major, minor, patch = current
+    if requested not in ((major, minor, patch + 1), (major, minor + 1, 0),
+                         (major + 1, 0, 0)):
+        raise ValueError('Release version must be the next patch, minor, '
+                         'or major version')
     sources[VERSION_FILES[0]] = replace_assignment(
         module, '__version_info__', repr(requested))
     docs = sources[VERSION_FILES[1]]

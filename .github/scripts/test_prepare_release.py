@@ -13,6 +13,55 @@ from unittest.mock import patch
 import prepare_release as release
 
 
+class RepositorySourcesTest(unittest.TestCase):
+    def test_release_transforms_actual_repository_version_sources(self):
+        root = Path(__file__).resolve().parents[2]
+        sources = {path: (root / path).read_text() for path in (
+            'cassandra/__init__.py', 'docs/conf.py')}
+        current = ast.literal_eval(release.assignment(
+            sources['cassandra/__init__.py'], '__version_info__').value)
+        docs = sources['docs/conf.py']
+        tags = ast.literal_eval(release.assignment(docs, 'TAGS').value)
+        deprecated = ast.literal_eval(
+            release.assignment(docs, 'DEPRECATED_VERSIONS').value)
+        current_tag = '.'.join(map(str, current)) + '-scylla'
+        major, minor, patch_version = current
+        for requested in ((major, minor, patch_version + 1),
+                          (major, minor + 1, 0), (major + 1, 0, 0)):
+            with self.subTest(requested=requested):
+                version = '.'.join(map(str, requested))
+                tag = version + '-scylla'
+                with patch.object(release, 'git_file', side_effect=(
+                        lambda revision, path: sources[path])):
+                    prepared = release.release_files('checkout', version)
+                self.assertEqual(
+                    set(prepared), {'cassandra/__init__.py', 'docs/conf.py'})
+                self.assertEqual(
+                    ast.literal_eval(release.assignment(
+                        prepared['cassandra/__init__.py'],
+                        '__version_info__').value), requested)
+                expected_tags = list(tags)
+                expected_deprecated = list(deprecated)
+                if requested[:2] == current[:2]:
+                    expected_tags[expected_tags.index(current_tag)] = tag
+                else:
+                    expected_tags.append(tag)
+                    if current_tag not in expected_deprecated:
+                        expected_deprecated.append(current_tag)
+                updated_docs = prepared['docs/conf.py']
+                self.assertEqual(
+                    ast.literal_eval(
+                        release.assignment(updated_docs, 'TAGS').value),
+                    expected_tags)
+                self.assertEqual(
+                    ast.literal_eval(release.assignment(
+                        updated_docs, 'DEPRECATED_VERSIONS').value),
+                    expected_deprecated)
+                self.assertEqual(
+                    ast.literal_eval(release.assignment(
+                        updated_docs, 'LATEST_VERSION').value), tag)
+
+
 class PreparationTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -101,15 +150,24 @@ class PreparationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'clean checkout'):
             release.check()
 
-    def test_invalid_or_old_versions_do_not_change_remote(self):
+    def test_rejected_versions_do_not_prepare_a_candidate(self):
+        local_refs = self.run_git('show-ref')
+        remote_refs = self.run_git('ls-remote', '--refs', 'origin')
         for version in ('3.29.13-scylla', 'v3.29.13', '03.29.13', '3.29.12',
-                        '3.28.99', '3.29.13\n'):
+                        '3.28.99', '3.29.13\n', '3.290.0', '3.29.14',
+                        '3.31.0', '3.30.1', '4.1.0', '4.0.1', '5.0.0'):
             with (self.subTest(version=version),
                   self.environment(RELEASE_VERSION=version)):
                 with self.assertRaises(ValueError):
-                    release.check()
-        self.assertEqual(self.ref('refs/heads/master'), self.base)
-        self.assertEqual(self.run_git('status', '--porcelain'), '')
+                    release.prepare()
+                self.assertEqual(self.run_git('rev-parse', 'HEAD'), self.base)
+                self.assertEqual(
+                    self.run_git('symbolic-ref', 'HEAD'), 'refs/heads/master')
+                self.assertEqual(self.run_git('show-ref'), local_refs)
+                self.assertEqual(
+                    self.run_git('ls-remote', '--refs', 'origin'), remote_refs)
+                self.assertEqual(self.run_git('status', '--porcelain'), '')
+                self.assertFalse(Path(os.environ['GITHUB_OUTPUT']).exists())
 
     def test_preparation_pushes_only_bot_version_commit_and_no_final_tag(self):
         source = self.candidate()
@@ -185,6 +243,19 @@ class PreparationTest(unittest.TestCase):
                 ast.literal_eval(
                     release.assignment(prepared, 'DEPRECATED_VERSIONS').value),
                 ['3.28.1-scylla', '3.29.12-scylla'])
+
+    def test_next_major_release_can_prepare_and_promote(self):
+        with self.environment(RELEASE_VERSION='4.0.0'):
+            source = self.candidate()
+            self.assertEqual(
+                self.ref('refs/heads/release-candidate/4.0.0-scylla'), source)
+            self.assertIn(
+                '__version_info__ = (4, 0, 0)',
+                self.run_git('show', source + ':cassandra/__init__.py'))
+            release.finalize()
+            self.assertEqual(self.ref('refs/heads/master'), source)
+            self.assertEqual(
+                self.ref('refs/tags/4.0.0-scylla^{commit}'), source)
 
     def test_promotion_atomically_pushes_tested_commit_and_annotated_bot_tag(
             self):

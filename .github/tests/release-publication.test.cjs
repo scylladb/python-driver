@@ -22,6 +22,16 @@ function ancestors(name, seen = new Set()) {
   return seen;
 }
 
+test('release automation runs for both version sources on PRs and master pushes', () => {
+  const automation = load('release-automation-tests.yml');
+  assert.deepEqual(automation.on.push.branches, ['master']);
+  for (const event of ['pull_request', 'push']) {
+    for (const path of ['cassandra/__init__.py', 'docs/conf.py']) {
+      assert.ok(automation.on[event].paths.includes(path), `${event} must check ${path}`);
+    }
+  }
+});
+
 // These contracts guard remote publication boundaries, including skipped or
 // failed prerequisite jobs. No status override may bypass the success gate.
 test('publication can only start by manual dispatch; pushes only build', () => {

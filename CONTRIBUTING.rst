@@ -178,6 +178,14 @@ suffix, for example::
 
     gh workflow run publish-manually.yml --ref master -f version=3.29.13
 
+Use canonical ``X.Y.Z`` input. Relative to the current driver version ``M.m.p``,
+only the next patch (``M.m.(p+1)``), minor (``M.(m+1).0``), or major
+(``(M+1).0.0``) is accepted, before candidate preparation. From ``3.29.12``,
+these are ``3.29.13``, ``3.30.0`` and ``4.0.0``; requests such as ``3.290.0``,
+``3.29.14``, ``3.31.0`` and ``3.30.1`` are rejected. There is no override or
+skip input. Deliberately skipped versions and unusual release sequences are
+blocked; a typo equal to an allowed successor can still pass.
+
 Branch pushes and manual dispatch of ``build-push.yml`` build distributions
 without publishing them. Tag pushes do not start release publication.
 
@@ -244,7 +252,8 @@ Documentation (``docs/``, ``CONTRIBUTING.rst``), tests
 ``.gitignore``, ``.gitattributes``, and the coverage/import-check scripts qualify
 when all changed files match this support-only union. The labeler configuration
 is the source of the exact allowlist. Workflows that build or publish shipped
-artifacts, production code, runtime dependencies, packaging/build manifests,
+artifacts or provide required release gates (including ``integration-tests.yml``),
+production code, runtime dependencies, packaging/build manifests,
 unknown paths, and mixed changes remain in the notes. ``README.rst`` supplies
 package metadata, so README-only documentation changes also remain in the notes.
 Titles, authors and broad ``chore``/``dependencies`` labels do not determine

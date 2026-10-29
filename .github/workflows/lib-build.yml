@@ -16,7 +16,7 @@ on:
         default: "linux,macos-x86,macos-arm,windows,linux-aarch64"
 
       target_tag:
-        description: "Publish particular tag"
+        description: "Git ref or commit SHA to build (defaults to the workflow revision)"
         type: string
         required: false
         default: ""

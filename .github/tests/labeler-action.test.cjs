@@ -176,10 +176,15 @@ test('real action API fallback binds configuration to the trusted launch SHA', a
   });
 });
 
-test('real action and guard keep build and release inputs visible', async () => {
-  for (const filename of ['README.rst', 'pyproject.toml', '.github/workflows/lib-build.yml', '.github/workflows/publish-manually.yml']) {
+test('real action and guard keep build, release and required gate inputs visible', async () => {
+  for (const filename of ['README.rst', 'pyproject.toml', '.github/workflows/lib-build.yml',
+    '.github/workflows/publish-manually.yml', '.github/workflows/integration-tests.yml']) {
     assert.equal(guard.policy()(filename), false);
     await fixture({files: [file(filename)], labels: ['keep-me', marker]}, async (f) => {
+      await f.run();
+      assert.deepEqual(f.state.labels, ['keep-me']);
+      f.state.files.push(file('docs/guide.rst'));
+      f.state.labels.push(marker);
       await f.run();
       assert.deepEqual(f.state.labels, ['keep-me']);
     });
