@@ -296,10 +296,23 @@ class PreparationTest(unittest.TestCase):
                     source)
 
     def test_wrong_app_cannot_prepare(self):
+        local_refs = self.run_git('show-ref')
+        remote_refs = self.run_git('ls-remote', '--refs', 'origin')
         with self.environment(RELEASE_APP_SLUG='another-app'):
             with self.assertRaisesRegex(ValueError, 'scylladb-releaser'):
                 release.prepare()
+        self.assertEqual(self.run_git('rev-parse', 'HEAD'), self.base)
+        self.assertEqual(
+            self.run_git('symbolic-ref', 'HEAD'), 'refs/heads/master')
+        self.assertEqual(self.run_git('show-ref'), local_refs)
+        self.assertEqual(
+            self.run_git('ls-remote', '--refs', 'origin'), remote_refs)
         self.assertEqual(self.ref('refs/heads/master'), self.base)
+        self.assertIsNone(release.remote_ref(
+            'refs/heads/release-candidate/3.29.13-scylla'))
+        self.assertIsNone(release.remote_ref('refs/tags/3.29.13-scylla'))
+        self.assertEqual(self.run_git('status', '--porcelain'), '')
+        self.assertFalse(Path(os.environ['GITHUB_OUTPUT']).exists())
 
     def test_mismatched_artifact_or_candidate_cannot_promote(self):
         self.candidate()

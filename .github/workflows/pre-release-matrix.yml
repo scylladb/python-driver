@@ -82,7 +82,9 @@ jobs:
         run: |
           set -euo pipefail
           SCYLLA_VERSION=$(python3 - <<'PY'
-          import json, os, re
+          import json
+          import os
+          import re
           versions = json.loads(os.environ['SCYLLA_VERSIONS'])
           version = versions[0] if isinstance(versions, list) and versions else versions
           if not isinstance(version, str) or not re.fullmatch(r'[0-9]{4}\.[0-9]+\.[0-9]+', version):

@@ -45,8 +45,8 @@ def create_release(api, tag, source_sha):
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
-        # The tag endpoint does not find drafts with a pending tag. The list
-        # endpoint includes drafts for authenticated users with push access.
+        # On a 404, inspect the authenticated listing so a matching draft
+        # is rejected before creating a release.
         page = 1
         while True:
             releases = api.request('GET', f'releases?per_page=100&page={page}')
