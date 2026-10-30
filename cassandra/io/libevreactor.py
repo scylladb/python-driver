@@ -151,9 +151,16 @@ class LibevLoop(object):
         if not self._thread:
             return
 
-        # Stop the prepare watcher first to prevent race conditions
+        # Stop the prepare watcher first to prevent race conditions.
+        # It was unref'd when started, so ref the loop back first: stopping it
+        # unbalanced leaves libev's active count at -1, and a loop thread still
+        # in ev_run then never returns, so the join below waits its full timeout.
+        # The timer is stopped by _update_timer() once _shutdown is set, but that
+        # runs from the prepare watcher, so stop it here too
         if self._preparer:
+            self._loop.ref()
             self._preparer.stop()
+        self._loop_timer.stop()
 
         # TODO: unguarded read; sets are copy-on-write, so at most a stale
         # snapshot (redundant idempotent close), never a torn read.
