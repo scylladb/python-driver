@@ -15,7 +15,7 @@
 import time
 
 from cassandra.connection import ConnectionShutdown
-from cassandra.policies import HostFilterPolicy, RoundRobinPolicy, FallthroughRetryPolicy
+from cassandra.policies import HostFilterPolicy, RoundRobinPolicy, FallthroughRetryPolicy, ConstantReconnectionPolicy
 
 import unittest
 
@@ -41,7 +41,10 @@ class MetricsTests(unittest.TestCase):
 
     def setUp(self):
         contact_point = ['127.0.0.2']
+        # constant reconnects: test_connection_error restarts the whole cluster, and the default
+        # exponential backoff can push the next reconnect past its wait for the cluster
         self.cluster = TestCluster(contact_points=contact_point, metrics_enabled=True,
+                                   reconnection_policy=ConstantReconnectionPolicy(1),
                                    execution_profiles=
                                    {EXEC_PROFILE_DEFAULT:
                                        ExecutionProfile(
@@ -79,7 +82,7 @@ class MetricsTests(unittest.TestCase):
             # Wait for the cluster to come back up for the next test
             wait_until_not_raised(
                 lambda: self.session.execute("SELECT key FROM system.local WHERE key='local'"),
-                delay=0.5, max_attempts=30)
+                delay=0.5, max_attempts=120)
 
         assert self.cluster.metrics.stats.connection_errors > 0
 

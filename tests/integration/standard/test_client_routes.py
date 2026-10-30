@@ -47,7 +47,10 @@ from tests.integration import (
     use_cluster,
     wait_for_node_socket,
     skip_scylla_version_lt,
+    scylla_only,
 )
+
+pytestmark = scylla_only  # system.client_routes and CLIENT_ROUTES_CHANGE are Scylla only
 from tests.tcp_proxy import TcpProxy
 from tests.util import wait_until_not_raised
 
