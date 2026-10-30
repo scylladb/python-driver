@@ -16,7 +16,7 @@ import json
 import subprocess
 from urllib.request import build_opener, Request, HTTPHandler
 
-from cassandra.metadata import SchemaParserV4, SchemaParserDSE68
+from cassandra.metadata import SchemaParserV4
 
 from tests.util import wait_until_not_raised
 from tests.integration import CASSANDRA_VERSION, SIMULACRON_JAR
@@ -389,13 +389,6 @@ def prime_driver_defaults(version=CASSANDRA_VERSION):
                              "ignore_on_prepare": True,
                              "message": "Invalid Query!"})
         )
-
-    # prepare empty rows for NGDG
-    for query in [SchemaParserDSE68._SELECT_VERTICES,
-                  SchemaParserDSE68._SELECT_EDGES]:
-        client_simulacron.submit_request(
-            PrimeQuery(query, result='success',
-            then={'rows': [], 'column_types': {'row1': 'int'}}))
 
 
 def prime_cluster(data_centers="3", version=None, cluster_name=DEFAULT_CLUSTER, dse_version=None):
