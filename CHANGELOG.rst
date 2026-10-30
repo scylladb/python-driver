@@ -81,6 +81,18 @@ Behavior Changes
   of the Scylla Cloud bundle support; applications that import ``yaml`` must
   depend on it directly.
 
+Removed
+-------
+* DataStax Enterprise (DSE) Graph support has been removed. This drops the
+  ``cassandra.datastax.graph`` and ``cassandra.graph`` packages (including the
+  fluent API), ``GraphExecutionProfile``, ``GraphAnalyticsExecutionProfile``,
+  the ``EXEC_PROFILE_GRAPH_DEFAULT``, ``EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT`` and
+  ``EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT`` constants,
+  ``Session.execute_graph()`` and ``Session.execute_graph_async()``, and the
+  ``graph`` extra (``gremlinpython``). ScyllaDB has no graph engine, so these
+  APIs could not work against it, and the fluent API could not be imported with
+  the ``gremlinpython`` versions the ``graph`` extra allowed.
+
 3.29.12
 ========
 Sep 26, 2026

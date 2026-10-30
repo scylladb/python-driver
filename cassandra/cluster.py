@@ -30,7 +30,6 @@ from copy import copy
 from functools import partial, reduce, wraps
 from itertools import groupby, count, chain
 import enum
-import json
 import logging
 import os
 from typing import Any, Dict, Optional, Union, Tuple
@@ -84,25 +83,17 @@ from cassandra.metadata import Metadata, Token, protect_name, murmur3, _NodeInfo
 from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, SimpleConvictionPolicy,
                                 ExponentialReconnectionPolicy, HostDistance,
                                 RetryPolicy, IdentityTranslator, NoSpeculativeExecutionPlan,
-                                NoSpeculativeExecutionPolicy, DefaultLoadBalancingPolicy,
-                                NeverRetryPolicy)
+                                NoSpeculativeExecutionPolicy)
 from cassandra.pool import (Host, _ReconnectionHandler, _HostReconnectionHandler,
                             HostConnection,
                             NoConnectionsAvailable)
 from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
                              BatchStatement, bind_params, QueryTrace, TraceUnavailable,
-                             named_tuple_factory, dict_factory, tuple_factory, FETCH_SIZE_UNSET,
-                             HostTargetingStatement)
-from cassandra.marshal import int64_pack
+                             named_tuple_factory, dict_factory, tuple_factory, FETCH_SIZE_UNSET)
 from cassandra.tablets import Tablet, choose_tablet_version_block, random_tablet_version_block
 from cassandra.timestamps import MonotonicTimestampGenerator
 from cassandra.util import _resolve_contact_points_to_string_map, Version, maybe_add_timeout_to_query
 
-from cassandra.datastax.graph import (graph_object_row_factory, GraphOptions, GraphSON1Serializer,
-                                      GraphProtocol, GraphSON2Serializer, GraphStatement, SimpleGraphStatement,
-                                      graph_graphson2_row_factory, graph_graphson3_row_factory,
-                                      GraphSON3Serializer)
-from cassandra.datastax.graph.query import _request_timeout_key, _GraphSONContextRowFactory
 from cassandra.datastax import cloud as dscloud
 from cassandra.application_info import ApplicationInfoBase
 from cassandra.driver_config import DriverConfigReporter
@@ -543,9 +534,6 @@ def _addrinfo_or_none(contact_point, port):
 def _execution_profile_to_string(name):
     default_profiles = {
         EXEC_PROFILE_DEFAULT: 'EXEC_PROFILE_DEFAULT',
-        EXEC_PROFILE_GRAPH_DEFAULT: 'EXEC_PROFILE_GRAPH_DEFAULT',
-        EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT: 'EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT',
-        EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT: 'EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT',
     }
 
     if name in default_profiles:
@@ -659,68 +647,6 @@ class ExecutionProfile(object):
         self.continuous_paging_options = continuous_paging_options
 
 
-class GraphExecutionProfile(ExecutionProfile):
-    graph_options = None
-    """
-    :class:`cassandra.graph.GraphOptions` to use with this execution
-
-    Default options for graph queries, initialized as follows by default::
-
-        GraphOptions(graph_language=b'gremlin-groovy')
-
-    See cassandra.graph.GraphOptions
-    """
-
-    def __init__(self, load_balancing_policy=_NOT_SET, retry_policy=None,
-                 consistency_level=_NOT_SET, serial_consistency_level=None,
-                 request_timeout=30.0, row_factory=None,
-                 graph_options=None, continuous_paging_options=_NOT_SET):
-        """
-        Default execution profile for graph execution.
-
-        See :class:`.ExecutionProfile` for base attributes. Note that if not explicitly set,
-        the row_factory and graph_options.graph_protocol are resolved during the query execution.
-        These options will resolve to graph_graphson3_row_factory and GraphProtocol.GRAPHSON_3_0
-        for the core graph engine (DSE 6.8+), otherwise graph_object_row_factory and GraphProtocol.GRAPHSON_1_0
-
-        In addition to default parameters shown in the signature, this profile also defaults ``retry_policy`` to
-        :class:`cassandra.policies.NeverRetryPolicy`.
-        """
-        retry_policy = retry_policy or NeverRetryPolicy()
-        super(GraphExecutionProfile, self).__init__(load_balancing_policy, retry_policy, consistency_level,
-                                                    serial_consistency_level, request_timeout, row_factory,
-                                                    continuous_paging_options=continuous_paging_options)
-        self.graph_options = graph_options or GraphOptions(graph_source=b'g',
-                                                           graph_language=b'gremlin-groovy')
-
-
-class GraphAnalyticsExecutionProfile(GraphExecutionProfile):
-
-    def __init__(self, load_balancing_policy=None, retry_policy=None,
-                 consistency_level=_NOT_SET, serial_consistency_level=None,
-                 request_timeout=3600. * 24. * 7., row_factory=None,
-                 graph_options=None):
-        """
-        Execution profile with timeout and load balancing appropriate for graph analytics queries.
-
-        See also :class:`~.GraphExecutionPolicy`.
-
-        In addition to default parameters shown in the signature, this profile also defaults ``retry_policy`` to
-        :class:`cassandra.policies.NeverRetryPolicy`, and ``load_balancing_policy`` to one that targets the current Spark
-        master.
-
-        Note: The graph_options.graph_source is set automatically to b'a' (analytics)
-        when using GraphAnalyticsExecutionProfile. This is mandatory to target analytics nodes.
-        """
-        load_balancing_policy = load_balancing_policy or DefaultLoadBalancingPolicy(default_lbp_factory())
-        graph_options = graph_options or GraphOptions(graph_language=b'gremlin-groovy')
-        super(GraphAnalyticsExecutionProfile, self).__init__(load_balancing_policy, retry_policy, consistency_level,
-                                                             serial_consistency_level, request_timeout, row_factory,
-                                                             graph_options)
-        # ensure the graph_source is analytics, since this is the purpose of the GraphAnalyticsExecutionProfile
-        self.graph_options.set_source_analytics()
-
-
 class ProfileManager(object):
 
     def __init__(self, pools_allowed: bool=True):
@@ -790,32 +716,6 @@ Key for the ``Cluster`` default execution profile, used when no other profile is
 
 Use this as the key in ``Cluster(execution_profiles)`` to override the default profile.
 """
-
-EXEC_PROFILE_GRAPH_DEFAULT = object()
-"""
-Key for the default graph execution profile, used when no other profile is selected in
-``Session.execute_graph(execution_profile)``.
-
-Use this as the key in :doc:`Cluster(execution_profiles) </execution-profiles>`
-to override the default graph profile.
-"""
-
-EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT = object()
-"""
-Key for the default graph system execution profile. This can be used for graph statements using the DSE graph
-system API.
-
-Selected using ``Session.execute_graph(execution_profile=EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT)``.
-"""
-
-EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT = object()
-"""
-Key for the default graph analytics execution profile. This can be used for graph statements intended to
-use Spark/analytics as the traversal source.
-
-Selected using ``Session.execute_graph(execution_profile=EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT)``.
-"""
-
 
 class ShardAwareOptions:
     disable = None
@@ -1720,13 +1620,6 @@ class Cluster(object):
             if execution_profiles:
                 profiles.update(execution_profiles)
                 self._config_mode = _ConfigMode.PROFILES
-
-            lbp = DefaultLoadBalancingPolicy(self.profile_manager.default.load_balancing_policy)
-            profiles.setdefault(EXEC_PROFILE_GRAPH_DEFAULT, GraphExecutionProfile(load_balancing_policy=lbp))
-            profiles.setdefault(EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT,
-                                GraphExecutionProfile(load_balancing_policy=lbp, request_timeout=60. * 3.))
-            profiles.setdefault(EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT,
-                                GraphAnalyticsExecutionProfile(load_balancing_policy=lbp))
 
         if self._contact_points_explicit and not self.cloud:  # avoid this warning for cloud users.
             if self._config_mode is _ConfigMode.PROFILES:
@@ -3635,7 +3528,6 @@ class Session(object):
     _profile_manager = None
     _metrics = None
     _request_init_callbacks = None
-    _graph_paging_available = False
 
     def __init__(self, cluster, hosts, keyspace=None):
         self.cluster = cluster
@@ -3917,175 +3809,6 @@ class Session(object):
             self, statements_and_parameters, concurrency,
             raise_on_first_error, execution_profile)
 
-    def execute_graph(self, query, parameters=None, trace=False, execution_profile=EXEC_PROFILE_GRAPH_DEFAULT, execute_as=None):
-        """
-        Executes a Gremlin query string or GraphStatement synchronously,
-        and returns a ResultSet from this execution.
-
-        `parameters` is dict of named parameters to bind. The values must be
-        JSON-serializable.
-
-        `execution_profile`: Selects an execution profile for the request.
-
-        `execute_as` the user that will be used on the server to execute the request.
-        """
-        return self.execute_graph_async(query, parameters, trace, execution_profile, execute_as).result()
-
-    def execute_graph_async(self, query, parameters=None, trace=False, execution_profile=EXEC_PROFILE_GRAPH_DEFAULT, execute_as=None):
-        """
-        Execute the graph query and return a :class:`ResponseFuture`
-        object which callbacks may be attached to for asynchronous response delivery. You may also call ``ResponseFuture.result()`` to synchronously block for
-        results at any time.
-        """
-        if self.cluster._config_mode is _ConfigMode.LEGACY:
-            raise ValueError(("Cannot execute graph queries using Cluster legacy parameters. "
-                              "Consider using Execution profiles: "
-                              "https://docs.datastax.com/en/developer/python-driver/latest/execution_profiles/#execution-profiles"))
-
-        if not isinstance(query, GraphStatement):
-            query = SimpleGraphStatement(query)
-
-        # Clone and look up instance here so we can resolve and apply the extended attributes
-        execution_profile = self.execution_profile_clone_update(execution_profile)
-
-        if not hasattr(execution_profile, 'graph_options'):
-            raise ValueError(
-                "Execution profile for graph queries must derive from GraphExecutionProfile, and provide graph_options")
-
-        self._resolve_execution_profile_options(execution_profile)
-
-        # make sure the graphson context row factory is binded to this cluster
-        try:
-            if issubclass(execution_profile.row_factory, _GraphSONContextRowFactory):
-                execution_profile.row_factory = execution_profile.row_factory(self.cluster)
-        except TypeError:
-            # issubclass might fail if arg1 is an instance
-            pass
-
-            # set graph paging if needed
-        self._maybe_set_graph_paging(execution_profile)
-
-        graph_parameters = None
-        if parameters:
-            graph_parameters = self._transform_params(parameters, graph_options=execution_profile.graph_options)
-
-        custom_payload = execution_profile.graph_options.get_options_map()
-        if execute_as:
-            custom_payload[_proxy_execute_key] = execute_as.encode()
-        custom_payload[_request_timeout_key] = int64_pack(int(execution_profile.request_timeout * 1000))
-
-        future = self._create_response_future(query, parameters=None, trace=trace, custom_payload=custom_payload,
-                                              timeout=_NOT_SET, execution_profile=execution_profile)
-
-        future.message.query_params = graph_parameters
-        future._protocol_handler = self.client_protocol_handler
-
-        if execution_profile.graph_options.is_analytics_source and \
-                isinstance(execution_profile.load_balancing_policy, DefaultLoadBalancingPolicy):
-            self._target_analytics_master(future)
-        else:
-            future.send_request()
-        return future
-
-    def _maybe_set_graph_paging(self, execution_profile):
-        graph_paging = execution_profile.continuous_paging_options
-        if execution_profile.continuous_paging_options is _NOT_SET:
-            graph_paging = None
-
-        execution_profile.continuous_paging_options = graph_paging
-
-    def _resolve_execution_profile_options(self, execution_profile):
-        """
-        Determine the GraphSON protocol and row factory for a graph query. This is useful
-        to configure automatically the execution profile when executing a query on a
-        core graph.
-
-        If `graph_protocol` is not explicitly specified, the following rules apply:
-        - Default to GraphProtocol.GRAPHSON_1_0, or GRAPHSON_2_0 if the `graph_language` is not gremlin-groovy.
-        - If `graph_options.graph_name` is specified and is a Core graph, set GraphSON_3_0.
-        If `row_factory` is not explicitly specified, the following rules apply:
-        - Default to graph_object_row_factory.
-        - If `graph_options.graph_name` is specified and is a Core graph, set graph_graphson3_row_factory.
-        """
-        if execution_profile.graph_options.graph_protocol is not None and \
-                execution_profile.row_factory is not None:
-            return
-
-        graph_options = execution_profile.graph_options
-
-        is_core_graph = False
-        if graph_options.graph_name:
-            # graph_options.graph_name is bytes ...
-            name = graph_options.graph_name.decode('utf-8')
-            if name in self.cluster.metadata.keyspaces:
-                ks_metadata = self.cluster.metadata.keyspaces[name]
-                if ks_metadata.graph_engine == 'Core':
-                    is_core_graph = True
-
-        if is_core_graph:
-            graph_protocol = GraphProtocol.GRAPHSON_3_0
-            row_factory = graph_graphson3_row_factory
-        else:
-            if graph_options.graph_language == GraphOptions.DEFAULT_GRAPH_LANGUAGE:
-                graph_protocol = GraphOptions.DEFAULT_GRAPH_PROTOCOL
-                row_factory = graph_object_row_factory
-            else:
-                # if not gremlin-groovy, GraphSON_2_0
-                graph_protocol = GraphProtocol.GRAPHSON_2_0
-                row_factory = graph_graphson2_row_factory
-
-        # Only apply if not set explicitly
-        if graph_options.graph_protocol is None:
-            graph_options.graph_protocol = graph_protocol
-        if execution_profile.row_factory is None:
-            execution_profile.row_factory = row_factory
-
-    def _transform_params(self, parameters, graph_options):
-        if not isinstance(parameters, dict):
-            raise ValueError('The parameters must be a dictionary. Unnamed parameters are not allowed.')
-
-        # Serialize python types to graphson
-        serializer = GraphSON1Serializer
-        if graph_options.graph_protocol == GraphProtocol.GRAPHSON_2_0:
-            serializer = GraphSON2Serializer()
-        elif graph_options.graph_protocol == GraphProtocol.GRAPHSON_3_0:
-            # only required for core graphs
-            context = {
-                'cluster': self.cluster,
-                'graph_name': graph_options.graph_name.decode('utf-8') if graph_options.graph_name else None
-            }
-            serializer = GraphSON3Serializer(context)
-
-        serialized_parameters = serializer.serialize(parameters)
-        return [json.dumps(serialized_parameters).encode('utf-8')]
-
-    def _target_analytics_master(self, future):
-        future._start_timer()
-        master_query_future = self._create_response_future("CALL DseClientTool.getAnalyticsGraphServer()",
-                                                           parameters=None, trace=False,
-                                                           custom_payload=None, timeout=future.timeout)
-        master_query_future.row_factory = tuple_factory
-        master_query_future.send_request()
-
-        cb = self._on_analytics_master_result
-        args = (master_query_future, future)
-        master_query_future.add_callbacks(callback=cb, callback_args=args, errback=cb, errback_args=args)
-
-    def _on_analytics_master_result(self, response, master_future, query_future):
-        try:
-            row = master_future.result()[0]
-            addr = row[0]['location']
-            delimiter_index = addr.rfind(':')  # assumes <ip>:<port> - not robust, but that's what is being provided
-            if delimiter_index > 0:
-                addr = addr[:delimiter_index]
-            targeted_query = HostTargetingStatement(query_future.query, addr)
-            query_future.query_plan = query_future._load_balancer.make_query_plan(self.keyspace, targeted_query)
-        except Exception:
-            log.debug("Failed querying analytics master (request might not be routed optimally). "
-                      "Make sure the session is connecting to a graph analytics datacenter.", exc_info=True)
-
-        self.submit(query_future.send_request)
-
     def _create_response_future(self, query, parameters, trace, custom_payload,
                                 timeout, execution_profile=EXEC_PROFILE_DEFAULT,
                                 paging_state=None, host=None):
@@ -4211,11 +3934,6 @@ class Session(object):
             message = BatchMessage(
                 query.batch_type, query._statements_and_parameters, cl,
                 serial_cl, timestamp, statement_keyspace)
-        elif isinstance(query, GraphStatement):
-            # the statement_keyspace is not aplicable to GraphStatement
-            message = QueryMessage(query.query, cl, serial_cl, fetch_size,
-                                   paging_state, timestamp,
-                                   continuous_paging_options)
 
         message.tracing = trace
         message.update_custom_payload(query.custom_payload)
@@ -7653,8 +7371,6 @@ class ResponseFuture(object):
 
     def _is_keyspace_change_query(self, message=None):
         message = self.message if message is None else message
-        if isinstance(self.query, GraphStatement):
-            return False
         if not isinstance(message, QueryMessage):
             return False
         query = getattr(message.query, 'query_string', message.query)
