@@ -168,3 +168,161 @@ To run the benchmarks, pick one of the files under the ``benchmarks/`` dir and r
 There are a few options.  Use ``--help`` to see them all::
 
     uv run benchmarks/future_batches.py --help
+
+GitHub releases and release notes
+=================================
+
+Releases start only through manual dispatch of ``publish-manually.yml`` from
+an up-to-date default branch. Supply the new version without the ``-scylla``
+suffix, for example::
+
+    gh workflow run publish-manually.yml --ref master -f version=3.29.13
+
+Use canonical ``X.Y.Z`` input. Relative to the current driver version ``M.m.p``,
+only the next patch (``M.m.(p+1)``), minor (``M.(m+1).0``), or major
+(``(M+1).0.0``) is accepted, before candidate preparation. From ``3.29.12``,
+these are ``3.29.13``, ``3.30.0`` and ``4.0.0``; requests such as ``3.290.0``,
+``3.29.14``, ``3.31.0`` and ``3.30.1`` are rejected. There is no override or
+skip input. Deliberately skipped versions and unusual release sequences are
+blocked; a typo equal to an allowed successor can still pass.
+
+Branch pushes and manual dispatch of ``build-push.yml`` build distributions
+without publishing them. Tag pushes do not start release publication.
+
+Configure the ``scylladb-releaser`` GitHub App installation for this repository
+with Contents write access. Set ``RELEASE_APP_ID`` as a repository or ``release``
+environment variable and ``RELEASE_APP_PRIVATE_KEY`` as a secret accessible to
+the ``release`` environment. Preparation, finalization and GitHub release
+creation use repository-scoped installation tokens. Version commits and annotated
+tags use the App's ``scylladb-releaser[bot]`` identity. Configure any branch
+protection bypass needed by that App before releasing. The existing PyPI Trusted
+Publisher must authorize ``publish-manually.yml``; its publication job does not
+select an environment.
+
+The workflow validates the requested version and dispatch revision, updates
+``cassandra/__init__.py`` and the documentation's release list/latest version,
+and pushes one version commit to ``release-candidate/X.Y.Z-scylla``. It creates
+no final release tag at this stage. That exact candidate commit must pass:
+
+* Wheel builds and their tests across all configured platforms, plus the source
+  distribution build.
+* The driver's reactor/Python integration-test matrix.
+* The pinned ``scylladb/python-driver-matrix`` harness against LATEST, PRIOR,
+  LTS-LATEST and LTS-PRIOR Scylla releases, using protocols 3 and 4. Its existing
+  compatibility exclusions for Scylla 2025.1 are retained.
+
+Only after all gates succeed does the App atomically advance the default branch
+and create the annotated ``X.Y.Z-scylla`` tag. The workflow rejects changed
+candidate refs, unexpected candidate changes, mismatched build SHAs and concurrent
+default-branch updates. Releasing has no test-skip input. Failed tests leave the
+candidate branch available for inspection without advancing the default branch
+or creating the final tag.
+
+The same run then uploads its tested distributions to PyPI and creates a GitHub
+release with generated notes. Existing published releases and their notes are
+preserved; matching unpublished releases must be published before retrying.
+Before uploading, the workflow checks the intended distribution filenames
+against PyPI's public inventory for that version. Any filename overlap stops
+the upload regardless of file contents, including same-source retries after
+partial or complete prior uploads. Transport errors, non-404 HTTP errors and
+malformed inventory also stop publication; a missing version (404) permits
+the first upload. Duplicate skipping remains disabled. Concurrent uploads or
+stale inventory can still let identical retries succeed. New GitHub notes
+require a successful upload. PyPI publication and GitHub release creation are
+not atomic.
+
+For recovery, inspect the original run's candidate/build SHA, upload logs and
+artifact inventory. Rerun failed test or build jobs in that original run to retain
+the candidate. If preparing again is necessary before finalization, inspect and
+remove only the unpublished candidate branch before dispatching from the current
+default branch; preparation refuses to overwrite an existing candidate. Candidate
+branches remain available after successful releases and may be removed later.
+Only if the original ``publish`` job succeeded and GitHub release creation failed,
+retry that failed release job in the original run, without rebuilding or rerunning
+the upload. If ``publish`` failed or was cancelled, even if all files appear
+present, arrange separately verified recovery. Do the same for partial uploads,
+unavailable evidence or changed tags. Do not move release tags, delete published
+files or enable duplicate skipping to bypass failures. This workflow does not
+verify durable provenance across publication attempts.
+
+The ``Classify release notes`` workflow uses ``actions/labeler`` and the
+filename rules in ``.github/labeler.yml`` to manage ``omit-from-release-notes``.
+Documentation (``docs/``, ``CONTRIBUTING.rst``), tests
+(``tests/``), the explicitly listed support files and workflows in ``.github/``,
+``.gitignore``, ``.gitattributes``, and the coverage/import-check scripts qualify
+when all changed files match this support-only union. The labeler configuration
+is the source of the exact allowlist. Workflows that build or publish shipped
+artifacts or provide required release gates (including ``integration-tests.yml``),
+production code, runtime dependencies, packaging/build manifests,
+unknown paths, and mixed changes remain in the notes. ``README.rst`` supplies
+package metadata, so README-only documentation changes also remain in the notes.
+Titles, authors and broad ``chore``/``dependencies`` labels do not determine
+omission.
+
+Labeling runs when a PR opens, changes, reopens, is edited or closes.
+``sync-labels: true`` removes the omission label when filenames stop matching.
+Trusted checks around labeling inspect rename origins and reject incomplete or
+changing file listings. Failed or skipped classification attempts to remove
+an unverified omission label without changing other labels. API outages can
+prevent cleanup; before/after checks do not make classification atomic, and
+cancellation can prevent the final cleanup step from running. The guard reads
+the canonical labeler configuration using locked parser/matcher dependencies.
+Unsupported configuration shapes fail visibly and require a guard update.
+The workflow checks out only the trusted event revision, never the PR head.
+
+Before manually dispatching a release, identify the merged PRs
+included since the previous release. Run ``Classify release notes`` manually
+with ``pr_number`` for each PR needing classification or backfilling, using a
+current default branch that contains the guard. For example::
+
+    gh workflow run label-release-notes.yml --ref master -f pr_number=123
+
+Manual runs selecting another branch or a tag are rejected before helper
+checkout. This enforces the documented dispatch procedure; it does not secure
+a modified workflow on an arbitrary selected branch.
+
+Wait for the final verification step, then compare its ``Verified`` log's
+head/base SHAs, changed-file count and ``omit`` result with fresh PR metadata,
+the complete file list including rename origins, and the actual labels::
+
+    gh api repos/scylladb/python-driver/pulls/123 --jq '{head: .head.sha, base: .base.sha, count: .changed_files}'
+    gh api --paginate repos/scylladb/python-driver/pulls/123/files --jq '.[] | {filename, status, previous_filename}'
+    gh api --paginate repos/scylladb/python-driver/issues/123/labels --jq '.[].name'
+
+Confirm the file count and unique names agree and that production, mixed, and
+unverified changes have no omission label. Rerun classification after changed
+revision evidence, failed or skipped runs, or label discrepancies, then repeat
+verification. The release configuration excludes this label from generated
+notes, but publication does not wait for classification automatically. Missing
+this manual check can preserve omissions or unwanted support entries in the
+published notes. Existing published notes are preserved on reruns; automated
+release-time synchronization is outside this change.
+
+``omit-from-release-notes`` controls GitHub release-note presentation. The local
+Jira caller skips add/remove events for this exact label and preserves other
+events. Existing Jira copies are not cleaned, and other synchronization paths
+may restore copied metadata.
+
+Run the focused automation checks from the repository root in a POSIX shell.
+Install ``uv``, Node.js 24 (including npm), and GitHub CLI first, and authenticate
+``gh`` with access to public repositories. The action tests require the unmodified
+bundle pinned in ``label-release-notes.yml``; they verify its commit and SHA256::
+
+    uv run --no-project python -m unittest discover -s .github/scripts -p 'test_*.py' -v
+    npm ci --ignore-scripts --prefix .github
+    labeler_ref=$(node <<'NODE'
+    const config = require('./.github/node_modules/js-yaml').load(
+      require('node:fs').readFileSync('.github/workflows/label-release-notes.yml', 'utf8'));
+    const action = config.jobs.classify.steps.find(step => step.id === 'labeler').uses;
+    const prefix = 'actions/labeler@';
+    const ref = action.slice(prefix.length);
+    if (!action.startsWith(prefix) || !/^[0-9a-f]{40}$/.test(ref)) {
+      throw Error('Expected pinned labeler');
+    }
+    console.log(ref);
+    NODE
+    )
+    export LABELER_ACTION_PATH="$(mktemp -d)/labeler.mjs"
+    gh api "repos/actions/labeler/contents/dist/index.js?ref=$labeler_ref" \
+      --header 'Accept: application/vnd.github.raw+json' > "$LABELER_ACTION_PATH"
+    node --test .github/tests/*.test.cjs

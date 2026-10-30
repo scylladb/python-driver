@@ -16,7 +16,7 @@ on:
         default: "linux,macos-x86,macos-arm,windows,linux-aarch64"
 
       target_tag:
-        description: "Publish particular tag"
+        description: "Git ref or commit SHA to build (defaults to the workflow revision)"
         type: string
         required: false
         default: ""
@@ -33,7 +33,31 @@ on:
         required: false
         default: false
 
+    outputs:
+      source_sha:
+        description: Exact commit used for every wheel and sdist built by this workflow
+        value: ${{ jobs.resolve-source.outputs.sha }}
+
+permissions:
+  contents: read
+
 jobs:
+  resolve-source:
+    name: Pin build source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.target_tag || github.sha }}
+          persist-credentials: false
+      - name: Record immutable source commit
+        id: source
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   prepare-matrix:
     name: "Prepare matrix to run for ${{ inputs.python-version }} on `${{ inputs.target }}`"
     runs-on: ubuntu-24.04
@@ -78,7 +102,7 @@ jobs:
     name: Build wheels for ${{ matrix.target }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
-    needs: prepare-matrix
+    needs: [prepare-matrix, resolve-source]
     strategy:
       fail-fast: false
       matrix:
@@ -87,7 +111,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.target_tag || github.sha }}
+          ref: ${{ needs.resolve-source.outputs.sha }}
 
       - name: Set build concurrency to the runner's CPU count
         shell: bash
@@ -192,13 +216,14 @@ jobs:
           path: ./wheelhouse/*.whl
 
   build-sdist:
+    needs: resolve-source
     name: Build source distribution
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.target_tag || github.sha }}
+          ref: ${{ needs.resolve-source.outputs.sha }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0

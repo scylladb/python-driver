@@ -1,0 +1,76 @@
+name: Test release automation
+
+on:
+  pull_request:
+    paths:
+      - 'cassandra/__init__.py'
+      - 'docs/conf.py'
+      - '.github/scripts/**'
+      - '.github/tests/**'
+      - '.github/package.json'
+      - '.github/package-lock.json'
+      - '.github/workflows/*release*'
+      - '.github/release.yml'
+      - '.github/labeler.yml'
+      - '.github/workflows/call_jira_sync.yml'
+      - '.github/workflows/build-push.yml'
+      - '.github/workflows/publish-manually.yml'
+      - '.github/workflows/lib-build.yml'
+      - '.github/workflows/integration-tests.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'cassandra/__init__.py'
+      - 'docs/conf.py'
+      - '.github/scripts/**'
+      - '.github/tests/**'
+      - '.github/package.json'
+      - '.github/package-lock.json'
+      - '.github/workflows/*release*'
+      - '.github/release.yml'
+      - '.github/labeler.yml'
+      - '.github/workflows/call_jira_sync.yml'
+      - '.github/workflows/build-push.yml'
+      - '.github/workflows/publish-manually.yml'
+      - '.github/workflows/lib-build.yml'
+      - '.github/workflows/integration-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts --prefix .github
+      - name: Fetch the pinned labeler for controlled API tests
+        working-directory: .github
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABELER_ACTION_PATH: ${{ runner.temp }}/labeler.mjs
+        run: |
+          labeler_ref=$(node <<'NODE'
+          const config = require('js-yaml').load(
+            require('node:fs').readFileSync('workflows/label-release-notes.yml', 'utf8'));
+          const action = config.jobs.classify.steps.find(step => step.id === 'labeler').uses;
+          const prefix = 'actions/labeler@';
+          const ref = action.slice(prefix.length);
+          if (!action.startsWith(prefix) || !/^[0-9a-f]{40}$/.test(ref)) {
+            throw Error('Expected pinned labeler');
+          }
+          console.log(ref);
+          NODE
+          )
+          gh api "repos/actions/labeler/contents/dist/index.js?ref=$labeler_ref" \
+            --header 'Accept: application/vnd.github.raw+json' > "$LABELER_ACTION_PATH"
+      - run: node --test .github/tests/*.test.cjs
+        env:
+          LABELER_ACTION_PATH: ${{ runner.temp }}/labeler.mjs

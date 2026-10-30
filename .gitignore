@@ -93,3 +93,5 @@ claude.log
 claude_history.json
 claude_config.json
 CLAUDE.md
+# Release automation dependencies
+/.github/node_modules/

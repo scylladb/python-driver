@@ -1,4 +1,4 @@
-name: Build and upload to PyPi
+name: Build distributions
 
 on:
   push:
@@ -7,29 +7,10 @@ on:
       - 'branch-**'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-and-publish:
     name: "Build wheels"
     uses: ./.github/workflows/lib-build.yml
-
-  # Publishing is a separate job (not inside the reusable workflow) because PyPI Trusted Publishing
-  # requires the *caller* workflow path in the OIDC token. A reusable workflow would embed its own
-  # path instead, causing an `invalid-publisher` error on the PyPI side.
-  # See: https://github.com/pypa/gh-action-pypi-publish/issues/166
-  publish:
-    name: "Publish wheels to PyPi"
-    if: ${{ endsWith(github.event.ref, 'scylla') }}
-    needs: build-and-publish
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: dist
-          merge-multiple: true
-
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          skip-existing: true

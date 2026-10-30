@@ -1,13 +1,13 @@
-Releasing
-=========
-* Run the tests and ensure they all pass
-* Update the version in ``cassandra/__init__.py``
-* Add the new version in ``docs/conf.py`` (variables: ``TAGS``, ``LATEST_VERSION``, ``DEPRECATED_VERSIONS``).
-   * For patch version releases (like ``3.26.8-scylla -> 3.26.9-scylla``) replace the old version with new one in ``TAGS`` and update ``LATEST_VERSION``.
-   * For minor version releases (like ``3.26.9-scylla -> 3.27.0-scylla``) add new version to ``TAGS``, update ``LATEST_VERSION`` and add previous minor version to ``DEPRECATED_VERSIONS``.
-* Commit the version changes, e.g. ``git commit -m 'Release 3.26.9'``
-* Tag the release.  For example: ``git tag -a 3.26.9-scylla -m 'Release 3.26.9'``
-* Push the tag and new ``master`` SIMULTANEOUSLY: ``git push --atomic origin master v6.0.21-scylla``
-* Now new version and its docs should be automatically published. Check `PyPI <https://pypi.org/project/scylla-driver/#history>`_ and `docs <https://python-driver.docs.scylladb.com/stable/>`_ to make sure its there.
-* If you didn't push branch and tag simultaneously (or doc publishing failed for other reason) then restart the relevant job from GitHub Actions UI.
-* Publish a GitHub Release and a post on community forum.
+# Release process
+
+* Verify release-note classifications for merged PRs in the intended release range, as documented in CONTRIBUTING.rst. Publication does not wait for classification automatically.
+* Configure the `scylladb-releaser` App, `RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY`, the `release` environment and the PyPI Trusted Publisher for `publish-manually.yml`.
+* Start the manual **Release ScyllaDB Python Driver** workflow on the current default branch with the new bare version, for example `gh workflow run publish-manually.yml --ref master -f version=3.29.13`.
+* Use canonical `X.Y.Z` without `-scylla`. Only the next patch, minor or major version is accepted: increment patch by one, increment minor by one and reset patch to zero, or increment major by one and reset minor and patch to zero. From `3.29.12`, these are `3.29.13`, `3.30.0` and `4.0.0`. Every other version is rejected before candidate preparation. Deliberate skips and unusual release sequences require a separate policy choice; there is no override or skip input. A typo that equals an allowed successor can still pass.
+* The App creates the version commit on a candidate branch. All wheel builds/tests, reactor integration tests and the external driver matrix must pass against that candidate SHA. The external matrix covers LATEST, PRIOR, LTS-LATEST and LTS-PRIOR Scylla releases with protocols 3 and 4.
+* After testing, the App atomically pushes the version commit to the default branch and creates its annotated release tag. Concurrent branch updates stop finalization. PyPI publication and GitHub release creation follow in the same manual run. Branch/tag pushes never publish distributions.
+* Verify PyPI, documentation and the GitHub release, then publish a post on the community forum. If documentation publishing fails, restart its job from GitHub Actions.
+* Failed tests leave the candidate branch for inspection; rerun failed jobs in the original run. Preparation never overwrites an existing candidate. For a fresh dispatch before finalization, first inspect and remove only the unpublished candidate branch. Candidate branches can also be removed after a successful release.
+* Before uploading, the workflow checks intended distribution filenames against PyPI's public inventory for that version. Any overlap stops the upload regardless of contents, including same-source retries after a partial or complete upload. Transport errors, non-404 HTTP errors and malformed inventory stop publication; a missing version (404) permits the first upload. Duplicate skipping stays disabled. Concurrent uploads or stale inventory can still let identical retries succeed. A failed upload prevents new GitHub release notes.
+* Before recovering a failed release, inspect the original run's candidate/build SHA, upload logs and artifact inventory. Confirm that every intended file reached PyPI and the tag still identifies that source. Only if the original `publish` job succeeded and the GitHub-release job failed, retry that failed release job in the original run; do not rebuild or rerun the upload.
+* If `publish` failed or was cancelled, even if all files appear present, arrange separately verified recovery. Do the same for partial uploads, unavailable evidence or changed tags. Do not move release tags, delete published files or enable duplicate skipping to bypass failures. Publication is not atomic across PyPI and GitHub, and the workflow does not verify durable provenance across attempts.

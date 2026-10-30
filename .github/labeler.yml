@@ -1,0 +1,4 @@
+omit-from-release-notes:
+  - changed-files:
+      - all-globs-to-all-files:
+          - '{docs/**,tests/**,.github/ISSUE_TEMPLATE/**,.github/pull_request_template.md,.github/dependabot.yml,.github/labeler.yml,.github/release.yml,.github/workflows/{coverage,docs-pr,docs-pages,numpy-import-contract,release-automation-tests,label-release-notes,call_jira_sync}.yml,.github/scripts/test_*.py,.github/tests/**,.github/scripts/release-notes-guard.cjs,.github/package{,-lock}.json,CONTRIBUTING.rst,.gitignore,.gitattributes,scripts/coverage.sh,scripts/check_numpy_imports.py}'
