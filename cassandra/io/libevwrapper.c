@@ -3,6 +3,44 @@
 #include <Python.h>
 #include <ev.h>
 
+#ifdef _WIN32
+#include <io.h>
+
+/* libev on Windows takes CRT fds and maps them with _get_osfhandle(), but
+ * Python hands us raw SOCKET handles, which makes the CRT kill the process
+ * with 0xC0000409 (scylladb/python-driver#501). Wrap each SOCKET in a CRT fd.
+ * The CRT cannot release a slot without closing the handle, so slots are
+ * cached by handle value and reused when Windows recycles that value. */
+static PyObject *crt_fds = NULL;
+
+static int
+crt_fd_for_socket(int sock) {
+    PyObject *key, *val;
+    int fd = -1;
+
+    if (!crt_fds && !(crt_fds = PyDict_New())) {
+        return -1;
+    }
+    if (!(key = PyLong_FromLong(sock))) {
+        return -1;
+    }
+    val = PyDict_GetItemWithError(crt_fds, key);
+    if (val) {
+        fd = (int)PyLong_AsLong(val);
+    } else if (!PyErr_Occurred()) {
+        fd = _open_osfhandle((intptr_t)sock, 0);
+        if (fd == -1) {
+            PyErr_SetFromErrno(PyExc_OSError);
+        } else if (!(val = PyLong_FromLong(fd)) || PyDict_SetItem(crt_fds, key, val) == -1) {
+            fd = -1;
+        }
+        Py_XDECREF(val);
+    }
+    Py_DECREF(key);
+    return fd;
+}
+#endif
+
 typedef struct libevwrapper_Loop {
     PyObject_HEAD
     struct ev_loop *loop;
@@ -167,6 +205,13 @@ IO_init(libevwrapper_IO *self, PyObject *args, PyObject *kwds) {
     fd = PyObject_AsFileDescriptor(socket);
     if (fd == -1) {
         PyErr_SetString(PyExc_TypeError, "unable to get file descriptor from socket");
+    }
+#ifdef _WIN32
+    else {
+        fd = crt_fd_for_socket(fd);
+    }
+#endif
+    if (fd == -1) {
         Py_XDECREF(callback);
         Py_XDECREF(loop);
         return -1;

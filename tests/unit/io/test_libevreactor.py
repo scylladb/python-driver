@@ -499,3 +499,34 @@ class LibevTimerTest(TimerTestMixin, LibevTimerPatcher):
 
         LibevConnection.initialize_reactor()
         super(LibevTimerTest, self).setUp()
+
+
+class LibevRealSocketTest(unittest.TestCase):
+
+    def test_io_watcher_on_real_socket(self):
+        """
+        An IO watcher on a real socket must fire. On Windows this used to kill
+        the process with 0xC0000409 (scylladb/python-driver#501).
+        """
+        if LibevConnection is None:
+            raise unittest.SkipTest('libev does not appear to be installed correctly')
+        from cassandra.io import libevwrapper
+
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        fired = []
+
+        def callback(watcher, revents):
+            fired.append(revents)
+            watcher.stop()
+
+        loop = libevwrapper.Loop()
+        watcher = libevwrapper.IO(b, libevwrapper.EV_READ, loop, callback)
+        watcher.start()
+        a.send(b'x')
+        t = threading.Thread(target=loop.start, daemon=True)
+        t.start()
+        t.join(5)
+        self.assertFalse(t.is_alive())
+        self.assertEqual(fired, [libevwrapper.EV_READ])
