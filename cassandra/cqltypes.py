@@ -1478,7 +1478,7 @@ class DateRangeType(CassandraType):
         return buf.getvalue()
 
 class VectorType(_CassandraType):
-    typename = 'org.apache.cassandra.db.marshal.VectorType'
+    typename = 'vector'
     vector_size = 0
     subtype = None
 
