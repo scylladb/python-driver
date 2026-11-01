@@ -3,6 +3,58 @@
 #include <Python.h>
 #include <ev.h>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <io.h>
+
+/* libev on Windows takes CRT fds and maps them with _get_osfhandle(), but
+ * Python hands us raw SOCKET handles, which makes the CRT kill the process
+ * with 0xC0000409 (scylladb/python-driver#501). So each watcher wraps its own
+ * duplicate of the socket (as socket.dup() does) in a CRT fd, and the Python
+ * socket stays owned by Python.
+ *
+ * _close() would free the slot with CloseHandle(), but sockets must be closed
+ * with closesocket(). The duplicate is therefore protected from CloseHandle()
+ * while it is in the CRT table: _close() still frees the slot (the UCRT frees
+ * it even when CloseHandle() fails) and closesocket() then closes the socket.
+ * The handle stays open throughout, so its value cannot be reused meanwhile. */
+static int
+crt_fd_for_socket(int sock) {
+    WSAPROTOCOL_INFOW info;
+    SOCKET dup;
+    int fd;
+
+    if (WSADuplicateSocketW((SOCKET)sock, GetCurrentProcessId(), &info) ||
+        (dup = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO,
+                          &info, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT)) == INVALID_SOCKET) {
+        PyErr_SetExcFromWindowsErr(PyExc_OSError, WSAGetLastError());
+        return -1;
+    }
+    if (!SetHandleInformation((HANDLE)dup, HANDLE_FLAG_PROTECT_FROM_CLOSE,
+                              HANDLE_FLAG_PROTECT_FROM_CLOSE)) {
+        PyErr_SetFromWindowsErr(0);
+        closesocket(dup);
+        return -1;
+    }
+    fd = _open_osfhandle((intptr_t)dup, 0);
+    if (fd == -1) {
+        PyErr_SetFromErrno(PyExc_OSError);
+        SetHandleInformation((HANDLE)dup, HANDLE_FLAG_PROTECT_FROM_CLOSE, 0);
+        closesocket(dup);
+    }
+    return fd;
+}
+
+static void
+close_crt_fd_for_socket(int fd) {
+    SOCKET dup = (SOCKET)_get_osfhandle(fd);
+
+    _close(fd);  /* frees the CRT slot; CloseHandle() is refused */
+    SetHandleInformation((HANDLE)dup, HANDLE_FLAG_PROTECT_FROM_CLOSE, 0);
+    closesocket(dup);
+}
+#endif
+
 typedef struct libevwrapper_Loop {
     PyObject_HEAD
     struct ev_loop *loop;
@@ -113,10 +165,20 @@ typedef struct libevwrapper_IO {
     struct ev_io io;
     struct libevwrapper_Loop *loop;
     PyObject *callback;
+    int owns_fd;  /* Windows: io.fd is our CRT fd and must be closed */
 } libevwrapper_IO;
 
 static void
 IO_dealloc(libevwrapper_IO *self) {
+    if (self->loop) {
+        /* never leave freed storage (or, on Windows, a closed fd) in libev */
+        ev_io_stop(self->loop->loop, &self->io);
+    }
+#ifdef _WIN32
+    if (self->owns_fd) {
+        close_crt_fd_for_socket(self->io.fd);
+    }
+#endif
     Py_XDECREF(self->loop);
     Py_XDECREF(self->callback);
     Py_TYPE(self)->tp_free((PyObject *)self);
@@ -156,6 +218,13 @@ IO_init(libevwrapper_IO *self, PyObject *args, PyObject *kwds) {
         return -1;
     }
 
+    if (self->loop) {
+        /* Re-running __init__ would overwrite the references, the fd (and its
+         * socket duplicate on Windows) and possibly an active watcher. */
+        PyErr_SetString(PyExc_RuntimeError, "IO watcher is already initialized");
+        return -1;
+    }
+
     if (loop) {
         Py_INCREF(loop);
         self->loop = (libevwrapper_Loop *)loop;
@@ -164,8 +233,7 @@ IO_init(libevwrapper_IO *self, PyObject *args, PyObject *kwds) {
     if (callback) {
         if (!PyCallable_Check(callback)) {
             PyErr_SetString(PyExc_TypeError, "callback parameter must be callable");
-            Py_XDECREF(loop);
-            return -1;
+            return -1;  /* IO_dealloc releases self->loop */
         }
         Py_INCREF(callback);
         self->callback = callback;
@@ -174,13 +242,21 @@ IO_init(libevwrapper_IO *self, PyObject *args, PyObject *kwds) {
     fd = PyObject_AsFileDescriptor(socket);
     if (fd == -1) {
         PyErr_SetString(PyExc_TypeError, "unable to get file descriptor from socket");
-        Py_XDECREF(callback);
-        Py_XDECREF(loop);
-        return -1;
+    }
+#ifdef _WIN32
+    else {
+        fd = crt_fd_for_socket(fd);
+    }
+#endif
+    if (fd == -1) {
+        return -1;  /* IO_dealloc releases self->loop and self->callback */
     }
     io = &(self->io);
     ev_io_init(io, io_callback, fd, io_flags);
     self->io.data = self;
+#ifdef _WIN32
+    self->owns_fd = 1;
+#endif
     return 0;
 }
 
