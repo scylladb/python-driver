@@ -8168,8 +8168,9 @@ class ResponseFuture(object):
         self._start_timer()
         self.send_request()
 
-    def _reprepare(self, prepare_message, host, connection, pool):
-        cb = partial(self.session.submit, self._execute_after_prepare, host, connection, pool)
+    def _reprepare(self, prepare_message, host, connection, pool, prepared_statement=_NOT_SET):
+        cb = partial(self.session.submit, self._execute_after_prepare, host, connection, pool,
+                     prepared_statement=prepared_statement)
         if pool is None and connection is not None and connection.is_control_connection:
             request_id = self._query_control_connection(prepare_message, cb=cb,
                                                         connection=connection, host=host)
@@ -8335,28 +8336,31 @@ class ResponseFuture(object):
                         self.query, cl, error=response,
                         retry_num=self._query_retries)
                 elif isinstance(response, PreparedQueryNotFound):
-                    if self.prepared_statement:
-                        query_id = self.prepared_statement.query_id
-                        assert query_id == response.info, \
-                            "Got different query ID in server response (%s) than we " \
-                            "had before (%s)" % (response.info, query_id)
-                    else:
-                        query_id = response.info
+                    query_id = response.info
 
+                    if self.prepared_statement:
+                        # Cache local in-flight context first so lookup by either id can succeed.
+                        self.session.cluster.add_prepared(self.prepared_statement.query_id, self.prepared_statement)
+
+                    # Resolve the statement to reprepare into a local: self.prepared_statement
+                    # is the execution context shared by every attempt of this future
+                    # (retries, speculative executions), so it must not be replaced by
+                    # the statement one attempt found missing.
                     try:
-                        prepared_statement = self.session.cluster._prepared_statements[query_id]
+                        statement_to_prepare = self.session.cluster._prepared_statements[query_id]
                     except KeyError:
                         if not self.prepared_statement:
-                            log.error("Tried to execute unknown prepared statement: id=%s",
-                                      query_id.encode('hex'))
+                            log.error("Tried to execute unknown prepared statement: id=%s", hexlify(query_id))
                             self._set_final_exception(response)
                             return
-                        else:
-                            prepared_statement = self.prepared_statement
-                            self.session.cluster._prepared_statements[query_id] = prepared_statement
+                        log.warning(
+                            "UNPREPARED for query id %s while executing statement id %s. "
+                            "Could not resolve returned id in cache, proceeding with in-flight context.",
+                            hexlify(query_id), hexlify(self.prepared_statement.query_id))
+                        statement_to_prepare = self.prepared_statement
 
                     current_keyspace = self._connection.keyspace
-                    prepared_keyspace = prepared_statement.keyspace
+                    prepared_keyspace = statement_to_prepare.keyspace
                     if not ProtocolVersion.uses_keyspace_flag(self.session.cluster.protocol_version) \
                             and prepared_keyspace  and current_keyspace != prepared_keyspace:
                         self._set_final_exception(
@@ -8366,15 +8370,18 @@ class ResponseFuture(object):
                                        (current_keyspace, prepared_keyspace)))
                         return
 
-                    log.debug("Re-preparing unrecognized prepared statement against host %s: %s",
-                              host, prepared_statement.query_string)
-                    prepared_keyspace = prepared_statement.keyspace \
+                    log.debug(
+                        "Re-preparing unrecognized prepared statement against host %s: %s",
+                        host, statement_to_prepare.query_string
+                    )
+                    prepared_keyspace = statement_to_prepare.keyspace \
                         if ProtocolVersion.uses_keyspace_flag(self.session.cluster.protocol_version) else None
-                    prepare_message = PrepareMessage(query=prepared_statement.query_string,
+                    prepare_message = PrepareMessage(query=statement_to_prepare.query_string,
                                                      keyspace=prepared_keyspace)
                     # since this might block, run on the executor to avoid hanging
                     # the event loop thread
-                    self.session.submit(self._reprepare, prepare_message, host, connection, pool)
+                    self.session.submit(self._reprepare, prepare_message, host, connection, pool,
+                                        prepared_statement=statement_to_prepare)
                     return
                 else:
                     if hasattr(response, 'to_exception'):
@@ -8425,11 +8432,18 @@ class ResponseFuture(object):
             self._set_final_exception(ConnectionException(
                 "Failed to set keyspace on all hosts: %s" % (errors,)))
 
-    def _execute_after_prepare(self, host, connection, pool, response):
+    def _execute_after_prepare(self, host, connection, pool, response, prepared_statement=_NOT_SET):
         """
         Handle the response to our attempt to prepare a statement.
         If it succeeded, run the original query again against the same host.
+
+        ``prepared_statement`` is the statement this PREPARE was sent for; the
+        response is validated against it and its result metadata is updated.
+        It defaults to the future's own prepared statement.
         """
+        if prepared_statement is _NOT_SET:
+            prepared_statement = self.prepared_statement
+
         if pool:
             pool.return_connection(connection)
 
@@ -8438,16 +8452,17 @@ class ResponseFuture(object):
 
         if isinstance(response, ResultMessage):
             if response.kind == RESULT_KIND_PREPARED:
-                if self.prepared_statement:
-                    if self.prepared_statement.query_id != response.query_id:
+                if prepared_statement:
+                    if prepared_statement.query_id != response.query_id:
                         self._set_final_exception(DriverException(
                             "ID mismatch while trying to reprepare (expected {expected}, got {got}). "
                             "This prepared statement won't work anymore. "
                             "This usually happens when you run a 'USE...' "
                             "query after the statement was prepared.".format(
-                                expected=hexlify(self.prepared_statement.query_id), got=hexlify(response.query_id)
+                                expected=hexlify(prepared_statement.query_id), got=hexlify(response.query_id)
                             )
                         ))
+                        return
                     # Update the metadata/id pair atomically from exactly what this
                     # reprepare response carries. Falling back to the previously
                     # cached id when this response has none would risk pairing it
@@ -8457,9 +8472,9 @@ class ResponseFuture(object):
                     # id-aware execute could send without the server detecting the
                     # mismatch. Dropping it instead triggers the same self-healing
                     # b'' sentinel path a never-prepared id would.
-                    self.prepared_statement.update_result_metadata(
+                    prepared_statement.update_result_metadata(
                         response.column_metadata, response.result_metadata_id)
-                
+
                 # use self._query to re-use the same host and
                 # at the same time properly borrow the connection
                 if pool is None and connection is not None and connection.is_control_connection:
