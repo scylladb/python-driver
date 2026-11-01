@@ -7494,7 +7494,13 @@ class ResponseFuture(object):
         # or to the explicit host target if set
         if self._host:
             # returning a single value effectively disables retries
-            self.query_plan = iter([self._host])
+            host = self._host
+            if isinstance(host, Host) and not host._is_removed:
+                current = self.session.cluster.metadata.get_host_by_host_id(host.host_id)
+                if (current is not None and not current._is_removed and
+                        current.endpoint == host.endpoint):
+                    host = current
+            self.query_plan = iter([host])
         else:
             # convert the list/generator/etc to an iterator so that subsequent
             # calls to send_request (which retries may do) will resume where
