@@ -11,15 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import errno
 import sys
 import threading
 import time
+import weakref
 import unittest
 
 from unittest.mock import patch, Mock
 import socket
 
 from cassandra import DependencyException
+from cassandra.connection import DefaultEndPoint
 
 try:
     from cassandra.io.libevreactor import _cleanup as libev__cleanup
@@ -53,6 +56,30 @@ class LibevConnectionTest(ReactorTestMixin, unittest.TestCase):
             self.addCleanup(p.stop)
         for p in patchers:
             p.start()
+
+    def test_watcher_failure_releases_first_watcher_and_socket(self):
+        """
+        If the write watcher cannot be created (e.g. no free CRT fd on
+        Windows), the read watcher and the socket must not be leaked.
+        """
+        class Watcher(object):
+            pass
+        first = Watcher()
+        first_ref = weakref.ref(first)
+        sock = Mock()
+        from cassandra.io import libevwrapper
+        libevwrapper.IO.side_effect = [first, OSError(errno.EMFILE, 'Too many open files')]
+        del first
+
+        def connect(conn):
+            conn._socket = sock
+
+        with patch.object(LibevConnection, '_connect_socket', connect):
+            with self.assertRaises(OSError):
+                LibevConnection(DefaultEndPoint('1.2.3.4'), cql_version='3.0.1', connect_timeout=5)
+        sock.close.assert_called_once_with()
+        libevwrapper.IO.side_effect = None  # the mock's iterator holds `first` too
+        self.assertIsNone(first_ref())
 
     def test_watchers_are_finished(self):
         """
@@ -619,3 +646,80 @@ class LibevTimerTest(TimerTestMixin, LibevTimerPatcher):
 
         LibevConnection.initialize_reactor()
         super(LibevTimerTest, self).setUp()
+
+
+class LibevRealSocketTest(unittest.TestCase):
+
+    def test_io_watcher_on_real_socket(self):
+        """
+        An IO watcher on a real socket must fire. On Windows this used to kill
+        the process with 0xC0000409 (scylladb/python-driver#501).
+        """
+        if LibevConnection is None:
+            raise unittest.SkipTest('libev does not appear to be installed correctly')
+        from cassandra.io import libevwrapper
+
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        fired = []
+        loop = libevwrapper.Loop()
+
+        def callback(watcher, revents):
+            fired.append(revents)
+            watcher.stop()
+            timer.stop()
+
+        def timeout():
+            watcher.stop()
+            timer.stop()
+
+        watcher = libevwrapper.IO(b, libevwrapper.EV_READ, loop, callback)
+        # Run the loop on this thread: it returns once both watchers are
+        # stopped, so nothing native is left running when the test ends.
+        timer = libevwrapper.Timer(loop, timeout)
+        try:
+            watcher.start()
+            timer.start(5)
+            a.send(b'x')
+            loop.start()
+        finally:
+            # The callbacks and the native watchers reference each other, and
+            # IO/Timer cannot be collected by the GC. Clearing the closure
+            # cells frees them (and on Windows the socket duplicate) here.
+            del watcher, timer
+        self.assertEqual(fired, [libevwrapper.EV_READ])
+
+    def test_io_init_failures_keep_reference_counts(self):
+        """
+        IO.__init__ failures must release the loop and callback references
+        exactly once, and re-initializing a watcher is refused instead of
+        leaking what the first initialization acquired.
+        """
+        if LibevConnection is None:
+            raise unittest.SkipTest('libev does not appear to be installed correctly')
+        from cassandra.io import libevwrapper
+
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        loop = libevwrapper.Loop()
+
+        def callback(watcher, revents):
+            pass
+
+        not_callable = object()
+        refs = sys.getrefcount(loop), sys.getrefcount(callback), sys.getrefcount(not_callable)
+        for _ in range(10):
+            with self.assertRaises(TypeError):
+                libevwrapper.IO(b, libevwrapper.EV_READ, loop, not_callable)
+            with self.assertRaises((TypeError, ValueError)):
+                libevwrapper.IO(-1, libevwrapper.EV_READ, loop, callback)
+            with self.assertRaises(TypeError):
+                libevwrapper.IO(object(), libevwrapper.EV_READ, loop, callback)
+            watcher = libevwrapper.IO(b, libevwrapper.EV_READ, loop, callback)
+            with self.assertRaises(RuntimeError):
+                watcher.__init__(b, libevwrapper.EV_READ, loop, callback)
+            del watcher
+        self.assertEqual(
+            (sys.getrefcount(loop), sys.getrefcount(callback), sys.getrefcount(not_callable)), refs)

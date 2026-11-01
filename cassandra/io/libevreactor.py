@@ -385,9 +385,17 @@ class LibevConnection(Connection):
         self._connect_socket()
         self._socket.setblocking(0)
 
-        with _global_loop._lock:
-            self._read_watcher = libev.IO(self._socket.fileno(), libev.EV_READ, _global_loop._loop, self.handle_read)
-            self._write_watcher = libev.IO(self._socket.fileno(), libev.EV_WRITE, _global_loop._loop, self.handle_write)
+        try:
+            with _global_loop._lock:
+                self._read_watcher = libev.IO(self._socket.fileno(), libev.EV_READ, _global_loop._loop, self.handle_read)
+                self._write_watcher = libev.IO(self._socket.fileno(), libev.EV_WRITE, _global_loop._loop, self.handle_write)
+        except Exception:
+            # Not registered with the loop yet, so nothing else will clean up.
+            # Dropping the watcher breaks its cycle with this connection
+            # through the bound callback, which IO cannot collect.
+            self._read_watcher = self._write_watcher = None
+            self._socket.close()
+            raise
 
         self._send_options_message()
 
