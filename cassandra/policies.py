@@ -167,6 +167,11 @@ class LoadBalancingPolicy(HostStateListener):
         order.  A generator may work well for custom implementations
         of this method.
 
+        Before selecting a connection, the driver resolves each Host by its
+        ``host_id`` in the receiving cluster's current metadata. Policies may
+        yield cached Host references; their old endpoints are not used.
+        Unknown IDs are skipped, retaining the plan's normal failover order.
+
         Note that the `query` argument may be :const:`None` when preparing
         statements.
 
