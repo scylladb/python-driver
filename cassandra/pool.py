@@ -522,6 +522,9 @@ class HostConnection(object):
             with self._connection_guard() as current:
                 if current:
                     self.host.sharding_info = first_connection.features.sharding_info
+            if not current:
+                self.shutdown()
+                return
             self._open_connections_for_all_shards(first_connection.features.shard_id)
 
         self.supports_tablet_routing = first_connection.features.tablets_routing_v1 \
@@ -1026,10 +1029,13 @@ class HostConnection(object):
                     if current and self.num_missing_or_needing_replacement != 0:
                         self._excess_connections.add(conn)
                         retained = True
-        except Exception:
+        except Exception as exc:
             with self._connection_guard(attempt, conn, expected) as current:
                 report_error = current
             if report_error:
+                log.error(
+                    "Failed to open connection to %s, on shard_id=%i: %s",
+                    self.host, shard_id, exc)
                 raise
         finally:
             self._finish_shard_attempt(attempt)
