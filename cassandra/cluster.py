@@ -343,9 +343,9 @@ class NoHostAvailable(Exception):
 
     errors = None
     """
-    A map of the form ``{ip: exception}`` which details the particular
-    Exception that was caught for each host the operation was attempted
-    against.
+    A map from hosts or connection-candidate labels to the exceptions that
+    prevented their use. Keys may be :class:`cassandra.pool.Host` objects,
+    endpoint strings, or host-ID labels for unresolved policy candidates.
     """
 
     def __init__(self, message, errors):
@@ -3737,7 +3737,8 @@ class Session(object):
 
         `paging_state` is an optional paging state, reused from a previous :class:`ResultSet`.
 
-        `host` is the :class:`cassandra.pool.Host` that should handle the query.
+        `host` is the :class:`cassandra.pool.Host` that should handle the
+        query.
         It is resolved by ``host_id`` against this cluster's current metadata,
         so a cached Host from a previous Cluster or endpoint can be reused.
         The current host and its current endpoint are used. An unknown host ID
@@ -5927,16 +5928,19 @@ class ControlConnection(object):
 
         def policy_endpoints():
             for host in lbp.make_query_plan():
-                current = self._cluster.metadata.get_host_by_host_id(host.host_id)
+                current = self._cluster.metadata.get_host_by_host_id(
+                    host.host_id)
                 if current is None:
                     errors["Host ID %s" % host.host_id] = ConnectionException(
                         "Host ID is not known to this cluster")
-                    log.debug("[control connection] Skipping unknown host ID %s from policy",
-                              host.host_id)
+                    log.debug(
+                        "[control connection] Skipping unknown host ID %s "
+                        "from policy", host.host_id)
                 else:
                     yield current.endpoint
 
-        for endpoint in chain(policy_endpoints(), self._cluster.endpoints_resolved):
+        for endpoint in chain(policy_endpoints(),
+                              self._cluster.endpoints_resolved):
             try:
                 return (self._try_connect(endpoint), None)
             except Exception as exc:
@@ -7526,18 +7530,21 @@ class ResponseFuture(object):
             # selections; internal attempt callbacks keep their original owner.
             selected_host = host
             if isinstance(host, Host):
-                host = self.session.cluster.metadata.get_host_by_host_id(host.host_id)
+                host = self.session.cluster.metadata.get_host_by_host_id(
+                    host.host_id)
             if host is None:
                 host_id = getattr(selected_host, 'host_id', None)
                 self._errors[selected_host] = ConnectionException(
                     "Host ID %s is not known to this cluster" % host_id)
-                log.debug("Skipping unknown host ID %s from query plan", host_id)
+                log.debug("Skipping unknown host ID %s from query plan",
+                          host_id)
                 req_id = None
             elif isinstance(host, Host) and (host._is_removed or
-                                            host.is_up is False):
+                                             host.is_up is False):
                 self._errors[host] = ConnectionException(
                     "Host has been marked down or removed")
-                log.debug("Skipping unavailable current host ID %s from query plan",
+                log.debug("Skipping unavailable current host ID %s "
+                          "from query plan",
                           host.host_id)
                 req_id = None
             else:
@@ -8039,17 +8046,19 @@ class ResponseFuture(object):
                 connection, request_id = pool.borrow_connection(
                     timeout=2.0, **borrow_options)
             # Check the metadata owner at final admission under the host lock.
-            # Terminal retirement cannot pass this region before send begins,
-            # but metadata publication has its own lock and may follow admission.
-            # The admitted attempt retains its original pool and stream owners.
+            # This prevents terminal retirement until send begins. Metadata
+            # publication uses its own lock and may follow admission.
+            # An admitted attempt keeps its original pool and stream owners.
             with host.lock if isinstance(host, Host) else nullcontext():
                 if (isinstance(host, Host) and
                         (host.is_up is False or
-                         not self.session.cluster._lifecycle.is_current(host))):
+                         not self.session.cluster._lifecycle.is_current(
+                             host))):
                     self._errors[host] = ConnectionException(
                         "Host is down or no longer current in this cluster")
-                    log.debug("Host ID %s became unavailable while borrowing connection",
-                              host.host_id)
+                    log.debug(
+                        "Host ID %s became unavailable while borrowing "
+                        "connection", host.host_id)
                     return None
                 if (pool.is_shutdown or
                         self.session._pools.get(host) is not pool or
