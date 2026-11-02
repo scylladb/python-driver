@@ -527,7 +527,12 @@ class HostConnection(object):
             if not current:
                 self.shutdown()
                 return
-            self._open_connections_for_all_shards(first_connection.features.shard_id)
+            try:
+                self._open_connections_for_all_shards(
+                    first_connection.features.shard_id)
+            except Exception:
+                self.shutdown()
+                raise
 
         self.supports_tablet_routing = first_connection.features.tablets_routing_v1 \
                                        or first_connection.features.tablets_routing_v2
