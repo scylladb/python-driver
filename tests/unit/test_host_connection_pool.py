@@ -1097,6 +1097,48 @@ class HostConnectionTests(_PoolTests):
             session.cluster.executor.shutdown(wait=True)
 
 
+@pytest.mark.parametrize('accepted_shards', [0, 1])
+def test_shard_fanout_failure_retires_candidate(socket_pool, accepted_shards):
+    host, session, original_pool, original, candidate = socket_pool
+    session.cluster.shard_aware_options.disable = False
+    candidate.features = ProtocolFeatures(
+        shard_id=0, sharding_info=Mock(shards_count=3))
+    pending = []
+    initialized = []
+    failure = RuntimeError('executor stopped during shard fan-out')
+
+    def submit(fn, *args):
+        pool = fn.__self__
+        if not initialized:
+            initialized.append(pool)
+        if len(pending) == accepted_shards:
+            raise failure
+        future = Future()
+        pending.append(future)
+        return future
+
+    session.submit.side_effect = submit
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            HostConnection(host, HostDistance.LOCAL, session)
+        assert raised.value is failure
+        pool = initialized[0]
+        assert pool.is_shutdown
+        assert pool._ownership.retired
+        assert not pool._connections
+        assert not pool._connection_attempts
+        assert not pool._connecting
+        assert not pool._shard_connections_futures
+        assert all(future.cancelled() for future in pending)
+        candidate.close.assert_called_once()
+        original.close.assert_not_called()
+        assert session._pools[host] is original_pool
+    finally:
+        for pool in initialized:
+            pool.shutdown()
+        original_pool.shutdown()
+
+
 @pytest.mark.parametrize('change', ['endpoint', 'host', 'session', 'cluster'])
 def test_first_connection_retired_after_keyspace_publication(
         socket_pool, change):
