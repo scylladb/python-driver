@@ -23,7 +23,7 @@ from threading import Barrier, Thread, Event, Lock, RLock
 from unittest.mock import Mock, NonCallableMagicMock, MagicMock, patch
 
 from cassandra.cluster import Cluster, Session, ShardAwareOptions
-from cassandra._lifecycle import ConnectionFailureReservation
+from cassandra._lifecycle import ConnectionFailureReservation, PoolOwnershipReservation
 from cassandra.connection import Connection, ConnectionBusy, ConnectionException, ConnectionSendError, DefaultEndPoint
 from cassandra.pool import HostConnection
 from cassandra.pool import Host, NoConnectionsAvailable
@@ -1031,7 +1031,9 @@ class HostConnectionTests(_PoolTests):
 
             def __init__(self, *args, **kwargs):
                 super(MockSession, self).__init__(*args, **kwargs)
-                self.cluster = MagicMock()
+                self._lock = RLock()
+                self._pools = {}
+                self.cluster = MagicMock(is_shutdown=False)
                 self.connection_created = Event()
                 self.cluster.executor = ThreadPoolExecutor(max_workers=2)
                 self.cluster.signal_connection_failure = lambda *args, **kwargs: False
@@ -1061,9 +1063,16 @@ class HostConnectionTests(_PoolTests):
             LOGGER.info("Testing fast shutdown %d / 3 times", attempt_num + 1)
             host = MagicMock()
             host.endpoint = "1.2.3.4"
+            host.lock = RLock()
+            host._is_removed = False
             session = MockSession()
 
-            pool = HostConnection(host=host, host_distance=HostDistance.REMOTE, session=session)
+            ownership = PoolOwnershipReservation(session, host, host.endpoint)
+            pool = HostConnection(host=host, host_distance=HostDistance.REMOTE,
+                                  session=session, _ownership=ownership)
+            with pool._membership_lock, session._lock, host.lock:
+                session._pools[host] = pool
+                ownership.published = True
             LOGGER.info("Initialized pool %s", pool)
 
             # Wait for initial connection to be created (with timeout)
@@ -1080,3 +1089,370 @@ class HostConnectionTests(_PoolTests):
 
             # Cleanup executor with proper wait
             session.cluster.executor.shutdown(wait=True)
+
+
+@pytest.mark.parametrize('operation', ['replace', 'shard'])
+@pytest.mark.parametrize('pause', ['connect', 'keyspace'])
+@pytest.mark.parametrize('change', ['endpoint', 'pool', 'host', 'session', 'cluster'])
+@pytest.mark.parametrize('fail', [False, True])
+def test_connection_completion_rechecks_ownership(
+        socket_pool, operation, pause, change, fail):
+    host, session, pool, original, candidate = socket_pool
+    host.sharding_info = Mock(shards_count=2)
+    pool._get_shard_aware_endpoint = Mock(return_value=None)
+    if operation == 'shard':
+        candidate.features = ProtocolFeatures(shard_id=1)
+    pool._keyspace = 'ks'
+    entered, release = Event(), Event()
+    errors = []
+
+    def wait():
+        entered.set()
+        assert release.wait(5)
+        if fail:
+            raise ConnectionException('late failure', pool.endpoint)
+
+    def connect(*args, **kwargs):
+        if pause == 'connect':
+            wait()
+        return candidate
+
+    def keyspace(target):
+        if pause == 'keyspace':
+            wait()
+        candidate.keyspace = target
+
+    session.cluster.connection_factory.side_effect = connect
+    candidate.set_keyspace_blocking.side_effect = keyspace
+
+    def complete():
+        try:
+            if operation == 'replace':
+                pool._replace(original)
+            else:
+                pool._open_connection_to_missing_shard(1)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = Thread(target=complete)
+    winner = None
+    try:
+        worker.start()
+        assert entered.wait(5)
+        with session._lock, host.lock:
+            if change == 'endpoint':
+                host.endpoint = DefaultEndPoint('127.0.0.2')
+            elif change == 'pool':
+                winner = HostConnection(host, HostDistance.IGNORED, session)
+                session._pools[host] = winner
+            elif change == 'host':
+                host._is_removed = True
+            elif change == 'session':
+                session.is_shutdown = True
+            else:
+                session.cluster.is_shutdown = True
+        before = pool._connections.copy()
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert not errors
+    assert pool._connections == before
+    if pause == 'keyspace' or not fail:
+        candidate.close.assert_called_once()
+    else:
+        candidate.close.assert_not_called()  # factory never returned a socket
+    assert not pool._connecting
+    assert not pool._connection_attempts
+    session.submit.assert_not_called()
+    session.cluster.on_down.assert_not_called()
+    host.signal_connection_failure.assert_not_called()
+    if winner is not None:
+        assert session._pools[host] is winner
+        assert not winner.is_shutdown
+    pool.shutdown()
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_old_attempt_cleanup_preserves_new_attempt(socket_pool, fail):
+    host, session, pool, original, candidate = socket_pool
+    host.sharding_info = Mock(shards_count=2)
+    candidate.features = ProtocolFeatures(shard_id=1)
+    pool._get_shard_aware_endpoint = Mock(return_value=None)
+    pool._keyspace = 'ks'
+    entered, release = Event(), Event()
+
+    def keyspace(target):
+        entered.set()
+        assert release.wait(5)
+        if fail:
+            raise ConnectionException('stale USE failed')
+        candidate.keyspace = target
+
+    candidate.set_keyspace_blocking.side_effect = keyspace
+    errors = []
+
+    def complete():
+        try:
+            pool._open_connection_to_missing_shard(1)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = Thread(target=complete)
+    try:
+        worker.start()
+        assert entered.wait(5)
+        newer = pool._begin_shard_attempt(1)
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert not errors
+    assert pool._connections == {0: original}
+    candidate.close.assert_called_once()
+    assert pool._connection_attempts[1] is newer[1]
+    assert 1 in pool._connecting
+
+    # The retained token must still be able to publish its own socket.
+    healthy = HashableMock(
+        spec=Connection, keyspace='ks', orphaned_threshold_reached=False,
+        features=ProtocolFeatures(shard_id=1))
+    session.cluster.connection_factory.side_effect = [healthy]
+    pool._open_connection_to_missing_shard(1, newer)
+    assert pool._connections == {0: original, 1: healthy}
+    assert not pool._connecting
+    healthy.close.assert_not_called()
+    pool.shutdown()
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_competing_shard_completion_cannot_overwrite_winner(socket_pool, fail):
+    host, session, pool, original, candidate = socket_pool
+    host.sharding_info = Mock(shards_count=3)
+    candidate.features = ProtocolFeatures(shard_id=1)
+    pool._get_shard_aware_endpoint = Mock(return_value=None)
+    pool._keyspace = 'ks'
+    entered, release = Event(), Event()
+    errors = []
+
+    def keyspace(target):
+        entered.set()
+        assert release.wait(5)
+        if fail:
+            raise ConnectionException('losing USE failed')
+        candidate.keyspace = target
+
+    candidate.set_keyspace_blocking.side_effect = keyspace
+
+    def complete():
+        try:
+            # This requested shard 2, but the server assigned shard 1.
+            pool._open_connection_to_missing_shard(2)
+        except BaseException as exc:
+            errors.append(exc)
+
+    winner = HashableMock(
+        spec=Connection, keyspace='ks', orphaned_threshold_reached=False,
+        features=ProtocolFeatures(shard_id=1))
+    worker = Thread(target=complete)
+    try:
+        worker.start()
+        assert entered.wait(5)
+        winning_attempt = pool._begin_shard_attempt(1)
+        assert pool._sync_keyspace(winner, winning_attempt, expected=None)
+        pool._finish_shard_attempt(winning_attempt)
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert not errors
+    assert pool._connections == {0: original, 1: winner}
+    candidate.close.assert_called_once()
+    winner.close.assert_not_called()
+    assert not pool._connecting
+    pool.shutdown()
+
+
+def test_shutdown_during_keyspace_sync_revokes_publication(socket_pool):
+    host, session, pool, original, candidate = socket_pool
+    host.sharding_info = Mock(shards_count=2)
+    candidate.features = ProtocolFeatures(shard_id=1)
+    pool._get_shard_aware_endpoint = Mock(return_value=None)
+    pool._keyspace = 'ks'
+    entered, release, retiring = Event(), Event(), Event()
+    errors = []
+    work_lock = pool._lock
+
+    class ObservedLock:
+        def __enter__(self):
+            if pool._ownership.retired:
+                retiring.set()
+            work_lock.acquire()
+
+        def __exit__(self, *args):
+            work_lock.release()
+
+    pool._lock = ObservedLock()
+
+    def keyspace(target):
+        entered.set()
+        assert release.wait(5)
+        candidate.keyspace = target
+
+    candidate.set_keyspace_blocking.side_effect = keyspace
+
+    def run(fn, *args):
+        try:
+            fn(*args)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = Thread(target=run, args=(pool._open_connection_to_missing_shard, 1))
+    shutdown = Thread(target=run, args=(pool.shutdown,))
+    try:
+        worker.start()
+        assert entered.wait(5)
+        shutdown.start()
+        assert retiring.wait(5)
+    finally:
+        release.set()
+        for thread in (worker, shutdown):
+            if thread.ident is not None:
+                thread.join(5)
+    assert not worker.is_alive() and not shutdown.is_alive()
+    assert not errors
+    assert pool.is_shutdown
+    assert not pool._connections
+    candidate.close.assert_called_once()
+    assert not pool._excess_connections
+
+
+def test_excess_connection_retention_rechecks_pool_owner(socket_pool):
+    host, session, pool, original, candidate = socket_pool
+    host.sharding_info = Mock(shards_count=2)
+    pool._get_shard_aware_endpoint = Mock(return_value=None)
+    pool.max_excess_connections_per_shard_multiplier = 0
+    retained_excess = HashableMock(spec=Connection)
+    pool._excess_connections.add(retained_excess)
+    entered, release = Event(), Event()
+    close_excess = pool._close_excess_connections
+    errors = []
+
+    def paused_close(_attempt=None):
+        entered.set()
+        assert release.wait(5)
+        close_excess(_attempt=_attempt)
+
+    pool._close_excess_connections = paused_close
+
+    def complete():
+        try:
+            pool._open_connection_to_missing_shard(1)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = Thread(target=complete)
+    try:
+        worker.start()
+        assert entered.wait(5)
+        winner = HostConnection(host, HostDistance.IGNORED, session)
+        with session._lock:
+            session._pools[host] = winner
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert not errors
+    assert pool._excess_connections == {retained_excess}
+    retained_excess.close.assert_not_called()
+    assert pool._connections == {0: original}
+    candidate.close.assert_called_once()
+    assert not winner.is_shutdown
+    pool._close_excess_connections = close_excess
+    pool.shutdown()
+    retained_excess.close.assert_called_once()
+
+
+def test_current_shard_replacement_preserves_draining_requests(socket_pool):
+    host, session, pool, original, candidate = socket_pool
+    host.sharding_info = Mock(shards_count=1)
+    pool._get_shard_aware_endpoint = Mock(return_value=None)
+    original.orphaned_threshold_reached = True
+    original.in_flight = 2
+    original.orphaned_request_ids = {1}
+
+    pool._open_connection_to_missing_shard(0)
+
+    assert pool._connections == {0: candidate}
+    assert original in pool._trash
+    original.close.assert_not_called()
+    assert candidate.in_flight == 0
+    pool.return_connection(original)
+    assert original.in_flight == 1  # only its orphaned request remains
+    assert candidate.in_flight == 0
+    original.close.assert_called_once()
+    assert not pool._trash
+    pool.shutdown()
+
+
+@pytest.mark.parametrize('newer_attempt', [False, True])
+def test_cancelled_shard_work_only_clears_its_own_marker(socket_pool, newer_attempt):
+    host, session, pool, original, candidate = socket_pool
+    future = Future()
+    session.submit.return_value = future
+    pool._submit_shard_attempt(1)
+    if newer_attempt:
+        newer = pool._begin_shard_attempt(1)
+    assert future.cancel()
+    assert (1 in pool._connecting) is newer_attempt
+    if newer_attempt:
+        assert pool._connection_attempts[1] is newer[1]
+    else:
+        assert 1 not in pool._connection_attempts
+    pool.shutdown()
+
+
+def test_failure_waiting_for_membership_does_not_hold_session(socket_pool):
+    host, session, pool, original, candidate = socket_pool
+    original.is_defunct = True
+    original.in_flight = 1
+    original.last_error = ConnectionException('failed transport')
+    waiting, session_available = Event(), Event()
+    membership_lock = pool._membership_lock
+    errors = []
+
+    class ObservedLock:
+        def __enter__(self):
+            waiting.set()
+            membership_lock.acquire()
+
+        def __exit__(self, *args):
+            membership_lock.release()
+
+    pool._membership_lock = ObservedLock()
+
+    def fail():
+        try:
+            pool.return_connection(original)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def acquire_session():
+        with session._lock:
+            session_available.set()
+
+    failure = Thread(target=fail)
+    publication = Thread(target=acquire_session)
+    try:
+        with membership_lock:
+            failure.start()
+            assert waiting.wait(5)
+            publication.start()
+            assert session_available.wait(2), 'failure inverted membership/Session order'
+    finally:
+        for worker in (failure, publication):
+            if worker.ident is not None:
+                worker.join(5)
+            assert not worker.is_alive()
+    assert not errors
+    pool.shutdown()

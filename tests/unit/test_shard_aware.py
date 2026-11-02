@@ -17,7 +17,10 @@ import unittest
 import logging
 import time
 from unittest.mock import MagicMock
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from threading import RLock
+
+from cassandra._lifecycle import PoolOwnershipReservation
 
 from cassandra.cluster import ShardAwareOptions
 from cassandra.pool import HostConnection, HostDistance
@@ -48,7 +51,9 @@ class MockSession(MagicMock):
     def __init__(self, ssl_options=None, ssl_context=None, sharding_info=None,
                  *args, **kwargs):
         super(MockSession, self).__init__(*args, **kwargs)
-        self.cluster = MagicMock()
+        self._lock = RLock()
+        self._pools = {}
+        self.cluster = MagicMock(is_shutdown=False)
         self.cluster.ssl_options = ssl_options
         self.cluster.ssl_context = ssl_context
         self.cluster.shard_aware_options = ShardAwareOptions()
@@ -86,6 +91,17 @@ class MockSession(MagicMock):
 
 
 class TestShardAware(unittest.TestCase):
+    def make_pool(self, host, session):
+        host.lock = RLock()
+        host._is_removed = False
+        ownership = PoolOwnershipReservation(session, host, host.endpoint)
+        pool = HostConnection(host, HostDistance.REMOTE, session,
+                              _ownership=ownership)
+        with pool._membership_lock, session._lock, host.lock:
+            session._pools[host] = pool
+            ownership.published = True
+        return pool
+
     @unittest.skipUnless(CShardingInfo, "Cython sharding extension is not available")
     def test_cython_sharding_info_matches_python(self):
         """
@@ -148,8 +164,7 @@ class TestShardAware(unittest.TestCase):
         host = MagicMock()
         host.endpoint = DefaultEndPoint("1.2.3.4")
         session = MockSession(ssl_context=object())
-        pool = HostConnection(host=host, host_distance=HostDistance.REMOTE,
-                              session=session)
+        pool = self.make_pool(host, session)
         try:
             for f in session.futures:
                 f.result()
@@ -175,7 +190,7 @@ class TestShardAware(unittest.TestCase):
                 (19045, {}, None),
                 (19045, None, object())]:
             session = MockSession(ssl_options=ssl_options, ssl_context=ssl_context)
-            pool = HostConnection(host=host, host_distance=HostDistance.REMOTE, session=session)
+            pool = self.make_pool(host, session)
             try:
                 for f in session.futures:
                     f.result()
@@ -198,6 +213,7 @@ class TestShardAware(unittest.TestCase):
 
         def submit(fn, *args, **kwargs):
             pending.append((fn, args, kwargs))
+            return Future()
 
         session.submit = submit
         connection_factory = MagicMock(
@@ -205,9 +221,7 @@ class TestShardAware(unittest.TestCase):
         session.cluster.connection_factory = connection_factory
 
         try:
-            pool = HostConnection(
-                host=host, host_distance=HostDistance.REMOTE,
-                session=session)
+            pool = self.make_pool(host, session)
             while pending:
                 fn, args, kwargs = pending.pop(0)
                 fn(*args, **kwargs)
@@ -243,7 +257,7 @@ class TestShardAware(unittest.TestCase):
                     ssl_options=ssl_options,
                     ssl_context=ssl_context,
                     sharding_info=sharding_info)
-                pool = HostConnection(host=host, host_distance=HostDistance.REMOTE, session=session)
+                pool = self.make_pool(host, session)
 
                 try:
                     for f in session.futures:
@@ -264,7 +278,7 @@ class TestShardAware(unittest.TestCase):
         host.endpoint = DefaultEndPoint("1.2.3.4")
         session = MockSession()
 
-        pool = HostConnection(host=host, host_distance=HostDistance.REMOTE, session=session)
+        pool = self.make_pool(host, session)
         for f in session.futures:
             f.result()
 

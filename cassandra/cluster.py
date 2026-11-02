@@ -4812,8 +4812,13 @@ class Session(object):
                         on_add_reconnection=on_add_reconnection,
                         _pool_failure=reservation)
 
+            # Share the creation generation with background socket work;
+            # publication below switches it to exact installed pool identity.
+            ownership = _lifecycle.PoolOwnershipReservation(
+                self, host, endpoint, generation, expected_pool)
             try:
-                new_pool = HostConnection(host, distance, self)
+                new_pool = HostConnection(host, distance, self,
+                                          _ownership=ownership)
             except AuthenticationFailed as auth_exc:
                 authentication_exc = ConnectionException(
                     str(auth_exc), endpoint=host)
@@ -4853,8 +4858,9 @@ class Session(object):
                 with new_pool._membership_lock:
                     with self._lock:
                         with host.lock:
-                            if not self._owns_pool_generation_locked(
-                                    host, generation, expected_pool, endpoint):
+                            if (not ownership.owns_locked(new_pool) or
+                                    not self._owns_pool_generation_locked(
+                                        host, generation, expected_pool, endpoint)):
                                 stale_candidate = True
                                 stale_result = \
                                     self._stale_pool_creation_result_locked(
@@ -4875,6 +4881,8 @@ class Session(object):
                                     ) as connected:
                                         self._pools[host] = new_pool
                                         self._pool_generations[host] = object()
+                                        ownership.published = True
+                                        ownership.expected_pool = None
                                         if connected:
                                             host._health_generation += 1
                                         publish_pool = True
