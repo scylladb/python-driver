@@ -31,6 +31,17 @@ Bug Fixes
   built-in Cython LZ4 codec is present. As before 3.29.12, it picks LZ4 only when
   the ``lz4`` package is installed; ``compression='lz4'`` still works with the
   built-in codec alone (#1085).
+* ``execute_concurrent()`` and ``execute_concurrent_with_args()`` count each
+  statement once when its future reports more than once (e.g. a speculative
+  response after a client timeout). Previously they could return early with a
+  duplicate result and a missing one, or fail a successful batch with
+  ``raise_on_first_error=True``. An exception raised by the caller's statement
+  iterable is now raised from ``execute_concurrent()`` instead of being
+  recorded as a result or lost.
+* ``execute_concurrent(..., results_generator=True)`` counts each statement
+  once when its future reports more than once (e.g. a speculative response
+  after a client timeout). Previously the generator could hang and submit more
+  than ``concurrency`` statements.
 
 Behavior Changes
 ----------------
