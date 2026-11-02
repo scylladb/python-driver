@@ -5929,8 +5929,10 @@ class ControlConnection(object):
             for host in lbp.make_query_plan():
                 current = self._cluster.metadata.get_host_by_host_id(host.host_id)
                 if current is None:
-                    errors[str(host)] = ConnectionException(
+                    errors["Host ID %s" % host.host_id] = ConnectionException(
                         "Host ID is not known to this cluster")
+                    log.debug("[control connection] Skipping unknown host ID %s from policy",
+                              host.host_id)
                 else:
                     yield current.endpoint
 
