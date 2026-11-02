@@ -224,7 +224,7 @@ wheels = [
 [[package]]
 name = "ccm"
 version = "2.0.5"
-source = { git = "https://github.com/scylladb/scylla-ccm.git?rev=master#ad068edc3524309b54428c1babb31ab7e7af2c89" }
+source = { git = "https://github.com/scylladb/scylla-ccm.git?rev=ad068edc3524309b54428c1babb31ab7e7af2c89#ad068edc3524309b54428c1babb31ab7e7af2c89" }
 dependencies = [
     { name = "boto3" },
     { name = "packaging" },
@@ -2013,7 +2013,7 @@ provides-extras = ["graph", "cle", "compress-lz4", "compress-snappy", "auth-kerb
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "ccm", git = "https://github.com/scylladb/scylla-ccm.git?rev=master" },
+    { name = "ccm", git = "https://github.com/scylladb/scylla-ccm.git?rev=ad068edc3524309b54428c1babb31ab7e7af2c89" },
     { name = "coverage", extras = ["toml"], specifier = ">=7.6" },
     { name = "cryptography", specifier = ">=42.0" },
     { name = "cython", specifier = ">=3.2" },
