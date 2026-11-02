@@ -346,6 +346,8 @@ class NoHostAvailable(Exception):
     A map from hosts or connection-candidate labels to the exceptions that
     prevented their use. Keys may be :class:`cassandra.pool.Host` objects,
     endpoint strings, or host-ID labels for unresolved policy candidates.
+    If all initial pools fail with control fallback disabled, it is instead
+    a list of the host addresses that could not be connected.
     """
 
     def __init__(self, message, errors):
