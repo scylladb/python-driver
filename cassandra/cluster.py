@@ -7533,10 +7533,11 @@ class ResponseFuture(object):
                     "Host ID %s is not known to this cluster" % host_id)
                 log.debug("Skipping unknown host ID %s from query plan", host_id)
                 req_id = None
-            elif isinstance(host, Host) and host._is_removed:
+            elif isinstance(host, Host) and (host._is_removed or
+                                            host.is_up is False):
                 self._errors[host] = ConnectionException(
                     "Host has been marked down or removed")
-                log.debug("Skipping removed current host ID %s from query plan",
+                log.debug("Skipping unavailable current host ID %s from query plan",
                           host.host_id)
                 req_id = None
             else:
