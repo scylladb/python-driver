@@ -5925,7 +5925,16 @@ class ControlConnection(object):
         lbp = self._cluster.load_balancing_policy \
             if self._cluster._config_mode == _ConfigMode.LEGACY else self._cluster._default_load_balancing_policy
 
-        for endpoint in chain((host.endpoint for host in lbp.make_query_plan()), self._cluster.endpoints_resolved):
+        def policy_endpoints():
+            for host in lbp.make_query_plan():
+                current = self._cluster.metadata.get_host_by_host_id(host.host_id)
+                if current is None:
+                    errors[str(host)] = ConnectionException(
+                        "Host ID is not known to this cluster")
+                else:
+                    yield current.endpoint
+
+        for endpoint in chain(policy_endpoints(), self._cluster.endpoints_resolved):
             try:
                 return (self._try_connect(endpoint), None)
             except Exception as exc:
