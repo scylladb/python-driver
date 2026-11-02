@@ -1127,7 +1127,6 @@ class HostConnection(object):
                 target = self._keyspace
             if target and conn.keyspace != target:
                 conn.set_keyspace_blocking(target)
-                conn.keyspace = target
             with self._connection_guard(attempt, conn, expected) as current:
                 if not current:
                     return False

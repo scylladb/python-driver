@@ -2025,7 +2025,7 @@ def test_rejected_executor_handoff_removes_queued_down(topology):
 @pytest.mark.parametrize('change', ['endpoint', 'host', 'pool'])
 @pytest.mark.parametrize('fail', [False, True])
 def test_topology_replacement_fences_real_connection_work(
-        topology, scope, pause, change, fail):
+        topology, request, scope, pause, change, fail):
     from uuid import uuid4
     from cassandra.shard_info import _ShardingInfo
 
@@ -2079,6 +2079,7 @@ def test_topology_replacement_fences_real_connection_work(
     if scope == 'shard':
         assert session.add_or_renew_pool(host, False).result(timeout=5)
         pool = session._pools[host]
+        request.addfinalizer(pool.shutdown)
         # Retain a real request on the original pool across replacement.
         borrowed, _ = pool.borrow_connection(timeout=0)
         assert borrowed.in_flight == 1
@@ -2121,6 +2122,7 @@ def test_topology_replacement_fences_real_connection_work(
         winning_ready = session.add_or_renew_pool(replacement, True)
         assert published.wait(5)
         winner = session._pools[replacement]
+        request.addfinalizer(winner.shutdown)
         winning_socket = winner._connections[0]
         assert not winning_socket.is_closed
     finally:
@@ -2150,7 +2152,6 @@ def test_topology_replacement_fences_real_connection_work(
     if change != 'pool':
         assert host._is_removed
         assert cluster.metadata.get_host_by_host_id(replacement.host_id) is replacement
-    winner.shutdown()
 
 
 @pytest.mark.parametrize('invalidate', ['none', 'generation', 'session', 'cluster'])
