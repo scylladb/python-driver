@@ -3737,7 +3737,12 @@ class Session(object):
 
         `paging_state` is an optional paging state, reused from a previous :class:`ResultSet`.
 
-        `host` is the :class:`cassandra.pool.Host` that should handle the query. If the host specified is down or
+        `host` is the :class:`cassandra.pool.Host` that should handle the query.
+        It is resolved by ``host_id`` against this cluster's current metadata,
+        so a cached Host from a previous Cluster or endpoint can be reused.
+        The current host and its current endpoint are used. An unknown host ID
+        fails with :class:`NoHostAvailable`, without targeting another node.
+        If the host specified is down or
         not yet connected, the query will fail with :class:`NoHostAvailable`. Using this is
         discouraged except in a few cases, e.g., querying node-local tables and applying schema changes.
 
@@ -7494,13 +7499,7 @@ class ResponseFuture(object):
         # or to the explicit host target if set
         if self._host:
             # returning a single value effectively disables retries
-            host = self._host
-            if isinstance(host, Host) and not host._is_removed:
-                current = self.session.cluster.metadata.get_host_by_host_id(host.host_id)
-                if (current is not None and not current._is_removed and
-                        current.endpoint == host.endpoint):
-                    host = current
-            self.query_plan = iter([host])
+            self.query_plan = iter([self._host])
         else:
             # convert the list/generator/etc to an iterator so that subsequent
             # calls to send_request (which retries may do) will resume where
@@ -7512,7 +7511,22 @@ class ResponseFuture(object):
         # query_plan is an iterator, so this will resume where we last left
         # off if send_request() is called multiple times
         for host in self.query_plan:
-            req_id = self._query(host)
+            # Public targets and extension query plans may retain a Host from
+            # an older Cluster or endpoint generation. Resolve only new
+            # selections; internal attempt callbacks keep their original owner.
+            selected_host = host
+            if isinstance(host, Host):
+                host = self.session.cluster.metadata.get_host_by_host_id(host.host_id)
+            if host is None:
+                self._errors[selected_host] = ConnectionException(
+                    "Host ID is not known to this cluster")
+                req_id = None
+            elif isinstance(host, Host) and host._is_removed:
+                self._errors[host] = ConnectionException(
+                    "Host has been marked down or removed")
+                req_id = None
+            else:
+                req_id = self._query(host)
             if req_id is not None:
                 self._req_id = req_id
                 return True

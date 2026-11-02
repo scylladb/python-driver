@@ -138,9 +138,8 @@ class ResponseFutureTests(unittest.TestCase):
             assert rf._query(retained_host) is None
             assert connection.send_msg.call_count == 1
 
-    def test_explicit_host_rejects_unknown_identity_endpoint_change_and_removal(self):
-        for scenario in ('unknown', 'changed_identity', 'changed_endpoint',
-                         'removed', 'current_removed'):
+    def test_explicit_host_rejects_unknown_identity_and_current_removal(self):
+        for scenario in ('unknown', 'changed_identity', 'current_removed'):
             with self.subTest(scenario=scenario):
                 host_id = uuid.uuid4()
                 retained_host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=host_id)
@@ -148,10 +147,6 @@ class ResponseFutureTests(unittest.TestCase):
                 if scenario == 'changed_identity':
                     current_host = Host('127.0.0.1', SimpleConvictionPolicy,
                                         host_id=uuid.uuid4())
-                elif scenario == 'changed_endpoint':
-                    current_host.endpoint = DefaultEndPoint('127.0.0.2')
-                elif scenario == 'removed':
-                    retained_host._is_removed = True
                 elif scenario == 'current_removed':
                     current_host._is_removed = True
                 session = self.make_owned_pool_session(current_host)
